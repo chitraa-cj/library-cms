@@ -5,10 +5,13 @@ import { createStrapiRouter, strapiRequest } from "./strapi";
 import { storage } from "./storage";
 import type { User } from "@shared/schema";
 
+const STRAPI_INTERNAL_KEYS = new Set(["id", "__component", "createdAt", "updatedAt", "publishedAt", "documentId", "locale"]);
+
 function cleanPayloadForStrapi(data: Record<string, any>): Record<string, any> {
   const cleaned: Record<string, any> = {};
   for (const [key, value] of Object.entries(data)) {
     if (value === undefined || value === null || value === "") continue;
+    if (STRAPI_INTERNAL_KEYS.has(key)) continue;
     if (typeof value === "object" && !Array.isArray(value)) {
       const sub = cleanPayloadForStrapi(value as Record<string, any>);
       if (Object.keys(sub).length > 0) {

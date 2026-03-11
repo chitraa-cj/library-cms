@@ -29,7 +29,13 @@ export async function strapiRequest(path: string, options: RequestInit = {}) {
     throw new Error(`Strapi error ${res.status}: ${errorText}`);
   }
 
-  return res.json();
+  const text = await res.text();
+  if (!text) return { data: null };
+  try {
+    return JSON.parse(text);
+  } catch {
+    return { data: null };
+  }
 }
 
 export function createStrapiRouter() {

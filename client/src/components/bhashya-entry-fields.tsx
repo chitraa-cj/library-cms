@@ -2,8 +2,16 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import TextTranslationFields from "./text-translation-fields";
 import type { BhashyaEntry, TextAndTranslation } from "@shared/schema";
+import { teekaAuthors } from "@shared/schema";
 import { Plus, Trash2, BookText } from "lucide-react";
 
 interface BhashyaEntryFieldsProps {
@@ -69,7 +77,7 @@ export default function BhashyaEntryFields({
           >
             <div className="flex items-center justify-between">
               <span className="text-xs font-medium text-muted-foreground uppercase tracking-wider">
-                Entry {index + 1}
+                Teeka {index + 1}
               </span>
               <Button
                 type="button"
@@ -101,15 +109,26 @@ export default function BhashyaEntryFields({
                 <Label className="text-xs text-muted-foreground">
                   Teeka Author
                 </Label>
-                <Input
+                <Select
                   value={entry.TeekaAuthor || ""}
-                  onChange={(e) =>
-                    updateEntry(index, "TeekaAuthor", e.target.value)
+                  onValueChange={(val) =>
+                    updateEntry(index, "TeekaAuthor", val)
                   }
-                  placeholder="Author of the Teeka"
-                  className="mt-1.5"
-                  data-testid={`${testIdPrefix}-author-${index}`}
-                />
+                >
+                  <SelectTrigger
+                    className="mt-1.5"
+                    data-testid={`${testIdPrefix}-author-${index}`}
+                  >
+                    <SelectValue placeholder="Select Teeka Author" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {teekaAuthors.map((author) => (
+                      <SelectItem key={author} value={author}>
+                        {author}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
               </div>
             </div>
             <TextTranslationFields

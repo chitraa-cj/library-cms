@@ -53,16 +53,82 @@ export const prasthanaBhashyamAuthors = [
   "Sri Upanishad Brahmendra",
 ] as const;
 
+export const translationLanguages = [
+  "Tamil",
+  "Kannada",
+  "Telugu",
+  "Mandarin",
+  "Arabic",
+  "French",
+  "Spanish",
+  "Hindi",
+  "German",
+  "Vietnamese",
+  "Assamese",
+  "Kashmiri",
+  "Marathi",
+  "Konkani",
+  "Malayalam",
+  "Punjabi",
+  "Bengali",
+  "Manipuri",
+  "Nepali",
+  "Urdu",
+  "Azerbaijani",
+  "Odia",
+  "Sindhi",
+  "Polish",
+  "Dutch",
+  "Swahili",
+  "Swedish",
+  "Greek",
+  "Amharic",
+  "Hebrew",
+  "Portuguese",
+  "Russian",
+  "Indonesian",
+  "Japanese",
+  "Nigerian Pidgin",
+  "Egyptian Arabic",
+  "Hausa",
+  "Turkish",
+  "Korean",
+  "Thai",
+  "Italian",
+  "Sinhalese",
+  "Ukrainian",
+  "Persian",
+  "Kurdish",
+  "Mongolian",
+  "Tibetan",
+  "Burmese",
+  "Malay",
+  "Gujarati",
+  "Bhojpuri",
+] as const;
+
+export const teekaAuthors = [
+  "Anandagiri",
+  "Ramaraya Kavi",
+  "Gopalananda",
+  "Narayanasrami",
+] as const;
+
+export interface StrapiBlock {
+  type: string;
+  children: { type: string; text: string }[];
+}
+
 export interface TextAndTranslation {
-  SanskritTextEntry?: string;
-  EnglishTranslationText?: string;
-  OtherLanguagesTranslation?: string;
-  LanguageOfTranslation?: string;
+  SanskritTextEntry?: StrapiBlock[] | string;
+  EnglishTranslationText?: StrapiBlock[] | string;
+  OtherLanguagesTranslation?: StrapiBlock[] | string;
+  LanguageOfTranslation?: (typeof translationLanguages)[number] | string;
 }
 
 export interface BhashyaEntry {
   TeekaName?: string;
-  TeekaAuthor?: string;
+  TeekaAuthor?: (typeof teekaAuthors)[number] | string;
   TeekaEntry?: TextAndTranslation;
 }
 
@@ -73,7 +139,7 @@ export interface StrapiGrantha {
   GranthaType: (typeof granthaTypes)[number];
   BhashyamName?: string;
   BhashyamAuthor?: (typeof bhashyamAuthors)[number];
-  IntroductionToTextEnglish?: any;
+  IntroductionToTextEnglish?: StrapiBlock[];
   BhashyakaraIntroduction?: TextAndTranslation;
   chapters?: StrapiChapter[];
   createdAt?: string;

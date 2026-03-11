@@ -1,9 +1,37 @@
-import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Label } from "@/components/ui/label";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import type { TextAndTranslation } from "@shared/schema";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import type { TextAndTranslation, StrapiBlock } from "@shared/schema";
+import { translationLanguages } from "@shared/schema";
 import { Languages } from "lucide-react";
+
+function blocksToText(value: StrapiBlock[] | string | undefined): string {
+  if (!value) return "";
+  if (typeof value === "string") return value;
+  if (Array.isArray(value)) {
+    return value
+      .map((block) =>
+        (block.children || []).map((child) => child.text || "").join("")
+      )
+      .join("\n");
+  }
+  return "";
+}
+
+function textToBlocks(text: string): StrapiBlock[] {
+  if (!text.trim()) return [];
+  return text.split("\n").map((line) => ({
+    type: "paragraph",
+    children: [{ type: "text", text: line }],
+  }));
+}
 
 interface TextTranslationFieldsProps {
   title: string;
@@ -18,6 +46,13 @@ export default function TextTranslationFields({
   onChange,
   testIdPrefix,
 }: TextTranslationFieldsProps) {
+  const handleBlocksChange = (
+    field: keyof TextAndTranslation,
+    text: string
+  ) => {
+    onChange({ ...value, [field]: textToBlocks(text) });
+  };
+
   return (
     <Card className="border-card-border">
       <CardHeader className="pb-3">
@@ -29,16 +64,16 @@ export default function TextTranslationFields({
       <CardContent className="space-y-4">
         <div>
           <Label className="text-xs text-muted-foreground">
-            Sanskrit Text
+            Sanskrit Text (Devanagari)
           </Label>
           <Textarea
-            value={value.SanskritTextEntry || ""}
+            value={blocksToText(value.SanskritTextEntry)}
             onChange={(e) =>
-              onChange({ ...value, SanskritTextEntry: e.target.value })
+              handleBlocksChange("SanskritTextEntry", e.target.value)
             }
-            placeholder="Enter Sanskrit text..."
+            placeholder="Enter Sanskrit text in Devanagari script..."
             rows={3}
-            className="mt-1.5 font-serif"
+            className="mt-1.5 font-serif text-base leading-relaxed"
             data-testid={`${testIdPrefix}-sanskrit`}
           />
         </div>
@@ -47,9 +82,9 @@ export default function TextTranslationFields({
             English Translation
           </Label>
           <Textarea
-            value={value.EnglishTranslationText || ""}
+            value={blocksToText(value.EnglishTranslationText)}
             onChange={(e) =>
-              onChange({ ...value, EnglishTranslationText: e.target.value })
+              handleBlocksChange("EnglishTranslationText", e.target.value)
             }
             placeholder="Enter English translation..."
             rows={3}
@@ -57,44 +92,57 @@ export default function TextTranslationFields({
             data-testid={`${testIdPrefix}-english`}
           />
         </div>
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-          <div>
-            <Label className="text-xs text-muted-foreground">
-              Other Languages Translation
-            </Label>
-            <Textarea
-              value={value.OtherLanguagesTranslation || ""}
-              onChange={(e) =>
-                onChange({
-                  ...value,
-                  OtherLanguagesTranslation: e.target.value,
-                })
-              }
-              placeholder="Translation in other languages..."
-              rows={2}
-              className="mt-1.5"
-              data-testid={`${testIdPrefix}-other`}
-            />
-          </div>
-          <div>
-            <Label className="text-xs text-muted-foreground">
-              Language of Translation
-            </Label>
-            <Input
-              value={value.LanguageOfTranslation || ""}
-              onChange={(e) =>
-                onChange({
-                  ...value,
-                  LanguageOfTranslation: e.target.value,
-                })
-              }
-              placeholder="e.g., Hindi, Tamil..."
+        <div>
+          <Label className="text-xs text-muted-foreground">
+            Language of Translation
+          </Label>
+          <Select
+            value={
+              typeof value.LanguageOfTranslation === "string"
+                ? value.LanguageOfTranslation
+                : ""
+            }
+            onValueChange={(val) =>
+              onChange({ ...value, LanguageOfTranslation: val })
+            }
+          >
+            <SelectTrigger
               className="mt-1.5"
               data-testid={`${testIdPrefix}-language`}
-            />
-          </div>
+            >
+              <SelectValue placeholder="Select language for translation" />
+            </SelectTrigger>
+            <SelectContent className="max-h-60">
+              {translationLanguages.map((lang) => (
+                <SelectItem key={lang} value={lang}>
+                  {lang}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </div>
+        <div>
+          <Label className="text-xs text-muted-foreground">
+            Translation in Selected Language
+          </Label>
+          <Textarea
+            value={blocksToText(value.OtherLanguagesTranslation)}
+            onChange={(e) =>
+              handleBlocksChange("OtherLanguagesTranslation", e.target.value)
+            }
+            placeholder={
+              value.LanguageOfTranslation
+                ? `Enter translation in ${value.LanguageOfTranslation}...`
+                : "Select a language above, then enter the translation..."
+            }
+            rows={3}
+            className="mt-1.5"
+            data-testid={`${testIdPrefix}-other`}
+          />
         </div>
       </CardContent>
     </Card>
   );
 }
+
+export { blocksToText, textToBlocks };

@@ -32,7 +32,10 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
-import TextTranslationFields from "@/components/text-translation-fields";
+import TextTranslationFields, {
+  blocksToText,
+  textToBlocks,
+} from "@/components/text-translation-fields";
 import {
   granthaTypes,
   bhashyamAuthors,
@@ -40,7 +43,7 @@ import {
   type StrapiResponse,
   type TextAndTranslation,
 } from "@shared/schema";
-import { Loader2, ArrowLeft } from "lucide-react";
+import { Loader2 } from "lucide-react";
 
 const EMPTY_TEXT_TRANSLATION: TextAndTranslation = {
   SanskritTextEntry: "",
@@ -140,7 +143,7 @@ export default function GranthasPage() {
       GranthaType: item.GranthaType || "",
       BhashyamName: item.BhashyamName || "",
       BhashyamAuthor: item.BhashyamAuthor || "",
-      IntroductionToTextEnglish: "",
+      IntroductionToTextEnglish: blocksToText(item.IntroductionToTextEnglish),
       BhashyakaraIntroduction: item.BhashyakaraIntroduction || { ...EMPTY_TEXT_TRANSLATION },
     });
     setFormOpen(true);
@@ -157,6 +160,9 @@ export default function GranthasPage() {
       GranthaType: formData.GranthaType || undefined,
       BhashyamName: formData.BhashyamName || undefined,
       BhashyamAuthor: formData.BhashyamAuthor || undefined,
+      IntroductionToTextEnglish: formData.IntroductionToTextEnglish
+        ? textToBlocks(formData.IntroductionToTextEnglish)
+        : undefined,
       BhashyakaraIntroduction: formData.BhashyakaraIntroduction,
     };
     if (editingItem) {
@@ -280,6 +286,19 @@ export default function GranthasPage() {
                 placeholder="Name of the bhashyam"
                 className="mt-1.5"
                 data-testid="input-bhashyam-name"
+              />
+            </div>
+            <div>
+              <Label>Introduction to Text (English)</Label>
+              <Textarea
+                value={formData.IntroductionToTextEnglish}
+                onChange={(e) =>
+                  setFormData({ ...formData, IntroductionToTextEnglish: e.target.value })
+                }
+                placeholder="English introduction to this text..."
+                rows={4}
+                className="mt-1.5"
+                data-testid="input-grantha-intro"
               />
             </div>
             <TextTranslationFields

@@ -2,6 +2,7 @@ import { useState } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { queryClient, apiRequest } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
+import { useDrafts } from "@/hooks/use-drafts";
 import DataTable from "@/components/data-table";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -54,8 +55,9 @@ const EMPTY_TT: TextAndTranslation = {
 export default function PrasthanaThraya() {
   const { toast } = useToast();
   const [formOpen, setFormOpen] = useState(false);
-  const [deleteTarget, setDeleteTarget] = useState<StrapiPrasthanaScreen | null>(null);
-  const [editingItem, setEditingItem] = useState<StrapiPrasthanaScreen | null>(null);
+  const [deleteTarget, setDeleteTarget] = useState<any>(null);
+  const [editingItem, setEditingItem] = useState<any>(null);
+  const [editingDraftId, setEditingDraftId] = useState<number | null>(null);
 
   const [formData, setFormData] = useState({
     GranthaName: "",
@@ -71,40 +73,9 @@ export default function PrasthanaThraya() {
     queryKey: ["/api/strapi", "prasthana-thraya-screens"],
   });
 
-  const createMutation = useMutation({
-    mutationFn: async (payload: any) => {
-      const res = await apiRequest("POST", "/api/strapi/prasthana-thraya-screens", payload);
-      return res.json();
-    },
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["/api/strapi", "prasthana-thraya-screens"] });
-      setFormOpen(false);
-      resetForm();
-      toast({ title: "Entry created" });
-    },
-    onError: (err: any) => {
-      toast({ variant: "destructive", title: "Error", description: err.message });
-    },
-  });
+  const { unpublishedDrafts, isLoadingDrafts, saveDraft, publishDraft, deleteDraft } = useDrafts("prasthana-thraya-screens");
 
-  const updateMutation = useMutation({
-    mutationFn: async ({ id, payload }: { id: string; payload: any }) => {
-      const res = await apiRequest("PUT", `/api/strapi/prasthana-thraya-screens/${id}`, payload);
-      return res.json();
-    },
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["/api/strapi", "prasthana-thraya-screens"] });
-      setFormOpen(false);
-      setEditingItem(null);
-      resetForm();
-      toast({ title: "Entry updated" });
-    },
-    onError: (err: any) => {
-      toast({ variant: "destructive", title: "Error", description: err.message });
-    },
-  });
-
-  const deleteMutation = useMutation({
+  const deleteStrapiMutation = useMutation({
     mutationFn: async (documentId: string) => {
       const res = await apiRequest("DELETE", `/api/strapi/prasthana-thraya-screens/${documentId}`);
       return res.json();
@@ -129,6 +100,7 @@ export default function PrasthanaThraya() {
       BhashyakaraIntroduction: { ...EMPTY_TT },
       BhashyaEntryCollection: [],
     });
+    setEditingDraftId(null);
   }
 
   function openAdd() {
@@ -137,17 +109,32 @@ export default function PrasthanaThraya() {
     setFormOpen(true);
   }
 
-  function openEdit(item: StrapiPrasthanaScreen) {
+  function openEdit(item: any) {
     setEditingItem(item);
-    setFormData({
-      GranthaName: item.GranthaName || "",
-      GranthaType: item.GranthaType || "",
-      BhashyamName: item.BhashyamName || "",
-      BhashyamAuthor: item.BhashyamAuthor || "",
-      EnglishIntroductionToText: item.EnglishIntroductionToText || "",
-      BhashyakaraIntroduction: item.BhashyakaraIntroduction || { ...EMPTY_TT },
-      BhashyaEntryCollection: item.BhashyaEntryCollection || [],
-    });
+    if (item._isDraft) {
+      setEditingDraftId(item._draftId);
+      const d = item._draftData;
+      setFormData({
+        GranthaName: d.GranthaName || "",
+        GranthaType: d.GranthaType || "",
+        BhashyamName: d.BhashyamName || "",
+        BhashyamAuthor: d.BhashyamAuthor || "",
+        EnglishIntroductionToText: d.EnglishIntroductionToText || "",
+        BhashyakaraIntroduction: d.BhashyakaraIntroduction || { ...EMPTY_TT },
+        BhashyaEntryCollection: d.BhashyaEntryCollection || [],
+      });
+    } else {
+      setEditingDraftId(null);
+      setFormData({
+        GranthaName: item.GranthaName || "",
+        GranthaType: item.GranthaType || "",
+        BhashyamName: item.BhashyamName || "",
+        BhashyamAuthor: item.BhashyamAuthor || "",
+        EnglishIntroductionToText: item.EnglishIntroductionToText || "",
+        BhashyakaraIntroduction: item.BhashyakaraIntroduction || { ...EMPTY_TT },
+        BhashyaEntryCollection: item.BhashyaEntryCollection || [],
+      });
+    }
     setFormOpen(true);
   }
 
@@ -162,14 +149,56 @@ export default function PrasthanaThraya() {
       BhashyakaraIntroduction: formData.BhashyakaraIntroduction,
       BhashyaEntryCollection: formData.BhashyaEntryCollection,
     };
-    if (editingItem) {
-      updateMutation.mutate({ id: editingItem.documentId, payload });
+
+    const strapiDocId = editingItem && !editingItem._isDraft ? editingItem.documentId : (editingItem?._strapiDocId || undefined);
+
+    saveDraft.mutate(
+      {
+        title: formData.GranthaName || "Prasthana Thraya Entry",
+        data: payload,
+        strapiDocumentId: strapiDocId,
+        draftId: editingDraftId || undefined,
+      },
+      {
+        onSuccess: () => {
+          setFormOpen(false);
+          resetForm();
+          setEditingItem(null);
+        },
+      }
+    );
+  }
+
+  function confirmDelete() {
+    if (!deleteTarget) return;
+    if (deleteTarget._isDraft) {
+      deleteDraft.mutate(deleteTarget._draftId, { onSuccess: () => setDeleteTarget(null) });
     } else {
-      createMutation.mutate(payload);
+      deleteStrapiMutation.mutate(deleteTarget.documentId);
     }
   }
 
-  const isSaving = createMutation.isPending || updateMutation.isPending;
+  function handlePublish(item: any) {
+    if (item._draftId) publishDraft.mutate(item._draftId);
+  }
+
+  const mergedData = [
+    ...unpublishedDrafts.map((d) => ({
+      ...(d.data as any),
+      _isDraft: true,
+      _draftId: d.id,
+      _draftStatus: d.status,
+      _strapiDocId: d.strapiDocumentId,
+      _draftData: d.data,
+    })),
+    ...(data?.data || []).map((item) => ({
+      ...item,
+      _isDraft: false,
+      _draftStatus: "published",
+    })),
+  ];
+
+  const isSaving = saveDraft.isPending;
 
   const columns = [
     { key: "GranthaName", label: "Grantha Name" },
@@ -192,12 +221,14 @@ export default function PrasthanaThraya() {
         title="Prasthana Thraya"
         description="Manage Prasthana Thraya screen entries"
         columns={columns}
-        data={data?.data || []}
-        isLoading={isLoading}
+        data={mergedData}
+        isLoading={isLoading || isLoadingDrafts}
         error={error}
         onAdd={openAdd}
         onEdit={openEdit}
         onDelete={(item) => setDeleteTarget(item)}
+        onPublish={handlePublish}
+        publishingId={publishDraft.isPending ? (publishDraft.variables as number) : null}
         addLabel="Add Entry"
         testIdPrefix="prasthana"
         searchKey="GranthaName"
@@ -211,7 +242,7 @@ export default function PrasthanaThraya() {
               {editingItem ? "Edit Entry" : "Add Prasthana Thraya Entry"}
             </DialogTitle>
             <DialogDescription>
-              {editingItem ? "Update the entry details." : "Create a new Prasthana Thraya screen entry."}
+              {editingItem ? "Update the entry. Changes saved as draft." : "Create a new entry. It will be saved as a draft."}
             </DialogDescription>
           </DialogHeader>
           <form onSubmit={handleSubmit} className="space-y-5">
@@ -303,7 +334,7 @@ export default function PrasthanaThraya() {
               </Button>
               <Button type="submit" disabled={isSaving} data-testid="button-prasthana-save">
                 {isSaving && <Loader2 className="w-4 h-4 mr-2 animate-spin" />}
-                {editingItem ? "Save Changes" : "Create Entry"}
+                Save as Draft
               </Button>
             </div>
           </form>
@@ -313,7 +344,7 @@ export default function PrasthanaThraya() {
       <AlertDialog open={!!deleteTarget} onOpenChange={() => setDeleteTarget(null)}>
         <AlertDialogContent>
           <AlertDialogHeader>
-            <AlertDialogTitle>Delete Entry</AlertDialogTitle>
+            <AlertDialogTitle>Delete {deleteTarget?._isDraft ? "Draft" : "Entry"}</AlertDialogTitle>
             <AlertDialogDescription>
               Are you sure you want to delete &quot;{deleteTarget?.GranthaName}&quot;?
             </AlertDialogDescription>
@@ -321,7 +352,7 @@ export default function PrasthanaThraya() {
           <AlertDialogFooter>
             <AlertDialogCancel>Cancel</AlertDialogCancel>
             <AlertDialogAction
-              onClick={() => deleteTarget && deleteMutation.mutate(deleteTarget.documentId)}
+              onClick={confirmDelete}
               className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
             >
               Delete

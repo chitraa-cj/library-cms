@@ -1,5 +1,5 @@
 import { sql } from "drizzle-orm";
-import { pgTable, text, varchar, timestamp } from "drizzle-orm/pg-core";
+import { pgTable, text, varchar, timestamp, serial, jsonb } from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod";
 
@@ -26,6 +26,27 @@ export const loginSchema = z.object({
 export type InsertUser = z.infer<typeof insertUserSchema>;
 export type User = typeof users.$inferSelect;
 export type LoginData = z.infer<typeof loginSchema>;
+
+export const contentDrafts = pgTable("content_drafts", {
+  id: serial("id").primaryKey(),
+  contentType: text("content_type").notNull(),
+  strapiDocumentId: text("strapi_document_id"),
+  title: text("title").notNull(),
+  data: jsonb("data").notNull(),
+  status: text("status").notNull().default("draft"),
+  createdBy: varchar("created_by").references(() => users.id),
+  createdAt: timestamp("created_at").defaultNow(),
+  updatedAt: timestamp("updated_at").defaultNow(),
+});
+
+export const insertDraftSchema = createInsertSchema(contentDrafts).omit({
+  id: true,
+  createdAt: true,
+  updatedAt: true,
+});
+
+export type InsertDraft = z.infer<typeof insertDraftSchema>;
+export type Draft = typeof contentDrafts.$inferSelect;
 
 export const granthaTypes = [
   "Upanishad",

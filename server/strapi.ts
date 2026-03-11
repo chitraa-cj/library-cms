@@ -4,7 +4,7 @@ import { requireAuth } from "./auth";
 const STRAPI_URL = process.env.STRAPI_URL || "http://13.60.173.218:1337";
 const STRAPI_TOKEN = process.env.STRAPI_API_TOKEN;
 
-async function strapiRequest(path: string, options: RequestInit = {}) {
+export async function strapiRequest(path: string, options: RequestInit = {}) {
   const url = `${STRAPI_URL}${path}`;
   const headers: Record<string, string> = {
     Authorization: `Bearer ${STRAPI_TOKEN}`,

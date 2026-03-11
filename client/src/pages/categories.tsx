@@ -2,6 +2,7 @@ import { useState } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { queryClient, apiRequest } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
+import { useDrafts } from "@/hooks/use-drafts";
 import DataTable from "@/components/data-table";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -30,8 +31,9 @@ import { Loader2 } from "lucide-react";
 export default function CategoriesPage() {
   const { toast } = useToast();
   const [formOpen, setFormOpen] = useState(false);
-  const [deleteTarget, setDeleteTarget] = useState<StrapiCategory | null>(null);
-  const [editingItem, setEditingItem] = useState<StrapiCategory | null>(null);
+  const [deleteTarget, setDeleteTarget] = useState<any>(null);
+  const [editingItem, setEditingItem] = useState<any>(null);
+  const [editingDraftId, setEditingDraftId] = useState<number | null>(null);
 
   const [formData, setFormData] = useState({ name: "", slug: "", description: "" });
 
@@ -39,40 +41,9 @@ export default function CategoriesPage() {
     queryKey: ["/api/strapi", "categories"],
   });
 
-  const createMutation = useMutation({
-    mutationFn: async (payload: any) => {
-      const res = await apiRequest("POST", "/api/strapi/categories", payload);
-      return res.json();
-    },
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["/api/strapi", "categories"] });
-      setFormOpen(false);
-      resetForm();
-      toast({ title: "Category created" });
-    },
-    onError: (err: any) => {
-      toast({ variant: "destructive", title: "Error", description: err.message });
-    },
-  });
+  const { unpublishedDrafts, isLoadingDrafts, saveDraft, publishDraft, deleteDraft } = useDrafts("categories");
 
-  const updateMutation = useMutation({
-    mutationFn: async ({ id, payload }: { id: string; payload: any }) => {
-      const res = await apiRequest("PUT", `/api/strapi/categories/${id}`, payload);
-      return res.json();
-    },
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["/api/strapi", "categories"] });
-      setFormOpen(false);
-      setEditingItem(null);
-      resetForm();
-      toast({ title: "Category updated" });
-    },
-    onError: (err: any) => {
-      toast({ variant: "destructive", title: "Error", description: err.message });
-    },
-  });
-
-  const deleteMutation = useMutation({
+  const deleteStrapiMutation = useMutation({
     mutationFn: async (documentId: string) => {
       const res = await apiRequest("DELETE", `/api/strapi/categories/${documentId}`);
       return res.json();
@@ -89,6 +60,7 @@ export default function CategoriesPage() {
 
   function resetForm() {
     setFormData({ name: "", slug: "", description: "" });
+    setEditingDraftId(null);
   }
 
   function openAdd() {
@@ -97,13 +69,24 @@ export default function CategoriesPage() {
     setFormOpen(true);
   }
 
-  function openEdit(item: StrapiCategory) {
+  function openEdit(item: any) {
     setEditingItem(item);
-    setFormData({
-      name: item.name || "",
-      slug: item.slug || "",
-      description: item.description || "",
-    });
+    if (item._isDraft) {
+      setEditingDraftId(item._draftId);
+      const d = item._draftData;
+      setFormData({
+        name: d.name || "",
+        slug: d.slug || "",
+        description: d.description || "",
+      });
+    } else {
+      setEditingDraftId(null);
+      setFormData({
+        name: item.name || "",
+        slug: item.slug || "",
+        description: item.description || "",
+      });
+    }
     setFormOpen(true);
   }
 
@@ -118,14 +101,56 @@ export default function CategoriesPage() {
       slug: formData.slug || formData.name.toLowerCase().replace(/\s+/g, "-"),
       description: formData.description || undefined,
     };
-    if (editingItem) {
-      updateMutation.mutate({ id: editingItem.documentId, payload });
+
+    const strapiDocId = editingItem && !editingItem._isDraft ? editingItem.documentId : (editingItem?._strapiDocId || undefined);
+
+    saveDraft.mutate(
+      {
+        title: formData.name,
+        data: payload,
+        strapiDocumentId: strapiDocId,
+        draftId: editingDraftId || undefined,
+      },
+      {
+        onSuccess: () => {
+          setFormOpen(false);
+          resetForm();
+          setEditingItem(null);
+        },
+      }
+    );
+  }
+
+  function confirmDelete() {
+    if (!deleteTarget) return;
+    if (deleteTarget._isDraft) {
+      deleteDraft.mutate(deleteTarget._draftId, { onSuccess: () => setDeleteTarget(null) });
     } else {
-      createMutation.mutate(payload);
+      deleteStrapiMutation.mutate(deleteTarget.documentId);
     }
   }
 
-  const isSaving = createMutation.isPending || updateMutation.isPending;
+  function handlePublish(item: any) {
+    if (item._draftId) publishDraft.mutate(item._draftId);
+  }
+
+  const mergedData = [
+    ...unpublishedDrafts.map((d) => ({
+      ...(d.data as any),
+      _isDraft: true,
+      _draftId: d.id,
+      _draftStatus: d.status,
+      _strapiDocId: d.strapiDocumentId,
+      _draftData: d.data,
+    })),
+    ...(data?.data || []).map((item) => ({
+      ...item,
+      _isDraft: false,
+      _draftStatus: "published",
+    })),
+  ];
+
+  const isSaving = saveDraft.isPending;
 
   const columns = [
     { key: "name", label: "Name" },
@@ -144,12 +169,14 @@ export default function CategoriesPage() {
         title="Categories"
         description="Manage content categories"
         columns={columns}
-        data={data?.data || []}
-        isLoading={isLoading}
+        data={mergedData}
+        isLoading={isLoading || isLoadingDrafts}
         error={error}
         onAdd={openAdd}
         onEdit={openEdit}
         onDelete={(item) => setDeleteTarget(item)}
+        onPublish={handlePublish}
+        publishingId={publishDraft.isPending ? (publishDraft.variables as number) : null}
         addLabel="Add Category"
         testIdPrefix="category"
         searchKey="name"
@@ -161,7 +188,7 @@ export default function CategoriesPage() {
           <DialogHeader>
             <DialogTitle>{editingItem ? "Edit Category" : "Add New Category"}</DialogTitle>
             <DialogDescription>
-              {editingItem ? "Update category details." : "Create a new category."}
+              {editingItem ? "Update category details. Changes saved as draft." : "Create a new category. It will be saved as a draft."}
             </DialogDescription>
           </DialogHeader>
           <form onSubmit={handleSubmit} className="space-y-4">
@@ -202,7 +229,7 @@ export default function CategoriesPage() {
               </Button>
               <Button type="submit" disabled={isSaving} data-testid="button-category-save">
                 {isSaving && <Loader2 className="w-4 h-4 mr-2 animate-spin" />}
-                {editingItem ? "Save Changes" : "Create Category"}
+                Save as Draft
               </Button>
             </div>
           </form>
@@ -212,7 +239,7 @@ export default function CategoriesPage() {
       <AlertDialog open={!!deleteTarget} onOpenChange={() => setDeleteTarget(null)}>
         <AlertDialogContent>
           <AlertDialogHeader>
-            <AlertDialogTitle>Delete Category</AlertDialogTitle>
+            <AlertDialogTitle>Delete {deleteTarget?._isDraft ? "Draft" : "Category"}</AlertDialogTitle>
             <AlertDialogDescription>
               Are you sure you want to delete &quot;{deleteTarget?.name}&quot;?
             </AlertDialogDescription>
@@ -220,7 +247,7 @@ export default function CategoriesPage() {
           <AlertDialogFooter>
             <AlertDialogCancel>Cancel</AlertDialogCancel>
             <AlertDialogAction
-              onClick={() => deleteTarget && deleteMutation.mutate(deleteTarget.documentId)}
+              onClick={confirmDelete}
               className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
             >
               Delete

@@ -2,6 +2,7 @@ import { useState } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { queryClient, apiRequest } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
+import { useDrafts } from "@/hooks/use-drafts";
 import DataTable from "@/components/data-table";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -52,8 +53,9 @@ const EMPTY_TT: TextAndTranslation = {
 export default function ChaptersPage() {
   const { toast } = useToast();
   const [formOpen, setFormOpen] = useState(false);
-  const [deleteTarget, setDeleteTarget] = useState<StrapiChapter | null>(null);
-  const [editingItem, setEditingItem] = useState<StrapiChapter | null>(null);
+  const [deleteTarget, setDeleteTarget] = useState<any>(null);
+  const [editingItem, setEditingItem] = useState<any>(null);
+  const [editingDraftId, setEditingDraftId] = useState<number | null>(null);
 
   const [formData, setFormData] = useState({
     ChapterTitle: "",
@@ -77,40 +79,9 @@ export default function ChaptersPage() {
     queryKey: ["/api/strapi", "chapters"],
   });
 
-  const createMutation = useMutation({
-    mutationFn: async (payload: any) => {
-      const res = await apiRequest("POST", "/api/strapi/chapters", payload);
-      return res.json();
-    },
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["/api/strapi", "chapters"] });
-      setFormOpen(false);
-      resetForm();
-      toast({ title: "Chapter created", description: "Entry saved to Strapi CMS." });
-    },
-    onError: (err: any) => {
-      toast({ variant: "destructive", title: "Error", description: err.message });
-    },
-  });
+  const { unpublishedDrafts, isLoadingDrafts, saveDraft, publishDraft, deleteDraft } = useDrafts("chapters");
 
-  const updateMutation = useMutation({
-    mutationFn: async ({ id, payload }: { id: string; payload: any }) => {
-      const res = await apiRequest("PUT", `/api/strapi/chapters/${id}`, payload);
-      return res.json();
-    },
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["/api/strapi", "chapters"] });
-      setFormOpen(false);
-      setEditingItem(null);
-      resetForm();
-      toast({ title: "Chapter updated", description: "Changes saved." });
-    },
-    onError: (err: any) => {
-      toast({ variant: "destructive", title: "Error", description: err.message });
-    },
-  });
-
-  const deleteMutation = useMutation({
+  const deleteStrapiMutation = useMutation({
     mutationFn: async (documentId: string) => {
       const res = await apiRequest("DELETE", `/api/strapi/chapters/${documentId}`);
       return res.json();
@@ -135,6 +106,7 @@ export default function ChaptersPage() {
       BhashyamForShlokaManthra: { ...EMPTY_TT },
       Teekas: [],
     });
+    setEditingDraftId(null);
   }
 
   function openAdd() {
@@ -143,17 +115,32 @@ export default function ChaptersPage() {
     setFormOpen(true);
   }
 
-  function openEdit(item: StrapiChapter) {
+  function openEdit(item: any) {
     setEditingItem(item);
-    setFormData({
-      ChapterTitle: item.ChapterTitle || "",
-      order: item.order || 0,
-      grantha: item.grantha?.documentId || "",
-      parent: item.parent?.documentId || "",
-      ShlokaManthraEntry: item.ShlokaManthraEntry || { ...EMPTY_TT },
-      BhashyamForShlokaManthra: item.BhashyamForShlokaManthra || { ...EMPTY_TT },
-      Teekas: item.Teekas || [],
-    });
+    if (item._isDraft) {
+      setEditingDraftId(item._draftId);
+      const d = item._draftData;
+      setFormData({
+        ChapterTitle: d.ChapterTitle || "",
+        order: d.order || 0,
+        grantha: d.grantha || "",
+        parent: d.parent || "",
+        ShlokaManthraEntry: d.ShlokaManthraEntry || { ...EMPTY_TT },
+        BhashyamForShlokaManthra: d.BhashyamForShlokaManthra || { ...EMPTY_TT },
+        Teekas: d.Teekas || [],
+      });
+    } else {
+      setEditingDraftId(null);
+      setFormData({
+        ChapterTitle: item.ChapterTitle || "",
+        order: item.order || 0,
+        grantha: item.grantha?.documentId || "",
+        parent: item.parent?.documentId || "",
+        ShlokaManthraEntry: item.ShlokaManthraEntry || { ...EMPTY_TT },
+        BhashyamForShlokaManthra: item.BhashyamForShlokaManthra || { ...EMPTY_TT },
+        Teekas: item.Teekas || [],
+      });
+    }
     setFormOpen(true);
   }
 
@@ -173,14 +160,55 @@ export default function ChaptersPage() {
     if (formData.grantha) payload.grantha = formData.grantha;
     if (formData.parent) payload.parent = formData.parent;
 
-    if (editingItem) {
-      updateMutation.mutate({ id: editingItem.documentId, payload });
+    const strapiDocId = editingItem && !editingItem._isDraft ? editingItem.documentId : (editingItem?._strapiDocId || undefined);
+
+    saveDraft.mutate(
+      {
+        title: formData.ChapterTitle,
+        data: payload,
+        strapiDocumentId: strapiDocId,
+        draftId: editingDraftId || undefined,
+      },
+      {
+        onSuccess: () => {
+          setFormOpen(false);
+          resetForm();
+          setEditingItem(null);
+        },
+      }
+    );
+  }
+
+  function confirmDelete() {
+    if (!deleteTarget) return;
+    if (deleteTarget._isDraft) {
+      deleteDraft.mutate(deleteTarget._draftId, { onSuccess: () => setDeleteTarget(null) });
     } else {
-      createMutation.mutate(payload);
+      deleteStrapiMutation.mutate(deleteTarget.documentId);
     }
   }
 
-  const isSaving = createMutation.isPending || updateMutation.isPending;
+  function handlePublish(item: any) {
+    if (item._draftId) publishDraft.mutate(item._draftId);
+  }
+
+  const mergedData = [
+    ...unpublishedDrafts.map((d) => ({
+      ...(d.data as any),
+      _isDraft: true,
+      _draftId: d.id,
+      _draftStatus: d.status,
+      _strapiDocId: d.strapiDocumentId,
+      _draftData: d.data,
+    })),
+    ...(data?.data || []).map((item) => ({
+      ...item,
+      _isDraft: false,
+      _draftStatus: "published",
+    })),
+  ];
+
+  const isSaving = saveDraft.isPending;
 
   const columns = [
     { key: "ChapterTitle", label: "Title" },
@@ -188,7 +216,7 @@ export default function ChaptersPage() {
     {
       key: "grantha",
       label: "Grantha",
-      render: (_: any, row: StrapiChapter) =>
+      render: (_: any, row: any) =>
         row.grantha?.GranthaName ? (
           <Badge variant="secondary">{row.grantha.GranthaName}</Badge>
         ) : null,
@@ -196,8 +224,7 @@ export default function ChaptersPage() {
     {
       key: "parent",
       label: "Parent Chapter",
-      render: (_: any, row: StrapiChapter) =>
-        row.parent?.ChapterTitle || null,
+      render: (_: any, row: any) => row.parent?.ChapterTitle || null,
     },
   ];
 
@@ -207,12 +234,14 @@ export default function ChaptersPage() {
         title="Chapters"
         description="Manage chapters within granthas"
         columns={columns}
-        data={data?.data || []}
-        isLoading={isLoading}
+        data={mergedData}
+        isLoading={isLoading || isLoadingDrafts}
         error={error}
         onAdd={openAdd}
         onEdit={openEdit}
         onDelete={(item) => setDeleteTarget(item)}
+        onPublish={handlePublish}
+        publishingId={publishDraft.isPending ? (publishDraft.variables as number) : null}
         addLabel="Add Chapter"
         testIdPrefix="chapter"
         searchKey="ChapterTitle"
@@ -227,8 +256,8 @@ export default function ChaptersPage() {
             </DialogTitle>
             <DialogDescription>
               {editingItem
-                ? "Update the chapter details."
-                : "Create a new chapter with shlokas, mantras, and translations."}
+                ? "Update the chapter details. Changes will be saved as a draft."
+                : "Create a new chapter. It will be saved as a draft until you publish it."}
             </DialogDescription>
           </DialogHeader>
           <form onSubmit={handleSubmit} className="space-y-5">
@@ -340,31 +369,28 @@ export default function ChaptersPage() {
               </Button>
               <Button type="submit" disabled={isSaving} data-testid="button-chapter-save">
                 {isSaving && <Loader2 className="w-4 h-4 mr-2 animate-spin" />}
-                {editingItem ? "Save Changes" : "Create Chapter"}
+                Save as Draft
               </Button>
             </div>
           </form>
         </DialogContent>
       </Dialog>
 
-      <AlertDialog
-        open={!!deleteTarget}
-        onOpenChange={() => setDeleteTarget(null)}
-      >
+      <AlertDialog open={!!deleteTarget} onOpenChange={() => setDeleteTarget(null)}>
         <AlertDialogContent>
           <AlertDialogHeader>
-            <AlertDialogTitle>Delete Chapter</AlertDialogTitle>
+            <AlertDialogTitle>Delete {deleteTarget?._isDraft ? "Draft" : "Chapter"}</AlertDialogTitle>
             <AlertDialogDescription>
               Are you sure you want to delete &quot;{deleteTarget?.ChapterTitle}&quot;?
+              {!deleteTarget?._isDraft && " This will remove it from the CMS."}
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
             <AlertDialogCancel>Cancel</AlertDialogCancel>
             <AlertDialogAction
-              onClick={() =>
-                deleteTarget && deleteMutation.mutate(deleteTarget.documentId)
-              }
+              onClick={confirmDelete}
               className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+              data-testid="button-confirm-delete"
             >
               Delete
             </AlertDialogAction>

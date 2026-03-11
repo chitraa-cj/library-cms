@@ -1,9 +1,11 @@
 import { useQuery } from "@tanstack/react-query";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import { BookOpen, FileText, Users, Tag, Layers, BookMarked, ArrowRight } from "lucide-react";
 import { Link } from "wouter";
 import { useAuth } from "@/hooks/use-auth";
+import type { Draft } from "@shared/schema";
 
 const contentSections = [
   {
@@ -64,8 +66,10 @@ const contentSections = [
 
 function StatCard({
   section,
+  draftCount,
 }: {
   section: (typeof contentSections)[number];
+  draftCount: number;
 }) {
   const { data, isLoading, error } = useQuery<any>({
     queryKey: ["/api/strapi", section.key],
@@ -84,7 +88,14 @@ function StatCard({
             >
               <section.icon className={`w-5 h-5 ${section.color}`} />
             </div>
-            <ArrowRight className="w-4 h-4 text-muted-foreground opacity-0 group-hover:opacity-100 transition-opacity" />
+            <div className="flex items-center gap-2">
+              {draftCount > 0 && (
+                <Badge variant="outline" className="bg-amber-100 text-amber-800 border-amber-300 text-xs" data-testid={`badge-drafts-${section.key}`}>
+                  {draftCount} draft{draftCount !== 1 ? "s" : ""}
+                </Badge>
+              )}
+              <ArrowRight className="w-4 h-4 text-muted-foreground opacity-0 group-hover:opacity-100 transition-opacity" />
+            </div>
           </div>
         </CardHeader>
         <CardContent>
@@ -106,7 +117,7 @@ function StatCard({
               </span>
             )}
             <span className="text-xs text-muted-foreground ml-1.5">
-              entries
+              published
             </span>
           </div>
         </CardContent>
@@ -117,6 +128,22 @@ function StatCard({
 
 export default function DashboardPage() {
   const { user } = useAuth();
+
+  const { data: allDrafts } = useQuery<Draft[]>({
+    queryKey: ["/api/drafts"],
+    queryFn: async () => {
+      const res = await fetch("/api/drafts", { credentials: "include" });
+      if (!res.ok) return [];
+      return res.json();
+    },
+  });
+
+  const draftCounts: Record<string, number> = {};
+  (allDrafts || []).forEach((d) => {
+    if (d.status === "draft") {
+      draftCounts[d.contentType] = (draftCounts[d.contentType] || 0) + 1;
+    }
+  });
 
   return (
     <div className="p-6 lg:p-8 max-w-7xl mx-auto space-y-8">
@@ -134,7 +161,7 @@ export default function DashboardPage() {
 
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
         {contentSections.map((section) => (
-          <StatCard key={section.key} section={section} />
+          <StatCard key={section.key} section={section} draftCount={draftCounts[section.key] || 0} />
         ))}
       </div>
 

@@ -2,6 +2,7 @@ import { useState } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { queryClient, apiRequest } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
+import { useDrafts } from "@/hooks/use-drafts";
 import DataTable from "@/components/data-table";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -43,8 +44,9 @@ import { Loader2 } from "lucide-react";
 export default function ArticlesPage() {
   const { toast } = useToast();
   const [formOpen, setFormOpen] = useState(false);
-  const [deleteTarget, setDeleteTarget] = useState<StrapiArticle | null>(null);
-  const [editingItem, setEditingItem] = useState<StrapiArticle | null>(null);
+  const [deleteTarget, setDeleteTarget] = useState<any>(null);
+  const [editingItem, setEditingItem] = useState<any>(null);
+  const [editingDraftId, setEditingDraftId] = useState<number | null>(null);
 
   const [formData, setFormData] = useState({
     title: "",
@@ -66,40 +68,9 @@ export default function ArticlesPage() {
     queryKey: ["/api/strapi", "categories"],
   });
 
-  const createMutation = useMutation({
-    mutationFn: async (payload: any) => {
-      const res = await apiRequest("POST", "/api/strapi/articles", payload);
-      return res.json();
-    },
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["/api/strapi", "articles"] });
-      setFormOpen(false);
-      resetForm();
-      toast({ title: "Article created" });
-    },
-    onError: (err: any) => {
-      toast({ variant: "destructive", title: "Error", description: err.message });
-    },
-  });
+  const { unpublishedDrafts, isLoadingDrafts, saveDraft, publishDraft, deleteDraft } = useDrafts("articles");
 
-  const updateMutation = useMutation({
-    mutationFn: async ({ id, payload }: { id: string; payload: any }) => {
-      const res = await apiRequest("PUT", `/api/strapi/articles/${id}`, payload);
-      return res.json();
-    },
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["/api/strapi", "articles"] });
-      setFormOpen(false);
-      setEditingItem(null);
-      resetForm();
-      toast({ title: "Article updated" });
-    },
-    onError: (err: any) => {
-      toast({ variant: "destructive", title: "Error", description: err.message });
-    },
-  });
-
-  const deleteMutation = useMutation({
+  const deleteStrapiMutation = useMutation({
     mutationFn: async (documentId: string) => {
       const res = await apiRequest("DELETE", `/api/strapi/articles/${documentId}`);
       return res.json();
@@ -116,6 +87,7 @@ export default function ArticlesPage() {
 
   function resetForm() {
     setFormData({ title: "", description: "", slug: "", author: "", category: "" });
+    setEditingDraftId(null);
   }
 
   function openAdd() {
@@ -124,15 +96,28 @@ export default function ArticlesPage() {
     setFormOpen(true);
   }
 
-  function openEdit(item: StrapiArticle) {
+  function openEdit(item: any) {
     setEditingItem(item);
-    setFormData({
-      title: item.title || "",
-      description: item.description || "",
-      slug: item.slug || "",
-      author: item.author?.documentId || "",
-      category: item.category?.documentId || "",
-    });
+    if (item._isDraft) {
+      setEditingDraftId(item._draftId);
+      const d = item._draftData;
+      setFormData({
+        title: d.title || "",
+        description: d.description || "",
+        slug: d.slug || "",
+        author: d.author || "",
+        category: d.category || "",
+      });
+    } else {
+      setEditingDraftId(null);
+      setFormData({
+        title: item.title || "",
+        description: item.description || "",
+        slug: item.slug || "",
+        author: item.author?.documentId || "",
+        category: item.category?.documentId || "",
+      });
+    }
     setFormOpen(true);
   }
 
@@ -150,14 +135,55 @@ export default function ArticlesPage() {
     if (formData.author) payload.author = formData.author;
     if (formData.category) payload.category = formData.category;
 
-    if (editingItem) {
-      updateMutation.mutate({ id: editingItem.documentId, payload });
+    const strapiDocId = editingItem && !editingItem._isDraft ? editingItem.documentId : (editingItem?._strapiDocId || undefined);
+
+    saveDraft.mutate(
+      {
+        title: formData.title,
+        data: payload,
+        strapiDocumentId: strapiDocId,
+        draftId: editingDraftId || undefined,
+      },
+      {
+        onSuccess: () => {
+          setFormOpen(false);
+          resetForm();
+          setEditingItem(null);
+        },
+      }
+    );
+  }
+
+  function confirmDelete() {
+    if (!deleteTarget) return;
+    if (deleteTarget._isDraft) {
+      deleteDraft.mutate(deleteTarget._draftId, { onSuccess: () => setDeleteTarget(null) });
     } else {
-      createMutation.mutate(payload);
+      deleteStrapiMutation.mutate(deleteTarget.documentId);
     }
   }
 
-  const isSaving = createMutation.isPending || updateMutation.isPending;
+  function handlePublish(item: any) {
+    if (item._draftId) publishDraft.mutate(item._draftId);
+  }
+
+  const mergedData = [
+    ...unpublishedDrafts.map((d) => ({
+      ...(d.data as any),
+      _isDraft: true,
+      _draftId: d.id,
+      _draftStatus: d.status,
+      _strapiDocId: d.strapiDocumentId,
+      _draftData: d.data,
+    })),
+    ...(data?.data || []).map((item) => ({
+      ...item,
+      _isDraft: false,
+      _draftStatus: "published",
+    })),
+  ];
+
+  const isSaving = saveDraft.isPending;
 
   const columns = [
     { key: "title", label: "Title" },
@@ -174,7 +200,7 @@ export default function ArticlesPage() {
     {
       key: "author",
       label: "Author",
-      render: (_: any, row: StrapiArticle) =>
+      render: (_: any, row: any) =>
         row.author?.name ? (
           <Badge variant="secondary">{row.author.name}</Badge>
         ) : null,
@@ -182,7 +208,7 @@ export default function ArticlesPage() {
     {
       key: "category",
       label: "Category",
-      render: (_: any, row: StrapiArticle) =>
+      render: (_: any, row: any) =>
         row.category?.name ? (
           <Badge variant="outline">{row.category.name}</Badge>
         ) : null,
@@ -195,12 +221,14 @@ export default function ArticlesPage() {
         title="Articles"
         description="Manage blog articles and content"
         columns={columns}
-        data={data?.data || []}
-        isLoading={isLoading}
+        data={mergedData}
+        isLoading={isLoading || isLoadingDrafts}
         error={error}
         onAdd={openAdd}
         onEdit={openEdit}
         onDelete={(item) => setDeleteTarget(item)}
+        onPublish={handlePublish}
+        publishingId={publishDraft.isPending ? (publishDraft.variables as number) : null}
         addLabel="Add Article"
         testIdPrefix="article"
         searchKey="title"
@@ -214,7 +242,7 @@ export default function ArticlesPage() {
               {editingItem ? "Edit Article" : "Add New Article"}
             </DialogTitle>
             <DialogDescription>
-              {editingItem ? "Update article details." : "Create a new article."}
+              {editingItem ? "Update article details. Changes saved as draft." : "Create a new article. It will be saved as a draft."}
             </DialogDescription>
           </DialogHeader>
           <form onSubmit={handleSubmit} className="space-y-4">
@@ -304,7 +332,7 @@ export default function ArticlesPage() {
               </Button>
               <Button type="submit" disabled={isSaving} data-testid="button-article-save">
                 {isSaving && <Loader2 className="w-4 h-4 mr-2 animate-spin" />}
-                {editingItem ? "Save Changes" : "Create Article"}
+                Save as Draft
               </Button>
             </div>
           </form>
@@ -314,7 +342,7 @@ export default function ArticlesPage() {
       <AlertDialog open={!!deleteTarget} onOpenChange={() => setDeleteTarget(null)}>
         <AlertDialogContent>
           <AlertDialogHeader>
-            <AlertDialogTitle>Delete Article</AlertDialogTitle>
+            <AlertDialogTitle>Delete {deleteTarget?._isDraft ? "Draft" : "Article"}</AlertDialogTitle>
             <AlertDialogDescription>
               Are you sure you want to delete &quot;{deleteTarget?.title}&quot;?
             </AlertDialogDescription>
@@ -322,7 +350,7 @@ export default function ArticlesPage() {
           <AlertDialogFooter>
             <AlertDialogCancel>Cancel</AlertDialogCancel>
             <AlertDialogAction
-              onClick={() => deleteTarget && deleteMutation.mutate(deleteTarget.documentId)}
+              onClick={confirmDelete}
               className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
             >
               Delete

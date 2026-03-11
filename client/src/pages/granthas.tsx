@@ -2,6 +2,7 @@ import { useState } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { queryClient, apiRequest } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
+import { useDrafts } from "@/hooks/use-drafts";
 import DataTable from "@/components/data-table";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -55,8 +56,9 @@ const EMPTY_TEXT_TRANSLATION: TextAndTranslation = {
 export default function GranthasPage() {
   const { toast } = useToast();
   const [formOpen, setFormOpen] = useState(false);
-  const [deleteTarget, setDeleteTarget] = useState<StrapiGrantha | null>(null);
-  const [editingItem, setEditingItem] = useState<StrapiGrantha | null>(null);
+  const [deleteTarget, setDeleteTarget] = useState<any>(null);
+  const [editingItem, setEditingItem] = useState<any>(null);
+  const [editingDraftId, setEditingDraftId] = useState<number | null>(null);
 
   const [formData, setFormData] = useState({
     GranthaName: "",
@@ -71,40 +73,9 @@ export default function GranthasPage() {
     queryKey: ["/api/strapi", "granthas"],
   });
 
-  const createMutation = useMutation({
-    mutationFn: async (payload: any) => {
-      const res = await apiRequest("POST", "/api/strapi/granthas", payload);
-      return res.json();
-    },
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["/api/strapi", "granthas"] });
-      setFormOpen(false);
-      resetForm();
-      toast({ title: "Grantha created", description: "Entry saved to Strapi CMS." });
-    },
-    onError: (err: any) => {
-      toast({ variant: "destructive", title: "Error", description: err.message });
-    },
-  });
+  const { unpublishedDrafts, isLoadingDrafts, saveDraft, publishDraft, deleteDraft } = useDrafts("granthas");
 
-  const updateMutation = useMutation({
-    mutationFn: async ({ id, payload }: { id: string; payload: any }) => {
-      const res = await apiRequest("PUT", `/api/strapi/granthas/${id}`, payload);
-      return res.json();
-    },
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["/api/strapi", "granthas"] });
-      setFormOpen(false);
-      setEditingItem(null);
-      resetForm();
-      toast({ title: "Grantha updated", description: "Changes saved." });
-    },
-    onError: (err: any) => {
-      toast({ variant: "destructive", title: "Error", description: err.message });
-    },
-  });
-
-  const deleteMutation = useMutation({
+  const deleteStrapiMutation = useMutation({
     mutationFn: async (documentId: string) => {
       const res = await apiRequest("DELETE", `/api/strapi/granthas/${documentId}`);
       return res.json();
@@ -128,6 +99,7 @@ export default function GranthasPage() {
       IntroductionToTextEnglish: "",
       BhashyakaraIntroduction: { ...EMPTY_TEXT_TRANSLATION },
     });
+    setEditingDraftId(null);
   }
 
   function openAdd() {
@@ -136,16 +108,30 @@ export default function GranthasPage() {
     setFormOpen(true);
   }
 
-  function openEdit(item: StrapiGrantha) {
+  function openEdit(item: any) {
     setEditingItem(item);
-    setFormData({
-      GranthaName: item.GranthaName || "",
-      GranthaType: item.GranthaType || "",
-      BhashyamName: item.BhashyamName || "",
-      BhashyamAuthor: item.BhashyamAuthor || "",
-      IntroductionToTextEnglish: blocksToText(item.IntroductionToTextEnglish),
-      BhashyakaraIntroduction: item.BhashyakaraIntroduction || { ...EMPTY_TEXT_TRANSLATION },
-    });
+    if (item._isDraft) {
+      setEditingDraftId(item._draftId);
+      const d = item._draftData;
+      setFormData({
+        GranthaName: d.GranthaName || "",
+        GranthaType: d.GranthaType || "",
+        BhashyamName: d.BhashyamName || "",
+        BhashyamAuthor: d.BhashyamAuthor || "",
+        IntroductionToTextEnglish: blocksToText(d.IntroductionToTextEnglish),
+        BhashyakaraIntroduction: d.BhashyakaraIntroduction || { ...EMPTY_TEXT_TRANSLATION },
+      });
+    } else {
+      setEditingDraftId(null);
+      setFormData({
+        GranthaName: item.GranthaName || "",
+        GranthaType: item.GranthaType || "",
+        BhashyamName: item.BhashyamName || "",
+        BhashyamAuthor: item.BhashyamAuthor || "",
+        IntroductionToTextEnglish: blocksToText(item.IntroductionToTextEnglish),
+        BhashyakaraIntroduction: item.BhashyakaraIntroduction || { ...EMPTY_TEXT_TRANSLATION },
+      });
+    }
     setFormOpen(true);
   }
 
@@ -165,14 +151,64 @@ export default function GranthasPage() {
         : undefined,
       BhashyakaraIntroduction: formData.BhashyakaraIntroduction,
     };
-    if (editingItem) {
-      updateMutation.mutate({ id: editingItem.documentId, payload });
+
+    const strapiDocId = editingItem && !editingItem._isDraft ? editingItem.documentId : (editingItem?._strapiDocId || undefined);
+
+    saveDraft.mutate(
+      {
+        title: formData.GranthaName,
+        data: payload,
+        strapiDocumentId: strapiDocId,
+        draftId: editingDraftId || undefined,
+      },
+      {
+        onSuccess: () => {
+          setFormOpen(false);
+          resetForm();
+          setEditingItem(null);
+        },
+      }
+    );
+  }
+
+  function handleDelete(item: any) {
+    setDeleteTarget(item);
+  }
+
+  function confirmDelete() {
+    if (!deleteTarget) return;
+    if (deleteTarget._isDraft) {
+      deleteDraft.mutate(deleteTarget._draftId, {
+        onSuccess: () => setDeleteTarget(null),
+      });
     } else {
-      createMutation.mutate(payload);
+      deleteStrapiMutation.mutate(deleteTarget.documentId);
     }
   }
 
-  const isSaving = createMutation.isPending || updateMutation.isPending;
+  function handlePublish(item: any) {
+    if (item._draftId) {
+      publishDraft.mutate(item._draftId);
+    }
+  }
+
+  const mergedData = [
+    ...unpublishedDrafts.map((d) => ({
+      ...(d.data as any),
+      _isDraft: true,
+      _draftId: d.id,
+      _draftStatus: d.status,
+      _strapiDocId: d.strapiDocumentId,
+      _draftData: d.data,
+    })),
+    ...(data?.data || []).map((item) => ({
+      ...item,
+      _isDraft: false,
+      _draftStatus: "published",
+    })),
+  ];
+
+  const isSaving = saveDraft.isPending;
 
   const columns = [
     { key: "GranthaName", label: "Name" },
@@ -197,12 +233,14 @@ export default function GranthasPage() {
         title="Granthas"
         description="Manage sacred texts and scriptures"
         columns={columns}
-        data={data?.data || []}
-        isLoading={isLoading}
+        data={mergedData}
+        isLoading={isLoading || isLoadingDrafts}
         error={error}
         onAdd={openAdd}
         onEdit={openEdit}
-        onDelete={(item) => setDeleteTarget(item)}
+        onDelete={handleDelete}
+        onPublish={handlePublish}
+        publishingId={publishDraft.isPending ? (publishDraft.variables as number) : null}
         addLabel="Add Grantha"
         testIdPrefix="grantha"
         searchKey="GranthaName"
@@ -217,8 +255,8 @@ export default function GranthasPage() {
             </DialogTitle>
             <DialogDescription>
               {editingItem
-                ? "Update the grantha details below."
-                : "Fill in the details to create a new grantha entry."}
+                ? "Update the grantha details below. Changes will be saved as a draft."
+                : "Fill in the details. The entry will be saved as a draft until you publish it."}
             </DialogDescription>
           </DialogHeader>
           <form onSubmit={handleSubmit} className="space-y-5">
@@ -319,7 +357,7 @@ export default function GranthasPage() {
               </Button>
               <Button type="submit" disabled={isSaving} data-testid="button-grantha-save">
                 {isSaving && <Loader2 className="w-4 h-4 mr-2 animate-spin" />}
-                {editingItem ? "Save Changes" : "Create Grantha"}
+                Save as Draft
               </Button>
             </div>
           </form>
@@ -332,22 +370,21 @@ export default function GranthasPage() {
       >
         <AlertDialogContent>
           <AlertDialogHeader>
-            <AlertDialogTitle>Delete Grantha</AlertDialogTitle>
+            <AlertDialogTitle>Delete {deleteTarget?._isDraft ? "Draft" : "Grantha"}</AlertDialogTitle>
             <AlertDialogDescription>
               Are you sure you want to delete &quot;{deleteTarget?.GranthaName}&quot;?
-              This action cannot be undone.
+              {!deleteTarget?._isDraft && " This will remove it from the CMS."}
+              {deleteTarget?._isDraft && " This draft has not been published yet."}
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
             <AlertDialogCancel>Cancel</AlertDialogCancel>
             <AlertDialogAction
-              onClick={() =>
-                deleteTarget && deleteMutation.mutate(deleteTarget.documentId)
-              }
+              onClick={confirmDelete}
               className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
               data-testid="button-confirm-delete"
             >
-              {deleteMutation.isPending ? (
+              {(deleteStrapiMutation.isPending || deleteDraft.isPending) ? (
                 <Loader2 className="w-4 h-4 mr-2 animate-spin" />
               ) : null}
               Delete

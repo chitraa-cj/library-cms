@@ -2,6 +2,7 @@ import { useState } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { queryClient, apiRequest } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
+import { useDrafts } from "@/hooks/use-drafts";
 import DataTable from "@/components/data-table";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -29,8 +30,9 @@ import { Loader2 } from "lucide-react";
 export default function AuthorsPage() {
   const { toast } = useToast();
   const [formOpen, setFormOpen] = useState(false);
-  const [deleteTarget, setDeleteTarget] = useState<StrapiAuthor | null>(null);
-  const [editingItem, setEditingItem] = useState<StrapiAuthor | null>(null);
+  const [deleteTarget, setDeleteTarget] = useState<any>(null);
+  const [editingItem, setEditingItem] = useState<any>(null);
+  const [editingDraftId, setEditingDraftId] = useState<number | null>(null);
 
   const [formData, setFormData] = useState({ name: "", email: "" });
 
@@ -38,40 +40,9 @@ export default function AuthorsPage() {
     queryKey: ["/api/strapi", "authors"],
   });
 
-  const createMutation = useMutation({
-    mutationFn: async (payload: any) => {
-      const res = await apiRequest("POST", "/api/strapi/authors", payload);
-      return res.json();
-    },
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["/api/strapi", "authors"] });
-      setFormOpen(false);
-      resetForm();
-      toast({ title: "Author created" });
-    },
-    onError: (err: any) => {
-      toast({ variant: "destructive", title: "Error", description: err.message });
-    },
-  });
+  const { unpublishedDrafts, isLoadingDrafts, saveDraft, publishDraft, deleteDraft } = useDrafts("authors");
 
-  const updateMutation = useMutation({
-    mutationFn: async ({ id, payload }: { id: string; payload: any }) => {
-      const res = await apiRequest("PUT", `/api/strapi/authors/${id}`, payload);
-      return res.json();
-    },
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["/api/strapi", "authors"] });
-      setFormOpen(false);
-      setEditingItem(null);
-      resetForm();
-      toast({ title: "Author updated" });
-    },
-    onError: (err: any) => {
-      toast({ variant: "destructive", title: "Error", description: err.message });
-    },
-  });
-
-  const deleteMutation = useMutation({
+  const deleteStrapiMutation = useMutation({
     mutationFn: async (documentId: string) => {
       const res = await apiRequest("DELETE", `/api/strapi/authors/${documentId}`);
       return res.json();
@@ -88,6 +59,7 @@ export default function AuthorsPage() {
 
   function resetForm() {
     setFormData({ name: "", email: "" });
+    setEditingDraftId(null);
   }
 
   function openAdd() {
@@ -96,9 +68,16 @@ export default function AuthorsPage() {
     setFormOpen(true);
   }
 
-  function openEdit(item: StrapiAuthor) {
+  function openEdit(item: any) {
     setEditingItem(item);
-    setFormData({ name: item.name || "", email: item.email || "" });
+    if (item._isDraft) {
+      setEditingDraftId(item._draftId);
+      const d = item._draftData;
+      setFormData({ name: d.name || "", email: d.email || "" });
+    } else {
+      setEditingDraftId(null);
+      setFormData({ name: item.name || "", email: item.email || "" });
+    }
     setFormOpen(true);
   }
 
@@ -112,14 +91,56 @@ export default function AuthorsPage() {
       name: formData.name,
       email: formData.email || undefined,
     };
-    if (editingItem) {
-      updateMutation.mutate({ id: editingItem.documentId, payload });
+
+    const strapiDocId = editingItem && !editingItem._isDraft ? editingItem.documentId : (editingItem?._strapiDocId || undefined);
+
+    saveDraft.mutate(
+      {
+        title: formData.name,
+        data: payload,
+        strapiDocumentId: strapiDocId,
+        draftId: editingDraftId || undefined,
+      },
+      {
+        onSuccess: () => {
+          setFormOpen(false);
+          resetForm();
+          setEditingItem(null);
+        },
+      }
+    );
+  }
+
+  function confirmDelete() {
+    if (!deleteTarget) return;
+    if (deleteTarget._isDraft) {
+      deleteDraft.mutate(deleteTarget._draftId, { onSuccess: () => setDeleteTarget(null) });
     } else {
-      createMutation.mutate(payload);
+      deleteStrapiMutation.mutate(deleteTarget.documentId);
     }
   }
 
-  const isSaving = createMutation.isPending || updateMutation.isPending;
+  function handlePublish(item: any) {
+    if (item._draftId) publishDraft.mutate(item._draftId);
+  }
+
+  const mergedData = [
+    ...unpublishedDrafts.map((d) => ({
+      ...(d.data as any),
+      _isDraft: true,
+      _draftId: d.id,
+      _draftStatus: d.status,
+      _strapiDocId: d.strapiDocumentId,
+      _draftData: d.data,
+    })),
+    ...(data?.data || []).map((item) => ({
+      ...item,
+      _isDraft: false,
+      _draftStatus: "published",
+    })),
+  ];
+
+  const isSaving = saveDraft.isPending;
 
   const columns = [
     { key: "name", label: "Name" },
@@ -137,12 +158,14 @@ export default function AuthorsPage() {
         title="Authors"
         description="Manage author profiles"
         columns={columns}
-        data={data?.data || []}
-        isLoading={isLoading}
+        data={mergedData}
+        isLoading={isLoading || isLoadingDrafts}
         error={error}
         onAdd={openAdd}
         onEdit={openEdit}
         onDelete={(item) => setDeleteTarget(item)}
+        onPublish={handlePublish}
+        publishingId={publishDraft.isPending ? (publishDraft.variables as number) : null}
         addLabel="Add Author"
         testIdPrefix="author"
         searchKey="name"
@@ -154,7 +177,7 @@ export default function AuthorsPage() {
           <DialogHeader>
             <DialogTitle>{editingItem ? "Edit Author" : "Add New Author"}</DialogTitle>
             <DialogDescription>
-              {editingItem ? "Update author details." : "Add a new author profile."}
+              {editingItem ? "Update author details. Changes saved as draft." : "Add a new author. It will be saved as a draft."}
             </DialogDescription>
           </DialogHeader>
           <form onSubmit={handleSubmit} className="space-y-4">
@@ -185,7 +208,7 @@ export default function AuthorsPage() {
               </Button>
               <Button type="submit" disabled={isSaving} data-testid="button-author-save">
                 {isSaving && <Loader2 className="w-4 h-4 mr-2 animate-spin" />}
-                {editingItem ? "Save Changes" : "Create Author"}
+                Save as Draft
               </Button>
             </div>
           </form>
@@ -195,7 +218,7 @@ export default function AuthorsPage() {
       <AlertDialog open={!!deleteTarget} onOpenChange={() => setDeleteTarget(null)}>
         <AlertDialogContent>
           <AlertDialogHeader>
-            <AlertDialogTitle>Delete Author</AlertDialogTitle>
+            <AlertDialogTitle>Delete {deleteTarget?._isDraft ? "Draft" : "Author"}</AlertDialogTitle>
             <AlertDialogDescription>
               Are you sure you want to delete &quot;{deleteTarget?.name}&quot;?
             </AlertDialogDescription>
@@ -203,7 +226,7 @@ export default function AuthorsPage() {
           <AlertDialogFooter>
             <AlertDialogCancel>Cancel</AlertDialogCancel>
             <AlertDialogAction
-              onClick={() => deleteTarget && deleteMutation.mutate(deleteTarget.documentId)}
+              onClick={confirmDelete}
               className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
             >
               Delete

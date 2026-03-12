@@ -17,7 +17,9 @@ import {
 import {
   Select,
   SelectContent,
+  SelectGroup,
   SelectItem,
+  SelectLabel,
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
@@ -355,33 +357,6 @@ export default function ChaptersPage() {
 
   const flatTree = useMemo(() => buildFlatTree(strapiChapters), [strapiChapters]);
 
-  const adhyayasByGrantha = useMemo(() => {
-    const map = new Map<string, StrapiChapter[]>();
-    for (const c of strapiChapters) {
-      if (!c.parent && c.grantha?.documentId) {
-        const list = map.get(c.grantha.documentId) || [];
-        list.push(c);
-        map.set(c.grantha.documentId, list);
-      }
-    }
-    return map;
-  }, [strapiChapters]);
-
-  const khandasByAdhyaya = useMemo(() => {
-    const map = new Map<string, StrapiChapter[]>();
-    for (const c of strapiChapters) {
-      if (c.parent?.documentId) {
-        const parentFlat = flatTree.find((f) => f.documentId === c.parent!.documentId);
-        if (parentFlat?.level === "adhyaya") {
-          const list = map.get(c.parent.documentId) || [];
-          list.push(c);
-          map.set(c.parent.documentId, list);
-        }
-      }
-    }
-    return map;
-  }, [strapiChapters, flatTree]);
-
   function resetForm() {
     setFormData({
       ChapterTitle: "",
@@ -425,25 +400,12 @@ export default function ChaptersPage() {
       const level = flat?.level || "adhyaya";
       setChapterLevel(level);
 
-      let adhyayaParent = "";
-      let khandaParent = "";
-      if (level === "khanda") adhyayaParent = item.parent?.documentId || "";
-      if (level === "shloka") {
-        const directParent = flatTree.find((f) => f.documentId === item.parent?.documentId);
-        if (directParent?.level === "khanda") {
-          khandaParent = directParent.documentId;
-          adhyayaParent = directParent.parentDocId || "";
-        } else {
-          adhyayaParent = item.parent?.documentId || "";
-        }
-      }
-
       setFormData({
         ChapterTitle: item.ChapterTitle || "",
         order: item.order || 0,
-        grantha: item.grantha?.documentId || "",
-        adhyayaParent,
-        khandaParent,
+        grantha: level === "adhyaya" ? (item.grantha?.documentId || "") : "",
+        adhyayaParent: level === "khanda" ? (item.parent?.documentId || "") : "",
+        khandaParent: level === "shloka" ? (item.parent?.documentId || "") : "",
         ShlokaManthraEntry: item.ShlokaManthraEntry || { ...EMPTY_TT },
         BhashyamForShlokaManthra: item.BhashyamForShlokaManthra || { ...EMPTY_TT },
         Teekas: item.Teekas || [],
@@ -452,13 +414,14 @@ export default function ChaptersPage() {
     setFormOpen(true);
   }
 
-  function computeParentDocId(): string | null {
-    if (chapterLevel === "adhyaya") return null;
-    if (chapterLevel === "khanda") return formData.adhyayaParent || null;
-    if (chapterLevel === "shloka") {
-      return formData.khandaParent || formData.adhyayaParent || null;
+  function inferGranthaFromParent(parentDocId: string): string {
+    let current = flatTree.find((f) => f.documentId === parentDocId);
+    while (current) {
+      if (current.granthaDocId) return current.granthaDocId;
+      if (!current.parentDocId) break;
+      current = flatTree.find((f) => f.documentId === current!.parentDocId);
     }
-    return null;
+    return "";
   }
 
   function handleSubmit(e: React.FormEvent) {
@@ -471,12 +434,27 @@ export default function ChaptersPage() {
       toast({ variant: "destructive", title: "Grantha is required for Adhyaya level" });
       return;
     }
+    if (chapterLevel === "khanda" && !formData.adhyayaParent) {
+      toast({ variant: "destructive", title: "Parent Adhyaya is required for Khanda level" });
+      return;
+    }
+    if (chapterLevel === "shloka" && !formData.khandaParent) {
+      toast({ variant: "destructive", title: "Parent chapter is required for Shloka level" });
+      return;
+    }
 
-    const parentDocId = computeParentDocId();
+    const parentDocId =
+      chapterLevel === "adhyaya" ? null :
+      chapterLevel === "khanda" ? formData.adhyayaParent :
+      formData.khandaParent;
+
+    const granthaDocId =
+      chapterLevel === "adhyaya" ? formData.grantha :
+      parentDocId ? inferGranthaFromParent(parentDocId) : "";
 
     const payload: any = {
       _level: chapterLevel,
-      _grantha: formData.grantha,
+      _grantha: granthaDocId,
       _adhyayaParent: formData.adhyayaParent,
       _khandaParent: formData.khandaParent,
       ChapterTitle: formData.ChapterTitle,
@@ -485,7 +463,7 @@ export default function ChaptersPage() {
       BhashyamForShlokaManthra: formData.BhashyamForShlokaManthra,
       Teekas: formData.Teekas,
     };
-    if (formData.grantha) payload.grantha = formData.grantha;
+    if (granthaDocId) payload.grantha = granthaDocId;
     if (parentDocId) payload.parent = parentDocId;
 
     const strapiDocId =
@@ -545,12 +523,6 @@ export default function ChaptersPage() {
   );
 
   const allGranthas = granthasData?.data || [];
-  const selectedAdhyayas = formData.grantha
-    ? (adhyayasByGrantha.get(formData.grantha) || [])
-    : [];
-  const selectedKhandas = formData.adhyayaParent
-    ? (khandasByAdhyaya.get(formData.adhyayaParent) || [])
-    : [];
 
   const levelInfo = (level: ChapterLevel) =>
     CHAPTER_LEVELS.find((l) => l.value === level)!;
@@ -823,54 +795,23 @@ export default function ChaptersPage() {
                   Hierarchy Placement
                 </p>
 
-                <div>
-                  <Label className="text-sm">
-                    Grantha (Book){chapterLevel === "adhyaya" ? " *" : ""}
-                  </Label>
-                  <Select
-                    value={formData.grantha}
-                    onValueChange={(val) =>
-                      setFormData({ ...formData, grantha: val, adhyayaParent: "", khandaParent: "" })
-                    }
-                  >
-                    <SelectTrigger className="mt-1.5" data-testid="select-grantha">
-                      <SelectValue placeholder="Select Grantha" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {allGranthas.map((g) => (
-                        <SelectItem key={g.documentId} value={g.documentId}>
-                          {g.GranthaName}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                </div>
-
-                {(chapterLevel === "khanda" || chapterLevel === "shloka") && (
+                {/* ADHYAYA: belongs to a Grantha */}
+                {chapterLevel === "adhyaya" && (
                   <div>
-                    <Label className="text-sm">
-                      Adhyaya / Valli (Master Chapter)
-                      {chapterLevel === "khanda" ? " *" : ""}
-                    </Label>
+                    <Label className="text-sm">Grantha (Book) *</Label>
                     <Select
-                      value={formData.adhyayaParent}
+                      value={formData.grantha}
                       onValueChange={(val) =>
-                        setFormData({ ...formData, adhyayaParent: val, khandaParent: "" })
+                        setFormData({ ...formData, grantha: val, adhyayaParent: "", khandaParent: "" })
                       }
                     >
-                      <SelectTrigger className="mt-1.5" data-testid="select-adhyaya">
-                        <SelectValue placeholder={
-                          !formData.grantha
-                            ? "Select a Grantha first"
-                            : selectedAdhyayas.length === 0
-                            ? "No Adhyayas yet"
-                            : "Select Adhyaya / Valli"
-                        } />
+                      <SelectTrigger className="mt-1.5" data-testid="select-grantha">
+                        <SelectValue placeholder="Select Grantha" />
                       </SelectTrigger>
                       <SelectContent>
-                        {selectedAdhyayas.map((c) => (
-                          <SelectItem key={c.documentId} value={c.documentId}>
-                            {chapterLabel(c, selectedAdhyayas)}
+                        {allGranthas.map((g) => (
+                          <SelectItem key={g.documentId} value={g.documentId}>
+                            {g.GranthaName}
                           </SelectItem>
                         ))}
                       </SelectContent>
@@ -878,60 +819,126 @@ export default function ChaptersPage() {
                   </div>
                 )}
 
-                {chapterLevel === "shloka" && (
-                  <div>
-                    <Label className="text-sm">
-                      Khanda / Brahmana / Valli (Sub Chapter, optional)
-                    </Label>
-                    <Select
-                      value={formData.khandaParent}
-                      onValueChange={(val) => setFormData({ ...formData, khandaParent: val })}
-                    >
-                      <SelectTrigger className="mt-1.5" data-testid="select-khanda">
-                        <SelectValue placeholder={
-                          !formData.adhyayaParent
-                            ? "Select an Adhyaya first (optional)"
-                            : selectedKhandas.length === 0
-                            ? "No Sub Chapters yet"
-                            : "Select Khanda / Sub Chapter"
-                        } />
-                      </SelectTrigger>
-                      <SelectContent>
-                        {selectedKhandas.map((c) => (
-                          <SelectItem key={c.documentId} value={c.documentId}>
-                            {chapterLabel(c, selectedKhandas)}
-                          </SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
-                    <p className="text-xs text-muted-foreground mt-1">
-                      If no Sub Chapter selected, the Shloka will be placed directly under the Adhyaya.
-                    </p>
-                  </div>
-                )}
+                {/* KHANDA: belongs to an Adhyaya (Grantha is inferred) */}
+                {chapterLevel === "khanda" && (() => {
+                  const allAdhyayas = flatTree.filter((f) => f.level === "adhyaya");
+                  return (
+                    <div>
+                      <Label className="text-sm">Parent Adhyaya / Valli *</Label>
+                      <Select
+                        value={formData.adhyayaParent}
+                        onValueChange={(val) =>
+                          setFormData({ ...formData, adhyayaParent: val, khandaParent: "" })
+                        }
+                      >
+                        <SelectTrigger className="mt-1.5" data-testid="select-adhyaya">
+                          <SelectValue placeholder={allAdhyayas.length === 0 ? "No Adhyayas yet" : "Select Adhyaya / Valli"} />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {allAdhyayas.map((a) => {
+                            const g = allGranthas.find((gr) => gr.documentId === a.granthaDocId);
+                            return (
+                              <SelectItem key={a.documentId} value={a.documentId}>
+                                {a.ChapterTitle}{g ? ` — ${g.GranthaName}` : ""}
+                              </SelectItem>
+                            );
+                          })}
+                        </SelectContent>
+                      </Select>
+                      <p className="text-xs text-muted-foreground mt-1">
+                        The Grantha will be automatically inferred from the selected Adhyaya.
+                      </p>
+                    </div>
+                  );
+                })()}
 
-                <div className="text-xs text-muted-foreground bg-muted/40 rounded px-3 py-2 flex items-center gap-2">
-                  <span className="font-medium">Path:</span>
-                  {formData.grantha
-                    ? allGranthas.find((g) => g.documentId === formData.grantha)?.GranthaName
-                    : "Grantha"}
-                  {(chapterLevel === "khanda" || chapterLevel === "shloka") && formData.adhyayaParent && (
-                    <>
+                {/* SHLOKA: belongs to a Khanda or directly to an Adhyaya */}
+                {chapterLevel === "shloka" && (() => {
+                  const allKhandas = flatTree.filter((f) => f.level === "khanda");
+                  const allAdhyayas = flatTree.filter((f) => f.level === "adhyaya");
+                  return (
+                    <div>
+                      <Label className="text-sm">Parent Chapter *</Label>
+                      <Select
+                        value={formData.khandaParent}
+                        onValueChange={(val) => setFormData({ ...formData, khandaParent: val })}
+                      >
+                        <SelectTrigger className="mt-1.5" data-testid="select-shloka-parent">
+                          <SelectValue placeholder="Select parent Khanda or Adhyaya" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {allKhandas.length > 0 && (
+                            <SelectGroup>
+                              <SelectLabel>Khanda / Sub Chapter</SelectLabel>
+                              {allKhandas.map((k) => {
+                                const adhyaya = flatTree.find((f) => f.documentId === k.parentDocId);
+                                const g = allGranthas.find((gr) => gr.documentId === k.granthaDocId || gr.documentId === adhyaya?.granthaDocId);
+                                return (
+                                  <SelectItem key={k.documentId} value={k.documentId}>
+                                    {k.ChapterTitle}{adhyaya ? ` — ${adhyaya.ChapterTitle}` : ""}{g ? ` — ${g.GranthaName}` : ""}
+                                  </SelectItem>
+                                );
+                              })}
+                            </SelectGroup>
+                          )}
+                          {allAdhyayas.length > 0 && (
+                            <SelectGroup>
+                              <SelectLabel>Adhyaya / Valli (direct)</SelectLabel>
+                              {allAdhyayas.map((a) => {
+                                const g = allGranthas.find((gr) => gr.documentId === a.granthaDocId);
+                                return (
+                                  <SelectItem key={a.documentId} value={a.documentId}>
+                                    {a.ChapterTitle}{g ? ` — ${g.GranthaName}` : ""}
+                                  </SelectItem>
+                                );
+                              })}
+                            </SelectGroup>
+                          )}
+                        </SelectContent>
+                      </Select>
+                      <p className="text-xs text-muted-foreground mt-1">
+                        Prefer selecting a Khanda / Sub Chapter. Choose Adhyaya directly only if no Khanda exists for this text.
+                      </p>
+                    </div>
+                  );
+                })()}
+
+                {/* Path preview */}
+                {(() => {
+                  let granthaName = "";
+                  let parentNames: string[] = [];
+                  if (chapterLevel === "adhyaya") {
+                    granthaName = allGranthas.find((g) => g.documentId === formData.grantha)?.GranthaName || "";
+                  } else if (chapterLevel === "khanda" && formData.adhyayaParent) {
+                    const adhyaya = flatTree.find((f) => f.documentId === formData.adhyayaParent);
+                    granthaName = allGranthas.find((g) => g.documentId === adhyaya?.granthaDocId)?.GranthaName || "";
+                    if (adhyaya) parentNames = [adhyaya.ChapterTitle];
+                  } else if (chapterLevel === "shloka" && formData.khandaParent) {
+                    const parent = flatTree.find((f) => f.documentId === formData.khandaParent);
+                    if (parent?.level === "khanda") {
+                      const adhyaya = flatTree.find((f) => f.documentId === parent.parentDocId);
+                      granthaName = allGranthas.find((g) => g.documentId === (parent.granthaDocId || adhyaya?.granthaDocId))?.GranthaName || "";
+                      parentNames = [adhyaya?.ChapterTitle || "Adhyaya", parent.ChapterTitle];
+                    } else if (parent) {
+                      granthaName = allGranthas.find((g) => g.documentId === parent.granthaDocId)?.GranthaName || "";
+                      parentNames = [parent.ChapterTitle];
+                    }
+                  }
+                  return (
+                    <div className="text-xs text-muted-foreground bg-muted/40 rounded px-3 py-2 flex items-center gap-1 flex-wrap">
+                      <span className="font-medium">Path:</span>
+                      {granthaName ? <span>{granthaName}</span> : <span className="italic">Grantha</span>}
+                      {parentNames.map((n, i) => (
+                        <span key={i} className="flex items-center gap-1">
+                          <ChevronRight className="w-3 h-3" />
+                          {n}
+                        </span>
+                      ))}
                       <ChevronRight className="w-3 h-3" />
-                      {strapiChapters.find((c) => c.documentId === formData.adhyayaParent)?.ChapterTitle || "Adhyaya"}
-                    </>
-                  )}
-                  {chapterLevel === "shloka" && formData.khandaParent && (
-                    <>
-                      <ChevronRight className="w-3 h-3" />
-                      {strapiChapters.find((c) => c.documentId === formData.khandaParent)?.ChapterTitle || "Khanda"}
-                    </>
-                  )}
-                  <ChevronRight className="w-3 h-3" />
-                  <span className="font-medium text-primary">
-                    {formData.ChapterTitle || "This Chapter"}
-                  </span>
-                </div>
+                      <span className="font-medium text-primary">{formData.ChapterTitle || "This Chapter"}</span>
+                    </div>
+                  );
+                })()}
               </div>
 
               <TextTranslationFields

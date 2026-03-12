@@ -54,7 +54,6 @@ import {
   Eye,
 } from "lucide-react";
 import { blocksToText } from "@/components/text-translation-fields";
-import DashboardLayout from "@/components/dashboard-layout";
 
 const CHAPTER_LEVELS = [
   {
@@ -557,8 +556,7 @@ export default function ChaptersPage() {
     CHAPTER_LEVELS.find((l) => l.value === level)!;
 
   return (
-    <DashboardLayout>
-      <div className="p-6 lg:p-8 max-w-7xl mx-auto">
+    <div className="p-6 lg:p-8 max-w-7xl mx-auto">
         <div className="flex items-center justify-between mb-6">
           <div>
             <h1 className="text-2xl font-bold text-foreground">Chapters</h1>
@@ -999,7 +997,6 @@ export default function ChaptersPage() {
             {viewingItem && <ChapterViewPanel item={viewingItem} allGranthas={allGranthas} flatTree={flatTree} levelInfo={levelInfo} onClose={() => setViewingItem(null)} onEdit={() => { setViewingItem(null); openEdit(viewingItem); }} />}
           </DialogContent>
         </Dialog>
-      </div>
-    </DashboardLayout>
+    </div>
   );
 }

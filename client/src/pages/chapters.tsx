@@ -51,7 +51,9 @@ import {
   Pencil,
   Trash2,
   Send,
+  Eye,
 } from "lucide-react";
+import { blocksToText } from "@/components/text-translation-fields";
 import DashboardLayout from "@/components/dashboard-layout";
 
 const CHAPTER_LEVELS = [
@@ -158,12 +160,148 @@ function buildFlatTree(chapters: StrapiChapter[]): FlatChapter[] {
   return result;
 }
 
+function ReadOnlyField({ label, text }: { label: string; text?: string }) {
+  if (!text?.trim()) return null;
+  return (
+    <div>
+      <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-1">{label}</p>
+      <div className="bg-muted/40 rounded-md px-3 py-2 text-sm whitespace-pre-wrap font-serif leading-relaxed">
+        {text}
+      </div>
+    </div>
+  );
+}
+
+function ReadOnlyTT({ label, tt }: { label: string; tt?: TextAndTranslation }) {
+  if (!tt) return null;
+  const sanskrit = blocksToText(tt.SanskritTextEntry);
+  const english = blocksToText(tt.EnglishTranslationText);
+  const other = blocksToText(tt.OtherLanguagesTranslation);
+  const lang = typeof tt.LanguageOfTranslation === "string" ? tt.LanguageOfTranslation : "";
+  if (!sanskrit && !english && !other) return null;
+  return (
+    <div className="space-y-3 rounded-lg border border-border p-4">
+      <p className="text-sm font-semibold text-foreground flex items-center gap-2">
+        <FileText className="w-4 h-4 text-primary" />
+        {label}
+      </p>
+      <ReadOnlyField label="Sanskrit Text (Devanagari)" text={sanskrit} />
+      <ReadOnlyField label="English Translation" text={english} />
+      {lang && <ReadOnlyField label={`Translation in ${lang}`} text={other} />}
+    </div>
+  );
+}
+
+function ChapterViewPanel({
+  item,
+  allGranthas,
+  flatTree,
+  levelInfo,
+  onClose,
+  onEdit,
+}: {
+  item: any;
+  allGranthas: StrapiGrantha[];
+  flatTree: FlatChapter[];
+  levelInfo: (level: ChapterLevel) => (typeof CHAPTER_LEVELS)[number];
+  onClose: () => void;
+  onEdit: () => void;
+}) {
+  const isDraft = !!item._isDraft;
+  const data = isDraft ? item._draftData || item : item;
+  const lvl = levelInfo(isDraft ? (data._level || "adhyaya") : (flatTree.find((f) => f.documentId === item.documentId)?.level || "adhyaya"));
+  const LvlIcon = lvl.icon;
+
+  const grantha = isDraft
+    ? allGranthas.find((g) => g.documentId === data._grantha || g.documentId === data.grantha)
+    : allGranthas.find((g) => g.documentId === (item.grantha?.documentId));
+
+  const parentChapter = isDraft ? null : flatTree.find((f) => f.documentId === item.parent?.documentId);
+
+  const teekas: BhashyaEntry[] = data.Teekas || [];
+
+  return (
+    <div className="space-y-5">
+      <DialogHeader>
+        <div className="flex items-start justify-between gap-4">
+          <div>
+            <DialogTitle className="text-xl">{data.ChapterTitle || item.ChapterTitle}</DialogTitle>
+            <div className="flex items-center gap-2 mt-2">
+              <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded border text-xs font-medium ${lvl.color}`}>
+                <LvlIcon className="w-3 h-3" />
+                {lvl.label}
+              </span>
+              {isDraft ? (
+                <Badge className="bg-amber-100 text-amber-800 border-amber-200 text-xs">Draft</Badge>
+              ) : (
+                <Badge className="bg-green-100 text-green-800 border-green-200 text-xs">Published</Badge>
+              )}
+            </div>
+          </div>
+          <Button variant="outline" size="sm" onClick={onEdit} data-testid="button-view-edit">
+            <Pencil className="w-3.5 h-3.5 mr-1.5" />
+            Edit
+          </Button>
+        </div>
+        <DialogDescription className="mt-2">
+          <span className="flex items-center gap-1 text-xs text-muted-foreground flex-wrap">
+            {grantha && <><span className="font-medium">{grantha.GranthaName}</span><ChevronRight className="w-3 h-3" /></>}
+            {parentChapter && <><span>{parentChapter.ChapterTitle}</span><ChevronRight className="w-3 h-3" /></>}
+            <span className="text-foreground font-medium">{data.ChapterTitle || item.ChapterTitle}</span>
+          </span>
+        </DialogDescription>
+      </DialogHeader>
+
+      <div className="grid grid-cols-2 gap-4 text-sm">
+        <div>
+          <p className="text-xs text-muted-foreground font-medium">Order</p>
+          <p className="mt-0.5">{data.order ?? item.order ?? 0}</p>
+        </div>
+        {grantha && (
+          <div>
+            <p className="text-xs text-muted-foreground font-medium">Grantha</p>
+            <p className="mt-0.5">{grantha.GranthaName}</p>
+          </div>
+        )}
+      </div>
+
+      <ReadOnlyTT label="Shloka / Manthra Entry" tt={data.ShlokaManthraEntry} />
+      <ReadOnlyTT label="Bhashyam for Shloka / Manthra" tt={data.BhashyamForShlokaManthra} />
+
+      {teekas.length > 0 && (
+        <div className="space-y-3">
+          <p className="text-sm font-semibold text-foreground flex items-center gap-2">
+            <BookOpen className="w-4 h-4 text-primary" />
+            Teekas (Commentaries)
+          </p>
+          {teekas.map((teeka, i) => (
+            <div key={i} className="rounded-lg border border-border p-4 space-y-3">
+              <div className="flex items-center gap-3">
+                <span className="text-sm font-medium">{teeka.TeekaName || `Teeka ${i + 1}`}</span>
+                {teeka.TeekaAuthor && (
+                  <Badge variant="secondary" className="text-xs">{teeka.TeekaAuthor}</Badge>
+                )}
+              </div>
+              <ReadOnlyTT label="Teeka Entry" tt={teeka.TeekaEntry} />
+            </div>
+          ))}
+        </div>
+      )}
+
+      <div className="flex justify-end pt-2">
+        <Button variant="outline" onClick={onClose} data-testid="button-view-close">Close</Button>
+      </div>
+    </div>
+  );
+}
+
 export default function ChaptersPage() {
   const { toast } = useToast();
   const [formOpen, setFormOpen] = useState(false);
   const [deleteTarget, setDeleteTarget] = useState<any>(null);
   const [editingItem, setEditingItem] = useState<any>(null);
   const [editingDraftId, setEditingDraftId] = useState<number | null>(null);
+  const [viewingItem, setViewingItem] = useState<any>(null);
   const [searchQuery, setSearchQuery] = useState("");
 
   const [chapterLevel, setChapterLevel] = useState<ChapterLevel>("adhyaya");
@@ -496,6 +634,15 @@ export default function ChaptersPage() {
                           <Button
                             size="sm"
                             variant="ghost"
+                            onClick={() => setViewingItem(draft)}
+                            data-testid={`button-view-${draft._draftId}`}
+                            title="View details"
+                          >
+                            <Eye className="w-3.5 h-3.5" />
+                          </Button>
+                          <Button
+                            size="sm"
+                            variant="ghost"
                             onClick={() => handlePublish(draft)}
                             disabled={isPub}
                             data-testid={`button-publish-${draft._draftId}`}
@@ -562,6 +709,15 @@ export default function ChaptersPage() {
                       <td className="px-4 py-3 text-muted-foreground">{flat.order}</td>
                       <td className="px-4 py-3">
                         <div className="flex justify-end gap-1">
+                          <Button
+                            size="sm"
+                            variant="ghost"
+                            onClick={() => setViewingItem(flat.raw)}
+                            data-testid={`button-view-${flat.documentId}`}
+                            title="View details"
+                          >
+                            <Eye className="w-3.5 h-3.5" />
+                          </Button>
                           <Button
                             size="sm"
                             variant="ghost"
@@ -828,6 +984,12 @@ export default function ChaptersPage() {
             </AlertDialogFooter>
           </AlertDialogContent>
         </AlertDialog>
+
+        <Dialog open={!!viewingItem} onOpenChange={() => setViewingItem(null)}>
+          <DialogContent className="max-w-3xl max-h-[90vh] overflow-y-auto">
+            {viewingItem && <ChapterViewPanel item={viewingItem} allGranthas={allGranthas} flatTree={flatTree} levelInfo={levelInfo} onClose={() => setViewingItem(null)} onEdit={() => { setViewingItem(null); openEdit(viewingItem); }} />}
+          </DialogContent>
+        </Dialog>
       </div>
     </DashboardLayout>
   );

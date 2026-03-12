@@ -160,6 +160,15 @@ function buildFlatTree(chapters: StrapiChapter[]): FlatChapter[] {
   return result;
 }
 
+function chapterLabel(chapter: StrapiChapter, siblings: StrapiChapter[]): string {
+  const duplicates = siblings.filter((s) => s.ChapterTitle === chapter.ChapterTitle);
+  if (duplicates.length <= 1) return chapter.ChapterTitle;
+  const sorted = [...duplicates].sort((a, b) => a.order - b.order || a.documentId.localeCompare(b.documentId));
+  const idx = sorted.findIndex((s) => s.documentId === chapter.documentId);
+  const orderPart = chapter.order !== undefined ? `Order ${chapter.order}` : `#${idx + 1}`;
+  return `${chapter.ChapterTitle} — ${orderPart} (…${chapter.documentId.slice(-5)})`;
+}
+
 function ReadOnlyField({ label, text }: { label: string; text?: string }) {
   if (!text?.trim()) return null;
   return (
@@ -863,7 +872,7 @@ export default function ChaptersPage() {
                       <SelectContent>
                         {selectedAdhyayas.map((c) => (
                           <SelectItem key={c.documentId} value={c.documentId}>
-                            {c.ChapterTitle}
+                            {chapterLabel(c, selectedAdhyayas)}
                           </SelectItem>
                         ))}
                       </SelectContent>
@@ -892,7 +901,7 @@ export default function ChaptersPage() {
                       <SelectContent>
                         {selectedKhandas.map((c) => (
                           <SelectItem key={c.documentId} value={c.documentId}>
-                            {c.ChapterTitle}
+                            {chapterLabel(c, selectedKhandas)}
                           </SelectItem>
                         ))}
                       </SelectContent>

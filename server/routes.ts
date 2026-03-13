@@ -48,6 +48,113 @@ const CONTENT_TYPE_MAP: Record<string, string> = {
   "prasthana-thraya-screens": "prasthana-thraya-screens",
 };
 
+async function publishGranthaWithHierarchy(
+  draft: any
+): Promise<any> {
+  const rawData = draft.data as Record<string, any>;
+  // Strip wizard-only fields from the Grantha payload
+  const { teekas: _teekas, hierarchy, ...granthaDataRaw } = rawData;
+  const granthaPayload = cleanPayloadForStrapi(granthaDataRaw);
+
+  // 1. Create or update the Grantha record
+  let strapiResult: any;
+  if (draft.strapiDocumentId) {
+    strapiResult = await strapiRequest(`/api/granthas/${draft.strapiDocumentId}`, {
+      method: "PUT",
+      body: JSON.stringify({ data: granthaPayload }),
+    });
+  } else {
+    strapiResult = await strapiRequest("/api/granthas", {
+      method: "POST",
+      body: JSON.stringify({ data: granthaPayload }),
+    });
+  }
+
+  const granthaDocId: string | undefined = strapiResult?.data?.documentId;
+
+  // 2. Publish hierarchy as separate Chapter records (best-effort)
+  if (Array.isArray(hierarchy) && granthaDocId) {
+    for (const adhyaya of hierarchy) {
+      let adhyayaDocId: string | undefined;
+      try {
+        const ar = await strapiRequest("/api/chapters", {
+          method: "POST",
+          body: JSON.stringify({
+            data: {
+              ChapterTitle: adhyaya.title,
+              order: adhyaya.order,
+              grantha: { connect: [{ documentId: granthaDocId }] },
+            },
+          }),
+        });
+        adhyayaDocId = ar?.data?.documentId;
+      } catch (e: any) {
+        console.warn(`[publish] Adhyaya "${adhyaya.title}" failed:`, e.message);
+        continue;
+      }
+
+      for (const khanda of (adhyaya.khandas ?? [])) {
+        let khandaDocId: string | undefined;
+        try {
+          const kr = await strapiRequest("/api/chapters", {
+            method: "POST",
+            body: JSON.stringify({
+              data: {
+                ChapterTitle: khanda.title,
+                order: khanda.order,
+                grantha: { connect: [{ documentId: granthaDocId }] },
+                ...(adhyayaDocId
+                  ? { parent: { connect: [{ documentId: adhyayaDocId }] } }
+                  : {}),
+              },
+            }),
+          });
+          khandaDocId = kr?.data?.documentId;
+        } catch (e: any) {
+          console.warn(`[publish] Khanda "${khanda.title}" failed:`, e.message);
+          continue;
+        }
+
+        for (const manthra of (khanda.manthras ?? [])) {
+          try {
+            const mData: Record<string, any> = {
+              ChapterTitle: manthra.title,
+              order: manthra.order,
+              grantha: { connect: [{ documentId: granthaDocId }] },
+              ...(khandaDocId
+                ? { parent: { connect: [{ documentId: khandaDocId }] } }
+                : {}),
+            };
+
+            if (manthra.ShlokaManthraEntry) {
+              mData.ShlokaManthraEntry = manthra.ShlokaManthraEntry;
+            }
+            if (manthra.BhashyamForShlokaManthra) {
+              mData.BhashyamForShlokaManthra = manthra.BhashyamForShlokaManthra;
+            }
+            if (Array.isArray(manthra.Teekas) && manthra.Teekas.length > 0) {
+              mData.Teekas = manthra.Teekas.map((t: any) => ({
+                TeekaName: t.TeekaName || "",
+                TeekaAuthor: t.TeekaAuthor || "",
+                ...(t.TeekaEntry ? { TeekaEntry: t.TeekaEntry } : {}),
+              }));
+            }
+
+            await strapiRequest("/api/chapters", {
+              method: "POST",
+              body: JSON.stringify({ data: mData }),
+            });
+          } catch (e: any) {
+            console.warn(`[publish] Manthra "${manthra.title}" failed:`, e.message);
+          }
+        }
+      }
+    }
+  }
+
+  return strapiResult;
+}
+
 export async function registerRoutes(
   httpServer: Server,
   app: Express
@@ -158,22 +265,28 @@ export async function registerRoutes(
         return res.status(400).json({ message: `Unknown content type: ${draft.contentType}` });
       }
 
-      const cleanedData = cleanPayloadForStrapi(draft.data as Record<string, any>);
+      let strapiResult: any;
 
-      let strapiResult;
-      if (draft.strapiDocumentId) {
-        strapiResult = await strapiRequest(
-          `/api/${strapiPlural}/${draft.strapiDocumentId}`,
-          {
-            method: "PUT",
-            body: JSON.stringify({ data: cleanedData }),
-          }
-        );
+      if (draft.contentType === "granthas") {
+        // Granthas need special handling: strip wizard-only fields and
+        // create chapter records separately in the correct order.
+        strapiResult = await publishGranthaWithHierarchy(draft);
       } else {
-        strapiResult = await strapiRequest(`/api/${strapiPlural}`, {
-          method: "POST",
-          body: JSON.stringify({ data: cleanedData }),
-        });
+        const cleanedData = cleanPayloadForStrapi(draft.data as Record<string, any>);
+        if (draft.strapiDocumentId) {
+          strapiResult = await strapiRequest(
+            `/api/${strapiPlural}/${draft.strapiDocumentId}`,
+            {
+              method: "PUT",
+              body: JSON.stringify({ data: cleanedData }),
+            }
+          );
+        } else {
+          strapiResult = await strapiRequest(`/api/${strapiPlural}`, {
+            method: "POST",
+            body: JSON.stringify({ data: cleanedData }),
+          });
+        }
       }
 
       const newDocumentId = strapiResult?.data?.documentId || draft.strapiDocumentId;

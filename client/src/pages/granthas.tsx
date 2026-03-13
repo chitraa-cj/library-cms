@@ -7,6 +7,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Textarea } from "@/components/ui/textarea";
 import {
   Select,
   SelectContent,
@@ -14,6 +15,13 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogDescription,
+} from "@/components/ui/dialog";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -45,6 +53,7 @@ import {
   Hash,
   Layers,
   Send,
+  FileText,
 } from "lucide-react";
 
 // ---------- Local Types ----------
@@ -55,10 +64,28 @@ interface TeekaDefinition {
   TeekaAuthor: string;
 }
 
+interface ManthraTeekaEntry {
+  TeekaName: string;
+  TeekaAuthor: string;
+  TeekaEntry?: {
+    SanskritTextEntry?: string;
+    EnglishTranslationText?: string;
+  };
+}
+
 interface ManthraNode {
   id: string;
   title: string;
   order: number;
+  ShlokaManthraEntry?: {
+    SanskritTextEntry?: string;
+    EnglishTranslationText?: string;
+  };
+  BhashyamForShlokaManthra?: {
+    SanskritTextEntry?: string;
+    EnglishTranslationText?: string;
+  };
+  Teekas?: ManthraTeekaEntry[];
 }
 
 interface KhandaNode {
@@ -92,7 +119,16 @@ function ordinal(n: number) {
   return ORDINALS[n - 1] ?? `${n}`;
 }
 
-// ---------- Card sub-component ----------
+function hasManthraContent(m: ManthraNode) {
+  return !!(
+    m.ShlokaManthraEntry?.SanskritTextEntry ||
+    m.ShlokaManthraEntry?.EnglishTranslationText ||
+    m.BhashyamForShlokaManthra?.SanskritTextEntry ||
+    m.Teekas?.some((t) => t.TeekaEntry?.SanskritTextEntry)
+  );
+}
+
+// ---------- Grantha Card ----------
 
 function GranthaCard({
   item,
@@ -192,7 +228,7 @@ function GranthaCard({
   );
 }
 
-// ---------- Step indicator ----------
+// ---------- Step Indicator ----------
 
 function StepDot({
   n,
@@ -234,26 +270,30 @@ function StepDot({
 export default function GranthasPage() {
   const { toast } = useToast();
 
-  // View management
   const [view, setView] = useState<"list" | "form">("list");
   const [step, setStep] = useState<1 | 2>(1);
   const [editingItem, setEditingItem] = useState<any>(null);
   const [editingDraftId, setEditingDraftId] = useState<number | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<any>(null);
 
-  // Step 1 form fields
+  // Step 1
   const [formData, setFormData] = useState({
     GranthaName: "",
     GranthaType: "",
     BhashyamName: "",
     BhashyamAuthor: "",
   });
-
-  // Step 1 teekas
   const [teekas, setTeekas] = useState<TeekaDefinition[]>([]);
 
-  // Step 2 hierarchy
+  // Step 2
   const [adhyayas, setAdhyayas] = useState<AdhyayaNode[]>([]);
+
+  // Manthra content dialog
+  const [editingManthra, setEditingManthra] = useState<{
+    adhyayaId: string;
+    khandaId: string;
+    manthraId: string;
+  } | null>(null);
 
   // Data
   const { data, isLoading } = useQuery<StrapiResponse<StrapiGrantha>>({
@@ -270,10 +310,7 @@ export default function GranthasPage() {
 
   const deleteStrapiMutation = useMutation({
     mutationFn: async (documentId: string) => {
-      const res = await apiRequest(
-        "DELETE",
-        `/api/strapi/granthas/${documentId}`
-      );
+      const res = await apiRequest("DELETE", `/api/strapi/granthas/${documentId}`);
       return res.json();
     },
     onSuccess: () => {
@@ -282,23 +319,14 @@ export default function GranthasPage() {
       toast({ title: "Grantha deleted" });
     },
     onError: (err: any) => {
-      toast({
-        variant: "destructive",
-        title: "Error",
-        description: err.message,
-      });
+      toast({ variant: "destructive", title: "Error", description: err.message });
     },
   });
 
   // ---------- Helpers ----------
 
   function resetForm() {
-    setFormData({
-      GranthaName: "",
-      GranthaType: "",
-      BhashyamName: "",
-      BhashyamAuthor: "",
-    });
+    setFormData({ GranthaName: "", GranthaType: "", BhashyamName: "", BhashyamAuthor: "" });
     setTeekas([]);
     setAdhyayas([]);
     setEditingDraftId(null);
@@ -342,17 +370,10 @@ export default function GranthasPage() {
   // ---------- Teeka handlers ----------
 
   function addTeeka() {
-    setTeekas([
-      ...teekas,
-      { id: uid(), TeekaName: "", TeekaAuthor: "" },
-    ]);
+    setTeekas([...teekas, { id: uid(), TeekaName: "", TeekaAuthor: "" }]);
   }
 
-  function updateTeeka(
-    id: string,
-    field: keyof Omit<TeekaDefinition, "id">,
-    value: string
-  ) {
+  function updateTeeka(id: string, field: keyof Omit<TeekaDefinition, "id">, value: string) {
     setTeekas(teekas.map((t) => (t.id === id ? { ...t, [field]: value } : t)));
   }
 
@@ -366,13 +387,7 @@ export default function GranthasPage() {
     const n = adhyayas.length + 1;
     setAdhyayas([
       ...adhyayas,
-      {
-        id: uid(),
-        title: `${ordinal(n)} Adhyaya (Chapter ${n})`,
-        order: n,
-        khandas: [],
-        expanded: true,
-      },
+      { id: uid(), title: `${ordinal(n)} Adhyaya (Chapter ${n})`, order: n, khandas: [], expanded: true },
     ]);
   }
 
@@ -385,11 +400,7 @@ export default function GranthasPage() {
   }
 
   function toggleAdhyaya(id: string) {
-    setAdhyayas(
-      adhyayas.map((a) =>
-        a.id === id ? { ...a, expanded: !a.expanded } : a
-      )
-    );
+    setAdhyayas(adhyayas.map((a) => (a.id === id ? { ...a, expanded: !a.expanded } : a)));
   }
 
   function addKhanda(adhyayaId: string) {
@@ -401,13 +412,7 @@ export default function GranthasPage() {
           ...a,
           khandas: [
             ...a.khandas,
-            {
-              id: uid(),
-              title: `${ordinal(n)} Khanda (Section ${n})`,
-              order: n,
-              manthras: [],
-              expanded: true,
-            },
+            { id: uid(), title: `${ordinal(n)} Khanda (Section ${n})`, order: n, manthras: [], expanded: true },
           ],
         };
       })
@@ -418,12 +423,7 @@ export default function GranthasPage() {
     setAdhyayas(
       adhyayas.map((a) => {
         if (a.id !== adhyayaId) return a;
-        return {
-          ...a,
-          khandas: a.khandas.map((k) =>
-            k.id === khandaId ? { ...k, title } : k
-          ),
-        };
+        return { ...a, khandas: a.khandas.map((k) => (k.id === khandaId ? { ...k, title } : k)) };
       })
     );
   }
@@ -462,27 +462,43 @@ export default function GranthasPage() {
           khandas: a.khandas.map((k) => {
             if (k.id !== khandaId) return k;
             const mIdx = k.manthras.length + 1;
-            return {
-              ...k,
-              manthras: [
-                ...k.manthras,
-                {
-                  id: uid(),
-                  title: `Manthra ${aIdx}.${kIdx}.${mIdx}`,
-                  order: mIdx,
-                },
-              ],
+            const newManthra: ManthraNode = {
+              id: uid(),
+              title: `Manthra ${aIdx}.${kIdx}.${mIdx}`,
+              order: mIdx,
+              // Pre-populate Teekas from Step 1 definitions
+              Teekas: teekas.map((t) => ({
+                TeekaName: t.TeekaName,
+                TeekaAuthor: t.TeekaAuthor,
+              })),
             };
+            return { ...k, manthras: [...k.manthras, newManthra] };
           }),
         };
       })
     );
   }
 
-  function removeManthra(
+  function removeManthra(adhyayaId: string, khandaId: string, manthraId: string) {
+    setAdhyayas(
+      adhyayas.map((a) => {
+        if (a.id !== adhyayaId) return a;
+        return {
+          ...a,
+          khandas: a.khandas.map((k) => {
+            if (k.id !== khandaId) return k;
+            return { ...k, manthras: k.manthras.filter((m) => m.id !== manthraId) };
+          }),
+        };
+      })
+    );
+  }
+
+  function updateManthraContent(
     adhyayaId: string,
     khandaId: string,
-    manthraId: string
+    manthraId: string,
+    updates: Partial<ManthraNode>
   ) {
     setAdhyayas(
       adhyayas.map((a) => {
@@ -493,13 +509,23 @@ export default function GranthasPage() {
             if (k.id !== khandaId) return k;
             return {
               ...k,
-              manthras: k.manthras.filter((m) => m.id !== manthraId),
+              manthras: k.manthras.map((m) =>
+                m.id === manthraId ? { ...m, ...updates } : m
+              ),
             };
           }),
         };
       })
     );
   }
+
+  // Get the currently edited manthra object
+  const currentManthra: ManthraNode | null = (() => {
+    if (!editingManthra) return null;
+    const a = adhyayas.find((x) => x.id === editingManthra.adhyayaId);
+    const k = a?.khandas.find((x) => x.id === editingManthra.khandaId);
+    return k?.manthras.find((x) => x.id === editingManthra.manthraId) ?? null;
+  })();
 
   // ---------- Save / Delete / Publish ----------
 
@@ -540,10 +566,6 @@ export default function GranthasPage() {
     );
   }
 
-  function handleDelete(item: any) {
-    setDeleteTarget(item);
-  }
-
   function confirmDelete() {
     if (!deleteTarget) return;
     if (deleteTarget._isDraft) {
@@ -559,7 +581,6 @@ export default function GranthasPage() {
     if (item._draftId) publishDraft.mutate(item._draftId);
   }
 
-  // Merged list
   const mergedData = [
     ...unpublishedDrafts.map((d) => ({
       ...(d.data as any),
@@ -597,18 +618,13 @@ export default function GranthasPage() {
         {isLoading || isLoadingDrafts ? (
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
             {[1, 2, 3].map((i) => (
-              <div
-                key={i}
-                className="rounded-xl border bg-card p-5 h-36 animate-pulse"
-              />
+              <div key={i} className="rounded-xl border bg-card p-5 h-36 animate-pulse" />
             ))}
           </div>
         ) : mergedData.length === 0 ? (
           <div className="flex flex-col items-center justify-center py-24 text-muted-foreground gap-4">
             <BookOpen className="w-14 h-14 opacity-20" />
-            <p className="text-sm">
-              No granthas yet — create your first entry.
-            </p>
+            <p className="text-sm">No granthas yet — create your first entry.</p>
             <Button onClick={openAdd} variant="outline">
               <Plus className="w-4 h-4 mr-2" />
               New Entry
@@ -621,7 +637,7 @@ export default function GranthasPage() {
                 key={item.documentId || item._draftId || idx}
                 item={item}
                 onEdit={() => openEdit(item)}
-                onDelete={() => handleDelete(item)}
+                onDelete={() => setDeleteTarget(item)}
                 onPublish={() => handlePublish(item)}
                 isPublishing={
                   publishDraft.isPending &&
@@ -632,21 +648,16 @@ export default function GranthasPage() {
           </div>
         )}
 
-        <AlertDialog
-          open={!!deleteTarget}
-          onOpenChange={() => setDeleteTarget(null)}
-        >
+        <AlertDialog open={!!deleteTarget} onOpenChange={() => setDeleteTarget(null)}>
           <AlertDialogContent>
             <AlertDialogHeader>
               <AlertDialogTitle>
                 Delete {deleteTarget?._isDraft ? "Draft" : "Grantha"}
               </AlertDialogTitle>
               <AlertDialogDescription>
-                Are you sure you want to delete &quot;
-                {deleteTarget?.GranthaName}&quot;?
+                Are you sure you want to delete &quot;{deleteTarget?.GranthaName}&quot;?
                 {!deleteTarget?._isDraft && " This will remove it from the CMS."}
-                {deleteTarget?._isDraft &&
-                  " This draft has not been published yet."}
+                {deleteTarget?._isDraft && " This draft has not been published yet."}
               </AlertDialogDescription>
             </AlertDialogHeader>
             <AlertDialogFooter>
@@ -668,23 +679,19 @@ export default function GranthasPage() {
     );
   }
 
-  // ---------- Render: Form (steps 1 & 2) ----------
+  // ---------- Render: Form ----------
 
   return (
     <div className="p-6 lg:p-8 max-w-4xl mx-auto">
       {/* Step indicator */}
       <div className="flex items-end gap-0 mb-10">
         <StepDot n={1} active={step === 1} done={step > 1} label="Configuration" />
-        <div
-          className={`flex-1 h-0.5 mb-5 transition-colors ${
-            step > 1 ? "bg-primary" : "bg-border"
-          }`}
-        />
+        <div className={`flex-1 h-0.5 mb-5 transition-colors ${step > 1 ? "bg-primary" : "bg-border"}`} />
         <StepDot n={2} active={step === 2} done={false} label="Build Hierarchy" />
       </div>
 
       {step === 1 ? (
-        /* ====== STEP 1: Configuration ====== */
+        /* ====== STEP 1 ====== */
         <div className="space-y-6">
           <div>
             <h2 className="text-xl font-semibold">Grantha Configuration</h2>
@@ -698,9 +705,7 @@ export default function GranthasPage() {
               <Label>Grantha Name *</Label>
               <Input
                 value={formData.GranthaName}
-                onChange={(e) =>
-                  setFormData({ ...formData, GranthaName: e.target.value })
-                }
+                onChange={(e) => setFormData({ ...formData, GranthaName: e.target.value })}
                 placeholder="e.g., Chandogya Upanishad"
                 className="mt-1.5"
                 data-testid="input-grantha-name"
@@ -710,21 +715,14 @@ export default function GranthasPage() {
               <Label>Grantha Type</Label>
               <Select
                 value={formData.GranthaType}
-                onValueChange={(val) =>
-                  setFormData({ ...formData, GranthaType: val })
-                }
+                onValueChange={(val) => setFormData({ ...formData, GranthaType: val })}
               >
-                <SelectTrigger
-                  className="mt-1.5"
-                  data-testid="select-grantha-type"
-                >
+                <SelectTrigger className="mt-1.5" data-testid="select-grantha-type">
                   <SelectValue placeholder="Select type" />
                 </SelectTrigger>
                 <SelectContent>
                   {granthaTypes.map((t) => (
-                    <SelectItem key={t} value={t}>
-                      {t}
-                    </SelectItem>
+                    <SelectItem key={t} value={t}>{t}</SelectItem>
                   ))}
                 </SelectContent>
               </Select>
@@ -733,9 +731,7 @@ export default function GranthasPage() {
               <Label>Bhashyam Name</Label>
               <Input
                 value={formData.BhashyamName}
-                onChange={(e) =>
-                  setFormData({ ...formData, BhashyamName: e.target.value })
-                }
+                onChange={(e) => setFormData({ ...formData, BhashyamName: e.target.value })}
                 placeholder="e.g., Chandogya Bhashyam"
                 className="mt-1.5"
                 data-testid="input-bhashyam-name"
@@ -745,21 +741,14 @@ export default function GranthasPage() {
               <Label>Bhashyam Author</Label>
               <Select
                 value={formData.BhashyamAuthor}
-                onValueChange={(val) =>
-                  setFormData({ ...formData, BhashyamAuthor: val })
-                }
+                onValueChange={(val) => setFormData({ ...formData, BhashyamAuthor: val })}
               >
-                <SelectTrigger
-                  className="mt-1.5"
-                  data-testid="select-bhashyam-author"
-                >
+                <SelectTrigger className="mt-1.5" data-testid="select-bhashyam-author">
                   <SelectValue placeholder="Select author" />
                 </SelectTrigger>
                 <SelectContent>
                   {bhashyamAuthors.map((a) => (
-                    <SelectItem key={a} value={a}>
-                      {a}
-                    </SelectItem>
+                    <SelectItem key={a} value={a}>{a}</SelectItem>
                   ))}
                 </SelectContent>
               </Select>
@@ -772,15 +761,10 @@ export default function GranthasPage() {
               <div>
                 <h3 className="font-semibold">Teeka Management</h3>
                 <p className="text-xs text-muted-foreground mt-0.5">
-                  Add commentary authors for this Grantha
+                  Define commentary works associated with this Grantha
                 </p>
               </div>
-              <Button
-                size="sm"
-                variant="outline"
-                onClick={addTeeka}
-                data-testid="button-add-teeka"
-              >
+              <Button size="sm" variant="outline" onClick={addTeeka} data-testid="button-add-teeka">
                 <Plus className="w-3.5 h-3.5 mr-1.5" />
                 Add Teeka
               </Button>
@@ -805,9 +789,7 @@ export default function GranthasPage() {
                         <Label className="text-xs">Teeka Name</Label>
                         <Input
                           value={teeka.TeekaName}
-                          onChange={(e) =>
-                            updateTeeka(teeka.id, "TeekaName", e.target.value)
-                          }
+                          onChange={(e) => updateTeeka(teeka.id, "TeekaName", e.target.value)}
                           placeholder="e.g., Nyaya-Nirnaya"
                           className="mt-1 h-8 text-sm"
                           data-testid={`input-teeka-name-${i}`}
@@ -817,21 +799,14 @@ export default function GranthasPage() {
                         <Label className="text-xs">Author</Label>
                         <Select
                           value={teeka.TeekaAuthor}
-                          onValueChange={(val) =>
-                            updateTeeka(teeka.id, "TeekaAuthor", val)
-                          }
+                          onValueChange={(val) => updateTeeka(teeka.id, "TeekaAuthor", val)}
                         >
-                          <SelectTrigger
-                            className="mt-1 h-8 text-sm"
-                            data-testid={`select-teeka-author-${i}`}
-                          >
+                          <SelectTrigger className="mt-1 h-8 text-sm" data-testid={`select-teeka-author-${i}`}>
                             <SelectValue placeholder="Select author" />
                           </SelectTrigger>
                           <SelectContent>
                             {teekaAuthors.map((a) => (
-                              <SelectItem key={a} value={a}>
-                                {a}
-                              </SelectItem>
+                              <SelectItem key={a} value={a}>{a}</SelectItem>
                             ))}
                           </SelectContent>
                         </Select>
@@ -855,10 +830,7 @@ export default function GranthasPage() {
           <div className="flex justify-between items-center pt-2">
             <Button
               variant="outline"
-              onClick={() => {
-                setView("list");
-                resetForm();
-              }}
+              onClick={() => { setView("list"); resetForm(); }}
               data-testid="button-cancel"
             >
               <ArrowLeft className="w-4 h-4 mr-2" />
@@ -867,10 +839,7 @@ export default function GranthasPage() {
             <Button
               onClick={() => {
                 if (!formData.GranthaName.trim()) {
-                  toast({
-                    variant: "destructive",
-                    title: "Grantha Name is required",
-                  });
+                  toast({ variant: "destructive", title: "Grantha Name is required" });
                   return;
                 }
                 setStep(2);
@@ -883,25 +852,21 @@ export default function GranthasPage() {
           </div>
         </div>
       ) : (
-        /* ====== STEP 2: Hierarchy Builder ====== */
+        /* ====== STEP 2 ====== */
         <div className="space-y-6">
           <div>
             <h2 className="text-xl font-semibold">
               {formData.GranthaName || "Grantha"} Hierarchy
             </h2>
             <p className="text-sm text-muted-foreground mt-1">
-              Adhyaya → Khanda → Manthra
+              Adhyaya → Khanda → Manthra — click any Manthra to enter its text content
             </p>
           </div>
 
           {/* Tree */}
           <div className="space-y-3">
             {adhyayas.map((adhyaya, aIdx) => (
-              <div
-                key={adhyaya.id}
-                className="border rounded-xl overflow-hidden"
-                data-testid={`adhyaya-${aIdx}`}
-              >
+              <div key={adhyaya.id} className="border rounded-xl overflow-hidden" data-testid={`adhyaya-${aIdx}`}>
                 {/* Adhyaya row */}
                 <div
                   className="flex items-center gap-3 px-4 py-3 bg-muted/30 cursor-pointer select-none"
@@ -912,36 +877,27 @@ export default function GranthasPage() {
                   </span>
                   <Input
                     value={adhyaya.title}
-                    onChange={(e) => {
-                      e.stopPropagation();
-                      updateAdhyaya(adhyaya.id, e.target.value);
-                    }}
+                    onChange={(e) => { e.stopPropagation(); updateAdhyaya(adhyaya.id, e.target.value); }}
                     onClick={(e) => e.stopPropagation()}
                     className="h-8 text-sm font-medium border-0 bg-transparent shadow-none focus-visible:ring-1 focus-visible:ring-primary/50 px-2"
                     data-testid={`input-adhyaya-title-${aIdx}`}
                   />
                   <div className="flex items-center gap-1 ml-auto shrink-0">
                     <span className="text-xs text-muted-foreground mr-1">
-                      {adhyaya.khandas.length} khanda
-                      {adhyaya.khandas.length !== 1 ? "s" : ""}
+                      {adhyaya.khandas.length} khanda{adhyaya.khandas.length !== 1 ? "s" : ""}
                     </span>
                     <Button
                       size="icon"
                       variant="ghost"
                       className="h-7 w-7 text-destructive hover:text-destructive"
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        removeAdhyaya(adhyaya.id);
-                      }}
+                      onClick={(e) => { e.stopPropagation(); removeAdhyaya(adhyaya.id); }}
                       data-testid={`button-remove-adhyaya-${aIdx}`}
                     >
                       <Trash2 className="w-3.5 h-3.5" />
                     </Button>
-                    {adhyaya.expanded ? (
-                      <ChevronDown className="w-4 h-4 text-muted-foreground" />
-                    ) : (
-                      <ChevronRight className="w-4 h-4 text-muted-foreground" />
-                    )}
+                    {adhyaya.expanded
+                      ? <ChevronDown className="w-4 h-4 text-muted-foreground" />
+                      : <ChevronRight className="w-4 h-4 text-muted-foreground" />}
                   </div>
                 </div>
 
@@ -949,53 +905,36 @@ export default function GranthasPage() {
                 {adhyaya.expanded && (
                   <div className="p-4 space-y-2.5">
                     {adhyaya.khandas.map((khanda, kIdx) => (
-                      <div
-                        key={khanda.id}
-                        className="border rounded-lg overflow-hidden"
-                        data-testid={`khanda-${aIdx}-${kIdx}`}
-                      >
+                      <div key={khanda.id} className="border rounded-lg overflow-hidden" data-testid={`khanda-${aIdx}-${kIdx}`}>
                         {/* Khanda row */}
                         <div
-                          className="flex items-center gap-2.5 px-3 py-2.5 cursor-pointer select-none hover:bg-muted/20 transition-colors"
+                          className="flex items-center gap-2.5 px-3 py-2.5 cursor-pointer select-none hover:bg-muted/20"
                           onClick={() => toggleKhanda(adhyaya.id, khanda.id)}
                         >
                           <Layers className="w-4 h-4 text-muted-foreground shrink-0" />
                           <Input
                             value={khanda.title}
-                            onChange={(e) => {
-                              e.stopPropagation();
-                              updateKhanda(
-                                adhyaya.id,
-                                khanda.id,
-                                e.target.value
-                              );
-                            }}
+                            onChange={(e) => { e.stopPropagation(); updateKhanda(adhyaya.id, khanda.id, e.target.value); }}
                             onClick={(e) => e.stopPropagation()}
                             className="h-7 text-sm border-0 bg-transparent shadow-none focus-visible:ring-1 focus-visible:ring-primary/50 px-1.5"
                             data-testid={`input-khanda-title-${aIdx}-${kIdx}`}
                           />
                           <div className="flex items-center gap-1 ml-auto shrink-0">
                             <span className="text-xs text-muted-foreground">
-                              {khanda.manthras.length} manthra
-                              {khanda.manthras.length !== 1 ? "s" : ""}
+                              {khanda.manthras.length} manthra{khanda.manthras.length !== 1 ? "s" : ""}
                             </span>
                             <Button
                               size="icon"
                               variant="ghost"
                               className="h-6 w-6 text-destructive hover:text-destructive"
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                removeKhanda(adhyaya.id, khanda.id);
-                              }}
+                              onClick={(e) => { e.stopPropagation(); removeKhanda(adhyaya.id, khanda.id); }}
                               data-testid={`button-remove-khanda-${aIdx}-${kIdx}`}
                             >
                               <Trash2 className="w-3 h-3" />
                             </Button>
-                            {khanda.expanded ? (
-                              <ChevronDown className="w-3.5 h-3.5 text-muted-foreground" />
-                            ) : (
-                              <ChevronRight className="w-3.5 h-3.5 text-muted-foreground" />
-                            )}
+                            {khanda.expanded
+                              ? <ChevronDown className="w-3.5 h-3.5 text-muted-foreground" />
+                              : <ChevronRight className="w-3.5 h-3.5 text-muted-foreground" />}
                           </div>
                         </div>
 
@@ -1006,39 +945,50 @@ export default function GranthasPage() {
                               Manage Manthras
                             </p>
                             <div className="space-y-1">
-                              {khanda.manthras.map((manthra, mIdx) => (
-                                <div
-                                  key={manthra.id}
-                                  className="flex items-center gap-2 group py-0.5"
-                                >
-                                  <Hash className="w-3.5 h-3.5 text-muted-foreground shrink-0" />
-                                  <span className="text-sm flex-1">
-                                    {manthra.title}
-                                  </span>
-                                  <Button
-                                    size="icon"
-                                    variant="ghost"
-                                    className="h-6 w-6 opacity-0 group-hover:opacity-100 text-destructive hover:text-destructive transition-opacity"
-                                    onClick={() =>
-                                      removeManthra(
-                                        adhyaya.id,
-                                        khanda.id,
-                                        manthra.id
-                                      )
-                                    }
-                                    data-testid={`button-remove-manthra-${aIdx}-${kIdx}-${mIdx}`}
+                              {khanda.manthras.map((manthra, mIdx) => {
+                                const hasContent = hasManthraContent(manthra);
+                                return (
+                                  <div
+                                    key={manthra.id}
+                                    className="flex items-center gap-2 group py-0.5"
                                   >
-                                    <X className="w-3 h-3" />
-                                  </Button>
-                                </div>
-                              ))}
+                                    <Hash className="w-3.5 h-3.5 text-muted-foreground shrink-0" />
+                                    <span className="text-sm flex-1">{manthra.title}</span>
+                                    {hasContent && (
+                                      <span
+                                        className="text-xs text-primary font-medium"
+                                        title="Has content"
+                                      >
+                                        <FileText className="w-3.5 h-3.5" />
+                                      </span>
+                                    )}
+                                    <Button
+                                      size="icon"
+                                      variant="ghost"
+                                      className="h-6 w-6 opacity-0 group-hover:opacity-100 transition-opacity text-muted-foreground hover:text-foreground"
+                                      onClick={() => setEditingManthra({ adhyayaId: adhyaya.id, khandaId: khanda.id, manthraId: manthra.id })}
+                                      data-testid={`button-edit-manthra-${aIdx}-${kIdx}-${mIdx}`}
+                                      title="Enter text content"
+                                    >
+                                      <Pencil className="w-3 h-3" />
+                                    </Button>
+                                    <Button
+                                      size="icon"
+                                      variant="ghost"
+                                      className="h-6 w-6 opacity-0 group-hover:opacity-100 transition-opacity text-destructive hover:text-destructive"
+                                      onClick={() => removeManthra(adhyaya.id, khanda.id, manthra.id)}
+                                      data-testid={`button-remove-manthra-${aIdx}-${kIdx}-${mIdx}`}
+                                    >
+                                      <X className="w-3 h-3" />
+                                    </Button>
+                                  </div>
+                                );
+                              })}
                               <Button
                                 size="sm"
                                 variant="ghost"
                                 className="w-full justify-start text-muted-foreground hover:text-foreground text-xs h-7 mt-1 pl-0"
-                                onClick={() =>
-                                  addManthra(adhyaya.id, khanda.id)
-                                }
+                                onClick={() => addManthra(adhyaya.id, khanda.id)}
                                 data-testid={`button-add-manthra-${aIdx}-${kIdx}`}
                               >
                                 <Plus className="w-3.5 h-3.5 mr-1" />
@@ -1077,27 +1027,234 @@ export default function GranthasPage() {
           </div>
 
           <div className="flex justify-between items-center pt-2">
-            <Button
-              variant="outline"
-              onClick={() => setStep(1)}
-              data-testid="button-back"
-            >
+            <Button variant="outline" onClick={() => setStep(1)} data-testid="button-back">
               <ArrowLeft className="w-4 h-4 mr-2" />
               Back
             </Button>
-            <Button
-              onClick={handleSaveAndExit}
-              disabled={saveDraft.isPending}
-              data-testid="button-save-exit"
-            >
-              {saveDraft.isPending && (
-                <Loader2 className="w-4 h-4 mr-2 animate-spin" />
-              )}
+            <Button onClick={handleSaveAndExit} disabled={saveDraft.isPending} data-testid="button-save-exit">
+              {saveDraft.isPending && <Loader2 className="w-4 h-4 mr-2 animate-spin" />}
               Save & Exit
             </Button>
           </div>
         </div>
       )}
+
+      {/* Manthra content dialog */}
+      <Dialog
+        open={!!editingManthra}
+        onOpenChange={(open) => { if (!open) setEditingManthra(null); }}
+      >
+        <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle>{currentManthra?.title ?? "Manthra"}</DialogTitle>
+            <DialogDescription>
+              Enter the Sanskrit text and translations. These fields map directly to the CMS chapter record.
+            </DialogDescription>
+          </DialogHeader>
+
+          {currentManthra && editingManthra && (
+            <div className="space-y-5 pt-1">
+              {/* Shloka / Manthra Text */}
+              <section className="space-y-3">
+                <h4 className="text-sm font-semibold flex items-center gap-2">
+                  <Hash className="w-4 h-4 text-primary" />
+                  Shloka / Manthra Text
+                  <span className="text-xs text-muted-foreground font-normal">(ShlokaManthraEntry)</span>
+                </h4>
+                <div>
+                  <Label className="text-xs">Sanskrit (Devanagari)</Label>
+                  <Textarea
+                    value={currentManthra.ShlokaManthraEntry?.SanskritTextEntry ?? ""}
+                    onChange={(e) =>
+                      updateManthraContent(
+                        editingManthra.adhyayaId,
+                        editingManthra.khandaId,
+                        editingManthra.manthraId,
+                        {
+                          ShlokaManthraEntry: {
+                            ...currentManthra.ShlokaManthraEntry,
+                            SanskritTextEntry: e.target.value,
+                          },
+                        }
+                      )
+                    }
+                    placeholder="Sanskrit text in Devanagari..."
+                    rows={3}
+                    className="mt-1.5 font-serif"
+                    data-testid="textarea-shloka-sanskrit"
+                  />
+                </div>
+                <div>
+                  <Label className="text-xs">English Translation</Label>
+                  <Textarea
+                    value={currentManthra.ShlokaManthraEntry?.EnglishTranslationText ?? ""}
+                    onChange={(e) =>
+                      updateManthraContent(
+                        editingManthra.adhyayaId,
+                        editingManthra.khandaId,
+                        editingManthra.manthraId,
+                        {
+                          ShlokaManthraEntry: {
+                            ...currentManthra.ShlokaManthraEntry,
+                            EnglishTranslationText: e.target.value,
+                          },
+                        }
+                      )
+                    }
+                    placeholder="English translation..."
+                    rows={3}
+                    className="mt-1.5"
+                    data-testid="textarea-shloka-english"
+                  />
+                </div>
+              </section>
+
+              {/* Bhashyam */}
+              <section className="space-y-3 border-t pt-4">
+                <h4 className="text-sm font-semibold flex items-center gap-2">
+                  <FileText className="w-4 h-4 text-primary" />
+                  Bhashyam for this Manthra
+                  <span className="text-xs text-muted-foreground font-normal">(BhashyamForShlokaManthra)</span>
+                </h4>
+                <div>
+                  <Label className="text-xs">Sanskrit Commentary</Label>
+                  <Textarea
+                    value={currentManthra.BhashyamForShlokaManthra?.SanskritTextEntry ?? ""}
+                    onChange={(e) =>
+                      updateManthraContent(
+                        editingManthra.adhyayaId,
+                        editingManthra.khandaId,
+                        editingManthra.manthraId,
+                        {
+                          BhashyamForShlokaManthra: {
+                            ...currentManthra.BhashyamForShlokaManthra,
+                            SanskritTextEntry: e.target.value,
+                          },
+                        }
+                      )
+                    }
+                    placeholder="Sanskrit bhashyam commentary..."
+                    rows={4}
+                    className="mt-1.5 font-serif"
+                    data-testid="textarea-bhashyam-sanskrit"
+                  />
+                </div>
+                <div>
+                  <Label className="text-xs">English Translation</Label>
+                  <Textarea
+                    value={currentManthra.BhashyamForShlokaManthra?.EnglishTranslationText ?? ""}
+                    onChange={(e) =>
+                      updateManthraContent(
+                        editingManthra.adhyayaId,
+                        editingManthra.khandaId,
+                        editingManthra.manthraId,
+                        {
+                          BhashyamForShlokaManthra: {
+                            ...currentManthra.BhashyamForShlokaManthra,
+                            EnglishTranslationText: e.target.value,
+                          },
+                        }
+                      )
+                    }
+                    placeholder="English translation of bhashyam..."
+                    rows={4}
+                    className="mt-1.5"
+                    data-testid="textarea-bhashyam-english"
+                  />
+                </div>
+              </section>
+
+              {/* Teekas */}
+              {(currentManthra.Teekas ?? []).length > 0 && (
+                <section className="space-y-3 border-t pt-4">
+                  <h4 className="text-sm font-semibold flex items-center gap-2">
+                    <Layers className="w-4 h-4 text-primary" />
+                    Teeka Entries
+                    <span className="text-xs text-muted-foreground font-normal">(Teekas)</span>
+                  </h4>
+                  {(currentManthra.Teekas ?? []).map((teeka, tIdx) => (
+                    <div key={tIdx} className="rounded-lg border p-4 space-y-3">
+                      <p className="text-xs font-semibold text-foreground">
+                        {teeka.TeekaName || `Teeka ${tIdx + 1}`}
+                        {teeka.TeekaAuthor && (
+                          <span className="font-normal text-muted-foreground ml-1">
+                            — {teeka.TeekaAuthor}
+                          </span>
+                        )}
+                      </p>
+                      <div>
+                        <Label className="text-xs">Sanskrit Commentary</Label>
+                        <Textarea
+                          value={teeka.TeekaEntry?.SanskritTextEntry ?? ""}
+                          onChange={(e) => {
+                            const updatedTeekas = (currentManthra.Teekas ?? []).map((t, i) =>
+                              i === tIdx
+                                ? {
+                                    ...t,
+                                    TeekaEntry: {
+                                      ...t.TeekaEntry,
+                                      SanskritTextEntry: e.target.value,
+                                    },
+                                  }
+                                : t
+                            );
+                            updateManthraContent(
+                              editingManthra.adhyayaId,
+                              editingManthra.khandaId,
+                              editingManthra.manthraId,
+                              { Teekas: updatedTeekas }
+                            );
+                          }}
+                          placeholder={`${teeka.TeekaName || "Teeka"} Sanskrit commentary...`}
+                          rows={3}
+                          className="mt-1.5 font-serif"
+                          data-testid={`textarea-teeka-sanskrit-${tIdx}`}
+                        />
+                      </div>
+                      <div>
+                        <Label className="text-xs">English Translation</Label>
+                        <Textarea
+                          value={teeka.TeekaEntry?.EnglishTranslationText ?? ""}
+                          onChange={(e) => {
+                            const updatedTeekas = (currentManthra.Teekas ?? []).map((t, i) =>
+                              i === tIdx
+                                ? {
+                                    ...t,
+                                    TeekaEntry: {
+                                      ...t.TeekaEntry,
+                                      EnglishTranslationText: e.target.value,
+                                    },
+                                  }
+                                : t
+                            );
+                            updateManthraContent(
+                              editingManthra.adhyayaId,
+                              editingManthra.khandaId,
+                              editingManthra.manthraId,
+                              { Teekas: updatedTeekas }
+                            );
+                          }}
+                          placeholder="English translation..."
+                          rows={3}
+                          className="mt-1.5"
+                          data-testid={`textarea-teeka-english-${tIdx}`}
+                        />
+                      </div>
+                    </div>
+                  ))}
+                </section>
+              )}
+
+              <div className="flex justify-end pt-2">
+                <Button onClick={() => setEditingManthra(null)} data-testid="button-manthra-done">
+                  <Check className="w-4 h-4 mr-2" />
+                  Done
+                </Button>
+              </div>
+            </div>
+          )}
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

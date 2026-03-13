@@ -41,4 +41,4 @@ waitForPort = 5000
 [userenv]
 
 [userenv.shared]
-STRAPI_URL = "http://13.60.173.218:1337"
+STRAPI_URL = "http://13.53.121.15:1337"

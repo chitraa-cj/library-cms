@@ -7,7 +7,7 @@ A data feeding website for the Ekatmadham Library that connects to a Strapi CMS 
 - **Frontend**: React + TypeScript with Vite, shadcn/ui components, TanStack Query, wouter routing
 - **Backend**: Express.js server with session-based authentication (passport-local), Strapi API proxy, draft management
 - **Database**: PostgreSQL (user authentication + content drafts)
-- **CMS**: Strapi CMS running on AWS EC2 (13.60.173.218:1337)
+- **CMS**: Strapi CMS running on AWS EC2 (13.53.121.15:1337 / https://admincms.xoidlabs.com)
 
 ## Content Flow
 1. User creates/edits content → saved as **draft** in local PostgreSQL
@@ -53,5 +53,6 @@ A data feeding website for the Ekatmadham Library that connects to a Strapi CMS 
 ## Environment Variables
 - `DATABASE_URL` - PostgreSQL connection string
 - `SESSION_SECRET` - Express session secret (required, no fallback)
-- `STRAPI_URL` - Strapi CMS URL (http://13.60.173.218:1337)
+- `STRAPI_URL` - Strapi CMS URL (http://13.53.121.15:1337)
+- **Note**: Strapi connection uses curl subprocess (execFile) with `-g` flag to handle special characters in query strings. Node.js native fetch/https cannot reach this server from the workflow process.
 - `STRAPI_API_TOKEN` - Strapi API authentication token

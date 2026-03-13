@@ -57,22 +57,6 @@ export async function registerRoutes(
   const strapiRouter = createStrapiRouter();
   app.use("/api/strapi", strapiRouter);
 
-  app.get("/api/_tmp_schema", async (_req, res) => {
-    try {
-      const endpoints = ["granthas", "chapters", "articles", "authors", "categories", "prasthana-thraya-screens"];
-      const result: any = {};
-      for (const ep of endpoints) {
-        try {
-          const d = await strapiRequest(`/api/${ep}?populate=*&pagination[pageSize]=1`);
-          const sample = d?.data?.[0];
-          if (sample) result[ep] = { fields: Object.keys(sample), sample };
-          else result[ep] = { fields: [], sample: null, meta: d?.meta };
-        } catch (e: any) { result[ep] = { error: e.message.slice(0, 200) }; }
-      }
-      res.json(result);
-    } catch (e: any) { res.status(500).json({ error: e.message }); }
-  });
-
   const VALID_CONTENT_TYPES = Object.keys(CONTENT_TYPE_MAP);
 
   app.get("/api/drafts", requireAuth, async (req, res) => {

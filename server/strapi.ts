@@ -1,38 +1,70 @@
 import { Router } from "express";
 import { requireAuth } from "./auth";
+import { execFile } from "node:child_process";
 
-const STRAPI_URL = process.env.STRAPI_URL || "https://admincms.xoidlabs.com";
-const STRAPI_TOKEN = process.env.STRAPI_API_TOKEN;
+const STRAPI_URL = process.env.STRAPI_URL || "http://13.53.121.15:1337";
+const STRAPI_TOKEN = () => process.env.STRAPI_API_TOKEN || "";
 
-export async function strapiRequest(path: string, options: RequestInit = {}) {
-  const url = `${STRAPI_URL}${path}`;
-  const headers: Record<string, string> = {
-    Authorization: `Bearer ${STRAPI_TOKEN}`,
-    ...((options.headers as Record<string, string>) || {}),
-  };
+function curlRequest(
+  url: string,
+  method = "GET",
+  body?: string
+): Promise<{ ok: boolean; status: number; body: string }> {
+  return new Promise((resolve, reject) => {
+    const args = [
+      "-g",
+      "-s",
+      "-k",
+      "--max-time", "20",
+      "-w", "|||HTTPSTATUS|||%{http_code}",
+      "-X", method,
+      "-H", `Authorization: Bearer ${STRAPI_TOKEN()}`,
+      "-H", "Content-Type: application/json",
+    ];
 
-  if (
-    options.body &&
-    typeof options.body === "string" &&
-    !headers["Content-Type"]
-  ) {
-    headers["Content-Type"] = "application/json";
-  }
+    if (body) {
+      args.push("-d", body);
+    }
 
-  const res = await fetch(url, {
-    ...options,
-    headers,
+    args.push(url);
+
+    execFile("curl", args, { timeout: 25000, maxBuffer: 10 * 1024 * 1024 }, (err, stdout, stderr) => {
+      if (err && !stdout) {
+        return reject(new Error(`curl failed: ${err.message} | stderr: ${stderr?.slice(0, 200)}`));
+      }
+
+      const output = stdout || "";
+      const sep = "|||HTTPSTATUS|||";
+      const sepIdx = output.lastIndexOf(sep);
+      if (sepIdx === -1) {
+        return reject(new Error(`curl no-status (exit ${(err as any)?.code}): "${output.slice(0, 100)}"`));
+      }
+      const status = parseInt(output.slice(sepIdx + sep.length), 10) || 0;
+      const responseBody = output.slice(0, sepIdx);
+
+      resolve({
+        ok: status >= 200 && status < 300,
+        status,
+        body: responseBody,
+      });
+    });
   });
+}
+
+export async function strapiRequest(path: string, options: { method?: string; body?: string } = {}) {
+  const url = `${STRAPI_URL}${path}`;
+  const res = await curlRequest(url, options.method || "GET", options.body);
 
   if (!res.ok) {
-    const errorText = await res.text();
-    throw new Error(`Strapi error ${res.status}: ${errorText}`);
+    const err = new Error(`Strapi error ${res.status}: ${res.body.slice(0, 300)}`) as any;
+    err.status = res.status;
+    throw err;
   }
 
-  const text = await res.text();
-  if (!text) return { data: null };
+  if (!res.body.trim()) return { data: null };
+
   try {
-    return JSON.parse(text);
+    return JSON.parse(res.body);
   } catch {
     return { data: null };
   }
@@ -61,17 +93,14 @@ export function createStrapiRouter() {
         const queryString = new URLSearchParams(
           req.query as Record<string, string>
         ).toString();
-        const populateParam = queryString
-          ? `?${queryString}`
-          : "?populate=*";
-        const data = await strapiRequest(
-          `/api/${ct.plural}${populateParam}`
-        );
+        const populateParam = queryString ? `?${queryString}` : "?populate=*";
+        const data = await strapiRequest(`/api/${ct.plural}${populateParam}`);
         res.json(data);
       } catch (error: any) {
-        res
-          .status(500)
-          .json({ message: error.message || "Failed to fetch data" });
+        if (error.status === 404) {
+          return res.json({ data: [], meta: { pagination: { page: 1, pageSize: 25, pageCount: 0, total: 0 } } });
+        }
+        res.status(500).json({ message: error.message || "Failed to fetch data" });
       }
     });
 
@@ -82,9 +111,7 @@ export function createStrapiRouter() {
         );
         res.json(data);
       } catch (error: any) {
-        res
-          .status(500)
-          .json({ message: error.message || "Failed to fetch entry" });
+        res.status(500).json({ message: error.message || "Failed to fetch entry" });
       }
     });
 
@@ -96,9 +123,7 @@ export function createStrapiRouter() {
         });
         res.status(201).json(data);
       } catch (error: any) {
-        res
-          .status(500)
-          .json({ message: error.message || "Failed to create entry" });
+        res.status(500).json({ message: error.message || "Failed to create entry" });
       }
     });
 
@@ -113,9 +138,7 @@ export function createStrapiRouter() {
         );
         res.json(data);
       } catch (error: any) {
-        res
-          .status(500)
-          .json({ message: error.message || "Failed to update entry" });
+        res.status(500).json({ message: error.message || "Failed to update entry" });
       }
     });
 
@@ -127,9 +150,7 @@ export function createStrapiRouter() {
         );
         res.json(data);
       } catch (error: any) {
-        res
-          .status(500)
-          .json({ message: error.message || "Failed to delete entry" });
+        res.status(500).json({ message: error.message || "Failed to delete entry" });
       }
     });
   }

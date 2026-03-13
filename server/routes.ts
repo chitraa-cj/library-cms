@@ -68,15 +68,38 @@ async function publishGranthaWithHierarchy(
   // 1. Create or update the Grantha record
   let strapiResult: any;
   if (draft.strapiDocumentId) {
+    // We already know the Strapi record — update it
     strapiResult = await strapiRequest(`/api/granthas/${draft.strapiDocumentId}`, {
       method: "PUT",
       body: JSON.stringify({ data: granthaPayload }),
     });
   } else {
-    strapiResult = await strapiRequest("/api/granthas", {
-      method: "POST",
-      body: JSON.stringify({ data: granthaPayload }),
-    });
+    // Check whether a Grantha with the same name already exists in Strapi
+    // to avoid creating duplicates when the same text is published more than once.
+    let existingDocId: string | undefined;
+    if (granthaPayload.GranthaName) {
+      try {
+        const searchName = encodeURIComponent(granthaPayload.GranthaName as string);
+        const existing = await strapiRequest(
+          `/api/granthas?filters[GranthaName][$eq]=${searchName}`
+        );
+        existingDocId = existing?.data?.[0]?.documentId;
+      } catch {
+        // ignore — fall back to creating
+      }
+    }
+
+    if (existingDocId) {
+      strapiResult = await strapiRequest(`/api/granthas/${existingDocId}`, {
+        method: "PUT",
+        body: JSON.stringify({ data: granthaPayload }),
+      });
+    } else {
+      strapiResult = await strapiRequest("/api/granthas", {
+        method: "POST",
+        body: JSON.stringify({ data: granthaPayload }),
+      });
+    }
   }
 
   const granthaDocId: string | undefined = strapiResult?.data?.documentId;

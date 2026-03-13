@@ -522,7 +522,17 @@ export default function ChaptersPage() {
     f.ChapterTitle.toLowerCase().includes(searchLower)
   );
 
-  const allGranthas = granthasData?.data || [];
+  // Deduplicate Granthas by name — guards against multiple Strapi records
+  // with the same title appearing as separate options in the selector.
+  const allGranthas = useMemo(() => {
+    const seen = new Set<string>();
+    return (granthasData?.data || []).filter((g) => {
+      const key = g.GranthaName.toLowerCase().trim();
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+  }, [granthasData]);
 
   const levelInfo = (level: ChapterLevel) =>
     CHAPTER_LEVELS.find((l) => l.value === level)!;

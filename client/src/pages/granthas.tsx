@@ -581,8 +581,26 @@ export default function GranthasPage() {
     if (item._draftId) publishDraft.mutate(item._draftId);
   }
 
+  // Collect which Strapi documentIds are currently being edited by a draft
+  // so we can hide the "published" card and only show the draft.
+  const draftedStrapiIds = new Set(
+    unpublishedDrafts.map((d) => d.strapiDocumentId).filter(Boolean) as string[]
+  );
+
+  // Deduplicate drafts by Grantha name — keep only the most recently updated
+  // one per name so the list doesn't show multiple Draft cards for the same text.
+  const seenDraftNames = new Set<string>();
+  const deduplicatedDrafts = [...unpublishedDrafts]
+    .sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime())
+    .filter((d) => {
+      const name = ((d.data as any)?.GranthaName ?? "").toLowerCase().trim() || String(d.id);
+      if (seenDraftNames.has(name)) return false;
+      seenDraftNames.add(name);
+      return true;
+    });
+
   const mergedData = [
-    ...unpublishedDrafts.map((d) => ({
+    ...deduplicatedDrafts.map((d) => ({
       ...(d.data as any),
       _isDraft: true,
       _draftId: d.id,
@@ -590,11 +608,14 @@ export default function GranthasPage() {
       _strapiDocId: d.strapiDocumentId,
       _draftData: d.data,
     })),
-    ...(data?.data || []).map((item) => ({
-      ...item,
-      _isDraft: false,
-      _draftStatus: "published",
-    })),
+    // Suppress published Strapi entry when a local draft is editing it
+    ...(data?.data || [])
+      .filter((item) => !draftedStrapiIds.has(item.documentId))
+      .map((item) => ({
+        ...item,
+        _isDraft: false,
+        _draftStatus: "published",
+      })),
   ];
 
   // ---------- Render: List ----------

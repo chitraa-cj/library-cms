@@ -1,0 +1,23 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" fill="none">
+  <!-- Background circle -->
+  <rect width="32" height="32" rx="8" fill="#1e3a5f"/>
+
+  <!-- Book 1 (tall, left) -->
+  <rect x="5" y="8" width="5" height="16" rx="1" fill="#f59e0b"/>
+  <rect x="5" y="8" width="1.5" height="16" rx="0.5" fill="#d97706"/>
+
+  <!-- Book 2 (medium, center-left) -->
+  <rect x="11" y="11" width="4" height="13" rx="1" fill="#e2e8f0"/>
+  <rect x="11" y="11" width="1.2" height="13" rx="0.5" fill="#cbd5e1"/>
+
+  <!-- Book 3 (short, center) -->
+  <rect x="16" y="13" width="4" height="11" rx="1" fill="#f97316"/>
+  <rect x="16" y="13" width="1.2" height="11" rx="0.5" fill="#ea580c"/>
+
+  <!-- Book 4 (tall, right) -->
+  <rect x="21" y="9" width="5" height="15" rx="1" fill="#60a5fa"/>
+  <rect x="21" y="9" width="1.5" height="15" rx="0.5" fill="#3b82f6"/>
+
+  <!-- Shelf line -->
+  <rect x="4" y="24" width="24" height="2" rx="1" fill="#93c5fd"/>
+</svg>

@@ -11,6 +11,7 @@ function cleanPayloadForStrapi(data: Record<string, any>): Record<string, any> {
   const cleaned: Record<string, any> = {};
   for (const [key, value] of Object.entries(data)) {
     if (value === undefined || value === null || value === "") continue;
+    if (typeof value === "number" && Number.isNaN(value)) continue;
     if (STRAPI_INTERNAL_KEYS.has(key)) continue;
     if (typeof value === "object" && !Array.isArray(value)) {
       const sub = cleanPayloadForStrapi(value as Record<string, any>);
@@ -53,8 +54,16 @@ async function publishGranthaWithHierarchy(
 ): Promise<any> {
   const rawData = draft.data as Record<string, any>;
   // Strip wizard-only fields from the Grantha payload
-  const { teekas: _teekas, hierarchy, ...granthaDataRaw } = rawData;
+  const { teekas: teekaDefinitions, hierarchy, ...granthaDataRaw } = rawData;
   const granthaPayload = cleanPayloadForStrapi(granthaDataRaw);
+
+  // Set NumberOfTeekas from the wizard's teeka count (Strapi expects a number)
+  if (Array.isArray(teekaDefinitions) && teekaDefinitions.length > 0) {
+    granthaPayload.NumberOfTeekas = teekaDefinitions.length;
+  } else {
+    // Remove if present and invalid to avoid Strapi validation error
+    delete granthaPayload.NumberOfTeekas;
+  }
 
   // 1. Create or update the Grantha record
   let strapiResult: any;

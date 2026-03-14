@@ -434,7 +434,7 @@ export default function GranthasPage() {
           ? item.BhashyakaraIntroduction.OtherTranslations.map((t: any) => ({
               id: uid(),
               language: t.LanguageOfTranslation || "",
-              text: blocksToText(t.OtherLanguagesTranslation) || "",
+              text: blocksToText(t.TranslationText ?? t.OtherLanguagesTranslation) || "",
             }))
           : []
       );
@@ -693,7 +693,7 @@ export default function GranthasPage() {
           ? {
               OtherTranslations: otherTranslations.map((t) => ({
                 LanguageOfTranslation: t.language,
-                OtherLanguagesTranslation: t.text.trim() ? textToBlocks(t.text) : undefined,
+                TranslationText: t.text.trim() ? textToBlocks(t.text) : undefined,
               })),
             }
           : {}),

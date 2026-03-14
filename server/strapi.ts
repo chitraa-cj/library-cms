@@ -90,10 +90,7 @@ export function createStrapiRouter() {
   const DEEP_POPULATE: Record<string, string> = {
     granthas: [
       "populate[BhashyakaraIntroduction][populate]=*",
-      "populate[teekas]=*",
-      "populate[sections]=*",
       "populate[GranthaNameTranslations]=*",
-      "populate[coverImage]=*",
     ].join("&"),
   };
 

@@ -53,8 +53,14 @@ async function publishGranthaWithHierarchy(
   draft: any
 ): Promise<any> {
   const rawData = draft.data as Record<string, any>;
-  // Strip wizard-only fields from the Grantha payload
-  const { teekas: teekaDefinitions, hierarchy, ...granthaDataRaw } = rawData;
+  // Strip wizard-only / local-format fields from the Grantha payload
+  const {
+    teekas: teekaDefinitions,
+    hierarchy,
+    otherTranslations: _otherLocal,
+    granthaNameTranslations: granthaNameTranslationsLocal,
+    ...granthaDataRaw
+  } = rawData;
   const granthaPayload = cleanPayloadForStrapi(granthaDataRaw);
 
   // Set NumberOfTeekas from the wizard's teeka count (Strapi expects a number)
@@ -63,6 +69,14 @@ async function publishGranthaWithHierarchy(
   } else {
     // Remove if present and invalid to avoid Strapi validation error
     delete granthaPayload.NumberOfTeekas;
+  }
+
+  // Convert local granthaNameTranslations → Strapi GranthaNameTranslations format
+  if (Array.isArray(granthaNameTranslationsLocal) && granthaNameTranslationsLocal.length > 0) {
+    granthaPayload.GranthaNameTranslations = granthaNameTranslationsLocal.map((t: any) => ({
+      LanguageOfTranslation: t.language || "",
+      GranthaNameTranslation: t.name || "",
+    }));
   }
 
   // 1. Create or update the Grantha record

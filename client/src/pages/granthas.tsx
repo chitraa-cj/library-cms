@@ -36,6 +36,7 @@ import {
   granthaTypes,
   bhashyamAuthors,
   teekaAuthors,
+  translationLanguages,
   type StrapiGrantha,
   type StrapiResponse,
 } from "@shared/schema";
@@ -65,6 +66,18 @@ interface TeekaDefinition {
   id: string;
   TeekaName: string;
   TeekaAuthor: string;
+}
+
+interface OtherTranslationEntry {
+  id: string;
+  language: string;
+  text: string;
+}
+
+interface GranthaNameTranslationEntry {
+  id: string;
+  language: string;
+  name: string;
 }
 
 interface ManthraTeekaEntry {
@@ -288,8 +301,15 @@ export default function GranthasPage() {
     IntroductionToTextEnglish: "",
     BhashyakaraIntroductionSanskrit: "",
     BhashyakaraIntroductionEnglish: "",
+    BhashyakaraIntroductionIAST: "",
+    slug: "",
+    order: "",
+    introVideoId: "",
+    introVideoTitle: "",
   });
   const [teekas, setTeekas] = useState<TeekaDefinition[]>([]);
+  const [otherTranslations, setOtherTranslations] = useState<OtherTranslationEntry[]>([]);
+  const [granthaNameTranslations, setGranthaNameTranslations] = useState<GranthaNameTranslationEntry[]>([]);
 
   // Step 2
   const [adhyayas, setAdhyayas] = useState<AdhyayaNode[]>([]);
@@ -341,11 +361,18 @@ export default function GranthasPage() {
     IntroductionToTextEnglish: "",
     BhashyakaraIntroductionSanskrit: "",
     BhashyakaraIntroductionEnglish: "",
+    BhashyakaraIntroductionIAST: "",
+    slug: "",
+    order: "",
+    introVideoId: "",
+    introVideoTitle: "",
   };
 
   function resetForm() {
     setFormData(EMPTY_FORM);
     setTeekas([]);
+    setOtherTranslations([]);
+    setGranthaNameTranslations([]);
     setAdhyayas([]);
     setEditingDraftId(null);
     setEditingItem(null);
@@ -372,8 +399,16 @@ export default function GranthasPage() {
           blocksToText(d.BhashyakaraIntroduction?.SanskritTextEntry) || "",
         BhashyakaraIntroductionEnglish:
           blocksToText(d.BhashyakaraIntroduction?.EnglishTranslationText) || "",
+        BhashyakaraIntroductionIAST:
+          blocksToText(d.BhashyakaraIntroduction?.IASTTransliteration) || "",
+        slug: d.slug || "",
+        order: d.order != null ? String(d.order) : "",
+        introVideoId: d.introVideoId || "",
+        introVideoTitle: d.introVideoTitle || "",
       });
       setTeekas(d.teekas || []);
+      setOtherTranslations(d.otherTranslations || []);
+      setGranthaNameTranslations(d.granthaNameTranslations || []);
       setAdhyayas(d.hierarchy || []);
     } else {
       setEditingDraftId(null);
@@ -387,7 +422,31 @@ export default function GranthasPage() {
           blocksToText(item.BhashyakaraIntroduction?.SanskritTextEntry) || "",
         BhashyakaraIntroductionEnglish:
           blocksToText(item.BhashyakaraIntroduction?.EnglishTranslationText) || "",
+        BhashyakaraIntroductionIAST:
+          blocksToText(item.BhashyakaraIntroduction?.IASTTransliteration) || "",
+        slug: item.slug || "",
+        order: item.order != null ? String(item.order) : "",
+        introVideoId: item.introVideoId || "",
+        introVideoTitle: item.introVideoTitle || "",
       });
+      setOtherTranslations(
+        Array.isArray(item.BhashyakaraIntroduction?.OtherTranslations)
+          ? item.BhashyakaraIntroduction.OtherTranslations.map((t: any) => ({
+              id: uid(),
+              language: t.LanguageOfTranslation || "",
+              text: blocksToText(t.OtherLanguagesTranslation) || "",
+            }))
+          : []
+      );
+      setGranthaNameTranslations(
+        Array.isArray(item.GranthaNameTranslations)
+          ? item.GranthaNameTranslations.map((t: any) => ({
+              id: uid(),
+              language: t.LanguageOfTranslation || "",
+              name: t.GranthaNameTranslation || t.name || "",
+            }))
+          : []
+      );
       setTeekas([]);
       setAdhyayas([]);
     }
@@ -407,6 +466,34 @@ export default function GranthasPage() {
 
   function removeTeeka(id: string) {
     setTeekas(teekas.filter((t) => t.id !== id));
+  }
+
+  // ---------- OtherTranslations handlers ----------
+
+  function addOtherTranslation() {
+    setOtherTranslations([...otherTranslations, { id: uid(), language: "", text: "" }]);
+  }
+
+  function updateOtherTranslation(id: string, field: keyof Omit<OtherTranslationEntry, "id">, value: string) {
+    setOtherTranslations(otherTranslations.map((t) => (t.id === id ? { ...t, [field]: value } : t)));
+  }
+
+  function removeOtherTranslation(id: string) {
+    setOtherTranslations(otherTranslations.filter((t) => t.id !== id));
+  }
+
+  // ---------- GranthaNameTranslations handlers ----------
+
+  function addGranthaNameTranslation() {
+    setGranthaNameTranslations([...granthaNameTranslations, { id: uid(), language: "", name: "" }]);
+  }
+
+  function updateGranthaNameTranslation(id: string, field: keyof Omit<GranthaNameTranslationEntry, "id">, value: string) {
+    setGranthaNameTranslations(granthaNameTranslations.map((t) => (t.id === id ? { ...t, [field]: value } : t)));
+  }
+
+  function removeGranthaNameTranslation(id: string) {
+    setGranthaNameTranslations(granthaNameTranslations.filter((t) => t.id !== id));
   }
 
   // ---------- Hierarchy handlers ----------
@@ -569,8 +656,18 @@ export default function GranthasPage() {
       BhashyamName: formData.BhashyamName || undefined,
       BhashyamAuthor: formData.BhashyamAuthor || undefined,
       teekas,
+      otherTranslations,
+      granthaNameTranslations,
       hierarchy: adhyayas,
     };
+
+    if (formData.slug.trim()) payload.slug = formData.slug.trim();
+    if (formData.order.trim()) {
+      const n = parseInt(formData.order, 10);
+      if (!isNaN(n)) payload.order = n;
+    }
+    if (formData.introVideoId.trim()) payload.introVideoId = formData.introVideoId.trim();
+    if (formData.introVideoTitle.trim()) payload.introVideoTitle = formData.introVideoTitle.trim();
 
     if (formData.IntroductionToTextEnglish.trim()) {
       payload.IntroductionToTextEnglish = textToBlocks(formData.IntroductionToTextEnglish);
@@ -578,7 +675,9 @@ export default function GranthasPage() {
 
     if (
       formData.BhashyakaraIntroductionSanskrit.trim() ||
-      formData.BhashyakaraIntroductionEnglish.trim()
+      formData.BhashyakaraIntroductionEnglish.trim() ||
+      formData.BhashyakaraIntroductionIAST.trim() ||
+      otherTranslations.length > 0
     ) {
       payload.BhashyakaraIntroduction = {
         ...(formData.BhashyakaraIntroductionSanskrit.trim()
@@ -586,6 +685,17 @@ export default function GranthasPage() {
           : {}),
         ...(formData.BhashyakaraIntroductionEnglish.trim()
           ? { EnglishTranslationText: textToBlocks(formData.BhashyakaraIntroductionEnglish) }
+          : {}),
+        ...(formData.BhashyakaraIntroductionIAST.trim()
+          ? { IASTTransliteration: textToBlocks(formData.BhashyakaraIntroductionIAST) }
+          : {}),
+        ...(otherTranslations.length > 0
+          ? {
+              OtherTranslations: otherTranslations.map((t) => ({
+                LanguageOfTranslation: t.language,
+                OtherLanguagesTranslation: t.text.trim() ? textToBlocks(t.text) : undefined,
+              })),
+            }
           : {}),
       };
     }
@@ -882,6 +992,96 @@ export default function GranthasPage() {
                 />
               </div>
             </div>
+
+            {/* IAST Transliteration */}
+            <div className="pt-2 border-t">
+              <Label className="flex items-center gap-1.5">
+                Bhashyakara Introduction
+                <span className="text-xs text-muted-foreground font-normal">(IAST Romanisation)</span>
+              </Label>
+              <Textarea
+                value={formData.BhashyakaraIntroductionIAST}
+                onChange={(e) =>
+                  setFormData({ ...formData, BhashyakaraIntroductionIAST: e.target.value })
+                }
+                placeholder="IAST transliteration of the commentary introduction..."
+                rows={4}
+                className="mt-1.5 font-mono text-sm"
+                data-testid="textarea-bhashyakara-iast"
+              />
+            </div>
+
+            {/* Other Language Translations (repeatable) */}
+            <div className="pt-2 border-t">
+              <div className="flex items-center justify-between mb-3">
+                <div>
+                  <Label>Other Language Translations</Label>
+                  <p className="text-xs text-muted-foreground mt-0.5">
+                    Translations of the Bhashyakara Introduction in other languages
+                  </p>
+                </div>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  onClick={addOtherTranslation}
+                  data-testid="button-add-other-translation"
+                >
+                  <Plus className="w-3.5 h-3.5 mr-1.5" />
+                  Add Translation
+                </Button>
+              </div>
+
+              {otherTranslations.length === 0 ? (
+                <p className="text-sm text-muted-foreground text-center py-4">
+                  No other translations added yet
+                </p>
+              ) : (
+                <div className="space-y-3">
+                  {otherTranslations.map((t, i) => (
+                    <div
+                      key={t.id}
+                      className="p-3 bg-muted/40 rounded-lg space-y-2"
+                    >
+                      <div className="flex items-center justify-between">
+                        <Select
+                          value={t.language}
+                          onValueChange={(val) => updateOtherTranslation(t.id, "language", val)}
+                        >
+                          <SelectTrigger
+                            className="h-8 text-sm w-48"
+                            data-testid={`select-other-translation-language-${i}`}
+                          >
+                            <SelectValue placeholder="Select language" />
+                          </SelectTrigger>
+                          <SelectContent>
+                            {translationLanguages.map((l) => (
+                              <SelectItem key={l} value={l}>{l}</SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          className="h-7 w-7 text-destructive"
+                          onClick={() => removeOtherTranslation(t.id)}
+                          data-testid={`button-remove-other-translation-${i}`}
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                        </Button>
+                      </div>
+                      <Textarea
+                        value={t.text}
+                        onChange={(e) => updateOtherTranslation(t.id, "text", e.target.value)}
+                        placeholder="Translation text..."
+                        rows={3}
+                        className="text-sm"
+                        data-testid={`textarea-other-translation-text-${i}`}
+                      />
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
           </div>
 
           {/* Teeka Management */}
@@ -954,6 +1154,140 @@ export default function GranthasPage() {
                 ))}
               </div>
             )}
+          </div>
+
+          {/* Grantha Name Translations (repeatable) */}
+          <div className="border rounded-xl p-5">
+            <div className="flex items-center justify-between mb-4">
+              <div>
+                <h3 className="font-semibold">Grantha Name Translations</h3>
+                <p className="text-xs text-muted-foreground mt-0.5">
+                  Name of the Grantha in other languages
+                </p>
+              </div>
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={addGranthaNameTranslation}
+                data-testid="button-add-grantha-name-translation"
+              >
+                <Plus className="w-3.5 h-3.5 mr-1.5" />
+                Add Translation
+              </Button>
+            </div>
+
+            {granthaNameTranslations.length === 0 ? (
+              <p className="text-sm text-muted-foreground text-center py-6">
+                No Grantha name translations added yet
+              </p>
+            ) : (
+              <div className="space-y-3">
+                {granthaNameTranslations.map((t, i) => (
+                  <div
+                    key={t.id}
+                    className="flex gap-3 items-start p-3 bg-muted/40 rounded-lg"
+                  >
+                    <span className="text-xs font-semibold text-muted-foreground mt-2.5 w-5 shrink-0 text-center">
+                      {i + 1}
+                    </span>
+                    <div className="flex-1 grid grid-cols-2 gap-3">
+                      <div>
+                        <Label className="text-xs">Language</Label>
+                        <Select
+                          value={t.language}
+                          onValueChange={(val) => updateGranthaNameTranslation(t.id, "language", val)}
+                        >
+                          <SelectTrigger
+                            className="mt-1 h-8 text-sm"
+                            data-testid={`select-grantha-name-language-${i}`}
+                          >
+                            <SelectValue placeholder="Select language" />
+                          </SelectTrigger>
+                          <SelectContent>
+                            {translationLanguages.map((l) => (
+                              <SelectItem key={l} value={l}>{l}</SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                      </div>
+                      <div>
+                        <Label className="text-xs">Translated Name</Label>
+                        <Input
+                          value={t.name}
+                          onChange={(e) => updateGranthaNameTranslation(t.id, "name", e.target.value)}
+                          placeholder="Name in the selected language..."
+                          className="mt-1 h-8 text-sm"
+                          data-testid={`input-grantha-name-translation-${i}`}
+                        />
+                      </div>
+                    </div>
+                    <Button
+                      size="icon"
+                      variant="ghost"
+                      className="shrink-0 h-8 w-8 text-destructive hover:text-destructive mt-0.5"
+                      onClick={() => removeGranthaNameTranslation(t.id)}
+                      data-testid={`button-remove-grantha-name-translation-${i}`}
+                    >
+                      <X className="w-4 h-4" />
+                    </Button>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+
+          {/* Additional Details */}
+          <div className="border rounded-xl p-5 space-y-4">
+            <div>
+              <h3 className="font-semibold">Additional Details</h3>
+              <p className="text-xs text-muted-foreground mt-0.5">
+                SEO slug, display order, and intro video information
+              </p>
+            </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <div>
+                <Label>Slug</Label>
+                <Input
+                  value={formData.slug}
+                  onChange={(e) => setFormData({ ...formData, slug: e.target.value })}
+                  placeholder="e.g., chandogya-upanishad"
+                  className="mt-1.5"
+                  data-testid="input-slug"
+                />
+              </div>
+              <div>
+                <Label>Display Order</Label>
+                <Input
+                  type="number"
+                  value={formData.order}
+                  onChange={(e) => setFormData({ ...formData, order: e.target.value })}
+                  placeholder="e.g., 1"
+                  className="mt-1.5"
+                  data-testid="input-order"
+                />
+              </div>
+              <div>
+                <Label>Intro Video ID</Label>
+                <Input
+                  value={formData.introVideoId}
+                  onChange={(e) => setFormData({ ...formData, introVideoId: e.target.value })}
+                  placeholder="YouTube or Vimeo video ID..."
+                  className="mt-1.5"
+                  data-testid="input-intro-video-id"
+                />
+              </div>
+              <div>
+                <Label>Intro Video Title</Label>
+                <Input
+                  value={formData.introVideoTitle}
+                  onChange={(e) => setFormData({ ...formData, introVideoTitle: e.target.value })}
+                  placeholder="Title of the intro video..."
+                  className="mt-1.5"
+                  data-testid="input-intro-video-title"
+                />
+              </div>
+            </div>
           </div>
 
           <div className="flex justify-between items-center pt-2">

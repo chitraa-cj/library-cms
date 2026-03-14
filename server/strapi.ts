@@ -87,13 +87,24 @@ export function createStrapiRouter() {
     },
   ];
 
+  const DEEP_POPULATE: Record<string, string> = {
+    granthas: [
+      "populate[BhashyakaraIntroduction][populate]=*",
+      "populate[teekas]=*",
+      "populate[sections]=*",
+      "populate[GranthaNameTranslations]=*",
+      "populate[coverImage]=*",
+    ].join("&"),
+  };
+
   for (const ct of contentTypes) {
     router.get(`/${ct.path}`, async (req, res) => {
       try {
         const queryString = new URLSearchParams(
           req.query as Record<string, string>
         ).toString();
-        const populateParam = queryString ? `?${queryString}` : "?populate=*";
+        const defaultPopulate = DEEP_POPULATE[ct.path] ?? "populate=*";
+        const populateParam = queryString ? `?${queryString}` : `?${defaultPopulate}`;
         const data = await strapiRequest(`/api/${ct.plural}${populateParam}`);
         res.json(data);
       } catch (error: any) {

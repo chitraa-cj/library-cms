@@ -39,6 +39,7 @@ import {
   type StrapiGrantha,
   type StrapiResponse,
 } from "@shared/schema";
+import { blocksToText, textToBlocks } from "@/lib/strapi-blocks";
 import {
   Loader2,
   Plus,
@@ -282,6 +283,9 @@ export default function GranthasPage() {
     GranthaType: "",
     BhashyamName: "",
     BhashyamAuthor: "",
+    IntroductionToTextEnglish: "",
+    BhashyakaraIntroductionSanskrit: "",
+    BhashyakaraIntroductionEnglish: "",
   });
   const [teekas, setTeekas] = useState<TeekaDefinition[]>([]);
 
@@ -325,8 +329,18 @@ export default function GranthasPage() {
 
   // ---------- Helpers ----------
 
+  const EMPTY_FORM = {
+    GranthaName: "",
+    GranthaType: "",
+    BhashyamName: "",
+    BhashyamAuthor: "",
+    IntroductionToTextEnglish: "",
+    BhashyakaraIntroductionSanskrit: "",
+    BhashyakaraIntroductionEnglish: "",
+  };
+
   function resetForm() {
-    setFormData({ GranthaName: "", GranthaType: "", BhashyamName: "", BhashyamAuthor: "" });
+    setFormData(EMPTY_FORM);
     setTeekas([]);
     setAdhyayas([]);
     setEditingDraftId(null);
@@ -349,6 +363,11 @@ export default function GranthasPage() {
         GranthaType: d.GranthaType || "",
         BhashyamName: d.BhashyamName || "",
         BhashyamAuthor: d.BhashyamAuthor || "",
+        IntroductionToTextEnglish: blocksToText(d.IntroductionToTextEnglish) || "",
+        BhashyakaraIntroductionSanskrit:
+          blocksToText(d.BhashyakaraIntroduction?.SanskritTextEntry) || "",
+        BhashyakaraIntroductionEnglish:
+          blocksToText(d.BhashyakaraIntroduction?.EnglishTranslationText) || "",
       });
       setTeekas(d.teekas || []);
       setAdhyayas(d.hierarchy || []);
@@ -359,6 +378,11 @@ export default function GranthasPage() {
         GranthaType: item.GranthaType || "",
         BhashyamName: item.BhashyamName || "",
         BhashyamAuthor: item.BhashyamAuthor || "",
+        IntroductionToTextEnglish: blocksToText(item.IntroductionToTextEnglish) || "",
+        BhashyakaraIntroductionSanskrit:
+          blocksToText(item.BhashyakaraIntroduction?.SanskritTextEntry) || "",
+        BhashyakaraIntroductionEnglish:
+          blocksToText(item.BhashyakaraIntroduction?.EnglishTranslationText) || "",
       });
       setTeekas([]);
       setAdhyayas([]);
@@ -535,7 +559,7 @@ export default function GranthasPage() {
       return;
     }
 
-    const payload = {
+    const payload: Record<string, any> = {
       GranthaName: formData.GranthaName,
       GranthaType: formData.GranthaType || undefined,
       BhashyamName: formData.BhashyamName || undefined,
@@ -543,6 +567,24 @@ export default function GranthasPage() {
       teekas,
       hierarchy: adhyayas,
     };
+
+    if (formData.IntroductionToTextEnglish.trim()) {
+      payload.IntroductionToTextEnglish = textToBlocks(formData.IntroductionToTextEnglish);
+    }
+
+    if (
+      formData.BhashyakaraIntroductionSanskrit.trim() ||
+      formData.BhashyakaraIntroductionEnglish.trim()
+    ) {
+      payload.BhashyakaraIntroduction = {
+        ...(formData.BhashyakaraIntroductionSanskrit.trim()
+          ? { SanskritTextEntry: textToBlocks(formData.BhashyakaraIntroductionSanskrit) }
+          : {}),
+        ...(formData.BhashyakaraIntroductionEnglish.trim()
+          ? { EnglishTranslationText: textToBlocks(formData.BhashyakaraIntroductionEnglish) }
+          : {}),
+      };
+    }
 
     const strapiDocId =
       editingItem && !editingItem._isDraft
@@ -773,6 +815,65 @@ export default function GranthasPage() {
                   ))}
                 </SelectContent>
               </Select>
+            </div>
+          </div>
+
+          {/* Introductions */}
+          <div className="border rounded-xl p-5 space-y-4">
+            <div>
+              <h3 className="font-semibold">Introductions</h3>
+              <p className="text-xs text-muted-foreground mt-0.5">
+                English introduction to the text and the Bhashyakara's introduction in Sanskrit &amp; English
+              </p>
+            </div>
+
+            <div>
+              <Label>Introduction to Text (English)</Label>
+              <Textarea
+                value={formData.IntroductionToTextEnglish}
+                onChange={(e) =>
+                  setFormData({ ...formData, IntroductionToTextEnglish: e.target.value })
+                }
+                placeholder="Brief English introduction to this Grantha..."
+                rows={4}
+                className="mt-1.5"
+                data-testid="textarea-introduction-english"
+              />
+            </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4 pt-2 border-t">
+              <div>
+                <Label className="flex items-center gap-1.5">
+                  Bhashyakara Introduction
+                  <span className="text-xs text-muted-foreground font-normal">(Sanskrit)</span>
+                </Label>
+                <Textarea
+                  value={formData.BhashyakaraIntroductionSanskrit}
+                  onChange={(e) =>
+                    setFormData({ ...formData, BhashyakaraIntroductionSanskrit: e.target.value })
+                  }
+                  placeholder="Sanskrit commentary introduction..."
+                  rows={5}
+                  className="mt-1.5 font-serif"
+                  data-testid="textarea-bhashyakara-sanskrit"
+                />
+              </div>
+              <div>
+                <Label className="flex items-center gap-1.5">
+                  Bhashyakara Introduction
+                  <span className="text-xs text-muted-foreground font-normal">(English)</span>
+                </Label>
+                <Textarea
+                  value={formData.BhashyakaraIntroductionEnglish}
+                  onChange={(e) =>
+                    setFormData({ ...formData, BhashyakaraIntroductionEnglish: e.target.value })
+                  }
+                  placeholder="English translation of commentary introduction..."
+                  rows={5}
+                  className="mt-1.5"
+                  data-testid="textarea-bhashyakara-english"
+                />
+              </div>
             </div>
           </div>
 

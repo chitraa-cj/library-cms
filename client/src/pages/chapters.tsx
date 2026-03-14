@@ -55,7 +55,7 @@ import {
   Send,
   Eye,
 } from "lucide-react";
-import { blocksToText } from "@/components/text-translation-fields";
+import { blocksToText } from "@/lib/strapi-blocks";
 
 const CHAPTER_LEVELS = [
   {

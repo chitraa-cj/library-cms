@@ -8,30 +8,10 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import type { TextAndTranslation, StrapiBlock } from "@shared/schema";
+import type { TextAndTranslation } from "@shared/schema";
 import { translationLanguages } from "@shared/schema";
 import { Languages } from "lucide-react";
-
-function blocksToText(value: StrapiBlock[] | string | undefined): string {
-  if (!value) return "";
-  if (typeof value === "string") return value;
-  if (Array.isArray(value)) {
-    return value
-      .map((block) =>
-        (block.children || []).map((child) => child.text || "").join("")
-      )
-      .join("\n");
-  }
-  return "";
-}
-
-function textToBlocks(text: string): StrapiBlock[] {
-  if (!text.trim()) return [];
-  return text.split("\n").map((line) => ({
-    type: "paragraph",
-    children: [{ type: "text", text: line }],
-  }));
-}
+import { blocksToText, textToBlocks } from "@/lib/strapi-blocks";
 
 interface TextTranslationFieldsProps {
   title: string;
@@ -145,4 +125,3 @@ export default function TextTranslationFields({
   );
 }
 
-export { blocksToText, textToBlocks };

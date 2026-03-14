@@ -48,6 +48,8 @@ export const insertDraftSchema = createInsertSchema(contentDrafts).omit({
 export type InsertDraft = z.infer<typeof insertDraftSchema>;
 export type Draft = typeof contentDrafts.$inferSelect;
 
+// ---------- Controlled vocabularies ----------
+
 export const granthaTypes = [
   "Upanishad",
   "Bhagavad Gita",
@@ -73,6 +75,9 @@ export const prasthanaBhashyamAuthors = [
   "Sri Shankaracharya",
   "Sri Upanishad Brahmendra",
 ] as const;
+
+/** Section types used for the sections[] relation on a Grantha. */
+export const sectionTypes = ["Adhyaya", "Khanda", "Valli", "Brahmana"] as const;
 
 export const translationLanguages = [
   "Tamil",
@@ -133,104 +138,253 @@ export const teekaAuthors = [
   "Ramaraya Kavi",
   "Gopalananda",
   "Narayanasrami",
+  "Madhusudana Saraswati",
 ] as const;
+
+// ---------- Strapi block / rich-text primitives ----------
 
 export interface StrapiBlock {
   type: string;
   children: { type: string; text: string }[];
 }
 
+/**
+ * Reusable bilingual text component.
+ * `SanskritTextEntry` and the translation fields are Strapi rich-text (StrapiBlock[]) or plain
+ * strings depending on context.
+ * `IASTTransliteration` is a plain string for IAST romanisation.
+ */
 export interface TextAndTranslation {
+  id?: number;
   SanskritTextEntry?: StrapiBlock[] | string;
   EnglishTranslationText?: StrapiBlock[] | string;
   OtherLanguagesTranslation?: StrapiBlock[] | string;
   LanguageOfTranslation?: (typeof translationLanguages)[number] | string;
+  IASTTransliteration?: string | null;
 }
 
+/** Component: a single teeka (commentary) entry on a shloka. */
 export interface BhashyaEntry {
+  id?: number;
   TeekaName?: string;
   TeekaAuthor?: (typeof teekaAuthors)[number] | string;
   TeekaEntry?: TextAndTranslation;
 }
 
-export interface StrapiGrantha {
+// ---------- Strapi entity types ----------
+
+/**
+ * Teeka — an independent commentary work linked to a Grantha.
+ * Returned as items in the `teekas[]` relation on StrapiGrantha.
+ */
+export interface StrapiTeeka {
   id: number;
   documentId: string;
-  GranthaName: string;
-  GranthaType: (typeof granthaTypes)[number];
-  BhashyamName?: string;
-  BhashyamAuthor?: (typeof bhashyamAuthors)[number];
-  IntroductionToTextEnglish?: StrapiBlock[];
-  BhashyakaraIntroduction?: TextAndTranslation;
-  chapters?: StrapiChapter[];
+  TeekaName: string;
+  TeekaAuthor?: string;
+  publishedAt?: string;
   createdAt?: string;
   updatedAt?: string;
 }
 
+/**
+ * Section — a chapter-level record linked to a Grantha via the `sections[]` relation.
+ * Type can be "Adhyaya", "Khanda", "Valli", "Brahmana", or null for leaf/shloka sections.
+ */
+export interface StrapiSection {
+  id: number;
+  documentId: string;
+  title: string;
+  type?: (typeof sectionTypes)[number] | string | null;
+  order?: number | null;
+  publishedAt?: string;
+  createdAt?: string;
+  updatedAt?: string;
+}
+
+// ---------- Main Strapi content-type interfaces ----------
+
+/**
+ * Grantha — the top-level sacred text record.
+ * Reflects the Strapi "granthas" content type with `populate=*`.
+ */
+export interface StrapiGrantha {
+  id: number;
+  documentId: string;
+  GranthaName: string;
+  GranthaType: (typeof granthaTypes)[number] | string;
+  BhashyamName?: string | null;
+  BhashyamAuthor?: (typeof bhashyamAuthors)[number] | string | null;
+
+  /** English introduction to the text (Strapi rich-text / blocks). */
+  IntroductionToTextEnglish?: StrapiBlock[] | null;
+
+  /** Bilingual introduction authored by the bhashyakara (commentator). */
+  BhashyakaraIntroduction?: TextAndTranslation | null;
+
+  /** Total number of teeka (commentary) works linked to this Grantha. */
+  NumberOfTeekas?: number | null;
+
+  /** URL-friendly slug. */
+  slug?: string | null;
+
+  /** Display order within a listing. */
+  order?: number | null;
+
+  /** YouTube / external video ID for the intro video. */
+  introVideoId?: string | null;
+
+  /** Title of the intro video. */
+  introVideoTitle?: string | null;
+
+  /** Multilingual translations of the Grantha name. */
+  GranthaNameTranslations?: any[];
+
+  /** Cover image media object. */
+  coverImage?: {
+    id?: number;
+    documentId?: string;
+    url?: string;
+    alternativeText?: string | null;
+    width?: number;
+    height?: number;
+  } | null;
+
+  /**
+   * Chapter sections linked to this Grantha.
+   * Each section has a type (Adhyaya / Khanda) and optional ordering.
+   */
+  sections?: StrapiSection[];
+
+  /**
+   * Teeka (commentary) entities linked to this Grantha.
+   * These are independent Strapi records with their own documentId.
+   */
+  teekas?: StrapiTeeka[];
+
+  /** Populated chapter records (from the separate chapters content type). */
+  chapters?: StrapiChapter[];
+
+  publishedAt?: string;
+  createdAt?: string;
+  updatedAt?: string;
+}
+
+/**
+ * Chapter — a node in the Adhyaya → Khanda → Shloka/Manthra hierarchy.
+ * Matches the Strapi "chapters" content type with `populate=*`.
+ * Depth is inferred from the presence/absence of a `parent`:
+ *   depth 0 = Adhyaya, depth 1 = Khanda, depth 2 = Shloka / Manthra.
+ */
 export interface StrapiChapter {
   id: number;
   documentId: string;
   ChapterTitle: string;
   order: number;
-  grantha?: StrapiGrantha;
-  parent?: StrapiChapter;
+
+  /** Parent Grantha this chapter belongs to. */
+  grantha?: Pick<StrapiGrantha, "id" | "documentId" | "GranthaName">;
+
+  /** Parent chapter (null for Adhyaya; Adhyaya for Khanda; Khanda for Shloka). */
+  parent?: Pick<StrapiChapter, "id" | "documentId" | "ChapterTitle">;
+
+  /** Direct child chapters. */
   children?: StrapiChapter[];
+
+  /** Shloka / Manthra text with translation (leaf level only). */
   ShlokaManthraEntry?: TextAndTranslation;
+
+  /** Bhashyam commentary on the shloka (leaf level only). */
   BhashyamForShlokaManthra?: TextAndTranslation;
+
+  /** Per-teeka commentary entries (leaf level only). */
   Teekas?: BhashyaEntry[];
+
+  publishedAt?: string;
   createdAt?: string;
   updatedAt?: string;
 }
 
+/**
+ * Article — blog / library article.
+ */
 export interface StrapiArticle {
   id: number;
   documentId: string;
   title: string;
-  description?: string;
-  slug?: string;
-  cover?: any;
+  description?: string | null;
+  slug?: string | null;
+  cover?: {
+    id?: number;
+    documentId?: string;
+    url?: string;
+    alternativeText?: string | null;
+    width?: number;
+    height?: number;
+  } | null;
   author?: StrapiAuthor;
   category?: StrapiCategory;
+  /** Rich-text content blocks. */
   blocks?: any[];
+  publishedAt?: string;
   createdAt?: string;
   updatedAt?: string;
 }
 
+/**
+ * Author — writer of articles.
+ */
 export interface StrapiAuthor {
   id: number;
   documentId: string;
   name: string;
-  avatar?: any;
-  email?: string;
+  avatar?: {
+    id?: number;
+    documentId?: string;
+    url?: string;
+    alternativeText?: string | null;
+  } | null;
+  email?: string | null;
   articles?: StrapiArticle[];
+  publishedAt?: string;
   createdAt?: string;
   updatedAt?: string;
 }
 
+/**
+ * Category — taxonomy for articles.
+ */
 export interface StrapiCategory {
   id: number;
   documentId: string;
   name: string;
-  slug?: string;
-  description?: string;
+  slug?: string | null;
+  description?: string | null;
   articles?: StrapiArticle[];
+  publishedAt?: string;
   createdAt?: string;
   updatedAt?: string;
 }
 
+/**
+ * Prasthana Thraya Screen — display screen for one of the three Prasthana Traya texts.
+ */
 export interface StrapiPrasthanaScreen {
   id: number;
   documentId: string;
-  GranthaName?: string;
-  GranthaType?: (typeof prasthanaGranthaTypes)[number];
-  BhashyamName?: string;
-  BhashyamAuthor?: (typeof prasthanaBhashyamAuthors)[number];
-  EnglishIntroductionToText?: string;
-  BhashyakaraIntroduction?: TextAndTranslation;
+  GranthaName?: string | null;
+  GranthaType?: (typeof prasthanaGranthaTypes)[number] | string | null;
+  BhashyamName?: string | null;
+  BhashyamAuthor?: (typeof prasthanaBhashyamAuthors)[number] | string | null;
+  EnglishIntroductionToText?: string | null;
+  BhashyakaraIntroduction?: TextAndTranslation | null;
   BhashyaEntryCollection?: BhashyaEntry[];
+  publishedAt?: string;
   createdAt?: string;
   updatedAt?: string;
 }
+
+// ---------- API response wrappers ----------
 
 export interface StrapiResponse<T> {
   data: T[];
@@ -246,5 +400,5 @@ export interface StrapiResponse<T> {
 
 export interface StrapiSingleResponse<T> {
   data: T;
-  meta: {};
+  meta: Record<string, unknown>;
 }

@@ -44,6 +44,8 @@ import {
   type BhashyaEntry,
 } from "@shared/schema";
 import { Loader2 } from "lucide-react";
+import StrapiSyncBar from "@/components/strapi-sync-bar";
+import { STRAPI_POLL_INTERVAL } from "@/hooks/use-strapi-sync";
 
 const EMPTY_TT: TextAndTranslation = {
   SanskritTextEntry: "",
@@ -71,6 +73,8 @@ export default function PrasthanaThraya() {
 
   const { data, isLoading, error } = useQuery<StrapiResponse<StrapiPrasthanaScreen>>({
     queryKey: ["/api/strapi", "prasthana-thraya-screens"],
+    refetchInterval: STRAPI_POLL_INTERVAL,
+    refetchOnWindowFocus: true,
   });
 
   const { unpublishedDrafts, isLoadingDrafts, saveDraft, publishDraft, deleteDraft } = useDrafts("prasthana-thraya-screens");
@@ -220,6 +224,7 @@ export default function PrasthanaThraya() {
       <DataTable
         title="Prasthana Thraya"
         description="Manage Prasthana Thraya screen entries"
+        headerContent={<StrapiSyncBar />}
         columns={columns}
         data={mergedData}
         isLoading={isLoading || isLoadingDrafts}

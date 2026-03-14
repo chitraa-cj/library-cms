@@ -56,6 +56,8 @@ import {
   Eye,
 } from "lucide-react";
 import { blocksToText } from "@/lib/strapi-blocks";
+import StrapiSyncBar from "@/components/strapi-sync-bar";
+import { STRAPI_POLL_INTERVAL } from "@/hooks/use-strapi-sync";
 
 const CHAPTER_LEVELS = [
   {
@@ -329,10 +331,14 @@ export default function ChaptersPage() {
 
   const { data, isLoading, error } = useQuery<StrapiResponse<StrapiChapter>>({
     queryKey: ["/api/strapi", "chapters"],
+    refetchInterval: STRAPI_POLL_INTERVAL,
+    refetchOnWindowFocus: true,
   });
 
   const { data: granthasData } = useQuery<StrapiResponse<StrapiGrantha>>({
     queryKey: ["/api/strapi", "granthas"],
+    refetchInterval: STRAPI_POLL_INTERVAL,
+    refetchOnWindowFocus: true,
   });
 
   const { unpublishedDrafts, isLoadingDrafts, saveDraft, publishDraft, deleteDraft } =
@@ -546,10 +552,13 @@ export default function ChaptersPage() {
               Manage the Grantha → Adhyaya → Khanda → Shloka hierarchy
             </p>
           </div>
-          <Button onClick={openAdd} data-testid="chapter-add">
-            <Plus className="w-4 h-4 mr-2" />
-            Add Chapter
-          </Button>
+          <div className="flex items-center gap-3">
+            <StrapiSyncBar />
+            <Button onClick={openAdd} data-testid="chapter-add">
+              <Plus className="w-4 h-4 mr-2" />
+              Add Chapter
+            </Button>
+          </div>
         </div>
 
         <div className="mb-4 flex items-center gap-6 text-xs text-muted-foreground">

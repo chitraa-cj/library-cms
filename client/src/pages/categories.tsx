@@ -27,6 +27,8 @@ import {
 } from "@/components/ui/alert-dialog";
 import { type StrapiCategory, type StrapiResponse } from "@shared/schema";
 import { Loader2 } from "lucide-react";
+import StrapiSyncBar from "@/components/strapi-sync-bar";
+import { STRAPI_POLL_INTERVAL } from "@/hooks/use-strapi-sync";
 
 export default function CategoriesPage() {
   const { toast } = useToast();
@@ -39,6 +41,8 @@ export default function CategoriesPage() {
 
   const { data, isLoading, error } = useQuery<StrapiResponse<StrapiCategory>>({
     queryKey: ["/api/strapi", "categories"],
+    refetchInterval: STRAPI_POLL_INTERVAL,
+    refetchOnWindowFocus: true,
   });
 
   const { unpublishedDrafts, isLoadingDrafts, saveDraft, publishDraft, deleteDraft } = useDrafts("categories");
@@ -167,6 +171,7 @@ export default function CategoriesPage() {
     <div className="p-6 lg:p-8 max-w-7xl mx-auto">
       <DataTable
         title="Categories"
+        headerContent={<StrapiSyncBar />}
         description="Manage content categories"
         columns={columns}
         data={mergedData}

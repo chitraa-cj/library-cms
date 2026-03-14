@@ -40,6 +40,8 @@ import {
   type StrapiResponse,
 } from "@shared/schema";
 import { Loader2 } from "lucide-react";
+import StrapiSyncBar from "@/components/strapi-sync-bar";
+import { STRAPI_POLL_INTERVAL } from "@/hooks/use-strapi-sync";
 
 export default function ArticlesPage() {
   const { toast } = useToast();
@@ -58,14 +60,18 @@ export default function ArticlesPage() {
 
   const { data, isLoading, error } = useQuery<StrapiResponse<StrapiArticle>>({
     queryKey: ["/api/strapi", "articles"],
+    refetchInterval: STRAPI_POLL_INTERVAL,
+    refetchOnWindowFocus: true,
   });
 
   const { data: authorsData } = useQuery<StrapiResponse<StrapiAuthor>>({
     queryKey: ["/api/strapi", "authors"],
+    refetchInterval: STRAPI_POLL_INTERVAL,
   });
 
   const { data: categoriesData } = useQuery<StrapiResponse<StrapiCategory>>({
     queryKey: ["/api/strapi", "categories"],
+    refetchInterval: STRAPI_POLL_INTERVAL,
   });
 
   const { unpublishedDrafts, isLoadingDrafts, saveDraft, publishDraft, deleteDraft } = useDrafts("articles");
@@ -219,6 +225,7 @@ export default function ArticlesPage() {
     <div className="p-6 lg:p-8 max-w-7xl mx-auto">
       <DataTable
         title="Articles"
+        headerContent={<StrapiSyncBar />}
         description="Manage blog articles and content"
         columns={columns}
         data={mergedData}

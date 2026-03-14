@@ -25,8 +25,16 @@ A data feeding website for the Ekatmadham Library that connects to a Strapi CMS 
 ## Key Components
 - **TextAndTranslation**: Reusable component for Sanskrit text + English translation + other languages (51 language dropdown)
 - **BhashyaEntryFields**: Repeatable Teeka/commentary entries with nested TextAndTranslation (4 Teeka authors)
-- **DataTable**: Generic data table with search, CRUD actions, status badges (Draft/Published), Publish button
+- **DataTable**: Generic data table with search, CRUD actions, status badges (Draft/Published), Publish button, `headerContent` slot
+- **StrapiSyncBar**: Sync status badge shown in every list view — green dot + "Synced X ago", spinning during fetch, manual refresh button
 - **useDrafts hook**: Shared hook for draft CRUD + publish workflow across all content pages
+- **useStrapiSync hook**: Provides `syncAll()` + `isSyncing` + `lastSyncedAt` by watching `useIsFetching` across all `/api/strapi` queries
+
+## Strapi Sync Behaviour
+- All Strapi queries use `refetchInterval: 30_000` (30 s) + `refetchOnWindowFocus: true`
+- Any content added directly in Strapi is automatically picked up within 30 seconds
+- Every list page shows a `StrapiSyncBar` in the header with last-sync time and a manual refresh button
+- Utility functions `blocksToText` / `textToBlocks` live in `client/src/lib/strapi-blocks.ts`
 
 ## Database Tables
 - `users` - User accounts (id, username, password, displayName, role)

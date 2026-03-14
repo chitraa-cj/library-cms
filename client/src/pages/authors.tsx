@@ -26,6 +26,8 @@ import {
 } from "@/components/ui/alert-dialog";
 import { type StrapiAuthor, type StrapiResponse } from "@shared/schema";
 import { Loader2 } from "lucide-react";
+import StrapiSyncBar from "@/components/strapi-sync-bar";
+import { STRAPI_POLL_INTERVAL } from "@/hooks/use-strapi-sync";
 
 export default function AuthorsPage() {
   const { toast } = useToast();
@@ -38,6 +40,8 @@ export default function AuthorsPage() {
 
   const { data, isLoading, error } = useQuery<StrapiResponse<StrapiAuthor>>({
     queryKey: ["/api/strapi", "authors"],
+    refetchInterval: STRAPI_POLL_INTERVAL,
+    refetchOnWindowFocus: true,
   });
 
   const { unpublishedDrafts, isLoadingDrafts, saveDraft, publishDraft, deleteDraft } = useDrafts("authors");
@@ -156,6 +160,7 @@ export default function AuthorsPage() {
     <div className="p-6 lg:p-8 max-w-7xl mx-auto">
       <DataTable
         title="Authors"
+        headerContent={<StrapiSyncBar />}
         description="Manage author profiles"
         columns={columns}
         data={mergedData}

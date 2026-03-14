@@ -37,6 +37,8 @@ interface DataTableProps {
   emptyMessage?: string;
   searchable?: boolean;
   searchKey?: string;
+  /** Extra content rendered to the left of the Add button (e.g. a sync status bar). */
+  headerContent?: React.ReactNode;
 }
 
 export default function DataTable({
@@ -57,6 +59,7 @@ export default function DataTable({
   emptyMessage = "No entries found",
   searchable = true,
   searchKey,
+  headerContent,
 }: DataTableProps) {
   const [search, setSearch] = useState("");
 
@@ -84,12 +87,15 @@ export default function DataTable({
             </p>
           )}
         </div>
-        {onAdd && (
-          <Button onClick={onAdd} data-testid={`button-${testIdPrefix}-add`}>
-            <Plus className="w-4 h-4 mr-2" />
-            {addLabel}
-          </Button>
-        )}
+        <div className="flex items-center gap-3">
+          {headerContent}
+          {onAdd && (
+            <Button onClick={onAdd} data-testid={`button-${testIdPrefix}-add`}>
+              <Plus className="w-4 h-4 mr-2" />
+              {addLabel}
+            </Button>
+          )}
+        </div>
       </div>
 
       {searchable && (

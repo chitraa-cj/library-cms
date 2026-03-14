@@ -1,4 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
+import { STRAPI_POLL_INTERVAL } from "@/hooks/use-strapi-sync";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -73,6 +74,8 @@ function StatCard({
 }) {
   const { data, isLoading, error } = useQuery<any>({
     queryKey: ["/api/strapi", section.key],
+    refetchInterval: STRAPI_POLL_INTERVAL,
+    refetchOnWindowFocus: true,
   });
 
   return (

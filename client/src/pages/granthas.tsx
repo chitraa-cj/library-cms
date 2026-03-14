@@ -40,6 +40,8 @@ import {
   type StrapiResponse,
 } from "@shared/schema";
 import { blocksToText, textToBlocks } from "@/lib/strapi-blocks";
+import StrapiSyncBar from "@/components/strapi-sync-bar";
+import { STRAPI_POLL_INTERVAL } from "@/hooks/use-strapi-sync";
 import {
   Loader2,
   Plus,
@@ -302,6 +304,8 @@ export default function GranthasPage() {
   // Data
   const { data, isLoading } = useQuery<StrapiResponse<StrapiGrantha>>({
     queryKey: ["/api/strapi", "granthas"],
+    refetchInterval: STRAPI_POLL_INTERVAL,
+    refetchOnWindowFocus: true,
   });
 
   const {
@@ -672,10 +676,13 @@ export default function GranthasPage() {
               Browse library to update existing content
             </p>
           </div>
-          <Button onClick={openAdd} data-testid="button-new-grantha">
-            <Plus className="w-4 h-4 mr-2" />
-            New Entry
-          </Button>
+          <div className="flex items-center gap-3">
+            <StrapiSyncBar />
+            <Button onClick={openAdd} data-testid="button-new-grantha">
+              <Plus className="w-4 h-4 mr-2" />
+              New Entry
+            </Button>
+          </div>
         </div>
 
         {isLoading || isLoadingDrafts ? (

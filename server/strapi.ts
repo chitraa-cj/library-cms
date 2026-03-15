@@ -103,6 +103,9 @@ export function createStrapiRouter() {
           "populate[sections][populate][manthras][fields][0]=documentId",
           "populate[sections][populate][manthras][fields][1]=ShlokaManthraNumber",
           "populate[sections][populate][manthras][fields][2]=order",
+          "populate[sections][populate][parent][fields][0]=documentId",
+          "populate[sections][populate][parent][fields][1]=title",
+          "populate[sections][populate][parent][fields][2]=type",
           "pagination[pageSize]=200",
         ].join("&")}`
       );

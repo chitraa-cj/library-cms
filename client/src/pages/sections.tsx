@@ -50,6 +50,9 @@ import {
   Hash,
   ExternalLink,
   AlertTriangle,
+  ChevronRight,
+  ChevronDown,
+  Layers,
 } from "lucide-react";
 import { STRAPI_POLL_INTERVAL } from "@/hooks/use-strapi-sync";
 
@@ -61,6 +64,16 @@ export default function SectionsPage() {
   const [editingDraftId, setEditingDraftId] = useState<number | null>(null);
   const [viewingItem, setViewingItem] = useState<any>(null);
   const [searchQuery, setSearchQuery] = useState("");
+  const [expandedSections, setExpandedSections] = useState<Set<string>>(new Set());
+
+  function toggleSection(documentId: string) {
+    setExpandedSections((prev) => {
+      const next = new Set(prev);
+      if (next.has(documentId)) next.delete(documentId);
+      else next.add(documentId);
+      return next;
+    });
+  }
 
   const [formData, setFormData] = useState({
     title: "",
@@ -263,11 +276,13 @@ export default function SectionsPage() {
                 <th className="text-left px-4 py-3 font-medium text-muted-foreground">Title</th>
                 <th className="text-left px-4 py-3 font-medium text-muted-foreground">Type</th>
                 <th className="text-left px-4 py-3 font-medium text-muted-foreground">Grantha</th>
-                <th className="text-left px-4 py-3 font-medium text-muted-foreground">Order</th>
+                <th className="text-left px-4 py-3 font-medium text-muted-foreground">Parent</th>
+                <th className="text-left px-4 py-3 font-medium text-muted-foreground">Entries</th>
                 <th className="text-right px-4 py-3 font-medium text-muted-foreground">Actions</th>
               </tr>
             </thead>
             <tbody>
+              {/* Draft rows (flat) */}
               {displayedDrafts.map((draft) => {
                 const isPub = publishDraft.isPending && publishDraft.variables === draft._draftId;
                 const grantha = allGranthas.find((g) => g.documentId === draft._grantha);
@@ -277,7 +292,8 @@ export default function SectionsPage() {
                     <td className="px-4 py-3 font-medium">{draft.title}</td>
                     <td className="px-4 py-3 text-muted-foreground text-xs">{draft.type || "—"}</td>
                     <td className="px-4 py-3 text-muted-foreground text-xs">{grantha?.GranthaName || "—"}</td>
-                    <td className="px-4 py-3 text-muted-foreground">{draft.order ?? "—"}</td>
+                    <td className="px-4 py-3 text-muted-foreground text-xs">—</td>
+                    <td className="px-4 py-3 text-muted-foreground text-xs">—</td>
                     <td className="px-4 py-3">
                       <div className="flex justify-end gap-1">
                         <Button size="sm" variant="ghost" onClick={() => openEdit(draft)} data-testid={`button-edit-draft-${draft._draftId}`}><Pencil className="w-3.5 h-3.5" /></Button>
@@ -291,23 +307,144 @@ export default function SectionsPage() {
                 );
               })}
 
-              {displayedPublished.map((section) => {
-                return (
-                  <tr key={section.documentId} className="border-b border-border hover:bg-muted/30 transition-colors" data-testid={`row-section-${section.documentId}`}>
-                    <td className="px-4 py-3"><Badge className="bg-green-100 text-green-800 border-green-200 text-xs">Published</Badge></td>
-                    <td className="px-4 py-3 font-medium">{section.title}</td>
-                    <td className="px-4 py-3 text-muted-foreground text-xs">{section.type || "—"}</td>
-                    <td className="px-4 py-3 text-muted-foreground text-xs">{section.grantha?.GranthaName || "—"}</td>
-                    <td className="px-4 py-3 text-muted-foreground">{section.order ?? "—"}</td>
-                    <td className="px-4 py-3">
-                      <div className="flex justify-end gap-1">
-                        <Button size="sm" variant="ghost" onClick={() => openEdit(section)} data-testid={`button-edit-${section.documentId}`}><Pencil className="w-3.5 h-3.5" /></Button>
-                        <Button size="sm" variant="ghost" className="text-destructive hover:text-destructive" onClick={() => setDeleteTarget(section)} data-testid={`button-delete-${section.documentId}`}><Trash2 className="w-3.5 h-3.5" /></Button>
-                      </div>
-                    </td>
-                  </tr>
-                );
-              })}
+              {/* Published sections — hierarchical grouped by grantha */}
+              {(() => {
+                // Group sections by grantha documentId
+                const byGrantha = new Map<string, { granthaName: string; sections: any[] }>();
+                for (const s of displayedPublished) {
+                  const gId = s.grantha?.documentId || "__none__";
+                  const gName = s.grantha?.GranthaName || "No Grantha";
+                  if (!byGrantha.has(gId)) byGrantha.set(gId, { granthaName: gName, sections: [] });
+                  byGrantha.get(gId)!.sections.push(s);
+                }
+
+                const rows: JSX.Element[] = [];
+
+                for (const [gId, { granthaName, sections: gSections }] of byGrantha) {
+                  // Build a lookup map for this grantha's sections
+                  const sectionById = new Map(gSections.map((s) => [s.documentId, s]));
+
+                  // Root sections = those whose parent is null OR whose parent is not in this grantha
+                  const roots = gSections.filter((s) => !s.parent || !sectionById.has(s.parent?.documentId));
+                  // Child map: parentDocId → children[]
+                  const childrenOf = new Map<string, any[]>();
+                  for (const s of gSections) {
+                    if (s.parent?.documentId && sectionById.has(s.parent.documentId)) {
+                      if (!childrenOf.has(s.parent.documentId)) childrenOf.set(s.parent.documentId, []);
+                      childrenOf.get(s.parent.documentId)!.push(s);
+                    }
+                  }
+
+                  // Grantha group header
+                  rows.push(
+                    <tr key={`grantha-${gId}`} className="bg-muted/60 border-b border-border">
+                      <td colSpan={7} className="px-4 py-2">
+                        <span className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">{granthaName}</span>
+                        <span className="ml-2 text-xs text-muted-foreground">({gSections.length} section{gSections.length !== 1 ? "s" : ""})</span>
+                      </td>
+                    </tr>
+                  );
+
+                  // Sort roots by order
+                  roots.sort((a, b) => (a.order ?? 999) - (b.order ?? 999));
+
+                  for (const root of roots) {
+                    const children = (childrenOf.get(root.documentId) || []).sort((a, b) => (a.order ?? 999) - (b.order ?? 999));
+                    const isExpanded = expandedSections.has(root.documentId);
+                    const hasChildren = children.length > 0;
+                    const manthraCount = Array.isArray(root.manthras) ? root.manthras.length : 0;
+
+                    // Root section row
+                    rows.push(
+                      <tr
+                        key={root.documentId}
+                        className="border-b border-border hover:bg-muted/20 transition-colors"
+                        data-testid={`row-section-${root.documentId}`}
+                      >
+                        <td className="px-4 py-3">
+                          <Badge className="bg-green-100 text-green-800 border-green-200 dark:bg-green-950/40 dark:text-green-400 dark:border-green-800 text-xs">Live</Badge>
+                        </td>
+                        <td className="px-4 py-3">
+                          <div className="flex items-center gap-1.5">
+                            {hasChildren ? (
+                              <button
+                                type="button"
+                                onClick={() => toggleSection(root.documentId)}
+                                className="text-muted-foreground hover:text-foreground transition-colors"
+                                data-testid={`button-expand-${root.documentId}`}
+                              >
+                                {isExpanded
+                                  ? <ChevronDown className="w-4 h-4" />
+                                  : <ChevronRight className="w-4 h-4" />}
+                              </button>
+                            ) : (
+                              <span className="w-4" />
+                            )}
+                            <span className="font-medium">{root.title}</span>
+                          </div>
+                        </td>
+                        <td className="px-4 py-3">
+                          {root.type ? <Badge variant="outline" className="text-xs">{root.type}</Badge> : <span className="text-muted-foreground">—</span>}
+                        </td>
+                        <td className="px-4 py-3 text-muted-foreground text-xs">{granthaName}</td>
+                        <td className="px-4 py-3 text-muted-foreground text-xs">—</td>
+                        <td className="px-4 py-3 text-muted-foreground text-xs">
+                          {hasChildren
+                            ? <span className="text-xs">{children.length} sub-section{children.length !== 1 ? "s" : ""}{manthraCount > 0 ? `, ${manthraCount} entr${manthraCount !== 1 ? "ies" : "y"}` : ""}</span>
+                            : manthraCount > 0 ? <span>{manthraCount} entr{manthraCount !== 1 ? "ies" : "y"}</span> : "—"
+                          }
+                        </td>
+                        <td className="px-4 py-3">
+                          <div className="flex justify-end gap-1">
+                            <Button size="sm" variant="ghost" onClick={() => openEdit(root)} data-testid={`button-edit-${root.documentId}`}><Pencil className="w-3.5 h-3.5" /></Button>
+                            <Button size="sm" variant="ghost" className="text-destructive hover:text-destructive" onClick={() => setDeleteTarget(root)} data-testid={`button-delete-${root.documentId}`}><Trash2 className="w-3.5 h-3.5" /></Button>
+                          </div>
+                        </td>
+                      </tr>
+                    );
+
+                    // Child section rows (only shown when expanded)
+                    if (isExpanded) {
+                      for (const child of children) {
+                        const childManthraCount = Array.isArray(child.manthras) ? child.manthras.length : 0;
+                        rows.push(
+                          <tr
+                            key={child.documentId}
+                            className="border-b border-border bg-muted/10 hover:bg-muted/30 transition-colors"
+                            data-testid={`row-section-${child.documentId}`}
+                          >
+                            <td className="px-4 py-2.5">
+                              <Badge className="bg-green-100 text-green-800 border-green-200 dark:bg-green-950/40 dark:text-green-400 dark:border-green-800 text-xs">Live</Badge>
+                            </td>
+                            <td className="px-4 py-2.5">
+                              <div className="flex items-center gap-1.5 pl-6">
+                                <Layers className="w-3.5 h-3.5 text-muted-foreground shrink-0" />
+                                <span className="text-sm">{child.title}</span>
+                              </div>
+                            </td>
+                            <td className="px-4 py-2.5">
+                              {child.type ? <Badge variant="outline" className="text-xs">{child.type}</Badge> : <span className="text-muted-foreground">—</span>}
+                            </td>
+                            <td className="px-4 py-2.5 text-muted-foreground text-xs">{granthaName}</td>
+                            <td className="px-4 py-2.5 text-muted-foreground text-xs font-medium text-foreground/70">{root.title}</td>
+                            <td className="px-4 py-2.5 text-muted-foreground text-xs">
+                              {childManthraCount > 0 ? `${childManthraCount} entr${childManthraCount !== 1 ? "ies" : "y"}` : "—"}
+                            </td>
+                            <td className="px-4 py-2.5">
+                              <div className="flex justify-end gap-1">
+                                <Button size="sm" variant="ghost" onClick={() => openEdit(child)} data-testid={`button-edit-${child.documentId}`}><Pencil className="w-3.5 h-3.5" /></Button>
+                                <Button size="sm" variant="ghost" className="text-destructive hover:text-destructive" onClick={() => setDeleteTarget(child)} data-testid={`button-delete-${child.documentId}`}><Trash2 className="w-3.5 h-3.5" /></Button>
+                              </div>
+                            </td>
+                          </tr>
+                        );
+                      }
+                    }
+                  }
+                }
+
+                return rows;
+              })()}
             </tbody>
           </table>
         )}

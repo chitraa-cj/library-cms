@@ -238,16 +238,45 @@ function GranthaCard({
         <p className="text-xs text-muted-foreground mt-1">{item.BhashyamName}</p>
       )}
       {!isDraft && (
-        <div className="flex gap-3 mt-3 pt-3 border-t text-xs text-muted-foreground">
+        <div className="mt-3 pt-3 border-t space-y-2">
           {Array.isArray(item.sections) && item.sections.length > 0 && (
-            <span>{item.sections.length} section{item.sections.length !== 1 ? "s" : ""}</span>
+            <div>
+              <p className="text-xs font-medium text-muted-foreground mb-1">
+                Sections ({item.sections.length})
+              </p>
+              <div className="flex flex-wrap gap-1">
+                {item.sections.map((s: any) => (
+                  <span
+                    key={s.documentId || s.id}
+                    className="inline-flex items-center text-xs bg-muted rounded px-1.5 py-0.5 text-foreground"
+                  >
+                    {s.title || "Untitled"}
+                    {s.type && <span className="ml-1 text-muted-foreground">· {s.type}</span>}
+                  </span>
+                ))}
+              </div>
+            </div>
           )}
           {Array.isArray(item.teekas) && item.teekas.length > 0 && (
-            <span>{item.teekas.length} teeka{item.teekas.length !== 1 ? "s" : ""}</span>
+            <div>
+              <p className="text-xs font-medium text-muted-foreground mb-1">
+                Teekas ({item.teekas.length})
+              </p>
+              <div className="flex flex-wrap gap-1">
+                {item.teekas.map((t: any) => (
+                  <span
+                    key={t.documentId || t.id}
+                    className="inline-flex items-center text-xs bg-muted rounded px-1.5 py-0.5 text-foreground"
+                  >
+                    {t.TeekaName || "Untitled"}
+                  </span>
+                ))}
+              </div>
+            </div>
           )}
           {(!Array.isArray(item.sections) || item.sections.length === 0) &&
            (!Array.isArray(item.teekas) || item.teekas.length === 0) && (
-            <span>No sections or teekas linked</span>
+            <p className="text-xs text-muted-foreground">No sections or teekas linked</p>
           )}
         </div>
       )}
@@ -479,7 +508,15 @@ export default function GranthasPage() {
           : []
       );
       setStructureConfig(DEFAULT_STRUCTURE);
-      setTeekas([]);
+      setTeekas(
+        Array.isArray(item.teekas)
+          ? item.teekas.map((t: any) => ({
+              id: t.documentId || uid(),
+              TeekaName: t.TeekaName || "",
+              TeekaAuthor: t.TeekaAuthor || "",
+            }))
+          : []
+      );
       setAdhyayas([]);
     }
     setStep(1);
@@ -1280,6 +1317,49 @@ export default function GranthasPage() {
               </div>
             )}
           </div>
+
+          {/* Linked Sections (read-only, from Strapi) */}
+          {editingItem && !editingItem._isDraft && Array.isArray(editingItem.sections) && editingItem.sections.length > 0 && (
+            <div className="border rounded-xl p-5">
+              <div className="flex items-start justify-between mb-4">
+                <div>
+                  <h3 className="font-semibold">Linked Sections</h3>
+                  <p className="text-xs text-muted-foreground mt-0.5">
+                    Sections currently linked to this Grantha in the CMS (read-only here)
+                  </p>
+                </div>
+                <a
+                  href="/sections"
+                  className="text-xs text-primary underline underline-offset-2 shrink-0 mt-0.5"
+                  data-testid="link-manage-sections"
+                >
+                  Manage in Sections →
+                </a>
+              </div>
+              <div className="space-y-2">
+                {editingItem.sections.map((s: any, i: number) => (
+                  <div
+                    key={s.documentId || s.id}
+                    className="flex items-center gap-3 px-3 py-2 bg-muted/40 rounded-lg"
+                    data-testid={`row-linked-section-${s.documentId || s.id}`}
+                  >
+                    <span className="text-xs font-semibold text-muted-foreground w-5 shrink-0 text-center">{i + 1}</span>
+                    <div className="flex-1 min-w-0">
+                      <p className="text-sm font-medium truncate">{s.title || "Untitled"}</p>
+                    </div>
+                    {s.type && (
+                      <span className="text-xs bg-background border rounded px-1.5 py-0.5 shrink-0 text-muted-foreground">
+                        {s.type}
+                      </span>
+                    )}
+                    {s.order != null && (
+                      <span className="text-xs text-muted-foreground shrink-0">#{s.order}</span>
+                    )}
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
 
           {/* Additional Details */}
           <div className="border rounded-xl p-5 space-y-4">

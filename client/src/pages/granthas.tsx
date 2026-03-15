@@ -58,7 +58,14 @@ import {
   Layers,
   Send,
   FileText,
+  ExternalLink,
 } from "lucide-react";
+
+const STRAPI_ADMIN = "http://13.53.121.15:1337/admin";
+function strapiAdminUrl(collection: string, documentId?: string) {
+  const base = `${STRAPI_ADMIN}/content-manager/collection-types/${collection}`;
+  return documentId ? `${base}/${documentId}` : base;
+}
 
 // ---------- Local Types ----------
 
@@ -216,6 +223,18 @@ function GranthaCard({
               )}
             </Button>
           )}
+          {!isDraft && item.documentId && (
+            <a
+              href={strapiAdminUrl("api::grantha.grantha", item.documentId)}
+              target="_blank"
+              rel="noopener noreferrer"
+              title="Open in Strapi CMS"
+              className="inline-flex items-center justify-center h-7 w-7 rounded-md hover:bg-muted text-muted-foreground hover:text-foreground transition-colors"
+              data-testid={`link-cms-${item.documentId}`}
+            >
+              <ExternalLink className="w-3.5 h-3.5" />
+            </a>
+          )}
           <Button
             size="icon"
             variant="ghost"
@@ -356,6 +375,7 @@ export default function GranthasPage() {
 
   // Step 2 – Book structure
   const [structureConfig, setStructureConfig] = useState({
+    levelOneEnabled: true,
     levelOneName: "Adhyaya",
     levelTwoEnabled: true,
     levelTwoName: "Khanda",
@@ -420,6 +440,7 @@ export default function GranthasPage() {
   };
 
   const DEFAULT_STRUCTURE = {
+    levelOneEnabled: true,
     levelOneName: "Adhyaya",
     levelTwoEnabled: true,
     levelTwoName: "Khanda",
@@ -1325,38 +1346,62 @@ export default function GranthasPage() {
                 <div>
                   <h3 className="font-semibold">Linked Sections</h3>
                   <p className="text-xs text-muted-foreground mt-0.5">
-                    Sections currently linked to this Grantha in the CMS (read-only here)
+                    Sections currently linked to this Grantha in the CMS — read-only here
                   </p>
                 </div>
-                <a
-                  href="/sections"
-                  className="text-xs text-primary underline underline-offset-2 shrink-0 mt-0.5"
-                  data-testid="link-manage-sections"
-                >
-                  Manage in Sections →
-                </a>
+                <div className="flex gap-3 items-center shrink-0">
+                  <a
+                    href={strapiAdminUrl("api::grantha.grantha", editingItem.documentId)}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="text-xs text-primary underline underline-offset-2 inline-flex items-center gap-1"
+                    data-testid="link-cms-grantha-edit"
+                  >
+                    Edit in CMS <ExternalLink className="w-3 h-3" />
+                  </a>
+                </div>
               </div>
               <div className="space-y-2">
-                {editingItem.sections.map((s: any, i: number) => (
-                  <div
-                    key={s.documentId || s.id}
-                    className="flex items-center gap-3 px-3 py-2 bg-muted/40 rounded-lg"
-                    data-testid={`row-linked-section-${s.documentId || s.id}`}
-                  >
-                    <span className="text-xs font-semibold text-muted-foreground w-5 shrink-0 text-center">{i + 1}</span>
-                    <div className="flex-1 min-w-0">
-                      <p className="text-sm font-medium truncate">{s.title || "Untitled"}</p>
+                {editingItem.sections.map((s: any, i: number) => {
+                  const manthras = Array.isArray(s.manthras) ? s.manthras : [];
+                  return (
+                    <div
+                      key={s.documentId || s.id}
+                      className="border rounded-lg overflow-hidden"
+                      data-testid={`row-linked-section-${s.documentId || s.id}`}
+                    >
+                      <div className="flex items-center gap-3 px-3 py-2 bg-muted/30">
+                        <span className="text-xs font-semibold text-muted-foreground w-5 shrink-0 text-center">{i + 1}</span>
+                        <div className="flex-1 min-w-0">
+                          <p className="text-sm font-medium truncate">{s.title || "Untitled"}</p>
+                        </div>
+                        {s.type && (
+                          <span className="text-xs bg-background border rounded px-1.5 py-0.5 shrink-0 text-muted-foreground">
+                            {s.type}
+                          </span>
+                        )}
+                        {manthras.length > 0 && (
+                          <span className="text-xs text-muted-foreground shrink-0">
+                            {manthras.length} {manthras.length === 1 ? "entry" : "entries"}
+                          </span>
+                        )}
+                      </div>
+                      {manthras.length > 0 && (
+                        <div className="px-3 py-2 bg-muted/10 border-t space-y-0.5">
+                          {manthras.map((m: any, mi: number) => (
+                            <div key={m.documentId || m.id} className="flex items-center gap-2 py-0.5">
+                              <Hash className="w-3 h-3 text-muted-foreground shrink-0" />
+                              <span className="text-xs text-muted-foreground shrink-0 w-5">{mi + 1}.</span>
+                              <span className="text-xs">
+                                {m.ShlokaManthraNumber ? `Shloka ${m.ShlokaManthraNumber}` : "Entry"}
+                              </span>
+                            </div>
+                          ))}
+                        </div>
+                      )}
                     </div>
-                    {s.type && (
-                      <span className="text-xs bg-background border rounded px-1.5 py-0.5 shrink-0 text-muted-foreground">
-                        {s.type}
-                      </span>
-                    )}
-                    {s.order != null && (
-                      <span className="text-xs text-muted-foreground shrink-0">#{s.order}</span>
-                    )}
-                  </div>
-                ))}
+                  );
+                })}
               </div>
             </div>
           )}
@@ -1451,29 +1496,50 @@ export default function GranthasPage() {
 
           {/* Level 1 */}
           <div className="border rounded-xl p-5 space-y-4">
-            <div>
-              <h3 className="font-semibold">Top-level Divisions</h3>
-              <p className="text-xs text-muted-foreground mt-0.5">
-                What are the main chapters or sections of this Grantha called?
-              </p>
-            </div>
-            <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
-              {["Adhyaya", "Chapter", "Prakarana", "Parichcheda", "Kanda", "Prasthanam", "Sarga", "Varga", "Dashaka", "Shataka", "Anuvaka", "Varsha"].map((name) => (
-                <button
-                  key={name}
-                  type="button"
-                  onClick={() => setStructureConfig({ ...structureConfig, levelOneName: name })}
-                  className={`px-3 py-2 rounded-lg border text-sm font-medium transition-colors text-left ${
-                    structureConfig.levelOneName === name
-                      ? "border-primary bg-primary/10 text-primary"
-                      : "border-border hover:border-primary/50 hover:bg-muted/50"
+            <div className="flex items-start justify-between gap-4">
+              <div>
+                <h3 className="font-semibold">Top-level Divisions</h3>
+                <p className="text-xs text-muted-foreground mt-0.5">
+                  Does this Grantha have top-level chapters or sections (e.g. Adhyaya)?
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setStructureConfig({ ...structureConfig, levelOneEnabled: !structureConfig.levelOneEnabled })}
+                className={`relative inline-flex h-6 w-11 flex-shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 focus:outline-none ${
+                  structureConfig.levelOneEnabled ? "bg-primary" : "bg-muted"
+                }`}
+                data-testid="toggle-level1"
+              >
+                <span
+                  className={`pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow ring-0 transition duration-200 ${
+                    structureConfig.levelOneEnabled ? "translate-x-5" : "translate-x-0"
                   }`}
-                  data-testid={`select-level1-${name}`}
-                >
-                  {name}
-                </button>
-              ))}
+                />
+              </button>
             </div>
+            {structureConfig.levelOneEnabled && (
+              <div>
+                <p className="text-xs text-muted-foreground mb-2">What are these top-level divisions called?</p>
+                <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
+                  {["Adhyaya", "Chapter", "Prakarana", "Parichcheda", "Kanda", "Prasthanam", "Sarga", "Varga", "Dashaka", "Shataka", "Anuvaka", "Varsha"].map((name) => (
+                    <button
+                      key={name}
+                      type="button"
+                      onClick={() => setStructureConfig({ ...structureConfig, levelOneName: name })}
+                      className={`px-3 py-2 rounded-lg border text-sm font-medium transition-colors text-left ${
+                        structureConfig.levelOneName === name
+                          ? "border-primary bg-primary/10 text-primary"
+                          : "border-border hover:border-primary/50 hover:bg-muted/50"
+                      }`}
+                      data-testid={`select-level1-${name}`}
+                    >
+                      {name}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
           </div>
 
           {/* Level 2 */}
@@ -1482,7 +1548,9 @@ export default function GranthasPage() {
               <div>
                 <h3 className="font-semibold">Sub-sections</h3>
                 <p className="text-xs text-muted-foreground mt-0.5">
-                  Does each {structureConfig.levelOneName} have smaller sub-divisions?
+                  {structureConfig.levelOneEnabled
+                    ? `Does each ${structureConfig.levelOneName} have smaller sub-divisions?`
+                    : "Does this Grantha have sections that group entries together?"}
                 </p>
               </div>
               <button
@@ -1529,7 +1597,7 @@ export default function GranthasPage() {
             <div>
               <h3 className="font-semibold">Individual Entries</h3>
               <p className="text-xs text-muted-foreground mt-0.5">
-                What are the individual text entries inside each {structureConfig.levelTwoEnabled ? structureConfig.levelTwoName : structureConfig.levelOneName} called?
+                What are the individual text entries called?
               </p>
             </div>
             <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
@@ -1555,8 +1623,12 @@ export default function GranthasPage() {
           <div className="bg-muted/40 rounded-xl p-4 text-sm text-muted-foreground">
             <span className="font-medium text-foreground">Structure preview: </span>
             {formData.GranthaName || "Grantha"}
-            <span className="mx-1.5 text-muted-foreground">→</span>
-            <span className="font-medium text-primary">{structureConfig.levelOneName}</span>
+            {structureConfig.levelOneEnabled && (
+              <>
+                <span className="mx-1.5 text-muted-foreground">→</span>
+                <span className="font-medium text-primary">{structureConfig.levelOneName}</span>
+              </>
+            )}
             {structureConfig.levelTwoEnabled && (
               <>
                 <span className="mx-1.5 text-muted-foreground">→</span>
@@ -1586,9 +1658,9 @@ export default function GranthasPage() {
               {formData.GranthaName || "Grantha"} — Content
             </h2>
             <p className="text-sm text-muted-foreground mt-1">
-              {structureConfig.levelOneName}
-              {structureConfig.levelTwoEnabled && ` → ${structureConfig.levelTwoName}`}
-              {` → ${structureConfig.leafName}`}
+              {structureConfig.levelOneEnabled && `${structureConfig.levelOneName} → `}
+              {structureConfig.levelTwoEnabled && `${structureConfig.levelTwoName} → `}
+              {structureConfig.leafName}
               {" — click any "}
               {structureConfig.leafName}
               {" to enter its text content"}
@@ -1601,12 +1673,14 @@ export default function GranthasPage() {
               const L1 = structureConfig.levelOneName;
               const L2 = structureConfig.levelTwoName;
               const leaf = structureConfig.leafName;
+              const hideL1Row = !structureConfig.levelOneEnabled;
               const flatLeafCount = !structureConfig.levelTwoEnabled
                 ? (adhyaya.khandas[0]?.manthras.length ?? 0)
                 : adhyaya.khandas.reduce((s, k) => s + k.manthras.length, 0);
               return (
-              <div key={adhyaya.id} className="border rounded-xl overflow-hidden" data-testid={`adhyaya-${aIdx}`}>
-                {/* Level-1 row */}
+              <div key={adhyaya.id} className={hideL1Row ? "space-y-3" : "border rounded-xl overflow-hidden"} data-testid={`adhyaya-${aIdx}`}>
+                {/* Level-1 row — hidden when L1 is disabled */}
+                {!hideL1Row && (
                 <div
                   className="flex items-center gap-3 px-4 py-3 bg-muted/30 cursor-pointer select-none"
                   onClick={() => toggleAdhyaya(adhyaya.id)}
@@ -1642,6 +1716,7 @@ export default function GranthasPage() {
                       : <ChevronRight className="w-4 h-4 text-muted-foreground" />}
                   </div>
                 </div>
+                )}
 
                 {/* Flat mode: show leaves directly under L1 */}
                 {!structureConfig.levelTwoEnabled && adhyaya.expanded && adhyaya.khandas[0] && (
@@ -1803,15 +1878,17 @@ export default function GranthasPage() {
               </div>
             ); })}
 
-            <Button
-              variant="outline"
-              className="w-full border-dashed text-muted-foreground hover:text-foreground"
-              onClick={addAdhyaya}
-              data-testid="button-add-adhyaya"
-            >
-              <Plus className="w-4 h-4 mr-2" />
-              New {structureConfig.levelOneName}
-            </Button>
+            {structureConfig.levelOneEnabled && (
+              <Button
+                variant="outline"
+                className="w-full border-dashed text-muted-foreground hover:text-foreground"
+                onClick={addAdhyaya}
+                data-testid="button-add-adhyaya"
+              >
+                <Plus className="w-4 h-4 mr-2" />
+                New {structureConfig.levelOneName}
+              </Button>
+            )}
           </div>
 
           <div className="flex justify-between items-center pt-2">

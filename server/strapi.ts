@@ -87,7 +87,7 @@ export function createStrapiRouter() {
     granthas: [
       "populate[BhashyakaraIntroduction][populate]=*",
       "populate[GranthaNameTranslations]=*",
-      "populate[sections][fields][0]=documentId&populate[sections][fields][1]=title&populate[sections][fields][2]=type&populate[sections][fields][3]=order",
+      "populate[sections][populate][manthras][fields][0]=documentId&populate[sections][populate][manthras][fields][1]=ShlokaManthraNumber&populate[sections][populate][manthras][fields][2]=order",
       "populate[teekas][fields][0]=documentId&populate[teekas][fields][1]=TeekaName&populate[teekas][fields][2]=TeekaAuthor",
     ].join("&"),
     teekas: [

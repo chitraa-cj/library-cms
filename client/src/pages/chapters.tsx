@@ -184,6 +184,136 @@ function ReadOnlyField({ label, text }: { label: string; text?: string }) {
   );
 }
 
+function GranthaDetailCard({ grantha }: { grantha: StrapiGrantha }) {
+  return (
+    <div className="mt-2 rounded-lg border border-primary/20 bg-primary/5 p-3 space-y-2">
+      <p className="text-xs font-semibold text-primary uppercase tracking-wider">Selected Grantha</p>
+      <div className="grid grid-cols-2 gap-x-4 gap-y-1.5 text-sm">
+        <div>
+          <span className="text-xs text-muted-foreground block">Name</span>
+          <span className="font-medium">{grantha.GranthaName}</span>
+        </div>
+        {grantha.GranthaType && (
+          <div>
+            <span className="text-xs text-muted-foreground block">Type</span>
+            <span>{grantha.GranthaType}</span>
+          </div>
+        )}
+        {grantha.BhashyamName && (
+          <div>
+            <span className="text-xs text-muted-foreground block">Bhashyam</span>
+            <span>{grantha.BhashyamName}</span>
+          </div>
+        )}
+        {grantha.BhashyamAuthor && (
+          <div>
+            <span className="text-xs text-muted-foreground block">Author</span>
+            <span>{grantha.BhashyamAuthor}</span>
+          </div>
+        )}
+        {grantha.NumberOfTeekas != null && (
+          <div>
+            <span className="text-xs text-muted-foreground block">Teekas</span>
+            <span>{grantha.NumberOfTeekas}</span>
+          </div>
+        )}
+        {grantha.slug && (
+          <div>
+            <span className="text-xs text-muted-foreground block">Slug</span>
+            <span className="font-mono text-xs">{grantha.slug}</span>
+          </div>
+        )}
+      </div>
+      {grantha.IntroductionToTextEnglish && blocksToText(grantha.IntroductionToTextEnglish) && (
+        <div>
+          <span className="text-xs text-muted-foreground block mb-0.5">Introduction (English)</span>
+          <p className="text-xs leading-relaxed text-foreground line-clamp-3">
+            {blocksToText(grantha.IntroductionToTextEnglish)}
+          </p>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function ChapterDetailCard({
+  chapter,
+  flatTree,
+  allGranthas,
+  label = "Selected Parent",
+}: {
+  chapter: FlatChapter;
+  flatTree: FlatChapter[];
+  allGranthas: StrapiGrantha[];
+  label?: string;
+}) {
+  const grantha = allGranthas.find((g) => g.documentId === chapter.granthaDocId);
+  const parentChapter = chapter.parentDocId
+    ? flatTree.find((f) => f.documentId === chapter.parentDocId)
+    : null;
+
+  const lvlInfo = CHAPTER_LEVELS.find((l) => l.value === chapter.level);
+  const LvlIcon = lvlInfo?.icon || Hash;
+
+  const sanskrit = blocksToText(chapter.raw.ShlokaManthraEntry?.SanskritTextEntry);
+  const english = blocksToText(chapter.raw.ShlokaManthraEntry?.EnglishTranslationText);
+
+  return (
+    <div className="mt-2 rounded-lg border border-primary/20 bg-primary/5 p-3 space-y-2">
+      <p className="text-xs font-semibold text-primary uppercase tracking-wider">{label}</p>
+
+      {/* Breadcrumb path */}
+      <div className="flex items-center gap-1 text-xs text-muted-foreground flex-wrap">
+        {grantha && <span className="font-medium text-foreground">{grantha.GranthaName}</span>}
+        {grantha && (parentChapter || true) && <ChevronRight className="w-3 h-3" />}
+        {parentChapter && <><span>{parentChapter.ChapterTitle}</span><ChevronRight className="w-3 h-3" /></>}
+        <span className="font-semibold text-foreground">{chapter.ChapterTitle}</span>
+      </div>
+
+      <div className="grid grid-cols-3 gap-x-4 gap-y-1.5 text-sm">
+        <div>
+          <span className="text-xs text-muted-foreground block">Title</span>
+          <span className="font-medium">{chapter.ChapterTitle}</span>
+        </div>
+        <div>
+          <span className="text-xs text-muted-foreground block">Order</span>
+          <span>{chapter.order}</span>
+        </div>
+        <div>
+          <span className="text-xs text-muted-foreground block">Level</span>
+          <span className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded border text-xs font-medium ${lvlInfo?.color || ""}`}>
+            <LvlIcon className="w-3 h-3" />
+            {lvlInfo?.label || chapter.level}
+          </span>
+        </div>
+        {grantha && (
+          <div className="col-span-2">
+            <span className="text-xs text-muted-foreground block">Grantha</span>
+            <span>{grantha.GranthaName}</span>
+          </div>
+        )}
+      </div>
+
+      {(sanskrit || english) && (
+        <div className="space-y-1.5 pt-1 border-t border-primary/10">
+          {sanskrit && (
+            <div>
+              <span className="text-xs text-muted-foreground block mb-0.5">Sanskrit Text</span>
+              <p className="text-xs font-serif leading-relaxed line-clamp-3">{sanskrit}</p>
+            </div>
+          )}
+          {english && (
+            <div>
+              <span className="text-xs text-muted-foreground block mb-0.5">English Translation</span>
+              <p className="text-xs leading-relaxed line-clamp-3">{english}</p>
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function ReadOnlyTT({ label, tt }: { label: string; tt?: TextAndTranslation }) {
   if (!tt) return null;
   const sanskrit = blocksToText(tt.SanskritTextEntry);
@@ -835,6 +965,10 @@ export default function ChaptersPage() {
                         ))}
                       </SelectContent>
                     </Select>
+                    {formData.grantha && (() => {
+                      const selected = allGranthas.find((g) => g.documentId === formData.grantha);
+                      return selected ? <GranthaDetailCard grantha={selected} /> : null;
+                    })()}
                   </div>
                 )}
 
@@ -864,6 +998,12 @@ export default function ChaptersPage() {
                           })}
                         </SelectContent>
                       </Select>
+                      {formData.adhyayaParent && (() => {
+                        const selected = flatTree.find((f) => f.documentId === formData.adhyayaParent);
+                        return selected
+                          ? <ChapterDetailCard chapter={selected} flatTree={flatTree} allGranthas={allGranthas} label="Selected Adhyaya" />
+                          : null;
+                      })()}
                       <p className="text-xs text-muted-foreground mt-1">
                         The Grantha will be automatically inferred from the selected Adhyaya.
                       </p>
@@ -915,6 +1055,12 @@ export default function ChaptersPage() {
                           )}
                         </SelectContent>
                       </Select>
+                      {formData.khandaParent && (() => {
+                        const selected = flatTree.find((f) => f.documentId === formData.khandaParent);
+                        return selected
+                          ? <ChapterDetailCard chapter={selected} flatTree={flatTree} allGranthas={allGranthas} label="Selected Parent Chapter" />
+                          : null;
+                      })()}
                       <p className="text-xs text-muted-foreground mt-1">
                         Prefer selecting a Khanda / Sub Chapter. Choose Adhyaya directly only if no Khanda exists for this text.
                       </p>

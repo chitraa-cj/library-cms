@@ -287,7 +287,7 @@ export default function GranthasPage() {
   const { toast } = useToast();
 
   const [view, setView] = useState<"list" | "form">("list");
-  const [step, setStep] = useState<1 | 2>(1);
+  const [step, setStep] = useState<1 | 2 | 3>(1);
   const [editingItem, setEditingItem] = useState<any>(null);
   const [editingDraftId, setEditingDraftId] = useState<number | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<any>(null);
@@ -311,7 +311,15 @@ export default function GranthasPage() {
   const [otherTranslations, setOtherTranslations] = useState<OtherTranslationEntry[]>([]);
   const [granthaNameTranslations, setGranthaNameTranslations] = useState<GranthaNameTranslationEntry[]>([]);
 
-  // Step 2
+  // Step 2 – Book structure
+  const [structureConfig, setStructureConfig] = useState({
+    levelOneName: "Adhyaya",
+    levelTwoEnabled: true,
+    levelTwoName: "Khanda",
+    leafName: "Manthra",
+  });
+
+  // Step 3
   const [adhyayas, setAdhyayas] = useState<AdhyayaNode[]>([]);
 
   // Manthra content dialog
@@ -368,11 +376,19 @@ export default function GranthasPage() {
     introVideoTitle: "",
   };
 
+  const DEFAULT_STRUCTURE = {
+    levelOneName: "Adhyaya",
+    levelTwoEnabled: true,
+    levelTwoName: "Khanda",
+    leafName: "Manthra",
+  };
+
   function resetForm() {
     setFormData(EMPTY_FORM);
     setTeekas([]);
     setOtherTranslations([]);
     setGranthaNameTranslations([]);
+    setStructureConfig(DEFAULT_STRUCTURE);
     setAdhyayas([]);
     setEditingDraftId(null);
     setEditingItem(null);
@@ -409,6 +425,7 @@ export default function GranthasPage() {
       setTeekas(d.teekas || []);
       setOtherTranslations(d.otherTranslations || []);
       setGranthaNameTranslations(d.granthaNameTranslations || []);
+      setStructureConfig(d.structureConfig || DEFAULT_STRUCTURE);
       setAdhyayas(d.hierarchy || []);
     } else {
       setEditingDraftId(null);
@@ -447,6 +464,7 @@ export default function GranthasPage() {
             }))
           : []
       );
+      setStructureConfig(DEFAULT_STRUCTURE);
       setTeekas([]);
       setAdhyayas([]);
     }
@@ -500,9 +518,13 @@ export default function GranthasPage() {
 
   function addAdhyaya() {
     const n = adhyayas.length + 1;
+    const L1 = structureConfig.levelOneName;
+    const defaultKhanda = !structureConfig.levelTwoEnabled
+      ? [{ id: uid(), title: "_default", order: 1, manthras: [], expanded: true }]
+      : [];
     setAdhyayas([
       ...adhyayas,
-      { id: uid(), title: `${ordinal(n)} Adhyaya (Chapter ${n})`, order: n, khandas: [], expanded: true },
+      { id: uid(), title: `${ordinal(n)} ${L1}`, order: n, khandas: defaultKhanda, expanded: true },
     ]);
   }
 
@@ -519,6 +541,7 @@ export default function GranthasPage() {
   }
 
   function addKhanda(adhyayaId: string) {
+    const L2 = structureConfig.levelTwoName;
     setAdhyayas(
       adhyayas.map((a) => {
         if (a.id !== adhyayaId) return a;
@@ -527,7 +550,7 @@ export default function GranthasPage() {
           ...a,
           khandas: [
             ...a.khandas,
-            { id: uid(), title: `${ordinal(n)} Khanda (Section ${n})`, order: n, manthras: [], expanded: true },
+            { id: uid(), title: `${ordinal(n)} ${L2}`, order: n, manthras: [], expanded: true },
           ],
         };
       })
@@ -568,10 +591,13 @@ export default function GranthasPage() {
 
   function addManthra(adhyayaId: string, khandaId: string) {
     const aIdx = adhyayas.findIndex((x) => x.id === adhyayaId) + 1;
+    const leaf = structureConfig.leafName;
     setAdhyayas(
       adhyayas.map((a) => {
         if (a.id !== adhyayaId) return a;
-        const kIdx = a.khandas.findIndex((x) => x.id === khandaId) + 1;
+        const kIdx = structureConfig.levelTwoEnabled
+          ? a.khandas.findIndex((x) => x.id === khandaId) + 1
+          : aIdx;
         return {
           ...a,
           khandas: a.khandas.map((k) => {
@@ -579,7 +605,9 @@ export default function GranthasPage() {
             const mIdx = k.manthras.length + 1;
             const newManthra: ManthraNode = {
               id: uid(),
-              title: `Manthra ${aIdx}.${kIdx}.${mIdx}`,
+              title: structureConfig.levelTwoEnabled
+                ? `${leaf} ${aIdx}.${kIdx}.${mIdx}`
+                : `${leaf} ${aIdx}.${mIdx}`,
               order: mIdx,
               // Pre-populate Teekas from Step 1 definitions
               Teekas: teekas.map((t) => ({
@@ -658,6 +686,7 @@ export default function GranthasPage() {
       teekas,
       otherTranslations,
       granthaNameTranslations,
+      structureConfig,
       hierarchy: adhyayas,
     };
 
@@ -867,7 +896,9 @@ export default function GranthasPage() {
       <div className="flex items-end gap-0 mb-10">
         <StepDot n={1} active={step === 1} done={step > 1} label="Configuration" />
         <div className={`flex-1 h-0.5 mb-5 transition-colors ${step > 1 ? "bg-primary" : "bg-border"}`} />
-        <StepDot n={2} active={step === 2} done={false} label="Build Hierarchy" />
+        <StepDot n={2} active={step === 2} done={step > 2} label="Book Structure" />
+        <div className={`flex-1 h-0.5 mb-5 transition-colors ${step > 2 ? "bg-primary" : "bg-border"}`} />
+        <StepDot n={3} active={step === 3} done={false} label="Build Content" />
       </div>
 
       {step === 1 ? (
@@ -1307,30 +1338,181 @@ export default function GranthasPage() {
                 }
                 setStep(2);
               }}
-              data-testid="button-next-hierarchy"
+              data-testid="button-next-structure"
             >
-              Next: Build Hierarchy
+              Next: Book Structure
+              <ChevronRight className="w-4 h-4 ml-2" />
+            </Button>
+          </div>
+        </div>
+      ) : step === 2 ? (
+        /* ====== STEP 2: Book Structure ====== */
+        <div className="space-y-6">
+          <div>
+            <h2 className="text-xl font-semibold">Book Structure</h2>
+            <p className="text-sm text-muted-foreground mt-1">
+              Tell us how <strong>{formData.GranthaName || "this Grantha"}</strong> is organized — we'll build the content editor accordingly.
+            </p>
+          </div>
+
+          {/* Level 1 */}
+          <div className="border rounded-xl p-5 space-y-4">
+            <div>
+              <h3 className="font-semibold">Top-level Divisions</h3>
+              <p className="text-xs text-muted-foreground mt-0.5">
+                What are the main chapters or sections of this Grantha called?
+              </p>
+            </div>
+            <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
+              {["Adhyaya", "Chapter", "Prakarana", "Parichcheda", "Kanda", "Prasthanam", "Sarga", "Varga", "Dashaka", "Shataka", "Anuvaka", "Varsha"].map((name) => (
+                <button
+                  key={name}
+                  type="button"
+                  onClick={() => setStructureConfig({ ...structureConfig, levelOneName: name })}
+                  className={`px-3 py-2 rounded-lg border text-sm font-medium transition-colors text-left ${
+                    structureConfig.levelOneName === name
+                      ? "border-primary bg-primary/10 text-primary"
+                      : "border-border hover:border-primary/50 hover:bg-muted/50"
+                  }`}
+                  data-testid={`select-level1-${name}`}
+                >
+                  {name}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          {/* Level 2 */}
+          <div className="border rounded-xl p-5 space-y-4">
+            <div className="flex items-start justify-between gap-4">
+              <div>
+                <h3 className="font-semibold">Sub-sections</h3>
+                <p className="text-xs text-muted-foreground mt-0.5">
+                  Does each {structureConfig.levelOneName} have smaller sub-divisions?
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setStructureConfig({ ...structureConfig, levelTwoEnabled: !structureConfig.levelTwoEnabled })}
+                className={`relative inline-flex h-6 w-11 flex-shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 focus:outline-none ${
+                  structureConfig.levelTwoEnabled ? "bg-primary" : "bg-muted"
+                }`}
+                data-testid="toggle-level2"
+              >
+                <span
+                  className={`pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow ring-0 transition duration-200 ${
+                    structureConfig.levelTwoEnabled ? "translate-x-5" : "translate-x-0"
+                  }`}
+                />
+              </button>
+            </div>
+            {structureConfig.levelTwoEnabled && (
+              <div>
+                <p className="text-xs text-muted-foreground mb-2">What are these sub-sections called?</p>
+                <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
+                  {["Khanda", "Pada", "Section", "Anuvaka", "Varga", "Prakarana", "Pariccheda"].map((name) => (
+                    <button
+                      key={name}
+                      type="button"
+                      onClick={() => setStructureConfig({ ...structureConfig, levelTwoName: name })}
+                      className={`px-3 py-2 rounded-lg border text-sm font-medium transition-colors text-left ${
+                        structureConfig.levelTwoName === name
+                          ? "border-primary bg-primary/10 text-primary"
+                          : "border-border hover:border-primary/50 hover:bg-muted/50"
+                      }`}
+                      data-testid={`select-level2-${name}`}
+                    >
+                      {name}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
+          </div>
+
+          {/* Leaf level */}
+          <div className="border rounded-xl p-5 space-y-4">
+            <div>
+              <h3 className="font-semibold">Individual Entries</h3>
+              <p className="text-xs text-muted-foreground mt-0.5">
+                What are the individual text entries inside each {structureConfig.levelTwoEnabled ? structureConfig.levelTwoName : structureConfig.levelOneName} called?
+              </p>
+            </div>
+            <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
+              {["Manthra", "Shloka", "Mantra", "Sutra", "Karika", "Verse", "Stanza", "Sloka", "Geeta"].map((name) => (
+                <button
+                  key={name}
+                  type="button"
+                  onClick={() => setStructureConfig({ ...structureConfig, leafName: name })}
+                  className={`px-3 py-2 rounded-lg border text-sm font-medium transition-colors text-left ${
+                    structureConfig.leafName === name
+                      ? "border-primary bg-primary/10 text-primary"
+                      : "border-border hover:border-primary/50 hover:bg-muted/50"
+                  }`}
+                  data-testid={`select-leaf-${name}`}
+                >
+                  {name}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          {/* Preview */}
+          <div className="bg-muted/40 rounded-xl p-4 text-sm text-muted-foreground">
+            <span className="font-medium text-foreground">Structure preview: </span>
+            {formData.GranthaName || "Grantha"}
+            <span className="mx-1.5 text-muted-foreground">→</span>
+            <span className="font-medium text-primary">{structureConfig.levelOneName}</span>
+            {structureConfig.levelTwoEnabled && (
+              <>
+                <span className="mx-1.5 text-muted-foreground">→</span>
+                <span className="font-medium text-primary">{structureConfig.levelTwoName}</span>
+              </>
+            )}
+            <span className="mx-1.5 text-muted-foreground">→</span>
+            <span className="font-medium text-primary">{structureConfig.leafName}</span>
+          </div>
+
+          <div className="flex justify-between items-center pt-2">
+            <Button variant="outline" onClick={() => setStep(1)} data-testid="button-back-to-config">
+              <ArrowLeft className="w-4 h-4 mr-2" />
+              Back
+            </Button>
+            <Button onClick={() => setStep(3)} data-testid="button-next-content">
+              Next: Build Content
               <ChevronRight className="w-4 h-4 ml-2" />
             </Button>
           </div>
         </div>
       ) : (
-        /* ====== STEP 2 ====== */
+        /* ====== STEP 3: Build Content ====== */
         <div className="space-y-6">
           <div>
             <h2 className="text-xl font-semibold">
-              {formData.GranthaName || "Grantha"} Hierarchy
+              {formData.GranthaName || "Grantha"} — Content
             </h2>
             <p className="text-sm text-muted-foreground mt-1">
-              Adhyaya → Khanda → Manthra — click any Manthra to enter its text content
+              {structureConfig.levelOneName}
+              {structureConfig.levelTwoEnabled && ` → ${structureConfig.levelTwoName}`}
+              {` → ${structureConfig.leafName}`}
+              {" — click any "}
+              {structureConfig.leafName}
+              {" to enter its text content"}
             </p>
           </div>
 
           {/* Tree */}
           <div className="space-y-3">
-            {adhyayas.map((adhyaya, aIdx) => (
+            {adhyayas.map((adhyaya, aIdx) => {
+              const L1 = structureConfig.levelOneName;
+              const L2 = structureConfig.levelTwoName;
+              const leaf = structureConfig.leafName;
+              const flatLeafCount = !structureConfig.levelTwoEnabled
+                ? (adhyaya.khandas[0]?.manthras.length ?? 0)
+                : adhyaya.khandas.reduce((s, k) => s + k.manthras.length, 0);
+              return (
               <div key={adhyaya.id} className="border rounded-xl overflow-hidden" data-testid={`adhyaya-${aIdx}`}>
-                {/* Adhyaya row */}
+                {/* Level-1 row */}
                 <div
                   className="flex items-center gap-3 px-4 py-3 bg-muted/30 cursor-pointer select-none"
                   onClick={() => toggleAdhyaya(adhyaya.id)}
@@ -1347,7 +1529,10 @@ export default function GranthasPage() {
                   />
                   <div className="flex items-center gap-1 ml-auto shrink-0">
                     <span className="text-xs text-muted-foreground mr-1">
-                      {adhyaya.khandas.length} khanda{adhyaya.khandas.length !== 1 ? "s" : ""}
+                      {structureConfig.levelTwoEnabled
+                        ? `${adhyaya.khandas.length} ${L2.toLowerCase()}${adhyaya.khandas.length !== 1 ? "s" : ""}`
+                        : `${flatLeafCount} ${leaf.toLowerCase()}${flatLeafCount !== 1 ? "s" : ""}`
+                      }
                     </span>
                     <Button
                       size="icon"
@@ -1364,12 +1549,58 @@ export default function GranthasPage() {
                   </div>
                 </div>
 
-                {/* Khandas */}
-                {adhyaya.expanded && (
+                {/* Flat mode: show leaves directly under L1 */}
+                {!structureConfig.levelTwoEnabled && adhyaya.expanded && adhyaya.khandas[0] && (
+                  <div className="px-4 pt-2 pb-3 border-t bg-muted/10">
+                    <p className="text-xs font-medium text-muted-foreground mb-2">
+                      {leaf}s in this {L1}
+                    </p>
+                    <div className="space-y-1">
+                      {adhyaya.khandas[0].manthras.map((manthra, mIdx) => {
+                        const hasContent = hasManthraContent(manthra);
+                        return (
+                          <div key={manthra.id} className="flex items-center gap-2 group py-0.5">
+                            <Hash className="w-3.5 h-3.5 text-muted-foreground shrink-0" />
+                            <span className="text-sm flex-1">{manthra.title}</span>
+                            {hasContent && <FileText className="w-3.5 h-3.5 text-primary" />}
+                            <Button
+                              size="icon" variant="ghost"
+                              className="h-6 w-6 opacity-0 group-hover:opacity-100 transition-opacity text-muted-foreground hover:text-foreground"
+                              onClick={() => setEditingManthra({ adhyayaId: adhyaya.id, khandaId: adhyaya.khandas[0].id, manthraId: manthra.id })}
+                              data-testid={`button-edit-manthra-${aIdx}-0-${mIdx}`}
+                            >
+                              <Pencil className="w-3 h-3" />
+                            </Button>
+                            <Button
+                              size="icon" variant="ghost"
+                              className="h-6 w-6 opacity-0 group-hover:opacity-100 transition-opacity text-destructive hover:text-destructive"
+                              onClick={() => removeManthra(adhyaya.id, adhyaya.khandas[0].id, manthra.id)}
+                              data-testid={`button-remove-manthra-${aIdx}-0-${mIdx}`}
+                            >
+                              <X className="w-3 h-3" />
+                            </Button>
+                          </div>
+                        );
+                      })}
+                      <Button
+                        size="sm" variant="ghost"
+                        className="w-full justify-start text-muted-foreground hover:text-foreground text-xs h-7 mt-1 pl-0"
+                        onClick={() => addManthra(adhyaya.id, adhyaya.khandas[0].id)}
+                        data-testid={`button-add-manthra-${aIdx}-0`}
+                      >
+                        <Plus className="w-3.5 h-3.5 mr-1" />
+                        Add {leaf}
+                      </Button>
+                    </div>
+                  </div>
+                )}
+
+                {/* Hierarchical mode: Level 2 sections */}
+                {structureConfig.levelTwoEnabled && adhyaya.expanded && (
                   <div className="p-4 space-y-2.5">
                     {adhyaya.khandas.map((khanda, kIdx) => (
                       <div key={khanda.id} className="border rounded-lg overflow-hidden" data-testid={`khanda-${aIdx}-${kIdx}`}>
-                        {/* Khanda row */}
+                        {/* Level-2 row */}
                         <div
                           className="flex items-center gap-2.5 px-3 py-2.5 cursor-pointer select-none hover:bg-muted/20"
                           onClick={() => toggleKhanda(adhyaya.id, khanda.id)}
@@ -1384,7 +1615,7 @@ export default function GranthasPage() {
                           />
                           <div className="flex items-center gap-1 ml-auto shrink-0">
                             <span className="text-xs text-muted-foreground">
-                              {khanda.manthras.length} manthra{khanda.manthras.length !== 1 ? "s" : ""}
+                              {khanda.manthras.length} {leaf.toLowerCase()}{khanda.manthras.length !== 1 ? "s" : ""}
                             </span>
                             <Button
                               size="icon"
@@ -1405,7 +1636,7 @@ export default function GranthasPage() {
                         {khanda.expanded && (
                           <div className="px-4 pt-2 pb-3 border-t bg-muted/10">
                             <p className="text-xs font-medium text-muted-foreground mb-2">
-                              Manage Manthras
+                              Manage {leaf}s
                             </p>
                             <div className="space-y-1">
                               {khanda.manthras.map((manthra, mIdx) => {
@@ -1455,7 +1686,7 @@ export default function GranthasPage() {
                                 data-testid={`button-add-manthra-${aIdx}-${kIdx}`}
                               >
                                 <Plus className="w-3.5 h-3.5 mr-1" />
-                                Add
+                                Add {leaf}
                               </Button>
                             </div>
                           </div>
@@ -1471,12 +1702,12 @@ export default function GranthasPage() {
                       data-testid={`button-add-khanda-${aIdx}`}
                     >
                       <Plus className="w-3.5 h-3.5 mr-1.5" />
-                      Add New Khanda
+                      Add New {L2}
                     </Button>
                   </div>
                 )}
               </div>
-            ))}
+            ); })}
 
             <Button
               variant="outline"
@@ -1485,12 +1716,12 @@ export default function GranthasPage() {
               data-testid="button-add-adhyaya"
             >
               <Plus className="w-4 h-4 mr-2" />
-              New Adhyaya
+              New {structureConfig.levelOneName}
             </Button>
           </div>
 
           <div className="flex justify-between items-center pt-2">
-            <Button variant="outline" onClick={() => setStep(1)} data-testid="button-back">
+            <Button variant="outline" onClick={() => setStep(2)} data-testid="button-back-to-structure">
               <ArrowLeft className="w-4 h-4 mr-2" />
               Back
             </Button>

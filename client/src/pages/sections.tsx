@@ -39,6 +39,7 @@ import {
   type StrapiResponse,
   type SectionTitleTranslation,
   sectionTypes,
+  sectionTypeLabels,
   translationLanguages,
 } from "@shared/schema";
 import {
@@ -433,7 +434,7 @@ export default function SectionsPage() {
                           </div>
                         </td>
                         <td className="px-4 py-3">
-                          {root.type ? <Badge variant="outline" className="text-xs">{root.type}</Badge> : <span className="text-muted-foreground">—</span>}
+                          {root.type ? <Badge variant="outline" className="text-xs">{sectionTypeLabels[root.type as keyof typeof sectionTypeLabels] ?? root.type}</Badge> : <span className="text-muted-foreground">—</span>}
                         </td>
                         <td className="px-4 py-3 text-muted-foreground text-xs">{granthaName}</td>
                         <td className="px-4 py-3 text-muted-foreground text-xs">—</td>
@@ -472,7 +473,7 @@ export default function SectionsPage() {
                               </div>
                             </td>
                             <td className="px-4 py-2.5">
-                              {child.type ? <Badge variant="outline" className="text-xs">{child.type}</Badge> : <span className="text-muted-foreground">—</span>}
+                              {child.type ? <Badge variant="outline" className="text-xs">{sectionTypeLabels[child.type as keyof typeof sectionTypeLabels] ?? child.type}</Badge> : <span className="text-muted-foreground">—</span>}
                             </td>
                             <td className="px-4 py-2.5 text-muted-foreground text-xs">{granthaName}</td>
                             <td className="px-4 py-2.5 text-muted-foreground text-xs font-medium text-foreground/70">{root.title}</td>
@@ -527,7 +528,7 @@ export default function SectionsPage() {
                   </SelectTrigger>
                   <SelectContent>
                     <SelectItem value="__none__"><span className="text-muted-foreground italic">No type</span></SelectItem>
-                    {sectionTypes.map((t) => <SelectItem key={t} value={t}>{t}</SelectItem>)}
+                    {sectionTypes.map((t) => <SelectItem key={t} value={t}>{sectionTypeLabels[t]}</SelectItem>)}
                   </SelectContent>
                 </Select>
               </div>

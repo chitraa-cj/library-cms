@@ -14,13 +14,26 @@ A data feeding website for the Ekatmadham Library that connects to a Strapi CMS 
 2. User clicks **Publish** → content is sent to Strapi CMS
 3. Published content appears on the Ekatmadham Library website (dev.ekatmdhamlibrary.xoidlabs.com)
 
-## Content Types (from Strapi)
-- **Granthas**: Sacred texts (GranthaName, GranthaType, BhashyamName, BhashyamAuthor, IntroductionToTextEnglish, BhashyakaraIntroduction)
-- **Chapters**: Chapter management with hierarchical structure (ChapterTitle, order, parent/children, ShlokaManthraEntry, BhashyamForShlokaManthra, Teekas)
-- **Articles**: Blog articles (title, description, slug, author, category)
-- **Authors**: Author profiles (name, email, avatar)
-- **Categories**: Content categories (name, slug, description)
-- **Prasthana Thraya**: Special screen entries (GranthaName, GranthaType, BhashyamName, BhashyamAuthor, BhashyaEntryCollection)
+## Content Types (from Strapi — Collection Types)
+- **Grantha** (`api::grantha.grantha`): Sacred texts — GranthaName, slug, GranthaType (enum), BhashyamName, BhashyamAuthor (enum), IntroductionToTextEnglish (blocks), BhashyakaraIntroduction (shared.text-and-translation), NumberOfTeekas, introVideoId, introVideoTitle, GranthaNameTranslations (shared.translations[]), coverImage (media), sections[], teekas[]
+- **Section** (`api::section.section`): Structural divisions — title, order, type (enum: adhyay|khanda|valli|pada|kanda|sukta|varga|anuvaka|prakarana|chapter|part|section|book), titleTranslations (shared.translations[]), grantha (manyToOne), parent (manyToOne→Section), sub_sections (oneToMany→Section), manthras (oneToMany→Manthra)
+- **Manthra** (`api::manthra.manthra`): Individual verse/mantra entries — ShlokaManthraNumber (string), order, Section (manyToOne, capital S), ShlokaManthraEntry (shared.text-and-translation), BhashyamEntry (shared.text-and-translation), Teekas (default.bhashya-entries[]), wordMeanings (shared.word-meaning[])
+- **Teeka** (`api::teeka.teeka`): Commentary works — TeekaName, TeekaAuthor (enum), grantha (manyToOne)
+- **Article** (`api::article.article`): Blog articles — title, description, slug, cover (media), author (manyToOne), category (manyToOne), blocks (dynamiczone)
+- **Author** (`api::author.author`): Author profiles — name, avatar (media), email, articles (oneToMany)
+- **Category** (`api::category.category`): Content categories — name, slug, description, articles (oneToMany)
+- **User**: Strapi user accounts
+
+## Single Types (from Strapi)
+- **About** (`api::about.about`): title (string), blocks (dynamiczone)
+- **Global** (`api::global.global`): siteName, favicon (media), siteDescription, defaultSeo (shared.seo)
+
+## Strapi Shared Components
+- **shared.text-and-translation**: SanskritTextEntry (blocks), IASTTransliteration (blocks), EnglishTranslationText (blocks), OtherTranslations (shared.translations[])
+- **shared.translations**: TranslationText (blocks), LanguageOfTranslation (enum — 45 languages), isAiTranslated (boolean)
+- **shared.word-meaning**: word (text), meaning (text), position (integer)
+- **shared.seo**: metaTitle, metaDescription, shareImage (media)
+- **default.bhashya-entries**: teeka (relation→Teeka), TeekaEntry (shared.text-and-translation)
 
 ## Key Components
 - **TextAndTranslation**: Reusable component for Sanskrit text + English translation + other languages (51 language dropdown)

@@ -81,6 +81,7 @@ export function createStrapiRouter() {
     { path: "articles", plural: "articles" },
     { path: "authors", plural: "authors" },
     { path: "categories", plural: "categories" },
+    { path: "chapters", plural: "chapters" },
   ];
 
   const DEEP_POPULATE: Record<string, string> = {
@@ -92,6 +93,14 @@ export function createStrapiRouter() {
     ].join("&"),
     teekas: [
       "populate[grantha][fields][0]=documentId&populate[grantha][fields][1]=GranthaName",
+    ].join("&"),
+    chapters: [
+      "populate[grantha][fields][0]=documentId&populate[grantha][fields][1]=GranthaName",
+      "populate[parent][fields][0]=documentId&populate[parent][fields][1]=ChapterTitle",
+      "populate[children][fields][0]=documentId&populate[children][fields][1]=ChapterTitle&populate[children][fields][2]=order",
+      "populate[ShlokaManthraEntry]=*",
+      "populate[BhashyamForShlokaManthra]=*",
+      "populate[Teekas]=*",
     ].join("&"),
   };
 

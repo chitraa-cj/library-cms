@@ -42,12 +42,16 @@ function cleanPayloadForStrapi(data: Record<string, any>): Record<string, any> {
 
 const CONTENT_TYPE_MAP: Record<string, string> = {
   granthas: "granthas",
-  chapters: "chapters",
+  teekas: "teekas",
   articles: "articles",
   authors: "authors",
   categories: "categories",
-  "prasthana-thraya-screens": "prasthana-thraya-screens",
 };
+
+// These content types exist in Strapi's schema but their REST API routes
+// are not generated on the Strapi server. Drafts can be saved locally
+// but cannot be published to Strapi directly.
+const STRAPI_UNROUTED_TYPES = new Set(["sections", "manthras"]);
 
 async function publishGranthaWithHierarchy(
   draft: any
@@ -210,7 +214,7 @@ export async function registerRoutes(
   const strapiRouter = createStrapiRouter();
   app.use("/api/strapi", strapiRouter);
 
-  const VALID_CONTENT_TYPES = Object.keys(CONTENT_TYPE_MAP);
+  const VALID_CONTENT_TYPES = [...Object.keys(CONTENT_TYPE_MAP), ...Array.from(STRAPI_UNROUTED_TYPES)];
 
   app.get("/api/drafts", requireAuth, async (req, res) => {
     try {
@@ -304,6 +308,12 @@ export async function registerRoutes(
       if (!draft) return res.status(404).json({ message: "Draft not found" });
       if (draft.status === "published") {
         return res.status(400).json({ message: "Draft is already published" });
+      }
+
+      if (STRAPI_UNROUTED_TYPES.has(draft.contentType)) {
+        return res.status(501).json({
+          message: `Cannot publish ${draft.contentType} directly to Strapi — the REST API route for this collection type is not enabled on the Strapi server. Please create or edit this record in the Strapi Content Manager: http://13.53.121.15:1337/admin`,
+        });
       }
 
       const strapiPlural = CONTENT_TYPE_MAP[draft.contentType];

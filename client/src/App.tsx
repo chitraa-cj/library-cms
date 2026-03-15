@@ -8,14 +8,12 @@ import DashboardLayout from "@/components/dashboard-layout";
 import LoginPage from "@/pages/login";
 import DashboardPage from "@/pages/dashboard";
 import GranthasPage from "@/pages/granthas";
-import ChaptersPage from "@/pages/chapters";
 import SectionsPage from "@/pages/sections";
 import TeekasPage from "@/pages/teekas";
 import ManthrasPage from "@/pages/manthras";
 import ArticlesPage from "@/pages/articles";
 import AuthorsPage from "@/pages/authors";
 import CategoriesPage from "@/pages/categories";
-import PrasthanaThrayaPage from "@/pages/prasthana-thraya";
 import AboutPage from "@/pages/about";
 import GlobalPage from "@/pages/global";
 import NotFound from "@/pages/not-found";
@@ -28,14 +26,12 @@ function AuthenticatedRoutes() {
         <Route path="/" component={DashboardPage} />
         <Route path="/dashboard" component={DashboardPage} />
         <Route path="/granthas" component={GranthasPage} />
-        <Route path="/chapters" component={ChaptersPage} />
         <Route path="/sections" component={SectionsPage} />
         <Route path="/teekas" component={TeekasPage} />
         <Route path="/manthras" component={ManthrasPage} />
         <Route path="/articles" component={ArticlesPage} />
         <Route path="/authors" component={AuthorsPage} />
         <Route path="/categories" component={CategoriesPage} />
-        <Route path="/prasthana-thraya" component={PrasthanaThrayaPage} />
         <Route path="/about" component={AboutPage} />
         <Route path="/global" component={GlobalPage} />
         <Route component={NotFound} />

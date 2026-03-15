@@ -77,17 +77,10 @@ export function createStrapiRouter() {
 
   const contentTypes = [
     { path: "granthas", plural: "granthas" },
-    { path: "chapters", plural: "chapters" },
-    { path: "sections", plural: "sections" },
     { path: "teekas", plural: "teekas" },
-    { path: "manthras", plural: "manthras" },
     { path: "articles", plural: "articles" },
     { path: "authors", plural: "authors" },
     { path: "categories", plural: "categories" },
-    {
-      path: "prasthana-thraya-screens",
-      plural: "prasthana-thraya-screens",
-    },
   ];
 
   const DEEP_POPULATE: Record<string, string> = {
@@ -97,20 +90,123 @@ export function createStrapiRouter() {
       "populate[sections][fields][0]=documentId&populate[sections][fields][1]=title&populate[sections][fields][2]=type&populate[sections][fields][3]=order",
       "populate[teekas][fields][0]=documentId&populate[teekas][fields][1]=TeekaName&populate[teekas][fields][2]=TeekaAuthor",
     ].join("&"),
-    sections: [
-      "populate[grantha][fields][0]=documentId&populate[grantha][fields][1]=GranthaName",
-      "populate[manthras][fields][0]=documentId&populate[manthras][fields][1]=title&populate[manthras][fields][2]=order",
-    ].join("&"),
     teekas: [
       "populate[grantha][fields][0]=documentId&populate[grantha][fields][1]=GranthaName",
     ].join("&"),
-    manthras: [
-      "populate[section][fields][0]=documentId&populate[section][fields][1]=title",
-      "populate[ShlokaManthraEntry][populate]=*",
-      "populate[BhashyamForShlokaManthra][populate]=*",
-      "populate[Teekas][populate]=*",
-    ].join("&"),
   };
+
+  // ── Sections: aggregate from granthas since /api/sections route is not enabled on the Strapi server ──
+  router.get("/sections", async (_req, res) => {
+    try {
+      const granthasData = await strapiRequest(
+        `/api/granthas?${[
+          "populate[sections][populate][manthras][fields][0]=documentId",
+          "populate[sections][populate][manthras][fields][1]=ShlokaManthraNumber",
+          "populate[sections][populate][manthras][fields][2]=order",
+          "pagination[pageSize]=200",
+        ].join("&")}`
+      );
+      const sections: any[] = [];
+      for (const g of granthasData.data || []) {
+        for (const s of g.sections || []) {
+          sections.push({
+            ...s,
+            grantha: { id: g.id, documentId: g.documentId, GranthaName: g.GranthaName },
+          });
+        }
+      }
+      sections.sort((a, b) => (a.order ?? 999) - (b.order ?? 999));
+      res.json({ data: sections, meta: { pagination: { page: 1, pageSize: sections.length, pageCount: 1, total: sections.length } } });
+    } catch (error: any) {
+      res.status(500).json({ message: error.message || "Failed to fetch sections" });
+    }
+  });
+
+  router.get("/sections/:documentId", async (req, res) => {
+    try {
+      const granthasData = await strapiRequest(`/api/granthas?populate[sections][populate]=*&pagination[pageSize]=200`);
+      for (const g of granthasData.data || []) {
+        const s = (g.sections || []).find((s: any) => s.documentId === req.params.documentId);
+        if (s) {
+          return res.json({ data: { ...s, grantha: { id: g.id, documentId: g.documentId, GranthaName: g.GranthaName } } });
+        }
+      }
+      res.status(404).json({ message: "Section not found" });
+    } catch (error: any) {
+      res.status(500).json({ message: error.message || "Failed to fetch section" });
+    }
+  });
+
+  const STRAPI_ADMIN_NOTE = "The Strapi server does not have REST API routes generated for this collection type. Please manage this record directly in the Strapi Content Manager at http://13.53.121.15:1337/admin";
+
+  router.post("/sections", (_req, res) => {
+    res.status(501).json({ message: STRAPI_ADMIN_NOTE });
+  });
+  router.put("/sections/:documentId", (_req, res) => {
+    res.status(501).json({ message: STRAPI_ADMIN_NOTE });
+  });
+  router.delete("/sections/:documentId", (_req, res) => {
+    res.status(501).json({ message: STRAPI_ADMIN_NOTE });
+  });
+
+  // ── Manthras: aggregate from granthas → sections since /api/manthras is not enabled ──
+  router.get("/manthras", async (_req, res) => {
+    try {
+      const granthasData = await strapiRequest(
+        `/api/granthas?${[
+          "populate[sections][populate][manthras][populate]=*",
+          "pagination[pageSize]=200",
+        ].join("&")}`
+      );
+      const manthras: any[] = [];
+      for (const g of granthasData.data || []) {
+        for (const s of g.sections || []) {
+          for (const m of s.manthras || []) {
+            manthras.push({
+              ...m,
+              section: { id: s.id, documentId: s.documentId, title: s.title, type: s.type },
+              grantha: { id: g.id, documentId: g.documentId, GranthaName: g.GranthaName },
+            });
+          }
+        }
+      }
+      manthras.sort((a, b) => (a.order ?? 999) - (b.order ?? 999));
+      res.json({ data: manthras, meta: { pagination: { page: 1, pageSize: manthras.length, pageCount: 1, total: manthras.length } } });
+    } catch (error: any) {
+      res.status(500).json({ message: error.message || "Failed to fetch manthras" });
+    }
+  });
+
+  router.get("/manthras/:documentId", async (req, res) => {
+    try {
+      const granthasData = await strapiRequest(`/api/granthas?populate[sections][populate][manthras][populate]=*&pagination[pageSize]=200`);
+      for (const g of granthasData.data || []) {
+        for (const s of g.sections || []) {
+          const m = (s.manthras || []).find((m: any) => m.documentId === req.params.documentId);
+          if (m) {
+            return res.json({ data: {
+              ...m,
+              section: { id: s.id, documentId: s.documentId, title: s.title, type: s.type },
+              grantha: { id: g.id, documentId: g.documentId, GranthaName: g.GranthaName },
+            }});
+          }
+        }
+      }
+      res.status(404).json({ message: "Manthra not found" });
+    } catch (error: any) {
+      res.status(500).json({ message: error.message || "Failed to fetch manthra" });
+    }
+  });
+
+  router.post("/manthras", (_req, res) => {
+    res.status(501).json({ message: STRAPI_ADMIN_NOTE });
+  });
+  router.put("/manthras/:documentId", (_req, res) => {
+    res.status(501).json({ message: STRAPI_ADMIN_NOTE });
+  });
+  router.delete("/manthras/:documentId", (_req, res) => {
+    res.status(501).json({ message: STRAPI_ADMIN_NOTE });
+  });
 
   for (const ct of contentTypes) {
     router.get(`/${ct.path}`, async (req, res) => {

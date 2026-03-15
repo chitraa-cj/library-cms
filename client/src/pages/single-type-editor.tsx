@@ -1,6 +1,7 @@
 import { useState, useEffect } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { queryClient, apiRequest } from "@/lib/queryClient";
+import { STRAPI_POLL_INTERVAL } from "@/hooks/use-strapi-sync";
 import { useToast } from "@/hooks/use-toast";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -87,6 +88,8 @@ export default function SingleTypeEditor({
 
   const { data, isLoading, error, refetch } = useQuery<{ data: Record<string, FieldValue> | null }>({
     queryKey: [`/api/strapi/${apiPath}`],
+    refetchInterval: STRAPI_POLL_INTERVAL,
+    refetchOnWindowFocus: true,
   });
 
   const record = data?.data;
@@ -94,7 +97,7 @@ export default function SingleTypeEditor({
   const fields = record ? parseFields(record) : [];
 
   useEffect(() => {
-    if (record) {
+    if (record && !dirty) {
       const initial: Record<string, string> = {};
       parseFields(record).forEach((f) => {
         if (f.kind === "text" || f.kind === "richtext" || f.kind === "number") {
@@ -102,7 +105,6 @@ export default function SingleTypeEditor({
         }
       });
       setEdits(initial);
-      setDirty(false);
     }
   }, [data]);
 

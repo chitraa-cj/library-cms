@@ -37,7 +37,9 @@ import {
   type StrapiSection,
   type StrapiGrantha,
   type StrapiResponse,
+  type SectionTitleTranslation,
   sectionTypes,
+  translationLanguages,
 } from "@shared/schema";
 import {
   Loader2,
@@ -56,6 +58,16 @@ import {
 } from "lucide-react";
 import { STRAPI_POLL_INTERVAL } from "@/hooks/use-strapi-sync";
 
+let _uid = 0;
+function uid() { return `tt-${++_uid}`; }
+
+interface TitleTranslationRow {
+  id: string;
+  text: string;
+  language: string;
+  isAiTranslated: boolean;
+}
+
 export default function SectionsPage() {
   const { toast } = useToast();
   const [formOpen, setFormOpen] = useState(false);
@@ -65,6 +77,7 @@ export default function SectionsPage() {
   const [viewingItem, setViewingItem] = useState<any>(null);
   const [searchQuery, setSearchQuery] = useState("");
   const [expandedSections, setExpandedSections] = useState<Set<string>>(new Set());
+  const [titleTranslations, setTitleTranslations] = useState<TitleTranslationRow[]>([]);
 
   function toggleSection(documentId: string) {
     setExpandedSections((prev) => {
@@ -123,8 +136,19 @@ export default function SectionsPage() {
 
   const strapiSections = data?.data || [];
 
+  function addTitleTranslation() {
+    setTitleTranslations((prev) => [...prev, { id: uid(), text: "", language: "", isAiTranslated: false }]);
+  }
+  function updateTitleTranslation(id: string, field: keyof Omit<TitleTranslationRow, "id">, value: any) {
+    setTitleTranslations((prev) => prev.map((t) => t.id === id ? { ...t, [field]: value } : t));
+  }
+  function removeTitleTranslation(id: string) {
+    setTitleTranslations((prev) => prev.filter((t) => t.id !== id));
+  }
+
   function resetForm() {
     setFormData({ title: "", type: "", order: "", grantha: "" });
+    setTitleTranslations([]);
     setEditingDraftId(null);
   }
 
@@ -145,6 +169,14 @@ export default function SectionsPage() {
         order: d.order != null ? String(d.order) : "",
         grantha: d._grantha || "",
       });
+      setTitleTranslations(
+        (d.titleTranslations || []).map((t: any) => ({
+          id: uid(),
+          text: t.TranslationText || "",
+          language: t.LanguageOfTranslation || "",
+          isAiTranslated: t.isAiTranslated ?? false,
+        }))
+      );
     } else {
       setEditingDraftId(null);
       setFormData({
@@ -153,6 +185,14 @@ export default function SectionsPage() {
         order: item.order != null ? String(item.order) : "",
         grantha: item.grantha?.documentId || "",
       });
+      setTitleTranslations(
+        (item.titleTranslations || []).map((t: any) => ({
+          id: uid(),
+          text: t.TranslationText || "",
+          language: t.LanguageOfTranslation || "",
+          isAiTranslated: t.isAiTranslated ?? false,
+        }))
+      );
     }
     setFormOpen(true);
   }
@@ -171,6 +211,15 @@ export default function SectionsPage() {
     if (formData.type) payload.type = formData.type;
     if (formData.order) payload.order = parseInt(formData.order) || 0;
     if (formData.grantha) payload.grantha = formData.grantha;
+    if (titleTranslations.length > 0) {
+      payload.titleTranslations = titleTranslations
+        .filter((t) => t.text.trim() || t.language.trim())
+        .map((t) => ({
+          TranslationText: t.text,
+          LanguageOfTranslation: t.language,
+          isAiTranslated: t.isAiTranslated,
+        }));
+    }
 
     const strapiDocId =
       editingItem && !editingItem._isDraft
@@ -452,12 +501,12 @@ export default function SectionsPage() {
 
       {/* Form dialog */}
       <Dialog open={formOpen} onOpenChange={setFormOpen}>
-        <DialogContent className="max-w-lg">
+        <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
           <DialogHeader>
             <DialogTitle>{editingItem ? "Edit Section" : "Add Section"}</DialogTitle>
             <DialogDescription>A Section is a top-level division of a Grantha (e.g., Adhyaya, Valli, Brahmana). It groups Manthras under it.</DialogDescription>
           </DialogHeader>
-          <form onSubmit={handleSubmit} className="space-y-4">
+          <form onSubmit={handleSubmit} className="space-y-5">
             <div>
               <Label>Title *</Label>
               <Input
@@ -499,6 +548,92 @@ export default function SectionsPage() {
                   {allGranthas.map((g) => <SelectItem key={g.documentId} value={g.documentId}>{g.GranthaName}</SelectItem>)}
                 </SelectContent>
               </Select>
+            </div>
+
+            {/* Title Translations */}
+            <div>
+              <div className="flex items-center justify-between mb-2">
+                <Label>Title Translations</Label>
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="outline"
+                  onClick={addTitleTranslation}
+                  data-testid="button-add-title-translation"
+                >
+                  <Plus className="w-3.5 h-3.5 mr-1" /> Add Translation
+                </Button>
+              </div>
+
+              {titleTranslations.length === 0 ? (
+                <p className="text-xs text-muted-foreground italic py-2">No title translations added.</p>
+              ) : (
+                <div className="space-y-3">
+                  {titleTranslations.map((tt, idx) => (
+                    <div key={tt.id} className="border border-border rounded-lg p-3 bg-muted/20 space-y-2.5">
+                      <div className="flex items-center justify-between">
+                        <span className="text-xs font-medium text-muted-foreground">Translation {idx + 1}</span>
+                        <Button
+                          type="button"
+                          size="sm"
+                          variant="ghost"
+                          className="text-destructive hover:text-destructive h-6 w-6 p-0"
+                          onClick={() => removeTitleTranslation(tt.id)}
+                          data-testid={`button-remove-tt-${idx}`}
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                        </Button>
+                      </div>
+
+                      <div>
+                        <Label className="text-xs">Translation Text</Label>
+                        <Input
+                          value={tt.text}
+                          onChange={(e) => updateTitleTranslation(tt.id, "text", e.target.value)}
+                          placeholder="Translated title text"
+                          className="mt-1 text-sm"
+                          data-testid={`input-tt-text-${idx}`}
+                        />
+                      </div>
+
+                      <div className="grid grid-cols-2 gap-2">
+                        <div>
+                          <Label className="text-xs">Language</Label>
+                          <Select
+                            value={tt.language || "__none__"}
+                            onValueChange={(v) => updateTitleTranslation(tt.id, "language", v === "__none__" ? "" : v)}
+                          >
+                            <SelectTrigger className="mt-1 text-sm h-9" data-testid={`select-tt-lang-${idx}`}>
+                              <SelectValue placeholder="Select language" />
+                            </SelectTrigger>
+                            <SelectContent>
+                              <SelectItem value="__none__"><span className="text-muted-foreground italic">Select language</span></SelectItem>
+                              {translationLanguages.map((lang) => (
+                                <SelectItem key={lang} value={lang}>{lang}</SelectItem>
+                              ))}
+                            </SelectContent>
+                          </Select>
+                        </div>
+                        <div>
+                          <Label className="text-xs">AI Translated?</Label>
+                          <Select
+                            value={tt.isAiTranslated ? "true" : "false"}
+                            onValueChange={(v) => updateTitleTranslation(tt.id, "isAiTranslated", v === "true")}
+                          >
+                            <SelectTrigger className="mt-1 text-sm h-9" data-testid={`select-tt-ai-${idx}`}>
+                              <SelectValue />
+                            </SelectTrigger>
+                            <SelectContent>
+                              <SelectItem value="false">No</SelectItem>
+                              <SelectItem value="true">Yes (AI)</SelectItem>
+                            </SelectContent>
+                          </Select>
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
             </div>
 
             <div className="flex justify-between pt-2">

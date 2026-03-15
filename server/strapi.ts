@@ -115,6 +115,9 @@ export function createStrapiRouter() {
           "populate[sections][populate][parent][fields][0]=documentId",
           "populate[sections][populate][parent][fields][1]=title",
           "populate[sections][populate][parent][fields][2]=type",
+          "populate[sections][populate][titleTranslations]=*",
+          "populate[sections][populate][sub_sections][fields][0]=documentId",
+          "populate[sections][populate][sub_sections][fields][1]=title",
           "pagination[pageSize]=200",
         ].join("&")}`
       );

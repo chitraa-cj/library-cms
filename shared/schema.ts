@@ -192,6 +192,13 @@ export interface StrapiTeeka {
  * Section — a chapter-level record linked to a Grantha via the `sections[]` relation.
  * Type can be "Adhyaya", "Khanda", "Valli", "Brahmana", or null for leaf/shloka sections.
  */
+export interface SectionTitleTranslation {
+  id?: number;
+  TranslationText?: string;
+  LanguageOfTranslation?: string;
+  isAiTranslated?: boolean | null;
+}
+
 export interface StrapiSection {
   id: number;
   documentId: string;
@@ -199,7 +206,10 @@ export interface StrapiSection {
   type?: (typeof sectionTypes)[number] | string | null;
   order?: number | null;
   grantha?: Pick<StrapiGrantha, "id" | "documentId" | "GranthaName"> | null;
+  parent?: Pick<StrapiSection, "id" | "documentId" | "title"> | null;
+  sub_sections?: Pick<StrapiSection, "id" | "documentId" | "title">[];
   manthras?: Pick<StrapiManthra, "id" | "documentId" | "title" | "order">[];
+  titleTranslations?: SectionTitleTranslation[];
   publishedAt?: string;
   createdAt?: string;
   updatedAt?: string;

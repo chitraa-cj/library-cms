@@ -48,10 +48,9 @@ const CONTENT_TYPE_MAP: Record<string, string> = {
   categories: "categories",
 };
 
-// These content types exist in Strapi's schema but their REST API routes
-// are not generated on the Strapi server. Drafts can be saved locally
-// but cannot be published to Strapi directly.
-const STRAPI_UNROUTED_TYPES = new Set(["sections", "manthras"]);
+// These content types exist in the portal but have no REST API route in Strapi.
+// Drafts can be saved locally but cannot be published to Strapi directly.
+const STRAPI_UNROUTED_TYPES = new Set(["sections", "manthras", "prasthana-thraya-screens"]);
 
 async function publishGranthaWithHierarchy(
   draft: any

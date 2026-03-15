@@ -43,7 +43,7 @@ import {
   type TextAndTranslation,
   type BhashyaEntry,
 } from "@shared/schema";
-import { Loader2 } from "lucide-react";
+import { Loader2, AlertTriangle } from "lucide-react";
 import StrapiSyncBar from "@/components/strapi-sync-bar";
 import { STRAPI_POLL_INTERVAL } from "@/hooks/use-strapi-sync";
 
@@ -220,7 +220,22 @@ export default function PrasthanaThraya() {
   ];
 
   return (
-    <div className="p-6 lg:p-8 max-w-7xl mx-auto">
+    <div className="p-6 lg:p-8 max-w-7xl mx-auto space-y-4">
+      <div className="flex items-start gap-3 rounded-xl border border-amber-300 bg-amber-50 dark:bg-amber-950/30 dark:border-amber-800 px-4 py-3 text-sm text-amber-800 dark:text-amber-300">
+        <AlertTriangle className="w-4 h-4 mt-0.5 shrink-0" />
+        <div>
+          <span className="font-semibold">Note:</span> Prasthana Thraya entries are stored locally as drafts only. This content type does not have a REST API route enabled on the Strapi server. To publish or edit records, use the{" "}
+          <a
+            href="http://13.53.121.15:1337/admin"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="underline underline-offset-2 font-medium"
+          >
+            Strapi Content Manager
+          </a>
+          {" "}directly.
+        </div>
+      </div>
       <DataTable
         title="Prasthana Thraya"
         description="Manage Prasthana Thraya screen entries"

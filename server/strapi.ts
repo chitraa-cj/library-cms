@@ -208,6 +208,20 @@ export function createStrapiRouter() {
     res.status(501).json({ message: STRAPI_ADMIN_NOTE });
   });
 
+  // ── Prasthana Thraya Screens: portal-only, no Strapi collection ──
+  router.get("/prasthana-thraya-screens", (_req, res) => {
+    res.json({ data: [], meta: { pagination: { page: 1, pageSize: 25, pageCount: 0, total: 0 } } });
+  });
+  router.post("/prasthana-thraya-screens", (_req, res) => {
+    res.status(501).json({ message: STRAPI_ADMIN_NOTE });
+  });
+  router.put("/prasthana-thraya-screens/:documentId", (_req, res) => {
+    res.status(501).json({ message: STRAPI_ADMIN_NOTE });
+  });
+  router.delete("/prasthana-thraya-screens/:documentId", (_req, res) => {
+    res.status(501).json({ message: STRAPI_ADMIN_NOTE });
+  });
+
   for (const ct of contentTypes) {
     router.get(`/${ct.path}`, async (req, res) => {
       try {

@@ -181,5 +181,35 @@ export function createStrapiRouter() {
     });
   }
 
+  // Single types: About and Global (one record each, no documentId)
+  const singleTypes = [
+    { path: "about", plural: "about" },
+    { path: "global", plural: "global" },
+  ];
+
+  for (const st of singleTypes) {
+    router.get(`/${st.path}`, async (req, res) => {
+      try {
+        const data = await strapiRequest(`/api/${st.plural}?populate=*`);
+        res.json(data);
+      } catch (error: any) {
+        if (error.status === 404) return res.json({ data: null });
+        res.status(500).json({ message: error.message || "Failed to fetch" });
+      }
+    });
+
+    router.put(`/${st.path}`, async (req, res) => {
+      try {
+        const data = await strapiRequest(`/api/${st.plural}`, {
+          method: "PUT",
+          body: JSON.stringify({ data: req.body }),
+        });
+        res.json(data);
+      } catch (error: any) {
+        res.status(500).json({ message: error.message || "Failed to update" });
+      }
+    });
+  }
+
   return router;
 }

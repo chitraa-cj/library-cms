@@ -18,69 +18,48 @@ import {
   Hash,
   ScrollText,
   Library,
+  Info,
+  Globe,
 } from "lucide-react";
 import { useState } from "react";
 import { cn } from "@/lib/utils";
 
-const navItems = [
+type NavSection = {
+  sectionLabel?: string;
+  items: {
+    label: string;
+    path: string;
+    icon: React.ElementType;
+    description?: string;
+  }[];
+};
+
+const navSections: NavSection[] = [
   {
-    label: "Dashboard",
-    path: "/dashboard",
-    icon: LayoutDashboard,
+    items: [
+      { label: "Dashboard", path: "/dashboard", icon: LayoutDashboard },
+    ],
   },
   {
-    label: "Granthas",
-    path: "/granthas",
-    icon: BookOpen,
-    description: "Sacred texts & scriptures",
+    sectionLabel: "Collection Types",
+    items: [
+      { label: "Granthas", path: "/granthas", icon: BookOpen, description: "Sacred texts & scriptures" },
+      { label: "Chapters", path: "/chapters", icon: Layers, description: "Chapter management" },
+      { label: "Sections", path: "/sections", icon: ScrollText, description: "Adhyaya, Valli, Brahmana divisions" },
+      { label: "Manthras", path: "/manthras", icon: Hash, description: "Verse & mantra entries" },
+      { label: "Teekas", path: "/teekas", icon: Library, description: "Commentary works" },
+      { label: "Articles", path: "/articles", icon: FileText, description: "Blog articles & content" },
+      { label: "Authors", path: "/authors", icon: Users, description: "Author profiles" },
+      { label: "Categories", path: "/categories", icon: Tag, description: "Content categories" },
+      { label: "Prasthana Thraya", path: "/prasthana-thraya", icon: BookMarked, description: "Prasthana Thraya screens" },
+    ],
   },
   {
-    label: "Chapters",
-    path: "/chapters",
-    icon: Layers,
-    description: "Chapter management",
-  },
-  {
-    label: "Sections",
-    path: "/sections",
-    icon: ScrollText,
-    description: "Adhyaya, Valli, Brahmana divisions",
-  },
-  {
-    label: "Manthras",
-    path: "/manthras",
-    icon: Hash,
-    description: "Verse & mantra entries",
-  },
-  {
-    label: "Teekas",
-    path: "/teekas",
-    icon: Library,
-    description: "Commentary works",
-  },
-  {
-    label: "Articles",
-    path: "/articles",
-    icon: FileText,
-    description: "Blog articles & content",
-  },
-  {
-    label: "Authors",
-    path: "/authors",
-    icon: Users,
-    description: "Author profiles",
-  },
-  {
-    label: "Categories",
-    path: "/categories",
-    icon: Tag,
-    description: "Content categories",
-  },
-  {
-    label: "Prasthana Thraya",
-    path: "/prasthana-thraya",
-    icon: BookMarked,
-    description: "Prasthana Thraya screens",
+    sectionLabel: "Single Types",
+    items: [
+      { label: "About", path: "/about", icon: Info, description: "About the library" },
+      { label: "Global Settings", path: "/global", icon: Globe, description: "Site-wide settings" },
+    ],
   },
 ];
 
@@ -135,37 +114,48 @@ export default function DashboardLayout({
         <Separator />
 
         <ScrollArea className="flex-1 py-3">
-          <nav className="px-3 space-y-1">
-            {navItems.map((item) => {
-              const isActive =
-                location === item.path ||
-                (item.path !== "/dashboard" &&
-                  location.startsWith(item.path));
-              return (
-                <Link key={item.path} href={item.path}>
-                  <div
-                    className={cn(
-                      "flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm transition-colors cursor-pointer group",
-                      isActive
-                        ? "bg-sidebar-accent text-sidebar-foreground font-medium"
-                        : "text-muted-foreground hover:text-sidebar-foreground hover:bg-sidebar-accent/50"
-                    )}
-                    data-testid={`nav-${item.label.toLowerCase().replace(/\s/g, "-")}`}
-                  >
-                    <item.icon
-                      className={cn(
-                        "w-4 h-4 flex-shrink-0",
-                        isActive ? "text-primary" : "text-muted-foreground group-hover:text-sidebar-foreground"
-                      )}
-                    />
-                    <span className="flex-1">{item.label}</span>
-                    {isActive && (
-                      <ChevronRight className="w-4 h-4 text-muted-foreground" />
-                    )}
-                  </div>
-                </Link>
-              );
-            })}
+          <nav className="px-3 space-y-4">
+            {navSections.map((section, si) => (
+              <div key={si}>
+                {section.sectionLabel && (
+                  <p className="px-3 mb-1 text-[10px] font-semibold uppercase tracking-widest text-muted-foreground/60">
+                    {section.sectionLabel}
+                  </p>
+                )}
+                <div className="space-y-0.5">
+                  {section.items.map((item) => {
+                    const isActive =
+                      location === item.path ||
+                      (item.path !== "/dashboard" &&
+                        location.startsWith(item.path));
+                    return (
+                      <Link key={item.path} href={item.path}>
+                        <div
+                          className={cn(
+                            "flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm transition-colors cursor-pointer group",
+                            isActive
+                              ? "bg-sidebar-accent text-sidebar-foreground font-medium"
+                              : "text-muted-foreground hover:text-sidebar-foreground hover:bg-sidebar-accent/50"
+                          )}
+                          data-testid={`nav-${item.label.toLowerCase().replace(/\s/g, "-")}`}
+                        >
+                          <item.icon
+                            className={cn(
+                              "w-4 h-4 flex-shrink-0",
+                              isActive ? "text-primary" : "text-muted-foreground group-hover:text-sidebar-foreground"
+                            )}
+                          />
+                          <span className="flex-1">{item.label}</span>
+                          {isActive && (
+                            <ChevronRight className="w-4 h-4 text-muted-foreground" />
+                          )}
+                        </div>
+                      </Link>
+                    );
+                  })}
+                </div>
+              </div>
+            ))}
           </nav>
         </ScrollArea>
 

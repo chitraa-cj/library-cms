@@ -16,6 +16,8 @@ import ArticlesPage from "@/pages/articles";
 import AuthorsPage from "@/pages/authors";
 import CategoriesPage from "@/pages/categories";
 import PrasthanaThrayaPage from "@/pages/prasthana-thraya";
+import AboutPage from "@/pages/about";
+import GlobalPage from "@/pages/global";
 import NotFound from "@/pages/not-found";
 import { Loader2 } from "lucide-react";
 
@@ -34,6 +36,8 @@ function AuthenticatedRoutes() {
         <Route path="/authors" component={AuthorsPage} />
         <Route path="/categories" component={CategoriesPage} />
         <Route path="/prasthana-thraya" component={PrasthanaThrayaPage} />
+        <Route path="/about" component={AboutPage} />
+        <Route path="/global" component={GlobalPage} />
         <Route component={NotFound} />
       </Switch>
     </DashboardLayout>

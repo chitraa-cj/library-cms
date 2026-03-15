@@ -46,7 +46,6 @@ import {
   Loader2,
   ChevronRight,
   BookOpen,
-  Layers,
   FileText,
   Hash,
   Plus,
@@ -54,38 +53,10 @@ import {
   Trash2,
   Send,
   Eye,
+  CornerDownRight,
 } from "lucide-react";
 import { blocksToText } from "@/lib/strapi-blocks";
 import { STRAPI_POLL_INTERVAL } from "@/hooks/use-strapi-sync";
-
-const CHAPTER_LEVELS = [
-  {
-    value: "adhyaya",
-    label: "Adhyaya / Valli",
-    sublabel: "Master Chapter",
-    icon: BookOpen,
-    color: "bg-orange-100 text-orange-800 border-orange-200",
-    badgeVariant: "outline" as const,
-  },
-  {
-    value: "khanda",
-    label: "Khanda / Brahmana / Valli",
-    sublabel: "Sub Chapter",
-    icon: Layers,
-    color: "bg-blue-100 text-blue-800 border-blue-200",
-    badgeVariant: "secondary" as const,
-  },
-  {
-    value: "shloka",
-    label: "Shloka / Verse",
-    sublabel: "Leaf Entry",
-    icon: Hash,
-    color: "bg-green-100 text-green-800 border-green-200",
-    badgeVariant: "default" as const,
-  },
-] as const;
-
-type ChapterLevel = (typeof CHAPTER_LEVELS)[number]["value"];
 
 const EMPTY_TT: TextAndTranslation = {
   SanskritTextEntry: "",
@@ -101,7 +72,6 @@ interface FlatChapter {
   granthaDocId?: string;
   parentDocId?: string;
   depth: number;
-  level: ChapterLevel;
   raw: StrapiChapter;
 }
 
@@ -116,25 +86,15 @@ function buildFlatTree(chapters: StrapiChapter[]): FlatChapter[] {
     return p ? 1 + getDepth(p, visited) : 1;
   }
 
-  function levelFromDepth(d: number): ChapterLevel {
-    if (d === 0) return "adhyaya";
-    if (d === 1) return "khanda";
-    return "shloka";
-  }
-
-  const flat: FlatChapter[] = chapters.map((c) => {
-    const depth = getDepth(c);
-    return {
-      documentId: c.documentId,
-      ChapterTitle: c.ChapterTitle,
-      order: c.order,
-      granthaDocId: c.grantha?.documentId,
-      parentDocId: c.parent?.documentId,
-      depth,
-      level: levelFromDepth(depth),
-      raw: c,
-    };
-  });
+  const flat: FlatChapter[] = chapters.map((c) => ({
+    documentId: c.documentId,
+    ChapterTitle: c.ChapterTitle,
+    order: c.order,
+    granthaDocId: c.grantha?.documentId,
+    parentDocId: c.parent?.documentId,
+    depth: getDepth(c),
+    raw: c,
+  }));
 
   const roots = flat.filter((f) => !f.parentDocId).sort((a, b) => a.order - b.order);
   const result: FlatChapter[] = [];
@@ -154,21 +114,29 @@ function buildFlatTree(chapters: StrapiChapter[]): FlatChapter[] {
   flat
     .filter((f) => f.parentDocId && !byDoc.has(f.parentDocId!))
     .forEach((orphan) => {
-      if (!result.find((r) => r.documentId === orphan.documentId)) {
-        result.push(orphan);
-      }
+      if (!result.find((r) => r.documentId === orphan.documentId)) result.push(orphan);
     });
 
   return result;
 }
 
-function chapterLabel(chapter: StrapiChapter, siblings: StrapiChapter[]): string {
-  const duplicates = siblings.filter((s) => s.ChapterTitle === chapter.ChapterTitle);
-  if (duplicates.length <= 1) return chapter.ChapterTitle;
-  const sorted = [...duplicates].sort((a, b) => a.order - b.order || a.documentId.localeCompare(b.documentId));
-  const idx = sorted.findIndex((s) => s.documentId === chapter.documentId);
-  const orderPart = chapter.order !== undefined ? `Order ${chapter.order}` : `#${idx + 1}`;
-  return `${chapter.ChapterTitle} — ${orderPart} (…${chapter.documentId.slice(-5)})`;
+function buildBreadcrumb(docId: string | undefined, flatTree: FlatChapter[], allGranthas: StrapiGrantha[]): string[] {
+  const parts: string[] = [];
+  let current = flatTree.find((f) => f.documentId === docId);
+  const visited = new Set<string>();
+  while (current && !visited.has(current.documentId)) {
+    visited.add(current.documentId);
+    parts.unshift(current.ChapterTitle);
+    current = current.parentDocId ? flatTree.find((f) => f.documentId === current!.parentDocId) : undefined;
+  }
+  if (parts.length > 0) {
+    const grantha = allGranthas.find((g) => {
+      const root = flatTree.find((f) => f.documentId === docId);
+      return root && (g.documentId === root.granthaDocId || flatTree.some((f) => f.documentId === docId && f.granthaDocId === g.documentId));
+    });
+    if (grantha) parts.unshift(grantha.GranthaName);
+  }
+  return parts;
 }
 
 function ReadOnlyField({ label, text }: { label: string; text?: string }) {
@@ -179,6 +147,26 @@ function ReadOnlyField({ label, text }: { label: string; text?: string }) {
       <div className="bg-muted/40 rounded-md px-3 py-2 text-sm whitespace-pre-wrap font-serif leading-relaxed">
         {text}
       </div>
+    </div>
+  );
+}
+
+function ReadOnlyTT({ label, tt }: { label: string; tt?: TextAndTranslation }) {
+  if (!tt) return null;
+  const sanskrit = blocksToText(tt.SanskritTextEntry);
+  const english = blocksToText(tt.EnglishTranslationText);
+  const other = blocksToText(tt.OtherLanguagesTranslation);
+  const lang = typeof tt.LanguageOfTranslation === "string" ? tt.LanguageOfTranslation : "";
+  if (!sanskrit && !english && !other) return null;
+  return (
+    <div className="space-y-3 rounded-lg border border-border p-4">
+      <p className="text-sm font-semibold text-foreground flex items-center gap-2">
+        <FileText className="w-4 h-4 text-primary" />
+        {label}
+      </p>
+      <ReadOnlyField label="Sanskrit Text (Devanagari)" text={sanskrit} />
+      <ReadOnlyField label="English Translation" text={english} />
+      {lang && <ReadOnlyField label={`Translation in ${lang}`} text={other} />}
     </div>
   );
 }
@@ -216,12 +204,6 @@ function GranthaDetailCard({ grantha }: { grantha: StrapiGrantha }) {
             <span>{grantha.NumberOfTeekas}</span>
           </div>
         )}
-        {grantha.slug && (
-          <div>
-            <span className="text-xs text-muted-foreground block">Slug</span>
-            <span className="font-mono text-xs">{grantha.slug}</span>
-          </div>
-        )}
       </div>
       {grantha.IntroductionToTextEnglish && blocksToText(grantha.IntroductionToTextEnglish) && (
         <div>
@@ -251,24 +233,17 @@ function ChapterDetailCard({
     ? flatTree.find((f) => f.documentId === chapter.parentDocId)
     : null;
 
-  const lvlInfo = CHAPTER_LEVELS.find((l) => l.value === chapter.level);
-  const LvlIcon = lvlInfo?.icon || Hash;
-
   const sanskrit = blocksToText(chapter.raw.ShlokaManthraEntry?.SanskritTextEntry);
   const english = blocksToText(chapter.raw.ShlokaManthraEntry?.EnglishTranslationText);
 
   return (
     <div className="mt-2 rounded-lg border border-primary/20 bg-primary/5 p-3 space-y-2">
       <p className="text-xs font-semibold text-primary uppercase tracking-wider">{label}</p>
-
-      {/* Breadcrumb path */}
       <div className="flex items-center gap-1 text-xs text-muted-foreground flex-wrap">
-        {grantha && <span className="font-medium text-foreground">{grantha.GranthaName}</span>}
-        {grantha && (parentChapter || true) && <ChevronRight className="w-3 h-3" />}
+        {grantha && <><span className="font-medium text-foreground">{grantha.GranthaName}</span><ChevronRight className="w-3 h-3" /></>}
         {parentChapter && <><span>{parentChapter.ChapterTitle}</span><ChevronRight className="w-3 h-3" /></>}
         <span className="font-semibold text-foreground">{chapter.ChapterTitle}</span>
       </div>
-
       <div className="grid grid-cols-3 gap-x-4 gap-y-1.5 text-sm">
         <div>
           <span className="text-xs text-muted-foreground block">Title</span>
@@ -279,11 +254,8 @@ function ChapterDetailCard({
           <span>{chapter.order}</span>
         </div>
         <div>
-          <span className="text-xs text-muted-foreground block">Level</span>
-          <span className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded border text-xs font-medium ${lvlInfo?.color || ""}`}>
-            <LvlIcon className="w-3 h-3" />
-            {lvlInfo?.label || chapter.level}
-          </span>
+          <span className="text-xs text-muted-foreground block">Depth</span>
+          <span>Level {chapter.depth + 1}</span>
         </div>
         {grantha && (
           <div className="col-span-2">
@@ -292,7 +264,6 @@ function ChapterDetailCard({
           </div>
         )}
       </div>
-
       {(sanskrit || english) && (
         <div className="space-y-1.5 pt-1 border-t border-primary/10">
           {sanskrit && (
@@ -313,51 +284,28 @@ function ChapterDetailCard({
   );
 }
 
-function ReadOnlyTT({ label, tt }: { label: string; tt?: TextAndTranslation }) {
-  if (!tt) return null;
-  const sanskrit = blocksToText(tt.SanskritTextEntry);
-  const english = blocksToText(tt.EnglishTranslationText);
-  const other = blocksToText(tt.OtherLanguagesTranslation);
-  const lang = typeof tt.LanguageOfTranslation === "string" ? tt.LanguageOfTranslation : "";
-  if (!sanskrit && !english && !other) return null;
-  return (
-    <div className="space-y-3 rounded-lg border border-border p-4">
-      <p className="text-sm font-semibold text-foreground flex items-center gap-2">
-        <FileText className="w-4 h-4 text-primary" />
-        {label}
-      </p>
-      <ReadOnlyField label="Sanskrit Text (Devanagari)" text={sanskrit} />
-      <ReadOnlyField label="English Translation" text={english} />
-      {lang && <ReadOnlyField label={`Translation in ${lang}`} text={other} />}
-    </div>
-  );
-}
-
 function ChapterViewPanel({
   item,
   allGranthas,
   flatTree,
-  levelInfo,
   onClose,
   onEdit,
 }: {
   item: any;
   allGranthas: StrapiGrantha[];
   flatTree: FlatChapter[];
-  levelInfo: (level: ChapterLevel) => (typeof CHAPTER_LEVELS)[number];
   onClose: () => void;
   onEdit: () => void;
 }) {
   const isDraft = !!item._isDraft;
   const data = isDraft ? item._draftData || item : item;
-  const lvl = levelInfo(isDraft ? (data._level || "adhyaya") : (flatTree.find((f) => f.documentId === item.documentId)?.level || "adhyaya"));
-  const LvlIcon = lvl.icon;
 
   const grantha = isDraft
     ? allGranthas.find((g) => g.documentId === data._grantha || g.documentId === data.grantha)
-    : allGranthas.find((g) => g.documentId === (item.grantha?.documentId));
+    : allGranthas.find((g) => g.documentId === item.grantha?.documentId);
 
   const parentChapter = isDraft ? null : flatTree.find((f) => f.documentId === item.parent?.documentId);
+  const depth = flatTree.find((f) => f.documentId === item.documentId)?.depth ?? 0;
 
   const teekas: BhashyaEntry[] = data.Teekas || [];
 
@@ -368,10 +316,7 @@ function ChapterViewPanel({
           <div>
             <DialogTitle className="text-xl">{data.ChapterTitle || item.ChapterTitle}</DialogTitle>
             <div className="flex items-center gap-2 mt-2">
-              <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded border text-xs font-medium ${lvl.color}`}>
-                <LvlIcon className="w-3 h-3" />
-                {lvl.label}
-              </span>
+              <Badge variant="outline" className="text-xs">Level {depth + 1}</Badge>
               {isDraft ? (
                 <Badge className="bg-amber-100 text-amber-800 border-amber-200 text-xs">Draft</Badge>
               ) : (
@@ -445,20 +390,17 @@ export default function ChaptersPage() {
   const [viewingItem, setViewingItem] = useState<any>(null);
   const [searchQuery, setSearchQuery] = useState("");
 
-  const [chapterLevel, setChapterLevel] = useState<ChapterLevel>("adhyaya");
-
   const [formData, setFormData] = useState({
     ChapterTitle: "",
     order: 0,
     grantha: "",
-    adhyayaParent: "",
-    khandaParent: "",
+    parentDocId: "",
     ShlokaManthraEntry: { ...EMPTY_TT } as TextAndTranslation,
     BhashyamForShlokaManthra: { ...EMPTY_TT } as TextAndTranslation,
     Teekas: [] as BhashyaEntry[],
   });
 
-  const { data, isLoading, error } = useQuery<StrapiResponse<StrapiChapter>>({
+  const { data, isLoading } = useQuery<StrapiResponse<StrapiChapter>>({
     queryKey: ["/api/strapi", "chapters"],
     refetchInterval: STRAPI_POLL_INTERVAL,
     refetchOnWindowFocus: true,
@@ -489,21 +431,40 @@ export default function ChaptersPage() {
   });
 
   const strapiChapters = data?.data || [];
-
   const flatTree = useMemo(() => buildFlatTree(strapiChapters), [strapiChapters]);
+
+  const allGranthas = useMemo(() => {
+    const seen = new Set<string>();
+    return (granthasData?.data || []).filter((g) => {
+      const key = g.GranthaName.toLowerCase().trim();
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+  }, [granthasData]);
+
+  function inferGranthaFromParent(parentDocId: string): string {
+    let current = flatTree.find((f) => f.documentId === parentDocId);
+    const visited = new Set<string>();
+    while (current && !visited.has(current.documentId)) {
+      visited.add(current.documentId);
+      if (current.granthaDocId) return current.granthaDocId;
+      if (!current.parentDocId) break;
+      current = flatTree.find((f) => f.documentId === current!.parentDocId);
+    }
+    return "";
+  }
 
   function resetForm() {
     setFormData({
       ChapterTitle: "",
       order: 0,
       grantha: "",
-      adhyayaParent: "",
-      khandaParent: "",
+      parentDocId: "",
       ShlokaManthraEntry: { ...EMPTY_TT },
       BhashyamForShlokaManthra: { ...EMPTY_TT },
       Teekas: [],
     });
-    setChapterLevel("adhyaya");
     setEditingDraftId(null);
   }
 
@@ -518,29 +479,22 @@ export default function ChaptersPage() {
     if (item._isDraft) {
       setEditingDraftId(item._draftId);
       const d = item._draftData;
-      setChapterLevel(d._level || "adhyaya");
       setFormData({
         ChapterTitle: d.ChapterTitle || "",
         order: d.order || 0,
         grantha: d._grantha || "",
-        adhyayaParent: d._adhyayaParent || "",
-        khandaParent: d._khandaParent || "",
+        parentDocId: d._parentDocId || "",
         ShlokaManthraEntry: d.ShlokaManthraEntry || { ...EMPTY_TT },
         BhashyamForShlokaManthra: d.BhashyamForShlokaManthra || { ...EMPTY_TT },
         Teekas: d.Teekas || [],
       });
     } else {
       setEditingDraftId(null);
-      const flat = flatTree.find((f) => f.documentId === item.documentId);
-      const level = flat?.level || "adhyaya";
-      setChapterLevel(level);
-
       setFormData({
         ChapterTitle: item.ChapterTitle || "",
         order: item.order || 0,
-        grantha: level === "adhyaya" ? (item.grantha?.documentId || "") : "",
-        adhyayaParent: level === "khanda" ? (item.parent?.documentId || "") : "",
-        khandaParent: level === "shloka" ? (item.parent?.documentId || "") : "",
+        grantha: item.grantha?.documentId || "",
+        parentDocId: item.parent?.documentId || "",
         ShlokaManthraEntry: item.ShlokaManthraEntry || { ...EMPTY_TT },
         BhashyamForShlokaManthra: item.BhashyamForShlokaManthra || { ...EMPTY_TT },
         Teekas: item.Teekas || [],
@@ -549,49 +503,19 @@ export default function ChaptersPage() {
     setFormOpen(true);
   }
 
-  function inferGranthaFromParent(parentDocId: string): string {
-    let current = flatTree.find((f) => f.documentId === parentDocId);
-    while (current) {
-      if (current.granthaDocId) return current.granthaDocId;
-      if (!current.parentDocId) break;
-      current = flatTree.find((f) => f.documentId === current!.parentDocId);
-    }
-    return "";
-  }
-
   function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
     if (!formData.ChapterTitle.trim()) {
       toast({ variant: "destructive", title: "Chapter Title is required" });
       return;
     }
-    if (chapterLevel === "adhyaya" && !formData.grantha) {
-      toast({ variant: "destructive", title: "Grantha is required for Adhyaya level" });
-      return;
-    }
-    if (chapterLevel === "khanda" && !formData.adhyayaParent) {
-      toast({ variant: "destructive", title: "Parent Adhyaya is required for Khanda level" });
-      return;
-    }
-    if (chapterLevel === "shloka" && !formData.khandaParent) {
-      toast({ variant: "destructive", title: "Parent chapter is required for Shloka level" });
-      return;
-    }
 
-    const parentDocId =
-      chapterLevel === "adhyaya" ? null :
-      chapterLevel === "khanda" ? formData.adhyayaParent :
-      formData.khandaParent;
-
-    const granthaDocId =
-      chapterLevel === "adhyaya" ? formData.grantha :
-      parentDocId ? inferGranthaFromParent(parentDocId) : "";
+    const parentDocId = formData.parentDocId || null;
+    const granthaDocId = formData.grantha || (parentDocId ? inferGranthaFromParent(parentDocId) : "");
 
     const payload: any = {
-      _level: chapterLevel,
       _grantha: granthaDocId,
-      _adhyayaParent: formData.adhyayaParent,
-      _khandaParent: formData.khandaParent,
+      _parentDocId: parentDocId || "",
       ChapterTitle: formData.ChapterTitle,
       order: formData.order,
       ShlokaManthraEntry: formData.ShlokaManthraEntry,
@@ -636,8 +560,6 @@ export default function ChaptersPage() {
     if (item._draftId) publishDraft.mutate(item._draftId);
   }
 
-  const isSaving = saveDraft.isPending;
-
   const draftRows = unpublishedDrafts.map((d) => ({
     ...(d.data as any),
     _isDraft: true,
@@ -657,498 +579,413 @@ export default function ChaptersPage() {
     f.ChapterTitle.toLowerCase().includes(searchLower)
   );
 
-  // Deduplicate Granthas by name — guards against multiple Strapi records
-  // with the same title appearing as separate options in the selector.
-  const allGranthas = useMemo(() => {
-    const seen = new Set<string>();
-    return (granthasData?.data || []).filter((g) => {
-      const key = g.GranthaName.toLowerCase().trim();
-      if (seen.has(key)) return false;
-      seen.add(key);
-      return true;
-    });
-  }, [granthasData]);
+  const isSaving = saveDraft.isPending;
 
-  const levelInfo = (level: ChapterLevel) =>
-    CHAPTER_LEVELS.find((l) => l.value === level)!;
+  const selectedParent = formData.parentDocId
+    ? flatTree.find((f) => f.documentId === formData.parentDocId)
+    : null;
+
+  const selectedGrantha = formData.grantha
+    ? allGranthas.find((g) => g.documentId === formData.grantha)
+    : null;
+
+  const parentsByGrantha = useMemo(() => {
+    const groups = new Map<string, { grantha?: StrapiGrantha; chapters: FlatChapter[] }>();
+    for (const f of flatTree) {
+      const key = f.granthaDocId || "__none__";
+      if (!groups.has(key)) {
+        groups.set(key, {
+          grantha: allGranthas.find((g) => g.documentId === f.granthaDocId),
+          chapters: [],
+        });
+      }
+      groups.get(key)!.chapters.push(f);
+    }
+    return groups;
+  }, [flatTree, allGranthas]);
 
   return (
     <div className="p-6 lg:p-8 max-w-7xl mx-auto">
-        <div className="flex items-center justify-between mb-6">
-          <h1 className="text-2xl font-bold text-foreground">Chapters</h1>
-          <Button onClick={openAdd} data-testid="chapter-add">
-            <Plus className="w-4 h-4 mr-2" />
-            Add Chapter
-          </Button>
-        </div>
+      <div className="flex items-center justify-between mb-6">
+        <h1 className="text-2xl font-bold text-foreground">Chapters</h1>
+        <Button onClick={openAdd} data-testid="chapter-add">
+          <Plus className="w-4 h-4 mr-2" />
+          Add Chapter
+        </Button>
+      </div>
 
-        <div className="mb-4">
-          <Input
-            placeholder="Search chapters..."
-            value={searchQuery}
-            onChange={(e) => setSearchQuery(e.target.value)}
-            className="max-w-sm"
-            data-testid="input-search-chapters"
-          />
-        </div>
+      <div className="mb-4">
+        <Input
+          placeholder="Search chapters..."
+          value={searchQuery}
+          onChange={(e) => setSearchQuery(e.target.value)}
+          className="max-w-sm"
+          data-testid="input-search-chapters"
+        />
+      </div>
 
-        <div className="rounded-lg border border-border bg-card overflow-hidden">
-          {isLoading || isLoadingDrafts ? (
-            <div className="flex justify-center items-center py-20">
-              <Loader2 className="w-6 h-6 animate-spin text-muted-foreground" />
-            </div>
-          ) : displayedDrafts.length === 0 && displayedPublished.length === 0 ? (
-            <div className="py-20 text-center text-muted-foreground">
-              <FileText className="w-10 h-10 mx-auto mb-3 opacity-30" />
-              <p>No chapters found. Add the first chapter above.</p>
-            </div>
-          ) : (
-            <table className="w-full text-sm">
-              <thead>
-                <tr className="border-b border-border bg-muted/40">
-                  <th className="text-left px-4 py-3 font-medium text-muted-foreground w-8">Status</th>
-                  <th className="text-left px-4 py-3 font-medium text-muted-foreground">Title</th>
-                  <th className="text-left px-4 py-3 font-medium text-muted-foreground">Level</th>
-                  <th className="text-left px-4 py-3 font-medium text-muted-foreground">Grantha</th>
-                  <th className="text-left px-4 py-3 font-medium text-muted-foreground">Order</th>
-                  <th className="text-right px-4 py-3 font-medium text-muted-foreground">Actions</th>
-                </tr>
-              </thead>
-              <tbody>
-                {displayedDrafts.map((draft) => {
-                  const lvl = levelInfo(draft._level || "adhyaya");
-                  const LvlIcon = lvl.icon;
-                  const isPub = publishDraft.isPending && publishDraft.variables === draft._draftId;
-                  return (
-                    <tr
-                      key={`draft-${draft._draftId}`}
-                      className="border-b border-border hover:bg-muted/30 transition-colors"
-                      data-testid={`row-draft-${draft._draftId}`}
-                    >
-                      <td className="px-4 py-3">
-                        <Badge className="bg-amber-100 text-amber-800 border-amber-200 text-xs">Draft</Badge>
-                      </td>
-                      <td className="px-4 py-3 font-medium">{draft.ChapterTitle}</td>
-                      <td className="px-4 py-3">
-                        <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded border text-xs font-medium ${lvl.color}`}>
-                          <LvlIcon className="w-3 h-3" />
-                          {lvl.label}
-                        </span>
-                      </td>
-                      <td className="px-4 py-3 text-muted-foreground text-xs">—</td>
-                      <td className="px-4 py-3 text-muted-foreground">{draft.order ?? 0}</td>
-                      <td className="px-4 py-3">
-                        <div className="flex justify-end gap-1">
-                          <Button
-                            size="sm"
-                            variant="ghost"
-                            onClick={() => setViewingItem(draft)}
-                            data-testid={`button-view-${draft._draftId}`}
-                            title="View details"
-                          >
-                            <Eye className="w-3.5 h-3.5" />
-                          </Button>
-                          <Button
-                            size="sm"
-                            variant="ghost"
-                            onClick={() => handlePublish(draft)}
-                            disabled={isPub}
-                            data-testid={`button-publish-${draft._draftId}`}
-                            title="Publish to CMS"
-                          >
-                            {isPub ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Send className="w-3.5 h-3.5" />}
-                          </Button>
-                          <Button
-                            size="sm"
-                            variant="ghost"
-                            onClick={() => openEdit(draft)}
-                            data-testid={`button-edit-${draft._draftId}`}
-                          >
-                            <Pencil className="w-3.5 h-3.5" />
-                          </Button>
-                          <Button
-                            size="sm"
-                            variant="ghost"
-                            className="text-destructive hover:text-destructive"
-                            onClick={() => setDeleteTarget(draft)}
-                            data-testid={`button-delete-${draft._draftId}`}
-                          >
-                            <Trash2 className="w-3.5 h-3.5" />
-                          </Button>
-                        </div>
-                      </td>
-                    </tr>
-                  );
-                })}
-
-                {displayedPublished.map((flat) => {
-                  const lvl = levelInfo(flat.level);
-                  const LvlIcon = lvl.icon;
-                  const grantha = allGranthas.find((g) => g.documentId === flat.granthaDocId);
-                  return (
-                    <tr
-                      key={`pub-${flat.documentId}`}
-                      className="border-b border-border hover:bg-muted/30 transition-colors"
-                      data-testid={`row-chapter-${flat.documentId}`}
-                    >
-                      <td className="px-4 py-3">
-                        <Badge className="bg-green-100 text-green-800 border-green-200 text-xs">Published</Badge>
-                      </td>
-                      <td className="px-4 py-3 font-medium">
-                        <span
-                          style={{ paddingLeft: flat.depth * 24 }}
-                          className="flex items-center gap-1.5"
+      <div className="rounded-lg border border-border bg-card overflow-hidden">
+        {isLoading || isLoadingDrafts ? (
+          <div className="flex justify-center items-center py-20">
+            <Loader2 className="w-6 h-6 animate-spin text-muted-foreground" />
+          </div>
+        ) : displayedDrafts.length === 0 && displayedPublished.length === 0 ? (
+          <div className="py-20 text-center text-muted-foreground">
+            <FileText className="w-10 h-10 mx-auto mb-3 opacity-30" />
+            <p>No chapters found. Add the first chapter above.</p>
+          </div>
+        ) : (
+          <table className="w-full text-sm">
+            <thead>
+              <tr className="border-b border-border bg-muted/40">
+                <th className="text-left px-4 py-3 font-medium text-muted-foreground w-8">Status</th>
+                <th className="text-left px-4 py-3 font-medium text-muted-foreground">Title</th>
+                <th className="text-left px-4 py-3 font-medium text-muted-foreground">Grantha</th>
+                <th className="text-left px-4 py-3 font-medium text-muted-foreground">Order</th>
+                <th className="text-right px-4 py-3 font-medium text-muted-foreground">Actions</th>
+              </tr>
+            </thead>
+            <tbody>
+              {displayedDrafts.map((draft) => {
+                const isPub = publishDraft.isPending && publishDraft.variables === draft._draftId;
+                return (
+                  <tr
+                    key={`draft-${draft._draftId}`}
+                    className="border-b border-border hover:bg-muted/30 transition-colors"
+                    data-testid={`row-draft-${draft._draftId}`}
+                  >
+                    <td className="px-4 py-3">
+                      <Badge className="bg-amber-100 text-amber-800 border-amber-200 text-xs">Draft</Badge>
+                    </td>
+                    <td className="px-4 py-3 font-medium">{draft.ChapterTitle}</td>
+                    <td className="px-4 py-3 text-muted-foreground text-xs">—</td>
+                    <td className="px-4 py-3 text-muted-foreground">{draft.order ?? 0}</td>
+                    <td className="px-4 py-3">
+                      <div className="flex justify-end gap-1">
+                        <Button
+                          size="sm"
+                          variant="ghost"
+                          onClick={() => setViewingItem(draft)}
+                          data-testid={`button-view-draft-${draft._draftId}`}
+                          title="View details"
                         >
-                          {flat.depth > 0 && (
-                            <ChevronRight className="w-3.5 h-3.5 text-muted-foreground shrink-0" />
-                          )}
-                          {flat.ChapterTitle}
-                        </span>
-                      </td>
-                      <td className="px-4 py-3">
-                        <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded border text-xs font-medium ${lvl.color}`}>
-                          <LvlIcon className="w-3 h-3" />
-                          {lvl.label}
-                        </span>
-                      </td>
-                      <td className="px-4 py-3 text-muted-foreground text-xs">
-                        {grantha?.GranthaName || flat.raw.grantha?.GranthaName || "—"}
-                      </td>
-                      <td className="px-4 py-3 text-muted-foreground">{flat.order}</td>
-                      <td className="px-4 py-3">
-                        <div className="flex justify-end gap-1">
-                          <Button
-                            size="sm"
-                            variant="ghost"
-                            onClick={() => setViewingItem(flat.raw)}
-                            data-testid={`button-view-${flat.documentId}`}
-                            title="View details"
-                          >
-                            <Eye className="w-3.5 h-3.5" />
-                          </Button>
-                          <Button
-                            size="sm"
-                            variant="ghost"
-                            onClick={() => openEdit(flat.raw)}
-                            data-testid={`button-edit-${flat.documentId}`}
-                          >
-                            <Pencil className="w-3.5 h-3.5" />
-                          </Button>
-                          <Button
-                            size="sm"
-                            variant="ghost"
-                            className="text-destructive hover:text-destructive"
-                            onClick={() => setDeleteTarget(flat.raw)}
-                            data-testid={`button-delete-${flat.documentId}`}
-                          >
-                            <Trash2 className="w-3.5 h-3.5" />
-                          </Button>
-                        </div>
-                      </td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-          )}
-        </div>
+                          <Eye className="w-3.5 h-3.5" />
+                        </Button>
+                        <Button
+                          size="sm"
+                          variant="ghost"
+                          onClick={() => openEdit(draft)}
+                          data-testid={`button-edit-draft-${draft._draftId}`}
+                        >
+                          <Pencil className="w-3.5 h-3.5" />
+                        </Button>
+                        <Button
+                          size="sm"
+                          variant="ghost"
+                          className="text-primary hover:text-primary"
+                          onClick={() => handlePublish(draft)}
+                          disabled={isPub}
+                          data-testid={`button-publish-draft-${draft._draftId}`}
+                          title="Publish to Strapi"
+                        >
+                          {isPub ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Send className="w-3.5 h-3.5" />}
+                        </Button>
+                        <Button
+                          size="sm"
+                          variant="ghost"
+                          className="text-destructive hover:text-destructive"
+                          onClick={() => setDeleteTarget(draft)}
+                          data-testid={`button-delete-draft-${draft._draftId}`}
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                        </Button>
+                      </div>
+                    </td>
+                  </tr>
+                );
+              })}
 
-        <Dialog open={formOpen} onOpenChange={setFormOpen}>
-          <DialogContent className="max-w-3xl max-h-[90vh] overflow-y-auto">
-            <DialogHeader>
-              <DialogTitle>
-                {editingItem ? "Edit Chapter" : "Add New Chapter"}
-              </DialogTitle>
-              <DialogDescription>
-                Select the chapter level then fill in the details.
-              </DialogDescription>
-            </DialogHeader>
-            <form onSubmit={handleSubmit} className="space-y-5">
+              {displayedPublished.map((flat) => {
+                const grantha = allGranthas.find((g) => g.documentId === flat.granthaDocId);
+                return (
+                  <tr
+                    key={flat.documentId}
+                    className="border-b border-border hover:bg-muted/30 transition-colors"
+                    data-testid={`row-chapter-${flat.documentId}`}
+                  >
+                    <td className="px-4 py-3">
+                      <Badge className="bg-green-100 text-green-800 border-green-200 text-xs">Published</Badge>
+                    </td>
+                    <td className="px-4 py-3">
+                      <div className="flex items-center" style={{ paddingLeft: `${flat.depth * 20}px` }}>
+                        {flat.depth > 0 && (
+                          <CornerDownRight className="w-3.5 h-3.5 text-muted-foreground mr-1.5 shrink-0" />
+                        )}
+                        <span className="font-medium">{flat.ChapterTitle}</span>
+                      </div>
+                    </td>
+                    <td className="px-4 py-3 text-muted-foreground text-xs">
+                      {grantha?.GranthaName || flat.raw.grantha?.GranthaName || "—"}
+                    </td>
+                    <td className="px-4 py-3 text-muted-foreground">{flat.order}</td>
+                    <td className="px-4 py-3">
+                      <div className="flex justify-end gap-1">
+                        <Button
+                          size="sm"
+                          variant="ghost"
+                          onClick={() => setViewingItem(flat.raw)}
+                          data-testid={`button-view-${flat.documentId}`}
+                          title="View details"
+                        >
+                          <Eye className="w-3.5 h-3.5" />
+                        </Button>
+                        <Button
+                          size="sm"
+                          variant="ghost"
+                          onClick={() => openEdit(flat.raw)}
+                          data-testid={`button-edit-${flat.documentId}`}
+                        >
+                          <Pencil className="w-3.5 h-3.5" />
+                        </Button>
+                        <Button
+                          size="sm"
+                          variant="ghost"
+                          className="text-destructive hover:text-destructive"
+                          onClick={() => setDeleteTarget(flat.raw)}
+                          data-testid={`button-delete-${flat.documentId}`}
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                        </Button>
+                      </div>
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        )}
+      </div>
 
+      {/* Add / Edit form dialog */}
+      <Dialog open={formOpen} onOpenChange={setFormOpen}>
+        <DialogContent className="max-w-3xl max-h-[90vh] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle>
+              {editingItem ? "Edit Chapter" : "Add Chapter"}
+            </DialogTitle>
+            <DialogDescription>
+              Fill in the chapter details. Parent and Grantha are both optional.
+            </DialogDescription>
+          </DialogHeader>
+          <form onSubmit={handleSubmit} className="space-y-5">
+
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               <div>
-                <Label className="mb-2 block">Chapter Level *</Label>
-                <div className="grid grid-cols-3 gap-2">
-                  {CHAPTER_LEVELS.map((l) => {
-                    const Icon = l.icon;
-                    const active = chapterLevel === l.value;
-                    return (
-                      <button
-                        key={l.value}
-                        type="button"
-                        onClick={() => {
-                          setChapterLevel(l.value);
-                          setFormData((f) => ({ ...f, adhyayaParent: "", khandaParent: "" }));
-                        }}
-                        data-testid={`level-${l.value}`}
-                        className={`flex flex-col items-center gap-1 p-3 rounded-lg border-2 text-sm font-medium transition-all ${
-                          active
-                            ? "border-primary bg-primary/5"
-                            : "border-border hover:border-muted-foreground/40"
-                        }`}
-                      >
-                        <Icon className={`w-4 h-4 ${active ? "text-primary" : "text-muted-foreground"}`} />
-                        <span className={active ? "text-primary" : "text-foreground"}>{l.label}</span>
-                        <span className="text-xs text-muted-foreground font-normal">{l.sublabel}</span>
-                      </button>
-                    );
-                  })}
-                </div>
+                <Label>Chapter Title *</Label>
+                <Input
+                  value={formData.ChapterTitle}
+                  onChange={(e) => setFormData({ ...formData, ChapterTitle: e.target.value })}
+                  placeholder="e.g., Adhyaya 1, Khanda 2, Shloka 1.1"
+                  className="mt-1.5"
+                  data-testid="input-chapter-title"
+                />
               </div>
-
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                <div>
-                  <Label>Chapter Title *</Label>
-                  <Input
-                    value={formData.ChapterTitle}
-                    onChange={(e) => setFormData({ ...formData, ChapterTitle: e.target.value })}
-                    placeholder="e.g., Adhyaya 1, Khanda 2, Shloka 1"
-                    className="mt-1.5"
-                    data-testid="input-chapter-title"
-                  />
-                </div>
-                <div>
-                  <Label>Order</Label>
-                  <Input
-                    type="number"
-                    value={formData.order}
-                    onChange={(e) => setFormData({ ...formData, order: parseInt(e.target.value) || 0 })}
-                    className="mt-1.5"
-                    data-testid="input-chapter-order"
-                  />
-                </div>
+              <div>
+                <Label>Order</Label>
+                <Input
+                  type="number"
+                  value={formData.order}
+                  onChange={(e) => setFormData({ ...formData, order: parseInt(e.target.value) || 0 })}
+                  className="mt-1.5"
+                  data-testid="input-chapter-order"
+                />
               </div>
+            </div>
 
-              <div className="rounded-lg border border-border bg-muted/20 p-4 space-y-3">
-                <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider flex items-center gap-1.5">
-                  <ChevronRight className="w-3.5 h-3.5" />
-                  Hierarchy Placement
-                </p>
+            {/* Hierarchy */}
+            <div className="rounded-lg border border-border bg-muted/20 p-4 space-y-4">
+              <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider flex items-center gap-1.5">
+                <ChevronRight className="w-3.5 h-3.5" />
+                Hierarchy Placement
+              </p>
 
-                {/* ADHYAYA: belongs to a Grantha */}
-                {chapterLevel === "adhyaya" && (
-                  <div>
-                    <Label className="text-sm">Grantha (Book) *</Label>
-                    <Select
-                      value={formData.grantha}
-                      onValueChange={(val) =>
-                        setFormData({ ...formData, grantha: val, adhyayaParent: "", khandaParent: "" })
-                      }
-                    >
-                      <SelectTrigger className="mt-1.5" data-testid="select-grantha">
-                        <SelectValue placeholder="Select Grantha" />
-                      </SelectTrigger>
-                      <SelectContent>
-                        {allGranthas.map((g) => (
-                          <SelectItem key={g.documentId} value={g.documentId}>
-                            {g.GranthaName}
-                          </SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
-                    {formData.grantha && (() => {
-                      const selected = allGranthas.find((g) => g.documentId === formData.grantha);
-                      return selected ? <GranthaDetailCard grantha={selected} /> : null;
-                    })()}
-                  </div>
+              {/* Parent Chapter — optional, any depth */}
+              <div>
+                <Label className="text-sm">Parent Chapter <span className="text-muted-foreground font-normal">(optional)</span></Label>
+                <Select
+                  value={formData.parentDocId || "__none__"}
+                  onValueChange={(val) => {
+                    const parentDocId = val === "__none__" ? "" : val;
+                    const inferred = parentDocId ? inferGranthaFromParent(parentDocId) : "";
+                    setFormData((f) => ({
+                      ...f,
+                      parentDocId,
+                      grantha: inferred || f.grantha,
+                    }));
+                  }}
+                >
+                  <SelectTrigger className="mt-1.5" data-testid="select-parent">
+                    <SelectValue placeholder="No parent — top-level entry" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="__none__">
+                      <span className="text-muted-foreground italic">No parent (top-level)</span>
+                    </SelectItem>
+                    {Array.from(parentsByGrantha.entries()).map(([key, group]) => (
+                      <SelectGroup key={key}>
+                        <SelectLabel>{group.grantha?.GranthaName || "No Grantha"}</SelectLabel>
+                        {group.chapters
+                          .filter((c) => !editingItem || c.documentId !== editingItem.documentId)
+                          .map((c) => (
+                            <SelectItem key={c.documentId} value={c.documentId}>
+                              <span style={{ paddingLeft: `${c.depth * 12}px` }} className="inline-flex items-center gap-1">
+                                {c.depth > 0 && <CornerDownRight className="w-3 h-3 text-muted-foreground" />}
+                                {c.ChapterTitle}
+                              </span>
+                            </SelectItem>
+                          ))}
+                      </SelectGroup>
+                    ))}
+                  </SelectContent>
+                </Select>
+                {selectedParent && (
+                  <ChapterDetailCard
+                    chapter={selectedParent}
+                    flatTree={flatTree}
+                    allGranthas={allGranthas}
+                    label="Selected Parent"
+                  />
                 )}
+              </div>
 
-                {/* KHANDA: belongs to an Adhyaya (Grantha is inferred) */}
-                {chapterLevel === "khanda" && (() => {
-                  const allAdhyayas = flatTree.filter((f) => f.level === "adhyaya");
-                  return (
-                    <div>
-                      <Label className="text-sm">Parent Adhyaya / Valli *</Label>
-                      <Select
-                        value={formData.adhyayaParent}
-                        onValueChange={(val) =>
-                          setFormData({ ...formData, adhyayaParent: val, khandaParent: "" })
-                        }
-                      >
-                        <SelectTrigger className="mt-1.5" data-testid="select-adhyaya">
-                          <SelectValue placeholder={allAdhyayas.length === 0 ? "No Adhyayas yet" : "Select Adhyaya / Valli"} />
-                        </SelectTrigger>
-                        <SelectContent>
-                          {allAdhyayas.map((a) => {
-                            const g = allGranthas.find((gr) => gr.documentId === a.granthaDocId);
-                            return (
-                              <SelectItem key={a.documentId} value={a.documentId}>
-                                {a.ChapterTitle}{g ? ` — ${g.GranthaName}` : ""}
-                              </SelectItem>
-                            );
-                          })}
-                        </SelectContent>
-                      </Select>
-                      {formData.adhyayaParent && (() => {
-                        const selected = flatTree.find((f) => f.documentId === formData.adhyayaParent);
-                        return selected
-                          ? <ChapterDetailCard chapter={selected} flatTree={flatTree} allGranthas={allGranthas} label="Selected Adhyaya" />
-                          : null;
-                      })()}
-                      <p className="text-xs text-muted-foreground mt-1">
-                        The Grantha will be automatically inferred from the selected Adhyaya.
-                      </p>
-                    </div>
-                  );
-                })()}
-
-                {/* SHLOKA: belongs to a Khanda or directly to an Adhyaya */}
-                {chapterLevel === "shloka" && (() => {
-                  const allKhandas = flatTree.filter((f) => f.level === "khanda");
-                  const allAdhyayas = flatTree.filter((f) => f.level === "adhyaya");
-                  return (
-                    <div>
-                      <Label className="text-sm">Parent Chapter *</Label>
-                      <Select
-                        value={formData.khandaParent}
-                        onValueChange={(val) => setFormData({ ...formData, khandaParent: val })}
-                      >
-                        <SelectTrigger className="mt-1.5" data-testid="select-shloka-parent">
-                          <SelectValue placeholder="Select parent Khanda or Adhyaya" />
-                        </SelectTrigger>
-                        <SelectContent>
-                          {allKhandas.length > 0 && (
-                            <SelectGroup>
-                              <SelectLabel>Khanda / Sub Chapter</SelectLabel>
-                              {allKhandas.map((k) => {
-                                const adhyaya = flatTree.find((f) => f.documentId === k.parentDocId);
-                                const g = allGranthas.find((gr) => gr.documentId === k.granthaDocId || gr.documentId === adhyaya?.granthaDocId);
-                                return (
-                                  <SelectItem key={k.documentId} value={k.documentId}>
-                                    {k.ChapterTitle}{adhyaya ? ` — ${adhyaya.ChapterTitle}` : ""}{g ? ` — ${g.GranthaName}` : ""}
-                                  </SelectItem>
-                                );
-                              })}
-                            </SelectGroup>
-                          )}
-                          {allAdhyayas.length > 0 && (
-                            <SelectGroup>
-                              <SelectLabel>Adhyaya / Valli (direct)</SelectLabel>
-                              {allAdhyayas.map((a) => {
-                                const g = allGranthas.find((gr) => gr.documentId === a.granthaDocId);
-                                return (
-                                  <SelectItem key={a.documentId} value={a.documentId}>
-                                    {a.ChapterTitle}{g ? ` — ${g.GranthaName}` : ""}
-                                  </SelectItem>
-                                );
-                              })}
-                            </SelectGroup>
-                          )}
-                        </SelectContent>
-                      </Select>
-                      {formData.khandaParent && (() => {
-                        const selected = flatTree.find((f) => f.documentId === formData.khandaParent);
-                        return selected
-                          ? <ChapterDetailCard chapter={selected} flatTree={flatTree} allGranthas={allGranthas} label="Selected Parent Chapter" />
-                          : null;
-                      })()}
-                      <p className="text-xs text-muted-foreground mt-1">
-                        Prefer selecting a Khanda / Sub Chapter. Choose Adhyaya directly only if no Khanda exists for this text.
-                      </p>
-                    </div>
-                  );
-                })()}
-
-                {/* Path preview */}
-                {(() => {
-                  let granthaName = "";
-                  let parentNames: string[] = [];
-                  if (chapterLevel === "adhyaya") {
-                    granthaName = allGranthas.find((g) => g.documentId === formData.grantha)?.GranthaName || "";
-                  } else if (chapterLevel === "khanda" && formData.adhyayaParent) {
-                    const adhyaya = flatTree.find((f) => f.documentId === formData.adhyayaParent);
-                    granthaName = allGranthas.find((g) => g.documentId === adhyaya?.granthaDocId)?.GranthaName || "";
-                    if (adhyaya) parentNames = [adhyaya.ChapterTitle];
-                  } else if (chapterLevel === "shloka" && formData.khandaParent) {
-                    const parent = flatTree.find((f) => f.documentId === formData.khandaParent);
-                    if (parent?.level === "khanda") {
-                      const adhyaya = flatTree.find((f) => f.documentId === parent.parentDocId);
-                      granthaName = allGranthas.find((g) => g.documentId === (parent.granthaDocId || adhyaya?.granthaDocId))?.GranthaName || "";
-                      parentNames = [adhyaya?.ChapterTitle || "Adhyaya", parent.ChapterTitle];
-                    } else if (parent) {
-                      granthaName = allGranthas.find((g) => g.documentId === parent.granthaDocId)?.GranthaName || "";
-                      parentNames = [parent.ChapterTitle];
-                    }
+              {/* Grantha — optional, auto-inferred from parent */}
+              <div>
+                <Label className="text-sm">
+                  Grantha <span className="text-muted-foreground font-normal">(optional{formData.parentDocId ? ", auto-inferred from parent" : ""})</span>
+                </Label>
+                <Select
+                  value={formData.grantha || "__none__"}
+                  onValueChange={(val) =>
+                    setFormData({ ...formData, grantha: val === "__none__" ? "" : val })
                   }
-                  return (
-                    <div className="text-xs text-muted-foreground bg-muted/40 rounded px-3 py-2 flex items-center gap-1 flex-wrap">
-                      <span className="font-medium">Path:</span>
-                      {granthaName ? <span>{granthaName}</span> : <span className="italic">Grantha</span>}
-                      {parentNames.map((n, i) => (
-                        <span key={i} className="flex items-center gap-1">
-                          <ChevronRight className="w-3 h-3" />
-                          {n}
-                        </span>
-                      ))}
-                      <ChevronRight className="w-3 h-3" />
-                      <span className="font-medium text-primary">{formData.ChapterTitle || "This Chapter"}</span>
-                    </div>
-                  );
-                })()}
+                >
+                  <SelectTrigger className="mt-1.5" data-testid="select-grantha">
+                    <SelectValue placeholder="Select Grantha (optional)" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="__none__">
+                      <span className="text-muted-foreground italic">No Grantha</span>
+                    </SelectItem>
+                    {allGranthas.map((g) => (
+                      <SelectItem key={g.documentId} value={g.documentId}>
+                        {g.GranthaName}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+                {selectedGrantha && <GranthaDetailCard grantha={selectedGrantha} />}
               </div>
 
-              <TextTranslationFields
-                title="Shloka / Manthra Entry"
-                value={formData.ShlokaManthraEntry}
-                onChange={(val) => setFormData({ ...formData, ShlokaManthraEntry: val })}
-                testIdPrefix="chapter-shloka"
-              />
+              {/* Path preview */}
+              {(formData.parentDocId || formData.grantha) && (
+                <div className="flex items-center gap-1 text-xs text-muted-foreground flex-wrap pt-1 border-t border-border">
+                  <span className="font-medium text-foreground mr-1">Path:</span>
+                  {selectedGrantha && <><span>{selectedGrantha.GranthaName}</span><ChevronRight className="w-3 h-3" /></>}
+                  {selectedParent && (() => {
+                    const ancestors: FlatChapter[] = [];
+                    let cur = selectedParent;
+                    const seen = new Set<string>();
+                    while (cur && !seen.has(cur.documentId)) {
+                      seen.add(cur.documentId);
+                      ancestors.unshift(cur);
+                      cur = cur.parentDocId ? flatTree.find((f) => f.documentId === cur!.parentDocId)! : undefined as any;
+                    }
+                    return ancestors.map((a, i) => (
+                      <span key={a.documentId} className="flex items-center gap-1">
+                        {i > 0 && <ChevronRight className="w-3 h-3" />}
+                        <span>{a.ChapterTitle}</span>
+                      </span>
+                    ));
+                  })()}
+                  <ChevronRight className="w-3 h-3" />
+                  <span className="font-semibold text-foreground">{formData.ChapterTitle || "New Chapter"}</span>
+                </div>
+              )}
+            </div>
 
-              <TextTranslationFields
-                title="Bhashyam for Shloka / Manthra"
-                value={formData.BhashyamForShlokaManthra}
-                onChange={(val) => setFormData({ ...formData, BhashyamForShlokaManthra: val })}
-                testIdPrefix="chapter-bhashyam"
-              />
+            {/* Text content */}
+            <TextTranslationFields
+              label="Shloka / Manthra Entry"
+              value={formData.ShlokaManthraEntry}
+              onChange={(val) => setFormData({ ...formData, ShlokaManthraEntry: val })}
+            />
+            <TextTranslationFields
+              label="Bhashyam for Shloka / Manthra"
+              value={formData.BhashyamForShlokaManthra}
+              onChange={(val) => setFormData({ ...formData, BhashyamForShlokaManthra: val })}
+            />
 
-              <BhashyaEntryFields
-                title="Teekas (Commentaries)"
-                entries={formData.Teekas}
-                onChange={(entries) => setFormData({ ...formData, Teekas: entries })}
-                testIdPrefix="chapter-teeka"
-              />
+            <BhashyaEntryFields
+              label="Teekas (Commentaries)"
+              value={formData.Teekas}
+              onChange={(val) => setFormData({ ...formData, Teekas: val })}
+            />
 
-              <div className="flex justify-end gap-3 pt-2">
-                <Button type="button" variant="outline" onClick={() => setFormOpen(false)}>
-                  Cancel
-                </Button>
-                <Button type="submit" disabled={isSaving} data-testid="button-chapter-save">
-                  {isSaving && <Loader2 className="w-4 h-4 mr-2 animate-spin" />}
-                  Save as Draft
-                </Button>
-              </div>
-            </form>
-          </DialogContent>
-        </Dialog>
-
-        <AlertDialog open={!!deleteTarget} onOpenChange={() => setDeleteTarget(null)}>
-          <AlertDialogContent>
-            <AlertDialogHeader>
-              <AlertDialogTitle>
-                Delete {deleteTarget?._isDraft ? "Draft" : "Chapter"}
-              </AlertDialogTitle>
-              <AlertDialogDescription>
-                Are you sure you want to delete &quot;{deleteTarget?.ChapterTitle}&quot;?
-                {!deleteTarget?._isDraft && " This will remove it from the CMS."}
-              </AlertDialogDescription>
-            </AlertDialogHeader>
-            <AlertDialogFooter>
-              <AlertDialogCancel>Cancel</AlertDialogCancel>
-              <AlertDialogAction
-                onClick={confirmDelete}
-                className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
-                data-testid="button-confirm-delete"
+            <div className="flex justify-between items-center pt-2">
+              <Button
+                type="button"
+                variant="outline"
+                onClick={() => { setFormOpen(false); resetForm(); setEditingItem(null); }}
+                data-testid="button-cancel"
               >
-                Delete
-              </AlertDialogAction>
-            </AlertDialogFooter>
-          </AlertDialogContent>
-        </AlertDialog>
+                Cancel
+              </Button>
+              <Button type="submit" disabled={isSaving} data-testid="button-save-draft">
+                {isSaving && <Loader2 className="w-4 h-4 mr-2 animate-spin" />}
+                Save as Draft
+              </Button>
+            </div>
+          </form>
+        </DialogContent>
+      </Dialog>
 
-        <Dialog open={!!viewingItem} onOpenChange={() => setViewingItem(null)}>
-          <DialogContent className="max-w-3xl max-h-[90vh] overflow-y-auto">
-            {viewingItem && <ChapterViewPanel item={viewingItem} allGranthas={allGranthas} flatTree={flatTree} levelInfo={levelInfo} onClose={() => setViewingItem(null)} onEdit={() => { setViewingItem(null); openEdit(viewingItem); }} />}
-          </DialogContent>
-        </Dialog>
+      {/* View dialog */}
+      <Dialog open={!!viewingItem} onOpenChange={(open) => { if (!open) setViewingItem(null); }}>
+        <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
+          {viewingItem && (
+            <ChapterViewPanel
+              item={viewingItem}
+              allGranthas={allGranthas}
+              flatTree={flatTree}
+              onClose={() => setViewingItem(null)}
+              onEdit={() => { openEdit(viewingItem); setViewingItem(null); }}
+            />
+          )}
+        </DialogContent>
+      </Dialog>
+
+      {/* Delete confirmation */}
+      <AlertDialog open={!!deleteTarget} onOpenChange={(open) => { if (!open) setDeleteTarget(null); }}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Delete chapter?</AlertDialogTitle>
+            <AlertDialogDescription>
+              This will permanently delete &quot;{deleteTarget?.ChapterTitle || deleteTarget?._draftData?.ChapterTitle}&quot;.
+              {!deleteTarget?._isDraft && " This cannot be undone."}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={confirmDelete}
+              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+              data-testid="button-confirm-delete"
+            >
+              Delete
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 }

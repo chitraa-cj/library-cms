@@ -94,6 +94,7 @@ export default function SectionsPage() {
     type: "",
     order: "",
     grantha: "",
+    parent: "",
   });
 
   const { data, isLoading } = useQuery<StrapiResponse<StrapiSection>>({
@@ -137,6 +138,15 @@ export default function SectionsPage() {
 
   const strapiSections = data?.data || [];
 
+  const parentSectionOptions = useMemo(() => {
+    const currentDocId = editingItem && !editingItem._isDraft ? editingItem.documentId : null;
+    return strapiSections.filter((s) => {
+      if (currentDocId && s.documentId === currentDocId) return false;
+      if (formData.grantha && s.grantha?.documentId !== formData.grantha) return false;
+      return true;
+    });
+  }, [strapiSections, editingItem, formData.grantha]);
+
   function addTitleTranslation() {
     setTitleTranslations((prev) => [...prev, { id: uid(), text: "", language: "", isAiTranslated: false }]);
   }
@@ -148,7 +158,7 @@ export default function SectionsPage() {
   }
 
   function resetForm() {
-    setFormData({ title: "", type: "", order: "", grantha: "" });
+    setFormData({ title: "", type: "", order: "", grantha: "", parent: "" });
     setTitleTranslations([]);
     setEditingDraftId(null);
   }
@@ -169,6 +179,7 @@ export default function SectionsPage() {
         type: d.type || "",
         order: d.order != null ? String(d.order) : "",
         grantha: d._grantha || "",
+        parent: d._parent || "",
       });
       setTitleTranslations(
         (d.titleTranslations || []).map((t: any) => ({
@@ -185,6 +196,7 @@ export default function SectionsPage() {
         type: item.type || "",
         order: item.order != null ? String(item.order) : "",
         grantha: item.grantha?.documentId || "",
+        parent: item.parent?.documentId || "",
       });
       setTitleTranslations(
         (item.titleTranslations || []).map((t: any) => ({
@@ -207,11 +219,13 @@ export default function SectionsPage() {
 
     const payload: any = {
       _grantha: formData.grantha,
+      _parent: formData.parent,
       title: formData.title,
     };
     if (formData.type) payload.type = formData.type;
     if (formData.order) payload.order = parseInt(formData.order) || 0;
     if (formData.grantha) payload.grantha = formData.grantha;
+    if (formData.parent) payload.parent = formData.parent;
     if (titleTranslations.length > 0) {
       payload.titleTranslations = titleTranslations
         .filter((t) => t.text.trim() || t.language.trim())
@@ -505,56 +519,115 @@ export default function SectionsPage() {
         <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
           <DialogHeader>
             <DialogTitle>{editingItem ? "Edit Section" : "Add Section"}</DialogTitle>
-            <DialogDescription>A Section is a top-level division of a Grantha (e.g., Adhyaya, Valli, Brahmana). It groups Manthras under it.</DialogDescription>
+            <DialogDescription>
+              Sections are structural divisions of a Grantha — Adhyaya, Khanda, Valli, Pada, etc. A section can optionally nest inside a parent section.
+            </DialogDescription>
           </DialogHeader>
           <form onSubmit={handleSubmit} className="space-y-5">
-            <div>
-              <Label>Title *</Label>
-              <Input
-                value={formData.title}
-                onChange={(e) => setFormData({ ...formData, title: e.target.value })}
-                placeholder="e.g., Adhyaya 1, Valli 3"
-                className="mt-1.5"
-                data-testid="input-section-title"
-              />
+
+            {/* ── Basic info ── */}
+            <div className="space-y-3">
+              <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">Basic Info</p>
+              <div>
+                <Label>Title *</Label>
+                <Input
+                  value={formData.title}
+                  onChange={(e) => setFormData({ ...formData, title: e.target.value })}
+                  placeholder="e.g., Adhyaya 1, Shanti Patha"
+                  className="mt-1.5"
+                  data-testid="input-section-title"
+                />
+              </div>
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <Label>Section Type</Label>
+                  <Select value={formData.type || "__none__"} onValueChange={(v) => setFormData({ ...formData, type: v === "__none__" ? "" : v })}>
+                    <SelectTrigger className="mt-1.5" data-testid="select-section-type">
+                      <SelectValue placeholder="Select type" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="__none__"><span className="text-muted-foreground italic">No type</span></SelectItem>
+                      {sectionTypes.map((t) => <SelectItem key={t} value={t}>{sectionTypeLabels[t]}</SelectItem>)}
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div>
+                  <Label>Order</Label>
+                  <Input
+                    type="number"
+                    value={formData.order}
+                    onChange={(e) => setFormData({ ...formData, order: e.target.value })}
+                    placeholder="Display order"
+                    className="mt-1.5"
+                    data-testid="input-section-order"
+                  />
+                </div>
+              </div>
             </div>
 
-            <div className="grid grid-cols-2 gap-3">
+            {/* ── Relationships ── */}
+            <div className="space-y-3 pt-1">
+              <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">Relationships</p>
               <div>
-                <Label>Section Type</Label>
-                <Select value={formData.type || "__none__"} onValueChange={(v) => setFormData({ ...formData, type: v === "__none__" ? "" : v })}>
-                  <SelectTrigger className="mt-1.5" data-testid="select-section-type">
-                    <SelectValue placeholder="Select type" />
+                <Label>Grantha <span className="text-muted-foreground font-normal text-xs">(optional)</span></Label>
+                <Select
+                  value={formData.grantha || "__none__"}
+                  onValueChange={(v) => setFormData({ ...formData, grantha: v === "__none__" ? "" : v, parent: "" })}
+                >
+                  <SelectTrigger className="mt-1.5" data-testid="select-section-grantha">
+                    <SelectValue placeholder="Select Grantha" />
                   </SelectTrigger>
                   <SelectContent>
-                    <SelectItem value="__none__"><span className="text-muted-foreground italic">No type</span></SelectItem>
-                    {sectionTypes.map((t) => <SelectItem key={t} value={t}>{sectionTypeLabels[t]}</SelectItem>)}
+                    <SelectItem value="__none__"><span className="text-muted-foreground italic">No Grantha</span></SelectItem>
+                    {allGranthas.map((g) => <SelectItem key={g.documentId} value={g.documentId}>{g.GranthaName}</SelectItem>)}
                   </SelectContent>
                 </Select>
               </div>
               <div>
-                <Label>Order</Label>
-                <Input type="number" value={formData.order} onChange={(e) => setFormData({ ...formData, order: e.target.value })} className="mt-1.5" data-testid="input-section-order" />
+                <Label>Parent Section <span className="text-muted-foreground font-normal text-xs">(optional — for nested Khandas etc.)</span></Label>
+                <Select
+                  value={formData.parent || "__none__"}
+                  onValueChange={(v) => setFormData({ ...formData, parent: v === "__none__" ? "" : v })}
+                >
+                  <SelectTrigger className="mt-1.5" data-testid="select-section-parent">
+                    <SelectValue placeholder="Select parent section" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="__none__"><span className="text-muted-foreground italic">No parent (top-level)</span></SelectItem>
+                    {parentSectionOptions.length === 0 && (
+                      <SelectItem value="__empty__" disabled>
+                        <span className="text-muted-foreground italic">
+                          {formData.grantha ? "No other sections in this Grantha" : "Select a Grantha first to filter"}
+                        </span>
+                      </SelectItem>
+                    )}
+                    {parentSectionOptions.map((s) => (
+                      <SelectItem key={s.documentId} value={s.documentId}>
+                        <span className="font-medium">{s.title}</span>
+                        {s.type && (
+                          <span className="text-muted-foreground ml-1">
+                            ({sectionTypeLabels[s.type as keyof typeof sectionTypeLabels] ?? s.type})
+                          </span>
+                        )}
+                        {!formData.grantha && s.grantha && (
+                          <span className="text-muted-foreground ml-1">— {s.grantha.GranthaName}</span>
+                        )}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+                {!formData.grantha && parentSectionOptions.length > 0 && (
+                  <p className="text-xs text-muted-foreground mt-1">
+                    Showing all sections. Select a Grantha above to filter.
+                  </p>
+                )}
               </div>
             </div>
 
-            <div>
-              <Label>Grantha <span className="text-muted-foreground font-normal">(optional)</span></Label>
-              <Select value={formData.grantha || "__none__"} onValueChange={(v) => setFormData({ ...formData, grantha: v === "__none__" ? "" : v })}>
-                <SelectTrigger className="mt-1.5" data-testid="select-section-grantha">
-                  <SelectValue placeholder="Select Grantha" />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="__none__"><span className="text-muted-foreground italic">No Grantha</span></SelectItem>
-                  {allGranthas.map((g) => <SelectItem key={g.documentId} value={g.documentId}>{g.GranthaName}</SelectItem>)}
-                </SelectContent>
-              </Select>
-            </div>
-
-            {/* Title Translations */}
-            <div>
-              <div className="flex items-center justify-between mb-2">
-                <Label>Title Translations</Label>
+            {/* ── Title Translations ── */}
+            <div className="pt-1">
+              <div className="flex items-center justify-between mb-3">
+                <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">Title Translations</p>
                 <Button
                   type="button"
                   size="sm"

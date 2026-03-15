@@ -56,7 +56,6 @@ import {
   Eye,
 } from "lucide-react";
 import { blocksToText } from "@/lib/strapi-blocks";
-import StrapiSyncBar from "@/components/strapi-sync-bar";
 import { STRAPI_POLL_INTERVAL } from "@/hooks/use-strapi-sync";
 
 const CHAPTER_LEVELS = [
@@ -676,30 +675,11 @@ export default function ChaptersPage() {
   return (
     <div className="p-6 lg:p-8 max-w-7xl mx-auto">
         <div className="flex items-center justify-between mb-6">
-          <div>
-            <h1 className="text-2xl font-bold text-foreground">Chapters</h1>
-            <p className="text-sm text-muted-foreground mt-1">
-              Manage the Grantha → Adhyaya → Khanda → Shloka hierarchy
-            </p>
-          </div>
-          <div className="flex items-center gap-3">
-            <StrapiSyncBar />
-            <Button onClick={openAdd} data-testid="chapter-add">
-              <Plus className="w-4 h-4 mr-2" />
-              Add Chapter
-            </Button>
-          </div>
-        </div>
-
-        <div className="mb-4 flex items-center gap-6 text-xs text-muted-foreground">
-          {CHAPTER_LEVELS.map((l) => (
-            <span key={l.value} className="flex items-center gap-1.5">
-              <span className={`px-2 py-0.5 rounded border text-xs font-medium ${l.color}`}>
-                {l.label}
-              </span>
-              {l.sublabel}
-            </span>
-          ))}
+          <h1 className="text-2xl font-bold text-foreground">Chapters</h1>
+          <Button onClick={openAdd} data-testid="chapter-add">
+            <Plus className="w-4 h-4 mr-2" />
+            Add Chapter
+          </Button>
         </div>
 
         <div className="mb-4">

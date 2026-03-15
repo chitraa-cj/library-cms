@@ -15,6 +15,9 @@ import {
   X,
   ChevronRight,
   BookMarked,
+  Hash,
+  ScrollText,
+  Library,
 } from "lucide-react";
 import { useState } from "react";
 import { cn } from "@/lib/utils";
@@ -36,6 +39,24 @@ const navItems = [
     path: "/chapters",
     icon: Layers,
     description: "Chapter management",
+  },
+  {
+    label: "Sections",
+    path: "/sections",
+    icon: ScrollText,
+    description: "Adhyaya, Valli, Brahmana divisions",
+  },
+  {
+    label: "Manthras",
+    path: "/manthras",
+    icon: Hash,
+    description: "Verse & mantra entries",
+  },
+  {
+    label: "Teekas",
+    path: "/teekas",
+    icon: Library,
+    description: "Commentary works",
   },
   {
     label: "Articles",

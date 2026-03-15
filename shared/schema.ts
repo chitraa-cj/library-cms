@@ -182,6 +182,7 @@ export interface StrapiTeeka {
   documentId: string;
   TeekaName: string;
   TeekaAuthor?: string;
+  grantha?: Pick<StrapiGrantha, "id" | "documentId" | "GranthaName"> | null;
   publishedAt?: string;
   createdAt?: string;
   updatedAt?: string;
@@ -197,6 +198,25 @@ export interface StrapiSection {
   title: string;
   type?: (typeof sectionTypes)[number] | string | null;
   order?: number | null;
+  grantha?: Pick<StrapiGrantha, "id" | "documentId" | "GranthaName"> | null;
+  manthras?: Pick<StrapiManthra, "id" | "documentId" | "title" | "order">[];
+  publishedAt?: string;
+  createdAt?: string;
+  updatedAt?: string;
+}
+
+/**
+ * Manthra — an individual verse/mantra entry linked to a Section (and optionally a Grantha).
+ */
+export interface StrapiManthra {
+  id: number;
+  documentId: string;
+  title?: string | null;
+  order?: number | null;
+  section?: Pick<StrapiSection, "id" | "documentId" | "title"> | null;
+  ShlokaManthraEntry?: TextAndTranslation | null;
+  BhashyamForShlokaManthra?: TextAndTranslation | null;
+  Teekas?: BhashyaEntry[];
   publishedAt?: string;
   createdAt?: string;
   updatedAt?: string;

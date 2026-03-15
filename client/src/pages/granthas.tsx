@@ -237,9 +237,23 @@ function GranthaCard({
       {item.BhashyamName && (
         <p className="text-xs text-muted-foreground mt-1">{item.BhashyamName}</p>
       )}
-      <p className="text-xs text-muted-foreground mt-3 pt-3 border-t">
-        Edited recently
-      </p>
+      {!isDraft && (
+        <div className="flex gap-3 mt-3 pt-3 border-t text-xs text-muted-foreground">
+          {Array.isArray(item.sections) && item.sections.length > 0 && (
+            <span>{item.sections.length} section{item.sections.length !== 1 ? "s" : ""}</span>
+          )}
+          {Array.isArray(item.teekas) && item.teekas.length > 0 && (
+            <span>{item.teekas.length} teeka{item.teekas.length !== 1 ? "s" : ""}</span>
+          )}
+          {(!Array.isArray(item.sections) || item.sections.length === 0) &&
+           (!Array.isArray(item.teekas) || item.teekas.length === 0) && (
+            <span>No sections or teekas linked</span>
+          )}
+        </div>
+      )}
+      {isDraft && (
+        <p className="text-xs text-muted-foreground mt-3 pt-3 border-t">Draft — not yet published</p>
+      )}
     </div>
   );
 }

@@ -78,6 +78,9 @@ export function createStrapiRouter() {
   const contentTypes = [
     { path: "granthas", plural: "granthas" },
     { path: "chapters", plural: "chapters" },
+    { path: "sections", plural: "sections" },
+    { path: "teekas", plural: "teekas" },
+    { path: "manthras", plural: "manthras" },
     { path: "articles", plural: "articles" },
     { path: "authors", plural: "authors" },
     { path: "categories", plural: "categories" },
@@ -91,6 +94,21 @@ export function createStrapiRouter() {
     granthas: [
       "populate[BhashyakaraIntroduction][populate]=*",
       "populate[GranthaNameTranslations]=*",
+      "populate[sections][fields][0]=documentId&populate[sections][fields][1]=title&populate[sections][fields][2]=type&populate[sections][fields][3]=order",
+      "populate[teekas][fields][0]=documentId&populate[teekas][fields][1]=TeekaName&populate[teekas][fields][2]=TeekaAuthor",
+    ].join("&"),
+    sections: [
+      "populate[grantha][fields][0]=documentId&populate[grantha][fields][1]=GranthaName",
+      "populate[manthras][fields][0]=documentId&populate[manthras][fields][1]=title&populate[manthras][fields][2]=order",
+    ].join("&"),
+    teekas: [
+      "populate[grantha][fields][0]=documentId&populate[grantha][fields][1]=GranthaName",
+    ].join("&"),
+    manthras: [
+      "populate[section][fields][0]=documentId&populate[section][fields][1]=title",
+      "populate[ShlokaManthraEntry][populate]=*",
+      "populate[BhashyamForShlokaManthra][populate]=*",
+      "populate[Teekas][populate]=*",
     ].join("&"),
   };
 

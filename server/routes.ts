@@ -5,7 +5,7 @@ import { createStrapiRouter, strapiRequest } from "./strapi";
 import { storage } from "./storage";
 import type { User } from "@shared/schema";
 
-const STRAPI_INTERNAL_KEYS = new Set(["id", "__component", "createdAt", "updatedAt", "publishedAt", "documentId", "locale"]);
+const STRAPI_INTERNAL_KEYS = new Set(["id", "_id", "__component", "createdAt", "updatedAt", "publishedAt", "documentId", "locale"]);
 
 function cleanPayloadForStrapi(data: Record<string, any>): Record<string, any> {
   const cleaned: Record<string, any> = {};
@@ -46,11 +46,12 @@ const CONTENT_TYPE_MAP: Record<string, string> = {
   articles: "articles",
   authors: "authors",
   categories: "categories",
+  manthras: "manthras",
 };
 
 // These content types exist in the portal but have no REST API route in Strapi.
 // Drafts can be saved locally but cannot be published to Strapi directly.
-const STRAPI_UNROUTED_TYPES = new Set(["sections", "manthras", "prasthana-thraya-screens"]);
+const STRAPI_UNROUTED_TYPES = new Set(["sections", "prasthana-thraya-screens"]);
 
 async function publishGranthaWithHierarchy(
   draft: any
@@ -60,6 +61,7 @@ async function publishGranthaWithHierarchy(
   const {
     teekas: teekaDefinitions,
     hierarchy,
+    structureConfig: _structureConfig,
     otherTranslations: _otherLocal,
     granthaNameTranslations: granthaNameTranslationsLocal,
     ...granthaDataRaw
@@ -204,6 +206,31 @@ async function publishGranthaWithHierarchy(
   return strapiResult;
 }
 
+function buildManthraPayload(data: Record<string, any>): Record<string, any> {
+  const {
+    section,       // lowercase local field → maps to Strapi's capital-S Section relation
+    grantha,       // local tracking only — not a direct field in Strapi Manthra schema
+    Teekas: _teekas, // stored as complex objects; omit — set relations manually in Strapi
+    ...rest
+  } = data;
+
+  const payload = cleanPayloadForStrapi(rest);
+
+  // Map section documentId → Section relation (Strapi v5 accepts raw documentId string)
+  if (section && typeof section === "string") {
+    payload.Section = section;
+  }
+
+  // order must be a number (not string)
+  if (payload.order !== undefined && payload.order !== null) {
+    const n = Number(payload.order);
+    if (!Number.isNaN(n)) payload.order = n;
+    else delete payload.order;
+  }
+
+  return payload;
+}
+
 export async function registerRoutes(
   httpServer: Server,
   app: Express
@@ -327,7 +354,12 @@ export async function registerRoutes(
         // create chapter records separately in the correct order.
         strapiResult = await publishGranthaWithHierarchy(draft);
       } else {
-        const cleanedData = cleanPayloadForStrapi(draft.data as Record<string, any>);
+        const cleanedData = draft.contentType === "manthras"
+          ? buildManthraPayload(draft.data as Record<string, any>)
+          : cleanPayloadForStrapi(draft.data as Record<string, any>);
+
+        console.log(`[publish] ${draft.contentType} payload:`, JSON.stringify(cleanedData));
+
         if (draft.strapiDocumentId) {
           strapiResult = await strapiRequest(
             `/api/${strapiPlural}/${draft.strapiDocumentId}`,

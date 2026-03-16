@@ -39,6 +39,7 @@ import {
   type StrapiResponse,
   type TextAndTranslation,
   type BhashyaEntry,
+  type WordMeaning,
 } from "@shared/schema";
 import {
   Loader2,
@@ -58,9 +59,11 @@ import { STRAPI_POLL_INTERVAL } from "@/hooks/use-strapi-sync";
 const EMPTY_TT: TextAndTranslation = {
   SanskritTextEntry: "",
   EnglishTranslationText: "",
-  OtherLanguagesTranslation: "",
-  LanguageOfTranslation: "",
+  OtherTranslations: [],
 };
+
+let _uid = 0;
+function uid() { return String(++_uid); }
 
 export default function ManthrasPage() {
   const { toast } = useToast();
@@ -71,12 +74,13 @@ export default function ManthrasPage() {
   const [searchQuery, setSearchQuery] = useState("");
 
   const [formData, setFormData] = useState({
-    title: "",
+    ShlokaManthraNumber: "",
     order: "",
     section: "",
     ShlokaManthraEntry: { ...EMPTY_TT } as TextAndTranslation,
-    BhashyamForShlokaManthra: { ...EMPTY_TT } as TextAndTranslation,
+    BhashyamEntry: { ...EMPTY_TT } as TextAndTranslation,
     Teekas: [] as BhashyaEntry[],
+    wordMeanings: [] as (WordMeaning & { _id: string })[],
   });
 
   const { data, isLoading } = useQuery<StrapiResponse<StrapiManthra>>({
@@ -116,12 +120,13 @@ export default function ManthrasPage() {
 
   function resetForm() {
     setFormData({
-      title: "",
+      ShlokaManthraNumber: "",
       order: "",
       section: "",
       ShlokaManthraEntry: { ...EMPTY_TT },
-      BhashyamForShlokaManthra: { ...EMPTY_TT },
+      BhashyamEntry: { ...EMPTY_TT },
       Teekas: [],
+      wordMeanings: [],
     });
     setEditingDraftId(null);
   }
@@ -138,22 +143,24 @@ export default function ManthrasPage() {
       setEditingDraftId(item._draftId);
       const d = item._draftData;
       setFormData({
-        title: d.title || "",
+        ShlokaManthraNumber: d.ShlokaManthraNumber || "",
         order: d.order != null ? String(d.order) : "",
         section: d._section || "",
         ShlokaManthraEntry: d.ShlokaManthraEntry || { ...EMPTY_TT },
-        BhashyamForShlokaManthra: d.BhashyamForShlokaManthra || { ...EMPTY_TT },
+        BhashyamEntry: d.BhashyamEntry || { ...EMPTY_TT },
         Teekas: d.Teekas || [],
+        wordMeanings: (d.wordMeanings || []).map((w: WordMeaning) => ({ ...w, _id: uid() })),
       });
     } else {
       setEditingDraftId(null);
       setFormData({
-        title: item.title || "",
+        ShlokaManthraNumber: item.ShlokaManthraNumber || "",
         order: item.order != null ? String(item.order) : "",
-        section: item.section?.documentId || "",
+        section: item.Section?.documentId || item.section?.documentId || "",
         ShlokaManthraEntry: item.ShlokaManthraEntry || { ...EMPTY_TT },
-        BhashyamForShlokaManthra: item.BhashyamForShlokaManthra || { ...EMPTY_TT },
+        BhashyamEntry: item.BhashyamEntry || { ...EMPTY_TT },
         Teekas: item.Teekas || [],
+        wordMeanings: (item.wordMeanings || []).map((w: WordMeaning) => ({ ...w, _id: uid() })),
       });
     }
     setFormOpen(true);
@@ -164,16 +171,17 @@ export default function ManthrasPage() {
 
     const payload: any = {
       _section: formData.section,
+      ShlokaManthraNumber: formData.ShlokaManthraNumber,
       ShlokaManthraEntry: formData.ShlokaManthraEntry,
-      BhashyamForShlokaManthra: formData.BhashyamForShlokaManthra,
+      BhashyamEntry: formData.BhashyamEntry,
       Teekas: formData.Teekas,
+      wordMeanings: formData.wordMeanings.map(({ _id, ...rest }) => rest),
     };
-    if (formData.title.trim()) payload.title = formData.title.trim();
     if (formData.order) payload.order = parseInt(formData.order) || 0;
-    if (formData.section) payload.section = formData.section;
+    if (formData.section) payload.Section = formData.section;
 
     const displayTitle =
-      formData.title.trim() ||
+      formData.ShlokaManthraNumber.trim() ||
       blocksToText(formData.ShlokaManthraEntry.SanskritTextEntry)?.slice(0, 40) ||
       `Manthra ${formData.order || ""}`;
 
@@ -219,11 +227,11 @@ export default function ManthrasPage() {
 
   const searchLower = searchQuery.toLowerCase();
   const displayedDrafts = draftRows.filter((d) =>
-    (d.title || "").toLowerCase().includes(searchLower) ||
+    (d.ShlokaManthraNumber || "").toLowerCase().includes(searchLower) ||
     blocksToText(d.ShlokaManthraEntry?.SanskritTextEntry)?.toLowerCase().includes(searchLower)
   );
   const displayedPublished = strapiManthras.filter((m) => {
-    const text = (m.title || blocksToText(m.ShlokaManthraEntry?.SanskritTextEntry) || "").toLowerCase();
+    const text = (m.ShlokaManthraNumber || blocksToText(m.ShlokaManthraEntry?.SanskritTextEntry) || "").toLowerCase();
     return text.includes(searchLower);
   });
 
@@ -283,7 +291,7 @@ export default function ManthrasPage() {
             <thead>
               <tr className="border-b border-border bg-muted/40">
                 <th className="text-left px-4 py-3 font-medium text-muted-foreground">Status</th>
-                <th className="text-left px-4 py-3 font-medium text-muted-foreground">Title / Sanskrit</th>
+                <th className="text-left px-4 py-3 font-medium text-muted-foreground">Number / Sanskrit</th>
                 <th className="text-left px-4 py-3 font-medium text-muted-foreground">Section</th>
                 <th className="text-left px-4 py-3 font-medium text-muted-foreground">Order</th>
                 <th className="text-right px-4 py-3 font-medium text-muted-foreground">Actions</th>
@@ -298,7 +306,7 @@ export default function ManthrasPage() {
                   <tr key={`draft-${draft._draftId}`} className="border-b border-border hover:bg-muted/30 transition-colors" data-testid={`row-draft-${draft._draftId}`}>
                     <td className="px-4 py-3"><Badge className="bg-amber-100 text-amber-800 border-amber-200 text-xs">Draft</Badge></td>
                     <td className="px-4 py-3">
-                      <p className="font-medium">{draft.title || <span className="text-muted-foreground italic">Untitled</span>}</p>
+                      <p className="font-medium">{draft.ShlokaManthraNumber || <span className="text-muted-foreground italic">No number</span>}</p>
                       {sanskrit && <p className="text-xs text-muted-foreground font-serif line-clamp-1 mt-0.5">{sanskrit}</p>}
                     </td>
                     <td className="px-4 py-3 text-muted-foreground text-xs">{section?.title || "—"}</td>
@@ -322,7 +330,7 @@ export default function ManthrasPage() {
                   <tr key={m.documentId} className="border-b border-border hover:bg-muted/30 transition-colors" data-testid={`row-manthra-${m.documentId}`}>
                     <td className="px-4 py-3"><Badge className="bg-green-100 text-green-800 border-green-200 text-xs">Published</Badge></td>
                     <td className="px-4 py-3">
-                      <p className="font-medium">{m.title || <span className="text-muted-foreground italic">Untitled</span>}</p>
+                      <p className="font-medium">{m.ShlokaManthraNumber || <span className="text-muted-foreground italic">No number</span>}</p>
                       {sanskrit && <p className="text-xs text-muted-foreground font-serif line-clamp-1 mt-0.5">{sanskrit}</p>}
                     </td>
                     <td className="px-4 py-3 text-muted-foreground text-xs">{m.section?.title || "—"}</td>
@@ -353,17 +361,17 @@ export default function ManthrasPage() {
           <form onSubmit={handleSubmit} className="space-y-5">
             <div className="grid grid-cols-2 gap-4">
               <div>
-                <Label>Title <span className="text-muted-foreground font-normal">(optional)</span></Label>
+                <Label>Shloka / Manthra Number *</Label>
                 <Input
-                  value={formData.title}
-                  onChange={(e) => setFormData({ ...formData, title: e.target.value })}
-                  placeholder="e.g., Manthra 1, Shloka 2.3"
+                  value={formData.ShlokaManthraNumber}
+                  onChange={(e) => setFormData({ ...formData, ShlokaManthraNumber: e.target.value })}
+                  placeholder="e.g., 1, 2.3, I-1"
                   className="mt-1.5"
-                  data-testid="input-manthra-title"
+                  data-testid="input-manthra-number"
                 />
               </div>
               <div>
-                <Label>Order</Label>
+                <Label>Order <span className="text-muted-foreground font-normal">(display sequence)</span></Label>
                 <Input
                   type="number"
                   value={formData.order}
@@ -408,9 +416,9 @@ export default function ManthrasPage() {
               onChange={(val) => setFormData({ ...formData, ShlokaManthraEntry: val })}
             />
             <TextTranslationFields
-              label="Bhashyam for Shloka / Manthra"
-              value={formData.BhashyamForShlokaManthra}
-              onChange={(val) => setFormData({ ...formData, BhashyamForShlokaManthra: val })}
+              label="Bhashyam Entry"
+              value={formData.BhashyamEntry}
+              onChange={(val) => setFormData({ ...formData, BhashyamEntry: val })}
             />
             <BhashyaEntryFields
               title="Teekas (Commentaries)"
@@ -418,6 +426,77 @@ export default function ManthrasPage() {
               onChange={(val) => setFormData({ ...formData, Teekas: val })}
               testIdPrefix="teeka"
             />
+
+            {/* Word Meanings */}
+            <div className="space-y-3">
+              <div className="flex items-center justify-between">
+                <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">Word Meanings</p>
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="outline"
+                  onClick={() => setFormData({ ...formData, wordMeanings: [...formData.wordMeanings, { _id: uid(), word: "", meaning: "", position: formData.wordMeanings.length + 1 }] })}
+                  data-testid="button-add-word-meaning"
+                >
+                  <Plus className="w-3.5 h-3.5 mr-1" /> Add Word
+                </Button>
+              </div>
+              {formData.wordMeanings.length === 0 ? (
+                <p className="text-xs text-muted-foreground italic py-2">No word meanings added.</p>
+              ) : (
+                <div className="space-y-2">
+                  {formData.wordMeanings.map((wm, idx) => (
+                    <div key={wm._id} className="grid grid-cols-[1fr_2fr_auto_auto] gap-2 items-center">
+                      <Input
+                        value={wm.word || ""}
+                        onChange={(e) => {
+                          const updated = [...formData.wordMeanings];
+                          updated[idx] = { ...updated[idx], word: e.target.value };
+                          setFormData({ ...formData, wordMeanings: updated });
+                        }}
+                        placeholder="Word"
+                        className="text-sm"
+                        data-testid={`input-wm-word-${idx}`}
+                      />
+                      <Input
+                        value={wm.meaning || ""}
+                        onChange={(e) => {
+                          const updated = [...formData.wordMeanings];
+                          updated[idx] = { ...updated[idx], meaning: e.target.value };
+                          setFormData({ ...formData, wordMeanings: updated });
+                        }}
+                        placeholder="Meaning"
+                        className="text-sm"
+                        data-testid={`input-wm-meaning-${idx}`}
+                      />
+                      <Input
+                        type="number"
+                        value={wm.position ?? ""}
+                        onChange={(e) => {
+                          const updated = [...formData.wordMeanings];
+                          updated[idx] = { ...updated[idx], position: parseInt(e.target.value) || null };
+                          setFormData({ ...formData, wordMeanings: updated });
+                        }}
+                        placeholder="#"
+                        className="text-sm w-16"
+                        data-testid={`input-wm-position-${idx}`}
+                      />
+                      <Button
+                        type="button"
+                        size="sm"
+                        variant="ghost"
+                        className="text-destructive hover:text-destructive h-9 w-9 p-0"
+                        onClick={() => setFormData({ ...formData, wordMeanings: formData.wordMeanings.filter((_, i) => i !== idx) })}
+                        data-testid={`button-remove-wm-${idx}`}
+                      >
+                        <Trash2 className="w-3.5 h-3.5" />
+                      </Button>
+                    </div>
+                  ))}
+                  <p className="text-xs text-muted-foreground">Columns: Word | Meaning | Position #</p>
+                </div>
+              )}
+            </div>
 
             <div className="flex justify-between pt-2">
               <Button type="button" variant="outline" onClick={() => { setFormOpen(false); resetForm(); setEditingItem(null); }}>Cancel</Button>

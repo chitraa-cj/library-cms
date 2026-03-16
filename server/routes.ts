@@ -75,13 +75,8 @@ async function publishGranthaWithHierarchy(
   } = rawData;
   const granthaPayload = cleanPayloadForStrapi(granthaDataRaw);
 
-  // Set NumberOfTeekas from the wizard's teeka count (Strapi expects a number)
-  if (Array.isArray(teekaDefinitions) && teekaDefinitions.length > 0) {
-    granthaPayload.NumberOfTeekas = teekaDefinitions.length;
-  } else {
-    // Remove if present and invalid to avoid Strapi validation error
-    delete granthaPayload.NumberOfTeekas;
-  }
+  // Set NumberOfTeekas from the wizard's teeka count (Strapi expects a number, 0 is valid)
+  granthaPayload.NumberOfTeekas = Array.isArray(teekaDefinitions) ? teekaDefinitions.length : 0;
 
   // Convert local granthaNameTranslations → Strapi GranthaNameTranslations format
   if (Array.isArray(granthaNameTranslationsLocal) && granthaNameTranslationsLocal.length > 0) {

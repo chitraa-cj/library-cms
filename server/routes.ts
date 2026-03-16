@@ -168,37 +168,87 @@ async function publishGranthaWithHierarchy(
           continue;
         }
 
-        for (const manthra of (khanda.manthras ?? [])) {
-          try {
-            const mData: Record<string, any> = {
-              ChapterTitle: manthra.title,
-              order: manthra.order,
-              grantha: { connect: [{ documentId: granthaDocId }] },
-              ...(khandaDocId
-                ? { parent: { connect: [{ documentId: khandaDocId }] } }
-                : {}),
-            };
+        // Level 3 (Pada) — if padas array is present and non-empty, iterate through padas
+        if (Array.isArray(khanda.padas) && khanda.padas.length > 0) {
+          for (const pada of khanda.padas) {
+            let padaDocId: string | undefined;
+            try {
+              const pr = await strapiRequest("/api/chapters", {
+                method: "POST",
+                body: JSON.stringify({
+                  data: {
+                    ChapterTitle: pada.title,
+                    order: pada.order,
+                    grantha: { connect: [{ documentId: granthaDocId }] },
+                    ...(khandaDocId
+                      ? { parent: { connect: [{ documentId: khandaDocId }] } }
+                      : {}),
+                  },
+                }),
+              });
+              padaDocId = pr?.data?.documentId;
+            } catch (e: any) {
+              console.warn(`[publish] Pada "${pada.title}" failed:`, e.message);
+              continue;
+            }
 
-            if (manthra.ShlokaManthraEntry) {
-              mData.ShlokaManthraEntry = manthra.ShlokaManthraEntry;
+            for (const manthra of (pada.manthras ?? [])) {
+              try {
+                const mData: Record<string, any> = {
+                  ChapterTitle: manthra.title,
+                  order: manthra.order,
+                  grantha: { connect: [{ documentId: granthaDocId }] },
+                  ...(padaDocId ? { parent: { connect: [{ documentId: padaDocId }] } } : {}),
+                };
+                if (manthra.ShlokaManthraEntry) mData.ShlokaManthraEntry = manthra.ShlokaManthraEntry;
+                if (manthra.BhashyamForShlokaManthra) mData.BhashyamForShlokaManthra = manthra.BhashyamForShlokaManthra;
+                if (Array.isArray(manthra.Teekas) && manthra.Teekas.length > 0) {
+                  mData.Teekas = manthra.Teekas.map((t: any) => ({
+                    TeekaName: t.TeekaName || "",
+                    TeekaAuthor: t.TeekaAuthor || "",
+                    ...(t.TeekaEntry ? { TeekaEntry: t.TeekaEntry } : {}),
+                  }));
+                }
+                await strapiRequest("/api/chapters", { method: "POST", body: JSON.stringify({ data: mData }) });
+              } catch (e: any) {
+                console.warn(`[publish] Manthra "${manthra.title}" (L3) failed:`, e.message);
+              }
             }
-            if (manthra.BhashyamForShlokaManthra) {
-              mData.BhashyamForShlokaManthra = manthra.BhashyamForShlokaManthra;
-            }
-            if (Array.isArray(manthra.Teekas) && manthra.Teekas.length > 0) {
-              mData.Teekas = manthra.Teekas.map((t: any) => ({
-                TeekaName: t.TeekaName || "",
-                TeekaAuthor: t.TeekaAuthor || "",
-                ...(t.TeekaEntry ? { TeekaEntry: t.TeekaEntry } : {}),
-              }));
-            }
+          }
+        } else {
+          // No padas — manthras sit directly under the khanda
+          for (const manthra of (khanda.manthras ?? [])) {
+            try {
+              const mData: Record<string, any> = {
+                ChapterTitle: manthra.title,
+                order: manthra.order,
+                grantha: { connect: [{ documentId: granthaDocId }] },
+                ...(khandaDocId
+                  ? { parent: { connect: [{ documentId: khandaDocId }] } }
+                  : {}),
+              };
 
-            await strapiRequest("/api/chapters", {
-              method: "POST",
-              body: JSON.stringify({ data: mData }),
-            });
-          } catch (e: any) {
-            console.warn(`[publish] Manthra "${manthra.title}" failed:`, e.message);
+              if (manthra.ShlokaManthraEntry) {
+                mData.ShlokaManthraEntry = manthra.ShlokaManthraEntry;
+              }
+              if (manthra.BhashyamForShlokaManthra) {
+                mData.BhashyamForShlokaManthra = manthra.BhashyamForShlokaManthra;
+              }
+              if (Array.isArray(manthra.Teekas) && manthra.Teekas.length > 0) {
+                mData.Teekas = manthra.Teekas.map((t: any) => ({
+                  TeekaName: t.TeekaName || "",
+                  TeekaAuthor: t.TeekaAuthor || "",
+                  ...(t.TeekaEntry ? { TeekaEntry: t.TeekaEntry } : {}),
+                }));
+              }
+
+              await strapiRequest("/api/chapters", {
+                method: "POST",
+                body: JSON.stringify({ data: mData }),
+              });
+            } catch (e: any) {
+              console.warn(`[publish] Manthra "${manthra.title}" failed:`, e.message);
+            }
           }
         }
       }

@@ -111,11 +111,20 @@ interface ManthraNode {
   Teekas?: ManthraTeekaEntry[];
 }
 
-interface KhandaNode {
+interface PadaNode {
   id: string;
   title: string;
   order: number;
   manthras: ManthraNode[];
+  expanded: boolean;
+}
+
+interface KhandaNode {
+  id: string;
+  title: string;
+  order: number;
+  padas: PadaNode[];   // used when levelThreeEnabled
+  manthras: ManthraNode[];  // used when levelThreeEnabled is false
   expanded: boolean;
 }
 
@@ -379,6 +388,8 @@ export default function GranthasPage() {
     levelOneName: "Adhyaya",
     levelTwoEnabled: true,
     levelTwoName: "Khanda",
+    levelThreeEnabled: false,
+    levelThreeName: "Pada",
     leafName: "Manthra",
   });
 
@@ -389,6 +400,7 @@ export default function GranthasPage() {
   const [editingManthra, setEditingManthra] = useState<{
     adhyayaId: string;
     khandaId: string;
+    padaId?: string;  // only set when levelThreeEnabled
     manthraId: string;
   } | null>(null);
 
@@ -444,6 +456,8 @@ export default function GranthasPage() {
     levelOneName: "Adhyaya",
     levelTwoEnabled: true,
     levelTwoName: "Khanda",
+    levelThreeEnabled: false,
+    levelThreeName: "Pada",
     leafName: "Manthra",
   };
 
@@ -592,7 +606,7 @@ export default function GranthasPage() {
     const n = adhyayas.length + 1;
     const L1 = structureConfig.levelOneName;
     const defaultKhanda = !structureConfig.levelTwoEnabled
-      ? [{ id: uid(), title: "_default", order: 1, manthras: [], expanded: true }]
+      ? [{ id: uid(), title: "_default", order: 1, padas: [], manthras: [], expanded: true }]
       : [];
     setAdhyayas([
       ...adhyayas,
@@ -622,7 +636,7 @@ export default function GranthasPage() {
           ...a,
           khandas: [
             ...a.khandas,
-            { id: uid(), title: `${ordinal(n)} ${L2}`, order: n, manthras: [], expanded: true },
+            { id: uid(), title: `${ordinal(n)} ${L2}`, order: n, padas: [], manthras: [], expanded: true },
           ],
         };
       })
@@ -661,7 +675,85 @@ export default function GranthasPage() {
     );
   }
 
-  function addManthra(adhyayaId: string, khandaId: string) {
+  // ── Level 3 (Pada) functions ──
+  function addPada(adhyayaId: string, khandaId: string) {
+    const L3 = structureConfig.levelThreeName;
+    setAdhyayas(
+      adhyayas.map((a) => {
+        if (a.id !== adhyayaId) return a;
+        return {
+          ...a,
+          khandas: a.khandas.map((k) => {
+            if (k.id !== khandaId) return k;
+            const n = (k.padas ?? []).length + 1;
+            return {
+              ...k,
+              padas: [
+                ...(k.padas ?? []),
+                { id: uid(), title: `${ordinal(n)} ${L3}`, order: n, manthras: [], expanded: true },
+              ],
+            };
+          }),
+        };
+      })
+    );
+  }
+
+  function updatePada(adhyayaId: string, khandaId: string, padaId: string, title: string) {
+    setAdhyayas(
+      adhyayas.map((a) => {
+        if (a.id !== adhyayaId) return a;
+        return {
+          ...a,
+          khandas: a.khandas.map((k) => {
+            if (k.id !== khandaId) return k;
+            return {
+              ...k,
+              padas: (k.padas ?? []).map((p) => (p.id === padaId ? { ...p, title } : p)),
+            };
+          }),
+        };
+      })
+    );
+  }
+
+  function removePada(adhyayaId: string, khandaId: string, padaId: string) {
+    setAdhyayas(
+      adhyayas.map((a) => {
+        if (a.id !== adhyayaId) return a;
+        return {
+          ...a,
+          khandas: a.khandas.map((k) => {
+            if (k.id !== khandaId) return k;
+            return { ...k, padas: (k.padas ?? []).filter((p) => p.id !== padaId) };
+          }),
+        };
+      })
+    );
+  }
+
+  function togglePada(adhyayaId: string, khandaId: string, padaId: string) {
+    setAdhyayas(
+      adhyayas.map((a) => {
+        if (a.id !== adhyayaId) return a;
+        return {
+          ...a,
+          khandas: a.khandas.map((k) => {
+            if (k.id !== khandaId) return k;
+            return {
+              ...k,
+              padas: (k.padas ?? []).map((p) =>
+                p.id === padaId ? { ...p, expanded: !p.expanded } : p
+              ),
+            };
+          }),
+        };
+      })
+    );
+  }
+
+  // ── Manthra functions (handle L2 and L3 paths) ──
+  function addManthra(adhyayaId: string, khandaId: string, padaId?: string) {
     const aIdx = adhyayas.findIndex((x) => x.id === adhyayaId) + 1;
     const leaf = structureConfig.leafName;
     setAdhyayas(
@@ -674,6 +766,25 @@ export default function GranthasPage() {
           ...a,
           khandas: a.khandas.map((k) => {
             if (k.id !== khandaId) return k;
+            if (structureConfig.levelThreeEnabled && padaId) {
+              // Add manthra inside a Pada
+              return {
+                ...k,
+                padas: (k.padas ?? []).map((p) => {
+                  if (p.id !== padaId) return p;
+                  const pIdx = (k.padas ?? []).findIndex((x) => x.id === padaId) + 1;
+                  const mIdx = p.manthras.length + 1;
+                  const newManthra: ManthraNode = {
+                    id: uid(),
+                    title: `${leaf} ${aIdx}.${kIdx}.${pIdx}.${mIdx}`,
+                    order: mIdx,
+                    Teekas: teekas.map((t) => ({ TeekaName: t.TeekaName, TeekaAuthor: t.TeekaAuthor })),
+                  };
+                  return { ...p, manthras: [...p.manthras, newManthra] };
+                }),
+              };
+            }
+            // Add manthra directly inside Khanda (L3 disabled)
             const mIdx = k.manthras.length + 1;
             const newManthra: ManthraNode = {
               id: uid(),
@@ -681,11 +792,7 @@ export default function GranthasPage() {
                 ? `${leaf} ${aIdx}.${kIdx}.${mIdx}`
                 : `${leaf} ${aIdx}.${mIdx}`,
               order: mIdx,
-              // Pre-populate Teekas from Step 1 definitions
-              Teekas: teekas.map((t) => ({
-                TeekaName: t.TeekaName,
-                TeekaAuthor: t.TeekaAuthor,
-              })),
+              Teekas: teekas.map((t) => ({ TeekaName: t.TeekaName, TeekaAuthor: t.TeekaAuthor })),
             };
             return { ...k, manthras: [...k.manthras, newManthra] };
           }),
@@ -694,7 +801,7 @@ export default function GranthasPage() {
     );
   }
 
-  function removeManthra(adhyayaId: string, khandaId: string, manthraId: string) {
+  function removeManthra(adhyayaId: string, khandaId: string, manthraId: string, padaId?: string) {
     setAdhyayas(
       adhyayas.map((a) => {
         if (a.id !== adhyayaId) return a;
@@ -702,6 +809,16 @@ export default function GranthasPage() {
           ...a,
           khandas: a.khandas.map((k) => {
             if (k.id !== khandaId) return k;
+            if (padaId) {
+              return {
+                ...k,
+                padas: (k.padas ?? []).map((p) =>
+                  p.id === padaId
+                    ? { ...p, manthras: p.manthras.filter((m) => m.id !== manthraId) }
+                    : p
+                ),
+              };
+            }
             return { ...k, manthras: k.manthras.filter((m) => m.id !== manthraId) };
           }),
         };
@@ -713,7 +830,8 @@ export default function GranthasPage() {
     adhyayaId: string,
     khandaId: string,
     manthraId: string,
-    updates: Partial<ManthraNode>
+    updates: Partial<ManthraNode>,
+    padaId?: string
   ) {
     setAdhyayas(
       adhyayas.map((a) => {
@@ -722,6 +840,20 @@ export default function GranthasPage() {
           ...a,
           khandas: a.khandas.map((k) => {
             if (k.id !== khandaId) return k;
+            if (padaId) {
+              return {
+                ...k,
+                padas: (k.padas ?? []).map((p) => {
+                  if (p.id !== padaId) return p;
+                  return {
+                    ...p,
+                    manthras: p.manthras.map((m) =>
+                      m.id === manthraId ? { ...m, ...updates } : m
+                    ),
+                  };
+                }),
+              };
+            }
             return {
               ...k,
               manthras: k.manthras.map((m) =>
@@ -739,6 +871,10 @@ export default function GranthasPage() {
     if (!editingManthra) return null;
     const a = adhyayas.find((x) => x.id === editingManthra.adhyayaId);
     const k = a?.khandas.find((x) => x.id === editingManthra.khandaId);
+    if (editingManthra.padaId) {
+      const p = k?.padas?.find((x) => x.id === editingManthra.padaId);
+      return p?.manthras.find((x) => x.id === editingManthra.manthraId) ?? null;
+    }
     return k?.manthras.find((x) => x.id === editingManthra.manthraId) ?? null;
   })();
 
@@ -1592,6 +1728,56 @@ export default function GranthasPage() {
             )}
           </div>
 
+          {/* Level 3 — only shown when L2 is enabled */}
+          {structureConfig.levelTwoEnabled && (
+            <div className="border rounded-xl p-5 space-y-4">
+              <div className="flex items-start justify-between gap-4">
+                <div>
+                  <h3 className="font-semibold">Sub-sub-sections</h3>
+                  <p className="text-xs text-muted-foreground mt-0.5">
+                    Does each {structureConfig.levelTwoName} have even smaller divisions?
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setStructureConfig({ ...structureConfig, levelThreeEnabled: !structureConfig.levelThreeEnabled })}
+                  className={`relative inline-flex h-6 w-11 flex-shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 focus:outline-none ${
+                    structureConfig.levelThreeEnabled ? "bg-primary" : "bg-muted"
+                  }`}
+                  data-testid="toggle-level3"
+                >
+                  <span
+                    className={`pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow ring-0 transition duration-200 ${
+                      structureConfig.levelThreeEnabled ? "translate-x-5" : "translate-x-0"
+                    }`}
+                  />
+                </button>
+              </div>
+              {structureConfig.levelThreeEnabled && (
+                <div>
+                  <p className="text-xs text-muted-foreground mb-2">What are these sub-sub-sections called?</p>
+                  <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
+                    {["Pada", "Varga", "Anuvaka", "Khanda", "Section", "Part", "Sukta"].map((name) => (
+                      <button
+                        key={name}
+                        type="button"
+                        onClick={() => setStructureConfig({ ...structureConfig, levelThreeName: name })}
+                        className={`px-3 py-2 rounded-lg border text-sm font-medium transition-colors text-left ${
+                          structureConfig.levelThreeName === name
+                            ? "border-primary bg-primary/10 text-primary"
+                            : "border-border hover:border-primary/50 hover:bg-muted/50"
+                        }`}
+                        data-testid={`select-level3-${name}`}
+                      >
+                        {name}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+
           {/* Leaf level */}
           <div className="border rounded-xl p-5 space-y-4">
             <div>
@@ -1635,6 +1821,12 @@ export default function GranthasPage() {
                 <span className="font-medium text-primary">{structureConfig.levelTwoName}</span>
               </>
             )}
+            {structureConfig.levelTwoEnabled && structureConfig.levelThreeEnabled && (
+              <>
+                <span className="mx-1.5 text-muted-foreground">→</span>
+                <span className="font-medium text-primary">{structureConfig.levelThreeName}</span>
+              </>
+            )}
             <span className="mx-1.5 text-muted-foreground">→</span>
             <span className="font-medium text-primary">{structureConfig.leafName}</span>
           </div>
@@ -1660,6 +1852,7 @@ export default function GranthasPage() {
             <p className="text-sm text-muted-foreground mt-1">
               {structureConfig.levelOneEnabled && `${structureConfig.levelOneName} → `}
               {structureConfig.levelTwoEnabled && `${structureConfig.levelTwoName} → `}
+              {structureConfig.levelTwoEnabled && structureConfig.levelThreeEnabled && `${structureConfig.levelThreeName} → `}
               {structureConfig.leafName}
               {" — click any "}
               {structureConfig.leafName}
@@ -1676,7 +1869,9 @@ export default function GranthasPage() {
               const hideL1Row = !structureConfig.levelOneEnabled;
               const flatLeafCount = !structureConfig.levelTwoEnabled
                 ? (adhyaya.khandas[0]?.manthras.length ?? 0)
-                : adhyaya.khandas.reduce((s, k) => s + k.manthras.length, 0);
+                : structureConfig.levelThreeEnabled
+                  ? adhyaya.khandas.reduce((s, k) => s + (k.padas ?? []).reduce((ps, p) => ps + p.manthras.length, 0), 0)
+                  : adhyaya.khandas.reduce((s, k) => s + k.manthras.length, 0);
               return (
               <div key={adhyaya.id} className={hideL1Row ? "space-y-3" : "border rounded-xl overflow-hidden"} data-testid={`adhyaya-${aIdx}`}>
                 {/* Level-1 row — hidden when L1 is disabled */}
@@ -1767,7 +1962,9 @@ export default function GranthasPage() {
                 {/* Hierarchical mode: Level 2 sections */}
                 {structureConfig.levelTwoEnabled && adhyaya.expanded && (
                   <div className="p-4 space-y-2.5">
-                    {adhyaya.khandas.map((khanda, kIdx) => (
+                    {adhyaya.khandas.map((khanda, kIdx) => {
+                      const L3 = structureConfig.levelThreeName;
+                      return (
                       <div key={khanda.id} className="border rounded-lg overflow-hidden" data-testid={`khanda-${aIdx}-${kIdx}`}>
                         {/* Level-2 row */}
                         <div
@@ -1784,7 +1981,10 @@ export default function GranthasPage() {
                           />
                           <div className="flex items-center gap-1 ml-auto shrink-0">
                             <span className="text-xs text-muted-foreground">
-                              {khanda.manthras.length} {leaf.toLowerCase()}{khanda.manthras.length !== 1 ? "s" : ""}
+                              {structureConfig.levelThreeEnabled
+                                ? `${(khanda.padas ?? []).length} ${L3.toLowerCase()}${(khanda.padas ?? []).length !== 1 ? "s" : ""}`
+                                : `${khanda.manthras.length} ${leaf.toLowerCase()}${khanda.manthras.length !== 1 ? "s" : ""}`
+                              }
                             </span>
                             <Button
                               size="icon"
@@ -1801,8 +2001,97 @@ export default function GranthasPage() {
                           </div>
                         </div>
 
-                        {/* Manthras */}
-                        {khanda.expanded && (
+                        {/* L3 enabled: show Padas inside Khanda */}
+                        {structureConfig.levelThreeEnabled && khanda.expanded && (
+                          <div className="px-4 pt-2 pb-3 border-t bg-muted/10 space-y-2">
+                            {(khanda.padas ?? []).map((pada, pIdx) => (
+                              <div key={pada.id} className="border rounded-md overflow-hidden" data-testid={`pada-${aIdx}-${kIdx}-${pIdx}`}>
+                                <div
+                                  className="flex items-center gap-2 px-3 py-2 cursor-pointer select-none hover:bg-muted/30"
+                                  onClick={() => togglePada(adhyaya.id, khanda.id, pada.id)}
+                                >
+                                  <BookOpen className="w-3.5 h-3.5 text-muted-foreground shrink-0" />
+                                  <Input
+                                    value={pada.title}
+                                    onChange={(e) => { e.stopPropagation(); updatePada(adhyaya.id, khanda.id, pada.id, e.target.value); }}
+                                    onClick={(e) => e.stopPropagation()}
+                                    className="h-6 text-sm border-0 bg-transparent shadow-none focus-visible:ring-1 focus-visible:ring-primary/50 px-1"
+                                    data-testid={`input-pada-title-${aIdx}-${kIdx}-${pIdx}`}
+                                  />
+                                  <div className="flex items-center gap-1 ml-auto shrink-0">
+                                    <span className="text-xs text-muted-foreground">
+                                      {pada.manthras.length} {leaf.toLowerCase()}{pada.manthras.length !== 1 ? "s" : ""}
+                                    </span>
+                                    <Button
+                                      size="icon" variant="ghost"
+                                      className="h-5 w-5 text-destructive hover:text-destructive"
+                                      onClick={(e) => { e.stopPropagation(); removePada(adhyaya.id, khanda.id, pada.id); }}
+                                      data-testid={`button-remove-pada-${aIdx}-${kIdx}-${pIdx}`}
+                                    >
+                                      <Trash2 className="w-3 h-3" />
+                                    </Button>
+                                    {pada.expanded
+                                      ? <ChevronDown className="w-3 h-3 text-muted-foreground" />
+                                      : <ChevronRight className="w-3 h-3 text-muted-foreground" />}
+                                  </div>
+                                </div>
+                                {pada.expanded && (
+                                  <div className="px-4 pt-1.5 pb-2.5 border-t bg-muted/5">
+                                    <div className="space-y-1">
+                                      {pada.manthras.map((manthra, mIdx) => {
+                                        const hasContent = hasManthraContent(manthra);
+                                        return (
+                                          <div key={manthra.id} className="flex items-center gap-2 group py-0.5">
+                                            <Hash className="w-3.5 h-3.5 text-muted-foreground shrink-0" />
+                                            <span className="text-sm flex-1">{manthra.title}</span>
+                                            {hasContent && <FileText className="w-3.5 h-3.5 text-primary" />}
+                                            <Button
+                                              size="icon" variant="ghost"
+                                              className="h-6 w-6 opacity-0 group-hover:opacity-100 transition-opacity text-muted-foreground hover:text-foreground"
+                                              onClick={() => setEditingManthra({ adhyayaId: adhyaya.id, khandaId: khanda.id, padaId: pada.id, manthraId: manthra.id })}
+                                              data-testid={`button-edit-manthra-${aIdx}-${kIdx}-${pIdx}-${mIdx}`}
+                                            >
+                                              <Pencil className="w-3 h-3" />
+                                            </Button>
+                                            <Button
+                                              size="icon" variant="ghost"
+                                              className="h-6 w-6 opacity-0 group-hover:opacity-100 transition-opacity text-destructive hover:text-destructive"
+                                              onClick={() => removeManthra(adhyaya.id, khanda.id, manthra.id, pada.id)}
+                                              data-testid={`button-remove-manthra-${aIdx}-${kIdx}-${pIdx}-${mIdx}`}
+                                            >
+                                              <X className="w-3 h-3" />
+                                            </Button>
+                                          </div>
+                                        );
+                                      })}
+                                      <Button
+                                        size="sm" variant="ghost"
+                                        className="w-full justify-start text-muted-foreground hover:text-foreground text-xs h-7 mt-1 pl-0"
+                                        onClick={() => addManthra(adhyaya.id, khanda.id, pada.id)}
+                                        data-testid={`button-add-manthra-${aIdx}-${kIdx}-${pIdx}`}
+                                      >
+                                        <Plus className="w-3.5 h-3.5 mr-1" />
+                                        Add {leaf}
+                                      </Button>
+                                    </div>
+                                  </div>
+                                )}
+                              </div>
+                            ))}
+                            <Button
+                              size="sm" variant="outline"
+                              className="w-full border-dashed text-muted-foreground hover:text-foreground mt-1"
+                              onClick={() => addPada(adhyaya.id, khanda.id)}
+                              data-testid={`button-add-pada-${aIdx}-${kIdx}`}
+                            >
+                              <Plus className="w-3.5 h-3.5 mr-1.5" />
+                              Add New {L3}
+                            </Button>
+                          </div>
+                        )}
+
+                        {/* L3 disabled: Manthras directly inside Khanda */}
+                        {!structureConfig.levelThreeEnabled && khanda.expanded && (
                           <div className="px-4 pt-2 pb-3 border-t bg-muted/10">
                             <p className="text-xs font-medium text-muted-foreground mb-2">
                               Manage {leaf}s
@@ -1811,23 +2100,16 @@ export default function GranthasPage() {
                               {khanda.manthras.map((manthra, mIdx) => {
                                 const hasContent = hasManthraContent(manthra);
                                 return (
-                                  <div
-                                    key={manthra.id}
-                                    className="flex items-center gap-2 group py-0.5"
-                                  >
+                                  <div key={manthra.id} className="flex items-center gap-2 group py-0.5">
                                     <Hash className="w-3.5 h-3.5 text-muted-foreground shrink-0" />
                                     <span className="text-sm flex-1">{manthra.title}</span>
                                     {hasContent && (
-                                      <span
-                                        className="text-xs text-primary font-medium"
-                                        title="Has content"
-                                      >
+                                      <span className="text-xs text-primary font-medium" title="Has content">
                                         <FileText className="w-3.5 h-3.5" />
                                       </span>
                                     )}
                                     <Button
-                                      size="icon"
-                                      variant="ghost"
+                                      size="icon" variant="ghost"
                                       className="h-6 w-6 opacity-0 group-hover:opacity-100 transition-opacity text-muted-foreground hover:text-foreground"
                                       onClick={() => setEditingManthra({ adhyayaId: adhyaya.id, khandaId: khanda.id, manthraId: manthra.id })}
                                       data-testid={`button-edit-manthra-${aIdx}-${kIdx}-${mIdx}`}
@@ -1836,8 +2118,7 @@ export default function GranthasPage() {
                                       <Pencil className="w-3 h-3" />
                                     </Button>
                                     <Button
-                                      size="icon"
-                                      variant="ghost"
+                                      size="icon" variant="ghost"
                                       className="h-6 w-6 opacity-0 group-hover:opacity-100 transition-opacity text-destructive hover:text-destructive"
                                       onClick={() => removeManthra(adhyaya.id, khanda.id, manthra.id)}
                                       data-testid={`button-remove-manthra-${aIdx}-${kIdx}-${mIdx}`}
@@ -1848,8 +2129,7 @@ export default function GranthasPage() {
                                 );
                               })}
                               <Button
-                                size="sm"
-                                variant="ghost"
+                                size="sm" variant="ghost"
                                 className="w-full justify-start text-muted-foreground hover:text-foreground text-xs h-7 mt-1 pl-0"
                                 onClick={() => addManthra(adhyaya.id, khanda.id)}
                                 data-testid={`button-add-manthra-${aIdx}-${kIdx}`}
@@ -1861,7 +2141,8 @@ export default function GranthasPage() {
                           </div>
                         )}
                       </div>
-                    ))}
+                      );
+                    })}
 
                     <Button
                       size="sm"
@@ -1940,7 +2221,8 @@ export default function GranthasPage() {
                             ...currentManthra.ShlokaManthraEntry,
                             SanskritTextEntry: e.target.value,
                           },
-                        }
+                        },
+                        editingManthra.padaId
                       )
                     }
                     placeholder="Sanskrit text in Devanagari..."
@@ -1963,7 +2245,8 @@ export default function GranthasPage() {
                             ...currentManthra.ShlokaManthraEntry,
                             EnglishTranslationText: e.target.value,
                           },
-                        }
+                        },
+                        editingManthra.padaId
                       )
                     }
                     placeholder="English translation..."
@@ -1995,7 +2278,8 @@ export default function GranthasPage() {
                             ...currentManthra.BhashyamForShlokaManthra,
                             SanskritTextEntry: e.target.value,
                           },
-                        }
+                        },
+                        editingManthra.padaId
                       )
                     }
                     placeholder="Sanskrit bhashyam commentary..."
@@ -2018,7 +2302,8 @@ export default function GranthasPage() {
                             ...currentManthra.BhashyamForShlokaManthra,
                             EnglishTranslationText: e.target.value,
                           },
-                        }
+                        },
+                        editingManthra.padaId
                       )
                     }
                     placeholder="English translation of bhashyam..."
@@ -2067,7 +2352,8 @@ export default function GranthasPage() {
                               editingManthra.adhyayaId,
                               editingManthra.khandaId,
                               editingManthra.manthraId,
-                              { Teekas: updatedTeekas }
+                              { Teekas: updatedTeekas },
+                              editingManthra.padaId
                             );
                           }}
                           placeholder={`${teeka.TeekaName || "Teeka"} Sanskrit commentary...`}
@@ -2096,7 +2382,8 @@ export default function GranthasPage() {
                               editingManthra.adhyayaId,
                               editingManthra.khandaId,
                               editingManthra.manthraId,
-                              { Teekas: updatedTeekas }
+                              { Teekas: updatedTeekas },
+                              editingManthra.padaId
                             );
                           }}
                           placeholder="English translation..."

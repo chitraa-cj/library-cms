@@ -6,16 +6,17 @@ import { useToast } from "@/hooks/use-toast";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Textarea } from "@/components/ui/textarea";
 import { Badge } from "@/components/ui/badge";
 import { Loader2, Save, RefreshCw, Info } from "lucide-react";
-import { blocksToText } from "@/lib/strapi-blocks";
+import RichTextEditor from "@/components/rich-text-editor";
+import type { StrapiBlock } from "@shared/schema";
 
 const SYSTEM_KEYS = new Set([
   "id", "documentId", "createdAt", "updatedAt", "publishedAt", "locale",
 ]);
 
 type FieldValue = string | number | boolean | null | undefined | object;
+type EditValue = string | StrapiBlock[];
 
 function isRichText(v: unknown): boolean {
   return (
@@ -51,7 +52,7 @@ function parseFields(data: Record<string, FieldValue>): EditableField[] {
         return { key, rawValue, displayValue: rawValue, kind: "text" as const };
       }
       if (isRichText(rawValue)) {
-        return { key, rawValue, displayValue: blocksToText(rawValue as any) || "", kind: "richtext" as const };
+        return { key, rawValue, displayValue: "", kind: "richtext" as const };
       }
       if (isNestedObject(rawValue)) {
         return { key, rawValue, displayValue: JSON.stringify(rawValue, null, 2), kind: "unknown" as const };
@@ -83,7 +84,7 @@ export default function SingleTypeEditor({
   description?: string;
 }) {
   const { toast } = useToast();
-  const [edits, setEdits] = useState<Record<string, string>>({});
+  const [edits, setEdits] = useState<Record<string, EditValue>>({});
   const [dirty, setDirty] = useState(false);
 
   const { data, isLoading, error, refetch } = useQuery<{ data: Record<string, FieldValue> | null }>({
@@ -93,14 +94,15 @@ export default function SingleTypeEditor({
   });
 
   const record = data?.data;
-
   const fields = record ? parseFields(record) : [];
 
   useEffect(() => {
     if (record && !dirty) {
-      const initial: Record<string, string> = {};
+      const initial: Record<string, EditValue> = {};
       parseFields(record).forEach((f) => {
-        if (f.kind === "text" || f.kind === "richtext" || f.kind === "number") {
+        if (f.kind === "richtext") {
+          initial[f.key] = (f.rawValue as StrapiBlock[]) ?? [];
+        } else if (f.kind === "text" || f.kind === "number") {
           initial[f.key] = f.displayValue;
         }
       });
@@ -109,7 +111,7 @@ export default function SingleTypeEditor({
   }, [data]);
 
   const saveMutation = useMutation({
-    mutationFn: async (payload: Record<string, string | number>) => {
+    mutationFn: async (payload: Record<string, EditValue | number>) => {
       const res = await apiRequest("PUT", `/api/strapi/${apiPath}`, payload);
       return res.json();
     },
@@ -124,11 +126,11 @@ export default function SingleTypeEditor({
   });
 
   function handleSave() {
-    const payload: Record<string, string | number> = {};
+    const payload: Record<string, EditValue | number> = {};
     Object.entries(edits).forEach(([key, val]) => {
       const field = fields.find((f) => f.key === key);
       if (field?.kind === "number") {
-        payload[key] = parseFloat(val) || 0;
+        payload[key] = parseFloat(val as string) || 0;
       } else {
         payload[key] = val;
       }
@@ -219,18 +221,16 @@ export default function SingleTypeEditor({
               return (
                 <div key={field.key}>
                   <Label className="text-sm font-medium">{friendlyLabel(field.key)}</Label>
-                  <p className="text-xs text-muted-foreground mb-1.5">
-                    Rich text — plain text shown here. Edit full formatting in Strapi admin.
-                  </p>
-                  <Textarea
-                    value={edits[field.key] ?? field.displayValue}
-                    onChange={(e) => {
-                      setEdits({ ...edits, [field.key]: e.target.value });
+                  <RichTextEditor
+                    value={edits[field.key] as StrapiBlock[] | undefined}
+                    onChange={(v) => {
+                      setEdits({ ...edits, [field.key]: v });
                       setDirty(true);
                     }}
-                    rows={4}
-                    className="mt-1 font-serif text-sm"
-                    data-testid={`textarea-${field.key}`}
+                    placeholder={`Enter ${friendlyLabel(field.key).toLowerCase()}...`}
+                    className="mt-1.5"
+                    minHeight={120}
+                    data-testid={`richtext-${field.key}`}
                   />
                 </div>
               );
@@ -241,7 +241,7 @@ export default function SingleTypeEditor({
                 <Label className="text-sm font-medium">{friendlyLabel(field.key)}</Label>
                 <Input
                   type={field.kind === "number" ? "number" : "text"}
-                  value={edits[field.key] ?? field.displayValue}
+                  value={(edits[field.key] as string) ?? field.displayValue}
                   onChange={(e) => {
                     setEdits({ ...edits, [field.key]: e.target.value });
                     setDirty(true);
@@ -256,8 +256,8 @@ export default function SingleTypeEditor({
           <div className="rounded-lg border border-border bg-muted/20 p-3 text-xs text-muted-foreground flex items-start gap-2">
             <Info className="w-3.5 h-3.5 mt-0.5 shrink-0" />
             <span>
-              Simple text fields can be edited here and saved directly to Strapi.
-              Media uploads, relations, and rich-text formatting should be managed in the Strapi admin panel.
+              Text and rich text fields can be edited here and saved directly to Strapi.
+              Media uploads and relations should be managed in the Strapi admin panel.
             </span>
           </div>
         </div>

@@ -926,9 +926,10 @@ export default function ChaptersPage() {
             />
 
             <BhashyaEntryFields
-              label="Teekas (Commentaries)"
-              value={formData.Teekas}
+              title="Teekas (Commentaries)"
+              entries={formData.Teekas}
               onChange={(val) => setFormData({ ...formData, Teekas: val })}
+              testIdPrefix="teeka"
             />
 
             <div className="flex justify-between items-center pt-2">

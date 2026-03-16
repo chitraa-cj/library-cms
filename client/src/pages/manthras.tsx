@@ -413,9 +413,10 @@ export default function ManthrasPage() {
               onChange={(val) => setFormData({ ...formData, BhashyamForShlokaManthra: val })}
             />
             <BhashyaEntryFields
-              label="Teekas (Commentaries)"
-              value={formData.Teekas}
+              title="Teekas (Commentaries)"
+              entries={formData.Teekas}
               onChange={(val) => setFormData({ ...formData, Teekas: val })}
+              testIdPrefix="teeka"
             />
 
             <div className="flex justify-between pt-2">

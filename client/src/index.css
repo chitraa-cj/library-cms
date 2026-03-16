@@ -286,3 +286,73 @@
     inset: -1px;
   }
 }
+
+/* ── Rich Text Editor (TipTap / ProseMirror) ── */
+.rich-text-editor-content .ProseMirror {
+  outline: none;
+  min-height: inherit;
+  line-height: 1.6;
+}
+
+.rich-text-editor-content .ProseMirror p {
+  margin: 0 0 0.4em;
+}
+.rich-text-editor-content .ProseMirror p:last-child {
+  margin-bottom: 0;
+}
+
+.rich-text-editor-content .ProseMirror strong {
+  font-weight: 700;
+}
+
+.rich-text-editor-content .ProseMirror em {
+  font-style: italic;
+}
+
+.rich-text-editor-content .ProseMirror u {
+  text-decoration: underline;
+}
+
+.rich-text-editor-content .ProseMirror s {
+  text-decoration: line-through;
+}
+
+.rich-text-editor-content .ProseMirror h1 {
+  font-size: 1.4em;
+  font-weight: 700;
+  margin: 0.5em 0 0.3em;
+}
+.rich-text-editor-content .ProseMirror h2 {
+  font-size: 1.2em;
+  font-weight: 600;
+  margin: 0.5em 0 0.3em;
+}
+.rich-text-editor-content .ProseMirror h3 {
+  font-size: 1.05em;
+  font-weight: 600;
+  margin: 0.4em 0 0.25em;
+}
+
+.rich-text-editor-content .ProseMirror ul,
+.rich-text-editor-content .ProseMirror ol {
+  padding-left: 1.4em;
+  margin: 0.3em 0;
+}
+.rich-text-editor-content .ProseMirror li {
+  margin-bottom: 0.15em;
+}
+
+.rich-text-editor-content .ProseMirror blockquote {
+  border-left: 3px solid hsl(var(--border));
+  padding-left: 0.75em;
+  color: hsl(var(--muted-foreground));
+  margin: 0.4em 0;
+}
+
+.rich-text-editor-content .ProseMirror code {
+  background: hsl(var(--muted));
+  border-radius: 3px;
+  font-size: 0.85em;
+  padding: 0.1em 0.3em;
+  font-family: monospace;
+}

@@ -7,7 +7,6 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Textarea } from "@/components/ui/textarea";
 import {
   Select,
   SelectContent,
@@ -15,6 +14,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import RichTextEditor from "@/components/rich-text-editor";
 import {
   Dialog,
   DialogContent,
@@ -39,8 +39,9 @@ import {
   translationLanguages,
   type StrapiGrantha,
   type StrapiResponse,
+  type StrapiBlock,
+  type TextAndTranslation,
 } from "@shared/schema";
-import { blocksToText, textToBlocks } from "@/lib/strapi-blocks";
 import StrapiSyncBar from "@/components/strapi-sync-bar";
 import { STRAPI_POLL_INTERVAL } from "@/hooks/use-strapi-sync";
 import {
@@ -78,7 +79,7 @@ interface TeekaDefinition {
 interface OtherTranslationEntry {
   id: string;
   language: string;
-  text: string;
+  text: StrapiBlock[];
 }
 
 interface GranthaNameTranslationEntry {
@@ -90,24 +91,15 @@ interface GranthaNameTranslationEntry {
 interface ManthraTeekaEntry {
   TeekaName: string;
   TeekaAuthor: string;
-  TeekaEntry?: {
-    SanskritTextEntry?: string;
-    EnglishTranslationText?: string;
-  };
+  TeekaEntry?: TextAndTranslation;
 }
 
 interface ManthraNode {
   id: string;
   title: string;
   order: number;
-  ShlokaManthraEntry?: {
-    SanskritTextEntry?: string;
-    EnglishTranslationText?: string;
-  };
-  BhashyamForShlokaManthra?: {
-    SanskritTextEntry?: string;
-    EnglishTranslationText?: string;
-  };
+  ShlokaManthraEntry?: TextAndTranslation;
+  BhashyamForShlokaManthra?: TextAndTranslation;
   Teekas?: ManthraTeekaEntry[];
 }
 
@@ -151,12 +143,19 @@ function ordinal(n: number) {
   return ORDINALS[n - 1] ?? `${n}`;
 }
 
+function hasBlocks(v: StrapiBlock[] | string | null | undefined): boolean {
+  if (!v) return false;
+  if (typeof v === "string") return v.trim().length > 0;
+  if (Array.isArray(v)) return v.some((b) => b.children?.some((c) => (c.text ?? "").trim().length > 0));
+  return false;
+}
+
 function hasManthraContent(m: ManthraNode) {
   return !!(
-    m.ShlokaManthraEntry?.SanskritTextEntry ||
-    m.ShlokaManthraEntry?.EnglishTranslationText ||
-    m.BhashyamForShlokaManthra?.SanskritTextEntry ||
-    m.Teekas?.some((t) => t.TeekaEntry?.SanskritTextEntry)
+    hasBlocks(m.ShlokaManthraEntry?.SanskritTextEntry) ||
+    hasBlocks(m.ShlokaManthraEntry?.EnglishTranslationText) ||
+    hasBlocks(m.BhashyamForShlokaManthra?.SanskritTextEntry) ||
+    m.Teekas?.some((t) => hasBlocks(t.TeekaEntry?.SanskritTextEntry))
   );
 }
 
@@ -364,15 +363,28 @@ export default function GranthasPage() {
   const [deleteTarget, setDeleteTarget] = useState<any>(null);
 
   // Step 1
-  const [formData, setFormData] = useState({
+  const [formData, setFormData] = useState<{
+    GranthaName: string;
+    GranthaType: string;
+    BhashyamName: string;
+    BhashyamAuthor: string;
+    IntroductionToTextEnglish: StrapiBlock[];
+    BhashyakaraIntroductionSanskrit: StrapiBlock[];
+    BhashyakaraIntroductionEnglish: StrapiBlock[];
+    BhashyakaraIntroductionIAST: StrapiBlock[];
+    slug: string;
+    order: string;
+    introVideoId: string;
+    introVideoTitle: string;
+  }>({
     GranthaName: "",
     GranthaType: "",
     BhashyamName: "",
     BhashyamAuthor: "",
-    IntroductionToTextEnglish: "",
-    BhashyakaraIntroductionSanskrit: "",
-    BhashyakaraIntroductionEnglish: "",
-    BhashyakaraIntroductionIAST: "",
+    IntroductionToTextEnglish: [],
+    BhashyakaraIntroductionSanskrit: [],
+    BhashyakaraIntroductionEnglish: [],
+    BhashyakaraIntroductionIAST: [],
     slug: "",
     order: "",
     introVideoId: "",
@@ -441,10 +453,10 @@ export default function GranthasPage() {
     GranthaType: "",
     BhashyamName: "",
     BhashyamAuthor: "",
-    IntroductionToTextEnglish: "",
-    BhashyakaraIntroductionSanskrit: "",
-    BhashyakaraIntroductionEnglish: "",
-    BhashyakaraIntroductionIAST: "",
+    IntroductionToTextEnglish: [] as StrapiBlock[],
+    BhashyakaraIntroductionSanskrit: [] as StrapiBlock[],
+    BhashyakaraIntroductionEnglish: [] as StrapiBlock[],
+    BhashyakaraIntroductionIAST: [] as StrapiBlock[],
     slug: "",
     order: "",
     introVideoId: "",
@@ -488,20 +500,22 @@ export default function GranthasPage() {
         GranthaType: d.GranthaType || "",
         BhashyamName: d.BhashyamName || "",
         BhashyamAuthor: d.BhashyamAuthor || "",
-        IntroductionToTextEnglish: blocksToText(d.IntroductionToTextEnglish) || "",
-        BhashyakaraIntroductionSanskrit:
-          blocksToText(d.BhashyakaraIntroduction?.SanskritTextEntry) || "",
-        BhashyakaraIntroductionEnglish:
-          blocksToText(d.BhashyakaraIntroduction?.EnglishTranslationText) || "",
-        BhashyakaraIntroductionIAST:
-          blocksToText(d.BhashyakaraIntroduction?.IASTTransliteration) || "",
+        IntroductionToTextEnglish: d.IntroductionToTextEnglish || [],
+        BhashyakaraIntroductionSanskrit: d.BhashyakaraIntroduction?.SanskritTextEntry || [],
+        BhashyakaraIntroductionEnglish: d.BhashyakaraIntroduction?.EnglishTranslationText || [],
+        BhashyakaraIntroductionIAST: d.BhashyakaraIntroduction?.IASTTransliteration || [],
         slug: d.slug || "",
         order: d.order != null ? String(d.order) : "",
         introVideoId: d.introVideoId || "",
         introVideoTitle: d.introVideoTitle || "",
       });
       setTeekas(d.teekas || []);
-      setOtherTranslations(d.otherTranslations || []);
+      setOtherTranslations(
+        (d.otherTranslations || []).map((t: any) => ({
+          ...t,
+          text: t.text || [],
+        }))
+      );
       setGranthaNameTranslations(d.granthaNameTranslations || []);
       setStructureConfig(d.structureConfig || DEFAULT_STRUCTURE);
       setAdhyayas(d.hierarchy || []);
@@ -512,13 +526,10 @@ export default function GranthasPage() {
         GranthaType: item.GranthaType || "",
         BhashyamName: item.BhashyamName || "",
         BhashyamAuthor: item.BhashyamAuthor || "",
-        IntroductionToTextEnglish: blocksToText(item.IntroductionToTextEnglish) || "",
-        BhashyakaraIntroductionSanskrit:
-          blocksToText(item.BhashyakaraIntroduction?.SanskritTextEntry) || "",
-        BhashyakaraIntroductionEnglish:
-          blocksToText(item.BhashyakaraIntroduction?.EnglishTranslationText) || "",
-        BhashyakaraIntroductionIAST:
-          blocksToText(item.BhashyakaraIntroduction?.IASTTransliteration) || "",
+        IntroductionToTextEnglish: item.IntroductionToTextEnglish || [],
+        BhashyakaraIntroductionSanskrit: item.BhashyakaraIntroduction?.SanskritTextEntry || [],
+        BhashyakaraIntroductionEnglish: item.BhashyakaraIntroduction?.EnglishTranslationText || [],
+        BhashyakaraIntroductionIAST: item.BhashyakaraIntroduction?.IASTTransliteration || [],
         slug: item.slug || "",
         order: item.order != null ? String(item.order) : "",
         introVideoId: item.introVideoId || "",
@@ -529,7 +540,7 @@ export default function GranthasPage() {
           ? item.BhashyakaraIntroduction.OtherTranslations.map((t: any) => ({
               id: uid(),
               language: t.LanguageOfTranslation || "",
-              text: blocksToText(t.TranslationText ?? t.OtherLanguagesTranslation) || "",
+              text: t.TranslationText ?? t.OtherLanguagesTranslation ?? [],
             }))
           : []
       );
@@ -575,10 +586,10 @@ export default function GranthasPage() {
   // ---------- OtherTranslations handlers ----------
 
   function addOtherTranslation() {
-    setOtherTranslations([...otherTranslations, { id: uid(), language: "", text: "" }]);
+    setOtherTranslations([...otherTranslations, { id: uid(), language: "", text: [] }]);
   }
 
-  function updateOtherTranslation(id: string, field: keyof Omit<OtherTranslationEntry, "id">, value: string) {
+  function updateOtherTranslation(id: string, field: keyof Omit<OtherTranslationEntry, "id">, value: string | StrapiBlock[]) {
     setOtherTranslations(otherTranslations.map((t) => (t.id === id ? { ...t, [field]: value } : t)));
   }
 
@@ -906,31 +917,31 @@ export default function GranthasPage() {
     if (formData.introVideoId.trim()) payload.introVideoId = formData.introVideoId.trim();
     if (formData.introVideoTitle.trim()) payload.introVideoTitle = formData.introVideoTitle.trim();
 
-    if (formData.IntroductionToTextEnglish.trim()) {
-      payload.IntroductionToTextEnglish = textToBlocks(formData.IntroductionToTextEnglish);
+    if (hasBlocks(formData.IntroductionToTextEnglish)) {
+      payload.IntroductionToTextEnglish = formData.IntroductionToTextEnglish;
     }
 
     if (
-      formData.BhashyakaraIntroductionSanskrit.trim() ||
-      formData.BhashyakaraIntroductionEnglish.trim() ||
-      formData.BhashyakaraIntroductionIAST.trim() ||
+      hasBlocks(formData.BhashyakaraIntroductionSanskrit) ||
+      hasBlocks(formData.BhashyakaraIntroductionEnglish) ||
+      hasBlocks(formData.BhashyakaraIntroductionIAST) ||
       otherTranslations.length > 0
     ) {
       payload.BhashyakaraIntroduction = {
-        ...(formData.BhashyakaraIntroductionSanskrit.trim()
-          ? { SanskritTextEntry: textToBlocks(formData.BhashyakaraIntroductionSanskrit) }
+        ...(hasBlocks(formData.BhashyakaraIntroductionSanskrit)
+          ? { SanskritTextEntry: formData.BhashyakaraIntroductionSanskrit }
           : {}),
-        ...(formData.BhashyakaraIntroductionEnglish.trim()
-          ? { EnglishTranslationText: textToBlocks(formData.BhashyakaraIntroductionEnglish) }
+        ...(hasBlocks(formData.BhashyakaraIntroductionEnglish)
+          ? { EnglishTranslationText: formData.BhashyakaraIntroductionEnglish }
           : {}),
-        ...(formData.BhashyakaraIntroductionIAST.trim()
-          ? { IASTTransliteration: textToBlocks(formData.BhashyakaraIntroductionIAST) }
+        ...(hasBlocks(formData.BhashyakaraIntroductionIAST)
+          ? { IASTTransliteration: formData.BhashyakaraIntroductionIAST }
           : {}),
         ...(otherTranslations.length > 0
           ? {
               OtherTranslations: otherTranslations.map((t) => ({
                 LanguageOfTranslation: t.language,
-                TranslationText: t.text.trim() ? textToBlocks(t.text) : undefined,
+                TranslationText: hasBlocks(t.text) ? t.text : undefined,
               })),
             }
           : {}),
@@ -1185,14 +1196,12 @@ export default function GranthasPage() {
 
             <div>
               <Label>Introduction to Text (English)</Label>
-              <Textarea
+              <RichTextEditor
                 value={formData.IntroductionToTextEnglish}
-                onChange={(e) =>
-                  setFormData({ ...formData, IntroductionToTextEnglish: e.target.value })
-                }
+                onChange={(v) => setFormData({ ...formData, IntroductionToTextEnglish: v })}
                 placeholder="Brief English introduction to this Grantha..."
-                rows={4}
                 className="mt-1.5"
+                minHeight={100}
                 data-testid="textarea-introduction-english"
               />
             </div>
@@ -1203,14 +1212,12 @@ export default function GranthasPage() {
                   Bhashyakara Introduction
                   <span className="text-xs text-muted-foreground font-normal">(Sanskrit)</span>
                 </Label>
-                <Textarea
+                <RichTextEditor
                   value={formData.BhashyakaraIntroductionSanskrit}
-                  onChange={(e) =>
-                    setFormData({ ...formData, BhashyakaraIntroductionSanskrit: e.target.value })
-                  }
+                  onChange={(v) => setFormData({ ...formData, BhashyakaraIntroductionSanskrit: v })}
                   placeholder="Sanskrit commentary introduction..."
-                  rows={5}
-                  className="mt-1.5 font-serif"
+                  className="mt-1.5"
+                  minHeight={130}
                   data-testid="textarea-bhashyakara-sanskrit"
                 />
               </div>
@@ -1219,14 +1226,12 @@ export default function GranthasPage() {
                   Bhashyakara Introduction
                   <span className="text-xs text-muted-foreground font-normal">(English)</span>
                 </Label>
-                <Textarea
+                <RichTextEditor
                   value={formData.BhashyakaraIntroductionEnglish}
-                  onChange={(e) =>
-                    setFormData({ ...formData, BhashyakaraIntroductionEnglish: e.target.value })
-                  }
+                  onChange={(v) => setFormData({ ...formData, BhashyakaraIntroductionEnglish: v })}
                   placeholder="English translation of commentary introduction..."
-                  rows={5}
                   className="mt-1.5"
+                  minHeight={130}
                   data-testid="textarea-bhashyakara-english"
                 />
               </div>
@@ -1238,14 +1243,12 @@ export default function GranthasPage() {
                 Bhashyakara Introduction
                 <span className="text-xs text-muted-foreground font-normal">(IAST Romanisation)</span>
               </Label>
-              <Textarea
+              <RichTextEditor
                 value={formData.BhashyakaraIntroductionIAST}
-                onChange={(e) =>
-                  setFormData({ ...formData, BhashyakaraIntroductionIAST: e.target.value })
-                }
+                onChange={(v) => setFormData({ ...formData, BhashyakaraIntroductionIAST: v })}
                 placeholder="IAST transliteration of the commentary introduction..."
-                rows={4}
-                className="mt-1.5 font-mono text-sm"
+                className="mt-1.5"
+                minHeight={100}
                 data-testid="textarea-bhashyakara-iast"
               />
             </div>
@@ -1308,12 +1311,11 @@ export default function GranthasPage() {
                           <Trash2 className="w-3.5 h-3.5" />
                         </Button>
                       </div>
-                      <Textarea
+                      <RichTextEditor
                         value={t.text}
-                        onChange={(e) => updateOtherTranslation(t.id, "text", e.target.value)}
+                        onChange={(v) => updateOtherTranslation(t.id, "text", v)}
                         placeholder="Translation text..."
-                        rows={3}
-                        className="text-sm"
+                        minHeight={80}
                         data-testid={`textarea-other-translation-text-${i}`}
                       />
                     </div>
@@ -2209,49 +2211,39 @@ export default function GranthasPage() {
                 </h4>
                 <div>
                   <Label className="text-xs">Sanskrit (Devanagari)</Label>
-                  <Textarea
-                    value={currentManthra.ShlokaManthraEntry?.SanskritTextEntry ?? ""}
-                    onChange={(e) =>
+                  <RichTextEditor
+                    value={currentManthra.ShlokaManthraEntry?.SanskritTextEntry}
+                    onChange={(v) =>
                       updateManthraContent(
                         editingManthra.adhyayaId,
                         editingManthra.khandaId,
                         editingManthra.manthraId,
-                        {
-                          ShlokaManthraEntry: {
-                            ...currentManthra.ShlokaManthraEntry,
-                            SanskritTextEntry: e.target.value,
-                          },
-                        },
+                        { ShlokaManthraEntry: { ...currentManthra.ShlokaManthraEntry, SanskritTextEntry: v } },
                         editingManthra.padaId
                       )
                     }
                     placeholder="Sanskrit text in Devanagari..."
-                    rows={3}
-                    className="mt-1.5 font-serif"
+                    className="mt-1.5"
+                    minHeight={80}
                     data-testid="textarea-shloka-sanskrit"
                   />
                 </div>
                 <div>
                   <Label className="text-xs">English Translation</Label>
-                  <Textarea
-                    value={currentManthra.ShlokaManthraEntry?.EnglishTranslationText ?? ""}
-                    onChange={(e) =>
+                  <RichTextEditor
+                    value={currentManthra.ShlokaManthraEntry?.EnglishTranslationText}
+                    onChange={(v) =>
                       updateManthraContent(
                         editingManthra.adhyayaId,
                         editingManthra.khandaId,
                         editingManthra.manthraId,
-                        {
-                          ShlokaManthraEntry: {
-                            ...currentManthra.ShlokaManthraEntry,
-                            EnglishTranslationText: e.target.value,
-                          },
-                        },
+                        { ShlokaManthraEntry: { ...currentManthra.ShlokaManthraEntry, EnglishTranslationText: v } },
                         editingManthra.padaId
                       )
                     }
                     placeholder="English translation..."
-                    rows={3}
                     className="mt-1.5"
+                    minHeight={80}
                     data-testid="textarea-shloka-english"
                   />
                 </div>
@@ -2266,49 +2258,39 @@ export default function GranthasPage() {
                 </h4>
                 <div>
                   <Label className="text-xs">Sanskrit Commentary</Label>
-                  <Textarea
-                    value={currentManthra.BhashyamForShlokaManthra?.SanskritTextEntry ?? ""}
-                    onChange={(e) =>
+                  <RichTextEditor
+                    value={currentManthra.BhashyamForShlokaManthra?.SanskritTextEntry}
+                    onChange={(v) =>
                       updateManthraContent(
                         editingManthra.adhyayaId,
                         editingManthra.khandaId,
                         editingManthra.manthraId,
-                        {
-                          BhashyamForShlokaManthra: {
-                            ...currentManthra.BhashyamForShlokaManthra,
-                            SanskritTextEntry: e.target.value,
-                          },
-                        },
+                        { BhashyamForShlokaManthra: { ...currentManthra.BhashyamForShlokaManthra, SanskritTextEntry: v } },
                         editingManthra.padaId
                       )
                     }
                     placeholder="Sanskrit bhashyam commentary..."
-                    rows={4}
-                    className="mt-1.5 font-serif"
+                    className="mt-1.5"
+                    minHeight={100}
                     data-testid="textarea-bhashyam-sanskrit"
                   />
                 </div>
                 <div>
                   <Label className="text-xs">English Translation</Label>
-                  <Textarea
-                    value={currentManthra.BhashyamForShlokaManthra?.EnglishTranslationText ?? ""}
-                    onChange={(e) =>
+                  <RichTextEditor
+                    value={currentManthra.BhashyamForShlokaManthra?.EnglishTranslationText}
+                    onChange={(v) =>
                       updateManthraContent(
                         editingManthra.adhyayaId,
                         editingManthra.khandaId,
                         editingManthra.manthraId,
-                        {
-                          BhashyamForShlokaManthra: {
-                            ...currentManthra.BhashyamForShlokaManthra,
-                            EnglishTranslationText: e.target.value,
-                          },
-                        },
+                        { BhashyamForShlokaManthra: { ...currentManthra.BhashyamForShlokaManthra, EnglishTranslationText: v } },
                         editingManthra.padaId
                       )
                     }
                     placeholder="English translation of bhashyam..."
-                    rows={4}
                     className="mt-1.5"
+                    minHeight={100}
                     data-testid="textarea-bhashyam-english"
                   />
                 </div>
@@ -2334,61 +2316,33 @@ export default function GranthasPage() {
                       </p>
                       <div>
                         <Label className="text-xs">Sanskrit Commentary</Label>
-                        <Textarea
-                          value={teeka.TeekaEntry?.SanskritTextEntry ?? ""}
-                          onChange={(e) => {
+                        <RichTextEditor
+                          value={teeka.TeekaEntry?.SanskritTextEntry}
+                          onChange={(v) => {
                             const updatedTeekas = (currentManthra.Teekas ?? []).map((t, i) =>
-                              i === tIdx
-                                ? {
-                                    ...t,
-                                    TeekaEntry: {
-                                      ...t.TeekaEntry,
-                                      SanskritTextEntry: e.target.value,
-                                    },
-                                  }
-                                : t
+                              i === tIdx ? { ...t, TeekaEntry: { ...t.TeekaEntry, SanskritTextEntry: v } } : t
                             );
-                            updateManthraContent(
-                              editingManthra.adhyayaId,
-                              editingManthra.khandaId,
-                              editingManthra.manthraId,
-                              { Teekas: updatedTeekas },
-                              editingManthra.padaId
-                            );
+                            updateManthraContent(editingManthra.adhyayaId, editingManthra.khandaId, editingManthra.manthraId, { Teekas: updatedTeekas }, editingManthra.padaId);
                           }}
                           placeholder={`${teeka.TeekaName || "Teeka"} Sanskrit commentary...`}
-                          rows={3}
-                          className="mt-1.5 font-serif"
+                          className="mt-1.5"
+                          minHeight={80}
                           data-testid={`textarea-teeka-sanskrit-${tIdx}`}
                         />
                       </div>
                       <div>
                         <Label className="text-xs">English Translation</Label>
-                        <Textarea
-                          value={teeka.TeekaEntry?.EnglishTranslationText ?? ""}
-                          onChange={(e) => {
+                        <RichTextEditor
+                          value={teeka.TeekaEntry?.EnglishTranslationText}
+                          onChange={(v) => {
                             const updatedTeekas = (currentManthra.Teekas ?? []).map((t, i) =>
-                              i === tIdx
-                                ? {
-                                    ...t,
-                                    TeekaEntry: {
-                                      ...t.TeekaEntry,
-                                      EnglishTranslationText: e.target.value,
-                                    },
-                                  }
-                                : t
+                              i === tIdx ? { ...t, TeekaEntry: { ...t.TeekaEntry, EnglishTranslationText: v } } : t
                             );
-                            updateManthraContent(
-                              editingManthra.adhyayaId,
-                              editingManthra.khandaId,
-                              editingManthra.manthraId,
-                              { Teekas: updatedTeekas },
-                              editingManthra.padaId
-                            );
+                            updateManthraContent(editingManthra.adhyayaId, editingManthra.khandaId, editingManthra.manthraId, { Teekas: updatedTeekas }, editingManthra.padaId);
                           }}
                           placeholder="English translation..."
-                          rows={3}
                           className="mt-1.5"
+                          minHeight={80}
                           data-testid={`textarea-teeka-english-${tIdx}`}
                         />
                       </div>

@@ -1,4 +1,3 @@
-import { Textarea } from "@/components/ui/textarea";
 import { Label } from "@/components/ui/label";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import {
@@ -11,7 +10,8 @@ import {
 import type { TextAndTranslation } from "@shared/schema";
 import { translationLanguages } from "@shared/schema";
 import { Languages } from "lucide-react";
-import { blocksToText, textToBlocks } from "@/lib/strapi-blocks";
+import RichTextEditor from "@/components/rich-text-editor";
+import type { StrapiBlock } from "@shared/schema";
 
 interface TextTranslationFieldsProps {
   title: string;
@@ -26,11 +26,11 @@ export default function TextTranslationFields({
   onChange,
   testIdPrefix,
 }: TextTranslationFieldsProps) {
-  const handleBlocksChange = (
+  const handleChange = (
     field: keyof TextAndTranslation,
-    text: string
+    blocks: StrapiBlock[]
   ) => {
-    onChange({ ...value, [field]: textToBlocks(text) });
+    onChange({ ...value, [field]: blocks });
   };
 
   return (
@@ -46,14 +46,12 @@ export default function TextTranslationFields({
           <Label className="text-xs text-muted-foreground">
             Sanskrit Text (Devanagari)
           </Label>
-          <Textarea
-            value={blocksToText(value.SanskritTextEntry)}
-            onChange={(e) =>
-              handleBlocksChange("SanskritTextEntry", e.target.value)
-            }
+          <RichTextEditor
+            value={value.SanskritTextEntry}
+            onChange={(v) => handleChange("SanskritTextEntry", v)}
             placeholder="Enter Sanskrit text in Devanagari script..."
-            rows={3}
-            className="mt-1.5 font-serif text-base leading-relaxed"
+            className="mt-1.5"
+            minHeight={80}
             data-testid={`${testIdPrefix}-sanskrit`}
           />
         </div>
@@ -61,14 +59,12 @@ export default function TextTranslationFields({
           <Label className="text-xs text-muted-foreground">
             English Translation
           </Label>
-          <Textarea
-            value={blocksToText(value.EnglishTranslationText)}
-            onChange={(e) =>
-              handleBlocksChange("EnglishTranslationText", e.target.value)
-            }
+          <RichTextEditor
+            value={value.EnglishTranslationText}
+            onChange={(v) => handleChange("EnglishTranslationText", v)}
             placeholder="Enter English translation..."
-            rows={3}
             className="mt-1.5"
+            minHeight={80}
             data-testid={`${testIdPrefix}-english`}
           />
         </div>
@@ -105,18 +101,16 @@ export default function TextTranslationFields({
           <Label className="text-xs text-muted-foreground">
             Translation in Selected Language
           </Label>
-          <Textarea
-            value={blocksToText(value.OtherLanguagesTranslation)}
-            onChange={(e) =>
-              handleBlocksChange("OtherLanguagesTranslation", e.target.value)
-            }
+          <RichTextEditor
+            value={value.OtherLanguagesTranslation}
+            onChange={(v) => handleChange("OtherLanguagesTranslation", v)}
             placeholder={
               value.LanguageOfTranslation
                 ? `Enter translation in ${value.LanguageOfTranslation}...`
                 : "Select a language above, then enter the translation..."
             }
-            rows={3}
             className="mt-1.5"
+            minHeight={80}
             data-testid={`${testIdPrefix}-other`}
           />
         </div>
@@ -124,4 +118,3 @@ export default function TextTranslationFields({
     </Card>
   );
 }
-

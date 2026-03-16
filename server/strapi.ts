@@ -104,34 +104,27 @@ export function createStrapiRouter() {
     ].join("&"),
   };
 
-  // ── Sections: aggregate from granthas since /api/sections route is not enabled on the Strapi server ──
+  // ── Sections: fetch directly from /api/sections ──
+  const SECTION_POPULATE = [
+    "populate[grantha][fields][0]=id",
+    "populate[grantha][fields][1]=documentId",
+    "populate[grantha][fields][2]=GranthaName",
+    "populate[parent][fields][0]=documentId",
+    "populate[parent][fields][1]=title",
+    "populate[parent][fields][2]=type",
+    "populate[sub_sections][fields][0]=documentId",
+    "populate[sub_sections][fields][1]=title",
+    "populate[manthras][fields][0]=documentId",
+    "populate[manthras][fields][1]=ShlokaManthraNumber",
+    "populate[manthras][fields][2]=order",
+    "populate[titleTranslations]=*",
+    "pagination[pageSize]=200",
+  ].join("&");
+
   router.get("/sections", async (_req, res) => {
     try {
-      const granthasData = await strapiRequest(
-        `/api/granthas?${[
-          "populate[sections][populate][manthras][fields][0]=documentId",
-          "populate[sections][populate][manthras][fields][1]=ShlokaManthraNumber",
-          "populate[sections][populate][manthras][fields][2]=order",
-          "populate[sections][populate][parent][fields][0]=documentId",
-          "populate[sections][populate][parent][fields][1]=title",
-          "populate[sections][populate][parent][fields][2]=type",
-          "populate[sections][populate][titleTranslations]=*",
-          "populate[sections][populate][sub_sections][fields][0]=documentId",
-          "populate[sections][populate][sub_sections][fields][1]=title",
-          "pagination[pageSize]=200",
-        ].join("&")}`
-      );
-      const sections: any[] = [];
-      for (const g of granthasData.data || []) {
-        for (const s of g.sections || []) {
-          sections.push({
-            ...s,
-            grantha: { id: g.id, documentId: g.documentId, GranthaName: g.GranthaName },
-          });
-        }
-      }
-      sections.sort((a, b) => (a.order ?? 999) - (b.order ?? 999));
-      res.json({ data: sections, meta: { pagination: { page: 1, pageSize: sections.length, pageCount: 1, total: sections.length } } });
+      const data = await strapiRequest(`/api/sections?${SECTION_POPULATE}`);
+      res.json(data);
     } catch (error: any) {
       res.status(500).json({ message: error.message || "Failed to fetch sections" });
     }
@@ -139,54 +132,66 @@ export function createStrapiRouter() {
 
   router.get("/sections/:documentId", async (req, res) => {
     try {
-      const granthasData = await strapiRequest(`/api/granthas?populate[sections][populate]=*&pagination[pageSize]=200`);
-      for (const g of granthasData.data || []) {
-        const s = (g.sections || []).find((s: any) => s.documentId === req.params.documentId);
-        if (s) {
-          return res.json({ data: { ...s, grantha: { id: g.id, documentId: g.documentId, GranthaName: g.GranthaName } } });
-        }
-      }
-      res.status(404).json({ message: "Section not found" });
+      const data = await strapiRequest(`/api/sections/${req.params.documentId}?${SECTION_POPULATE}`);
+      res.json(data);
     } catch (error: any) {
       res.status(500).json({ message: error.message || "Failed to fetch section" });
     }
   });
 
-  const STRAPI_ADMIN_NOTE = "The Strapi server does not have REST API routes generated for this collection type. Please manage this record directly in the Strapi Content Manager at http://13.53.121.15:1337/admin";
+  router.post("/sections", async (req, res) => {
+    try {
+      const data = await strapiRequest("/api/sections", { method: "POST", body: JSON.stringify(req.body) });
+      res.json(data);
+    } catch (error: any) {
+      res.status(error.status || 500).json({ message: error.message });
+    }
+  });
+  router.put("/sections/:documentId", async (req, res) => {
+    try {
+      const data = await strapiRequest(`/api/sections/${req.params.documentId}`, { method: "PUT", body: JSON.stringify(req.body) });
+      res.json(data);
+    } catch (error: any) {
+      res.status(error.status || 500).json({ message: error.message });
+    }
+  });
+  router.delete("/sections/:documentId", async (req, res) => {
+    try {
+      const data = await strapiRequest(`/api/sections/${req.params.documentId}`, { method: "DELETE" });
+      res.json(data);
+    } catch (error: any) {
+      res.status(error.status || 500).json({ message: error.message });
+    }
+  });
 
-  router.post("/sections", (_req, res) => {
-    res.status(501).json({ message: STRAPI_ADMIN_NOTE });
-  });
-  router.put("/sections/:documentId", (_req, res) => {
-    res.status(501).json({ message: STRAPI_ADMIN_NOTE });
-  });
-  router.delete("/sections/:documentId", (_req, res) => {
-    res.status(501).json({ message: STRAPI_ADMIN_NOTE });
-  });
+  // ── Manthras: fetch directly from /api/manthras ──
+  const MANTHRA_POPULATE = [
+    "populate[Section][fields][0]=id",
+    "populate[Section][fields][1]=documentId",
+    "populate[Section][fields][2]=title",
+    "populate[Section][fields][3]=type",
+    "populate[Section][populate][grantha][fields][0]=id",
+    "populate[Section][populate][grantha][fields][1]=documentId",
+    "populate[Section][populate][grantha][fields][2]=GranthaName",
+    "populate[ShlokaManthraEntry][populate]=*",
+    "populate[BhashyamEntry][populate]=*",
+    "populate[wordMeanings]=*",
+    "pagination[pageSize]=200",
+  ].join("&");
 
-  // ── Manthras: aggregate from granthas → sections since /api/manthras is not enabled ──
   router.get("/manthras", async (_req, res) => {
     try {
-      const granthasData = await strapiRequest(
-        `/api/granthas?${[
-          "populate[sections][populate][manthras][populate]=*",
-          "pagination[pageSize]=200",
-        ].join("&")}`
-      );
-      const manthras: any[] = [];
-      for (const g of granthasData.data || []) {
-        for (const s of g.sections || []) {
-          for (const m of s.manthras || []) {
-            manthras.push({
-              ...m,
-              section: { id: s.id, documentId: s.documentId, title: s.title, type: s.type },
-              grantha: { id: g.id, documentId: g.documentId, GranthaName: g.GranthaName },
-            });
-          }
-        }
-      }
-      manthras.sort((a, b) => (a.order ?? 999) - (b.order ?? 999));
-      res.json({ data: manthras, meta: { pagination: { page: 1, pageSize: manthras.length, pageCount: 1, total: manthras.length } } });
+      const data = await strapiRequest(`/api/manthras?${MANTHRA_POPULATE}`);
+      // Normalise: expose section (lowercase) and grantha for frontend compatibility
+      const manthras = (data.data || []).map((m: any) => {
+        const sec = m.Section;
+        return {
+          ...m,
+          section: sec ? { id: sec.id, documentId: sec.documentId, title: sec.title, type: sec.type } : null,
+          grantha: sec?.grantha ?? null,
+        };
+      });
+      res.json({ ...data, data: manthras });
     } catch (error: any) {
       res.status(500).json({ message: error.message || "Failed to fetch manthras" });
     }
@@ -194,33 +199,45 @@ export function createStrapiRouter() {
 
   router.get("/manthras/:documentId", async (req, res) => {
     try {
-      const granthasData = await strapiRequest(`/api/granthas?populate[sections][populate][manthras][populate]=*&pagination[pageSize]=200`);
-      for (const g of granthasData.data || []) {
-        for (const s of g.sections || []) {
-          const m = (s.manthras || []).find((m: any) => m.documentId === req.params.documentId);
-          if (m) {
-            return res.json({ data: {
-              ...m,
-              section: { id: s.id, documentId: s.documentId, title: s.title, type: s.type },
-              grantha: { id: g.id, documentId: g.documentId, GranthaName: g.GranthaName },
-            }});
-          }
-        }
+      const data = await strapiRequest(`/api/manthras/${req.params.documentId}?${MANTHRA_POPULATE}`);
+      const m = data.data;
+      if (m) {
+        const sec = m.Section;
+        data.data = {
+          ...m,
+          section: sec ? { id: sec.id, documentId: sec.documentId, title: sec.title, type: sec.type } : null,
+          grantha: sec?.grantha ?? null,
+        };
       }
-      res.status(404).json({ message: "Manthra not found" });
+      res.json(data);
     } catch (error: any) {
       res.status(500).json({ message: error.message || "Failed to fetch manthra" });
     }
   });
 
-  router.post("/manthras", (_req, res) => {
-    res.status(501).json({ message: STRAPI_ADMIN_NOTE });
+  router.post("/manthras", async (req, res) => {
+    try {
+      const data = await strapiRequest("/api/manthras", { method: "POST", body: JSON.stringify(req.body) });
+      res.json(data);
+    } catch (error: any) {
+      res.status(error.status || 500).json({ message: error.message });
+    }
   });
-  router.put("/manthras/:documentId", (_req, res) => {
-    res.status(501).json({ message: STRAPI_ADMIN_NOTE });
+  router.put("/manthras/:documentId", async (req, res) => {
+    try {
+      const data = await strapiRequest(`/api/manthras/${req.params.documentId}`, { method: "PUT", body: JSON.stringify(req.body) });
+      res.json(data);
+    } catch (error: any) {
+      res.status(error.status || 500).json({ message: error.message });
+    }
   });
-  router.delete("/manthras/:documentId", (_req, res) => {
-    res.status(501).json({ message: STRAPI_ADMIN_NOTE });
+  router.delete("/manthras/:documentId", async (req, res) => {
+    try {
+      const data = await strapiRequest(`/api/manthras/${req.params.documentId}`, { method: "DELETE" });
+      res.json(data);
+    } catch (error: any) {
+      res.status(error.status || 500).json({ message: error.message });
+    }
   });
 
   // ── Prasthana Thraya Screens: portal-only, no Strapi collection ──

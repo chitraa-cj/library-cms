@@ -12,7 +12,11 @@ function cleanPayloadForStrapi(data: Record<string, any>): Record<string, any> {
   for (const [key, value] of Object.entries(data)) {
     if (value === undefined || value === null || value === "") continue;
     if (typeof value === "number" && Number.isNaN(value)) continue;
+    // Strip string "NaN" — happens when a number input was left blank and serialized
+    if (value === "NaN") continue;
     if (STRAPI_INTERNAL_KEYS.has(key)) continue;
+    // Strip local-only portal fields (prefixed with _)
+    if (key.startsWith("_")) continue;
     if (typeof value === "object" && !Array.isArray(value)) {
       const sub = cleanPayloadForStrapi(value as Record<string, any>);
       if (Object.keys(sub).length > 0) {

@@ -62,6 +62,8 @@ async function publishGranthaWithHierarchy(
     teekas: teekaDefinitions,
     hierarchy,
     structureConfig: _structureConfig,
+    // Always compute NumberOfTeekas from the actual teekas array, never from stored form data
+    NumberOfTeekas: _NumberOfTeekas,
     otherTranslations: _otherLocal,
     granthaNameTranslations: granthaNameTranslationsLocal,
     ...granthaDataRaw

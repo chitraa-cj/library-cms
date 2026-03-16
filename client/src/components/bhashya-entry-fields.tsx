@@ -23,10 +23,12 @@ interface BhashyaEntryFieldsProps {
 
 export default function BhashyaEntryFields({
   title,
-  entries,
+  entries: entriesProp,
   onChange,
   testIdPrefix,
 }: BhashyaEntryFieldsProps) {
+  const entries: BhashyaEntry[] = entriesProp ?? [];
+
   const addEntry = () => {
     onChange([
       ...entries,

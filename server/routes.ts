@@ -42,6 +42,7 @@ function cleanPayloadForStrapi(data: Record<string, any>): Record<string, any> {
 
 const CONTENT_TYPE_MAP: Record<string, string> = {
   granthas: "granthas",
+  sections: "sections",
   teekas: "teekas",
   articles: "articles",
   authors: "authors",
@@ -51,7 +52,7 @@ const CONTENT_TYPE_MAP: Record<string, string> = {
 
 // These content types exist in the portal but have no REST API route in Strapi.
 // Drafts can be saved locally but cannot be published to Strapi directly.
-const STRAPI_UNROUTED_TYPES = new Set(["sections", "prasthana-thraya-screens"]);
+const STRAPI_UNROUTED_TYPES = new Set(["prasthana-thraya-screens"]);
 
 async function publishGranthaWithHierarchy(
   draft: any
@@ -233,6 +234,39 @@ function buildManthraPayload(data: Record<string, any>): Record<string, any> {
   return payload;
 }
 
+function buildSectionPayload(data: Record<string, any>): Record<string, any> {
+  const {
+    _grantha,          // local-prefix copy of grantha documentId
+    _parent,           // local-prefix copy of parent section documentId
+    grantha,           // documentId string for the parent Grantha
+    parent,            // documentId string for the parent Section
+    order,
+    ...rest
+  } = data;
+
+  const payload = cleanPayloadForStrapi(rest);
+
+  // Map grantha → Strapi relation (Strapi v5 accepts raw documentId string)
+  const granthaId = grantha || _grantha;
+  if (granthaId && typeof granthaId === "string") {
+    payload.grantha = granthaId;
+  }
+
+  // Map parent → Strapi relation
+  const parentId = parent || _parent;
+  if (parentId && typeof parentId === "string") {
+    payload.parent = parentId;
+  }
+
+  // order must be a number
+  if (order !== undefined && order !== null && order !== "") {
+    const n = Number(order);
+    if (!Number.isNaN(n)) payload.order = n;
+  }
+
+  return payload;
+}
+
 export async function registerRoutes(
   httpServer: Server,
   app: Express
@@ -356,9 +390,12 @@ export async function registerRoutes(
         // create chapter records separately in the correct order.
         strapiResult = await publishGranthaWithHierarchy(draft);
       } else {
-        const cleanedData = draft.contentType === "manthras"
-          ? buildManthraPayload(draft.data as Record<string, any>)
-          : cleanPayloadForStrapi(draft.data as Record<string, any>);
+        const cleanedData =
+          draft.contentType === "manthras"
+            ? buildManthraPayload(draft.data as Record<string, any>)
+            : draft.contentType === "sections"
+            ? buildSectionPayload(draft.data as Record<string, any>)
+            : cleanPayloadForStrapi(draft.data as Record<string, any>);
 
         console.log(`[publish] ${draft.contentType} payload:`, JSON.stringify(cleanedData));
 

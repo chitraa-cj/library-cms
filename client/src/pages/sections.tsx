@@ -52,8 +52,6 @@ import {
   Eye,
   FileText,
   Hash,
-  ExternalLink,
-  AlertTriangle,
   ChevronRight,
   ChevronDown,
   Layers,
@@ -300,19 +298,6 @@ export default function SectionsPage() {
           <Plus className="w-4 h-4 mr-2" />
           Add Section
         </Button>
-      </div>
-
-      <div className="mb-4 rounded-lg border border-amber-200 bg-amber-50 dark:bg-amber-950/20 dark:border-amber-800 px-4 py-3 flex items-start gap-3 text-sm">
-        <AlertTriangle className="w-4 h-4 text-amber-600 dark:text-amber-400 mt-0.5 shrink-0" />
-        <div className="text-amber-800 dark:text-amber-300">
-          <span className="font-medium">Read from Strapi via Granthas — </span>
-          the Sections API route is not yet enabled on the Strapi server. Sections shown here are live data aggregated from Granthas.
-          To create or edit sections, use the{" "}
-          <a href="http://13.53.121.15:1337/admin" target="_blank" rel="noopener noreferrer"
-            className="underline font-medium inline-flex items-center gap-1">
-            Strapi Content Manager <ExternalLink className="w-3 h-3" />
-          </a>.
-        </div>
       </div>
 
       <div className="mb-4">

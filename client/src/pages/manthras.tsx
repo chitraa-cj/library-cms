@@ -49,8 +49,6 @@ import {
   Trash2,
   Send,
   Hash,
-  AlertTriangle,
-  ExternalLink,
   X,
   ChevronDown,
   ChevronRight,
@@ -316,19 +314,6 @@ export default function ManthrasPage() {
           <Plus className="w-4 h-4 mr-2" />
           Add Manthra
         </Button>
-      </div>
-
-      <div className="mb-4 rounded-lg border border-amber-200 bg-amber-50 dark:bg-amber-950/20 dark:border-amber-800 px-4 py-3 flex items-start gap-3 text-sm">
-        <AlertTriangle className="w-4 h-4 text-amber-600 dark:text-amber-400 mt-0.5 shrink-0" />
-        <div className="text-amber-800 dark:text-amber-300">
-          <span className="font-medium">Read from Strapi via Granthas → Sections — </span>
-          the Manthras API route is not yet enabled on the Strapi server. Manthras shown here are live data aggregated through Granthas.
-          To create or edit manthras, use the{" "}
-          <a href="http://13.53.121.15:1337/admin" target="_blank" rel="noopener noreferrer"
-            className="underline font-medium inline-flex items-center gap-1">
-            Strapi Content Manager <ExternalLink className="w-3 h-3" />
-          </a>.
-        </div>
       </div>
 
       {/* Filters */}

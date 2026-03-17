@@ -529,43 +529,81 @@ export default function GranthasPage() {
       const savedData = matchingDraft?.data as any;
 
       setEditingDraftId(matchingDraft?.id ?? null);
+
+      // For each field: prefer saved portal draft value (already in portal format)
+      // and fall back to Strapi data (which needs mapping) when draft has nothing.
+      const hasDraft = !!savedData;
+
       setFormData({
         GranthaName: item.GranthaName || "",
         GranthaType: item.GranthaType || "",
         BhashyamName: item.BhashyamName || "",
         BhashyamAuthor: item.BhashyamAuthor || "",
-        IntroductionToTextEnglish: item.IntroductionToTextEnglish || [],
-        BhashyakaraIntroductionSanskrit: item.BhashyakaraIntroduction?.SanskritTextEntry || [],
-        BhashyakaraIntroductionEnglish: item.BhashyakaraIntroduction?.EnglishTranslationText || [],
-        BhashyakaraIntroductionIAST: item.BhashyakaraIntroduction?.IASTTransliteration || [],
+        // Rich text: prefer draft blocks (portal format) if present, else Strapi
+        IntroductionToTextEnglish:
+          hasBlocks(savedData?.IntroductionToTextEnglish)
+            ? savedData.IntroductionToTextEnglish
+            : item.IntroductionToTextEnglish || [],
+        BhashyakaraIntroductionSanskrit:
+          hasBlocks(savedData?.BhashyakaraIntroductionSanskrit)
+            ? savedData.BhashyakaraIntroductionSanskrit
+            : item.BhashyakaraIntroduction?.SanskritTextEntry || [],
+        BhashyakaraIntroductionEnglish:
+          hasBlocks(savedData?.BhashyakaraIntroductionEnglish)
+            ? savedData.BhashyakaraIntroductionEnglish
+            : item.BhashyakaraIntroduction?.EnglishTranslationText || [],
+        BhashyakaraIntroductionIAST:
+          hasBlocks(savedData?.BhashyakaraIntroductionIAST)
+            ? savedData.BhashyakaraIntroductionIAST
+            : item.BhashyakaraIntroduction?.IASTTransliteration || [],
         slug: item.slug || "",
         order: item.order != null ? String(item.order) : "",
         introVideoId: item.introVideoId || "",
         introVideoTitle: item.introVideoTitle || "",
       });
-      setOtherTranslations(
-        Array.isArray(item.BhashyakaraIntroduction?.OtherTranslations)
-          ? item.BhashyakaraIntroduction.OtherTranslations.map((t: any) => ({
-              id: uid(),
-              language: t.LanguageOfTranslation || "",
-              text: t.TranslationText ?? t.OtherLanguagesTranslation ?? [],
-            }))
-          : []
-      );
-      setGranthaNameTranslations(
-        Array.isArray(item.GranthaNameTranslations)
-          ? item.GranthaNameTranslations.map((t: any) => ({
-              id: uid(),
-              language: t.LanguageOfTranslation || "",
-              name: t.GranthaNameTranslation || t.name || "",
-            }))
-          : []
-      );
-      // Restore structure and hierarchy from saved portal draft if available
+
+      // OtherTranslations (Bhashyakara): prefer draft (portal format) if non-empty
+      if (hasDraft && Array.isArray(savedData.otherTranslations) && savedData.otherTranslations.length > 0) {
+        setOtherTranslations(savedData.otherTranslations.map((t: any) => ({
+          id: t.id || uid(),
+          language: t.language || "",
+          text: t.text || [],
+        })));
+      } else {
+        setOtherTranslations(
+          Array.isArray(item.BhashyakaraIntroduction?.OtherTranslations)
+            ? item.BhashyakaraIntroduction.OtherTranslations.map((t: any) => ({
+                id: uid(),
+                language: t.LanguageOfTranslation || "",
+                text: t.TranslationText ?? t.OtherLanguagesTranslation ?? [],
+              }))
+            : []
+        );
+      }
+
+      // GranthaNameTranslations: prefer draft (portal format) if non-empty
+      if (hasDraft && Array.isArray(savedData.granthaNameTranslations) && savedData.granthaNameTranslations.length > 0) {
+        setGranthaNameTranslations(savedData.granthaNameTranslations.map((t: any) => ({
+          id: t.id || uid(),
+          language: t.language || "",
+          name: t.name || "",
+        })));
+      } else {
+        setGranthaNameTranslations(
+          Array.isArray(item.GranthaNameTranslations)
+            ? item.GranthaNameTranslations.map((t: any) => ({
+                id: uid(),
+                language: t.LanguageOfTranslation || "",
+                name: t.GranthaNameTranslation || t.name || "",
+              }))
+            : []
+        );
+      }
+
+      // Structure, hierarchy, teekas — only in portal draft, never in Strapi
       setStructureConfig(savedData?.structureConfig || DEFAULT_STRUCTURE);
       setAdhyayas(savedData?.hierarchy || []);
       setTeekas(
-        // Prefer saved draft teekas (richer data) over Strapi teekas
         Array.isArray(savedData?.teekas) && savedData.teekas.length > 0
           ? savedData.teekas
           : Array.isArray(item.teekas)

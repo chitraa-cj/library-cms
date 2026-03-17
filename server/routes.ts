@@ -186,24 +186,26 @@ async function publishGranthaWithHierarchy(
   // 2. Publish teekas (best-effort) — create each teeka and link to this grantha
   if (Array.isArray(teekaDefinitions) && granthaDocId) {
     for (const teeka of teekaDefinitions) {
-      if (!teeka.TeekaName) continue;
       // TeekaAuthor is a Strapi enum — only include if valid
       const validAuthor = teeka.TeekaAuthor && STRAPI_TEEKA_AUTHORS.has(teeka.TeekaAuthor)
         ? teeka.TeekaAuthor : undefined;
+      // Use TeekaName if given; fall back to author name; skip if neither
+      const effectiveName = (teeka.TeekaName || "").trim() || (validAuthor ? `${validAuthor} Teeka` : "");
+      if (!effectiveName) continue;
       try {
         await strapiRequest("/api/teekas", {
           method: "POST",
           body: JSON.stringify({
             data: {
-              TeekaName: teeka.TeekaName,
+              TeekaName: effectiveName,
               ...(validAuthor ? { TeekaAuthor: validAuthor } : {}),
               grantha: granthaDocId,
             },
           }),
         });
-        console.log(`[publish] Teeka "${teeka.TeekaName}" created`);
+        console.log(`[publish] Teeka "${effectiveName}" created`);
       } catch (e: any) {
-        console.error(`[publish] Teeka "${teeka.TeekaName}" failed:`, e.message);
+        console.error(`[publish] Teeka "${effectiveName}" failed:`, e.message);
       }
     }
   }
@@ -464,6 +466,7 @@ export async function registerRoutes(
       const draft = await storage.updateDraft(id, user.id, {
         ...(title && { title }),
         ...(data && { data }),
+        status: "draft",
       });
       if (!draft) return res.status(404).json({ message: "Draft not found" });
       res.json(draft);

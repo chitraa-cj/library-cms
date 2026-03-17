@@ -58,6 +58,22 @@ const CONTENT_TYPE_MAP: Record<string, string> = {
 // Drafts can be saved locally but cannot be published to Strapi directly.
 const STRAPI_UNROUTED_TYPES = new Set(["prasthana-thraya-screens"]);
 
+async function buildManthraData(
+  manthra: Record<string, any>,
+  sectionDocId: string | undefined
+): Promise<Record<string, any>> {
+  const mData: Record<string, any> = {
+    ShlokaManthraNumber: manthra.ShlokaManthraNumber || manthra.title || "",
+  };
+  if (manthra.order != null) mData.order = Number(manthra.order) || undefined;
+  if (sectionDocId) mData.Section = { connect: [{ documentId: sectionDocId }] };
+  if (manthra.ShlokaManthraEntry) mData.ShlokaManthraEntry = manthra.ShlokaManthraEntry;
+  if (manthra.BhashyamForShlokaManthra) mData.BhashyamForShlokaManthra = manthra.BhashyamForShlokaManthra;
+  if (Array.isArray(manthra.Teekas) && manthra.Teekas.length > 0) mData.Teekas = manthra.Teekas;
+  mData.NumberOfTeekas = manthra.NumberOfTeekas ?? 0;
+  return cleanPayloadForStrapi(mData);
+}
+
 async function publishGranthaWithHierarchy(
   draft: any
 ): Promise<any> {
@@ -66,7 +82,7 @@ async function publishGranthaWithHierarchy(
   const {
     teekas: teekaDefinitions,
     hierarchy,
-    structureConfig: _structureConfig,
+    structureConfig,
     // Always compute NumberOfTeekas from the actual teekas array, never from stored form data
     NumberOfTeekas: _NumberOfTeekas,
     otherTranslations: _otherLocal,
@@ -125,60 +141,100 @@ async function publishGranthaWithHierarchy(
 
   const granthaDocId: string | undefined = strapiResult?.data?.documentId;
 
-  // 2. Publish hierarchy as separate Chapter records (best-effort)
+  // 2. Publish teekas (best-effort) — create each teeka and link to this grantha
+  if (Array.isArray(teekaDefinitions) && granthaDocId) {
+    for (const teeka of teekaDefinitions) {
+      if (!teeka.TeekaName) continue;
+      try {
+        await strapiRequest("/api/teekas", {
+          method: "POST",
+          body: JSON.stringify({
+            data: {
+              TeekaName: teeka.TeekaName,
+              ...(teeka.TeekaAuthor ? { TeekaAuthor: teeka.TeekaAuthor } : {}),
+              grantha: { connect: [{ documentId: granthaDocId }] },
+            },
+          }),
+        });
+      } catch (e: any) {
+        console.warn(`[publish] Teeka "${teeka.TeekaName}" failed:`, e.message);
+      }
+    }
+  }
+
+  // 3. Publish hierarchy as Sections + Manthras (best-effort)
+  // Sections → /api/sections (title, type, grantha, parent)
+  // Manthras → /api/manthras (ShlokaManthraNumber, Section, content fields)
+  const L1type: string = structureConfig?.levelOneName || "Adhyaya";
+  const L2type: string = structureConfig?.levelTwoName || "Khanda";
+  const L3type: string = structureConfig?.levelThreeName || "Pada";
+  const levelTwoEnabled: boolean = structureConfig?.levelTwoEnabled !== false;
+  const levelThreeEnabled: boolean = !!structureConfig?.levelThreeEnabled;
+
   if (Array.isArray(hierarchy) && granthaDocId) {
     for (const adhyaya of hierarchy) {
       let adhyayaDocId: string | undefined;
       try {
-        const ar = await strapiRequest("/api/chapters", {
+        const ar = await strapiRequest("/api/sections", {
           method: "POST",
           body: JSON.stringify({
             data: {
-              ChapterTitle: adhyaya.title,
-              order: adhyaya.order,
+              title: adhyaya.title,
+              type: L1type,
+              order: adhyaya.order ?? undefined,
               grantha: { connect: [{ documentId: granthaDocId }] },
             },
           }),
         });
         adhyayaDocId = ar?.data?.documentId;
       } catch (e: any) {
-        console.warn(`[publish] Adhyaya "${adhyaya.title}" failed:`, e.message);
+        console.warn(`[publish] Section L1 "${adhyaya.title}" failed:`, e.message);
         continue;
       }
 
       for (const khanda of (adhyaya.khandas ?? [])) {
+        // When L2 is disabled, khandas[0] is a "_default" container — skip creating a section for it
+        const isDefaultKhanda = khanda.title === "_default" || !levelTwoEnabled;
         let khandaDocId: string | undefined;
-        try {
-          const kr = await strapiRequest("/api/chapters", {
-            method: "POST",
-            body: JSON.stringify({
-              data: {
-                ChapterTitle: khanda.title,
-                order: khanda.order,
-                grantha: { connect: [{ documentId: granthaDocId }] },
-                ...(adhyayaDocId
-                  ? { parent: { connect: [{ documentId: adhyayaDocId }] } }
-                  : {}),
-              },
-            }),
-          });
-          khandaDocId = kr?.data?.documentId;
-        } catch (e: any) {
-          console.warn(`[publish] Khanda "${khanda.title}" failed:`, e.message);
-          continue;
+
+        if (!isDefaultKhanda) {
+          try {
+            const kr = await strapiRequest("/api/sections", {
+              method: "POST",
+              body: JSON.stringify({
+                data: {
+                  title: khanda.title,
+                  type: L2type,
+                  order: khanda.order ?? undefined,
+                  grantha: { connect: [{ documentId: granthaDocId }] },
+                  ...(adhyayaDocId
+                    ? { parent: { connect: [{ documentId: adhyayaDocId }] } }
+                    : {}),
+                },
+              }),
+            });
+            khandaDocId = kr?.data?.documentId;
+          } catch (e: any) {
+            console.warn(`[publish] Section L2 "${khanda.title}" failed:`, e.message);
+            continue;
+          }
+        } else {
+          // No L2 — manthras attach directly to the adhyaya section
+          khandaDocId = adhyayaDocId;
         }
 
-        // Level 3 (Pada) — if padas array is present and non-empty, iterate through padas
-        if (Array.isArray(khanda.padas) && khanda.padas.length > 0) {
+        // Level 3 (Pada) — if padas array is present and non-empty
+        if (levelThreeEnabled && Array.isArray(khanda.padas) && khanda.padas.length > 0) {
           for (const pada of khanda.padas) {
             let padaDocId: string | undefined;
             try {
-              const pr = await strapiRequest("/api/chapters", {
+              const pr = await strapiRequest("/api/sections", {
                 method: "POST",
                 body: JSON.stringify({
                   data: {
-                    ChapterTitle: pada.title,
-                    order: pada.order,
+                    title: pada.title,
+                    type: L3type,
+                    order: pada.order ?? undefined,
                     grantha: { connect: [{ documentId: granthaDocId }] },
                     ...(khandaDocId
                       ? { parent: { connect: [{ documentId: khandaDocId }] } }
@@ -194,55 +250,19 @@ async function publishGranthaWithHierarchy(
 
             for (const manthra of (pada.manthras ?? [])) {
               try {
-                const mData: Record<string, any> = {
-                  ChapterTitle: manthra.title,
-                  order: manthra.order,
-                  grantha: { connect: [{ documentId: granthaDocId }] },
-                  ...(padaDocId ? { parent: { connect: [{ documentId: padaDocId }] } } : {}),
-                };
-                if (manthra.ShlokaManthraEntry) mData.ShlokaManthraEntry = manthra.ShlokaManthraEntry;
-                if (manthra.BhashyamForShlokaManthra) mData.BhashyamForShlokaManthra = manthra.BhashyamForShlokaManthra;
-                if (Array.isArray(manthra.Teekas) && manthra.Teekas.length > 0) {
-                  mData.Teekas = manthra.Teekas.map((t: any) => ({
-                    TeekaName: t.TeekaName || "",
-                    TeekaAuthor: t.TeekaAuthor || "",
-                    ...(t.TeekaEntry ? { TeekaEntry: t.TeekaEntry } : {}),
-                  }));
-                }
-                await strapiRequest("/api/chapters", { method: "POST", body: JSON.stringify({ data: mData }) });
+                const mData = await buildManthraData(manthra, padaDocId);
+                await strapiRequest("/api/manthras", { method: "POST", body: JSON.stringify({ data: mData }) });
               } catch (e: any) {
                 console.warn(`[publish] Manthra "${manthra.title}" (L3) failed:`, e.message);
               }
             }
           }
         } else {
-          // No padas — manthras sit directly under the khanda
+          // No padas — manthras sit directly under the khanda (or adhyaya if L2 disabled)
           for (const manthra of (khanda.manthras ?? [])) {
             try {
-              const mData: Record<string, any> = {
-                ChapterTitle: manthra.title,
-                order: manthra.order,
-                grantha: { connect: [{ documentId: granthaDocId }] },
-                ...(khandaDocId
-                  ? { parent: { connect: [{ documentId: khandaDocId }] } }
-                  : {}),
-              };
-
-              if (manthra.ShlokaManthraEntry) {
-                mData.ShlokaManthraEntry = manthra.ShlokaManthraEntry;
-              }
-              if (manthra.BhashyamForShlokaManthra) {
-                mData.BhashyamForShlokaManthra = manthra.BhashyamForShlokaManthra;
-              }
-              if (Array.isArray(manthra.Teekas) && manthra.Teekas.length > 0) {
-                mData.Teekas = manthra.Teekas.map((t: any) => ({
-                  TeekaName: t.TeekaName || "",
-                  TeekaAuthor: t.TeekaAuthor || "",
-                  ...(t.TeekaEntry ? { TeekaEntry: t.TeekaEntry } : {}),
-                }));
-              }
-
-              await strapiRequest("/api/chapters", {
+              const mData = await buildManthraData(manthra, khandaDocId);
+              await strapiRequest("/api/manthras", {
                 method: "POST",
                 body: JSON.stringify({ data: mData }),
               });

@@ -200,9 +200,9 @@ export default function DashboardPage() {
                 <span className="text-xs font-bold text-primary">2</span>
               </div>
               <div>
-                <p className="text-sm font-medium">Add Chapters</p>
+                <p className="text-sm font-medium">Build the Structure</p>
                 <p className="text-xs text-muted-foreground mt-0.5">
-                  Add chapters with shlokas, mantras, and their translations.
+                  Add Sections (Adhyaya, Khanda, etc.) and Manthras with their translations and teekas.
                 </p>
               </div>
             </div>

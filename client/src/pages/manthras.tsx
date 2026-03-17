@@ -52,6 +52,8 @@ import {
   AlertTriangle,
   ExternalLink,
   X,
+  ChevronDown,
+  ChevronRight,
 } from "lucide-react";
 import { blocksToText } from "@/lib/strapi-blocks";
 import { STRAPI_POLL_INTERVAL } from "@/hooks/use-strapi-sync";
@@ -75,6 +77,15 @@ export default function ManthrasPage() {
   const [searchQuery, setSearchQuery] = useState("");
   const [filterGrantha, setFilterGrantha] = useState("__all__");
   const [filterSection, setFilterSection] = useState("__all__");
+  // All sections start expanded; clicking a section header collapses it
+  const [collapsedSections, setCollapsedSections] = useState<Set<string>>(new Set());
+  function toggleSection(key: string) {
+    setCollapsedSections((prev) => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key); else next.add(key);
+      return next;
+    });
+  }
 
   const [formData, setFormData] = useState({
     ShlokaManthraNumber: "",
@@ -376,7 +387,6 @@ export default function ManthrasPage() {
               <tr className="border-b border-border bg-muted/40">
                 <th className="text-left px-4 py-3 font-medium text-muted-foreground">Status</th>
                 <th className="text-left px-4 py-3 font-medium text-muted-foreground">Number / Sanskrit</th>
-                <th className="text-left px-4 py-3 font-medium text-muted-foreground">Grantha</th>
                 <th className="text-left px-4 py-3 font-medium text-muted-foreground">Section</th>
                 <th className="text-left px-4 py-3 font-medium text-muted-foreground">Order</th>
                 <th className="text-right px-4 py-3 font-medium text-muted-foreground">Actions</th>
@@ -396,13 +406,13 @@ export default function ManthrasPage() {
                       {sanskrit && <p className="text-xs text-muted-foreground font-serif line-clamp-1 mt-0.5">{sanskrit}</p>}
                     </td>
                     <td className="px-4 py-3 text-xs">
-                      {granthaName ? <span className="font-medium text-foreground">{granthaName}</span> : <span className="text-muted-foreground">—</span>}
-                    </td>
-                    <td className="px-4 py-3 text-xs">
                       {section ? (
-                        <span className="text-muted-foreground">
-                          {section.title}{section.type ? <span className="text-muted-foreground/60"> ({section.type})</span> : null}
-                        </span>
+                        <div>
+                          {granthaName && <p className="font-medium text-foreground text-xs">{granthaName}</p>}
+                          <p className="text-muted-foreground">{section.title}{section.type ? <span className="text-muted-foreground/60"> ({section.type})</span> : null}</p>
+                        </div>
+                      ) : granthaName ? (
+                        <span className="font-medium text-foreground">{granthaName}</span>
                       ) : <span className="text-muted-foreground">—</span>}
                     </td>
                     <td className="px-4 py-3 text-muted-foreground">{draft.order ?? "—"}</td>
@@ -421,38 +431,105 @@ export default function ManthrasPage() {
                 );
               })}
 
-              {displayedPublished.map((m) => {
-                const sanskrit = blocksToText(m.ShlokaManthraEntry?.SanskritTextEntry);
-                // server sets m.grantha (top-level) and m.section (lowercase, with title/type)
-                const granthaName = (m as any).grantha?.GranthaName || "";
-                const sec = (m as any).section;
-                return (
-                  <tr key={m.documentId} className="border-b border-border hover:bg-muted/30 transition-colors" data-testid={`row-manthra-${m.documentId}`}>
-                    <td className="px-4 py-3"><Badge className="bg-green-100 text-green-800 border-green-200 text-xs">Published</Badge></td>
-                    <td className="px-4 py-3">
-                      <p className="font-medium">{m.ShlokaManthraNumber || <span className="text-muted-foreground italic">No number</span>}</p>
-                      {sanskrit && <p className="text-xs text-muted-foreground font-serif line-clamp-1 mt-0.5">{sanskrit}</p>}
-                    </td>
-                    <td className="px-4 py-3 text-xs">
-                      {granthaName ? <span className="font-medium text-foreground">{granthaName}</span> : <span className="text-muted-foreground">—</span>}
-                    </td>
-                    <td className="px-4 py-3 text-xs">
-                      {sec ? (
-                        <span className="text-muted-foreground">
-                          {sec.title}{sec.type ? <span className="text-muted-foreground/60"> ({sec.type})</span> : null}
-                        </span>
-                      ) : <span className="text-muted-foreground">—</span>}
-                    </td>
-                    <td className="px-4 py-3 text-muted-foreground">{m.order ?? "—"}</td>
-                    <td className="px-4 py-3">
-                      <div className="flex justify-end gap-1">
-                        <Button size="sm" variant="ghost" onClick={() => openEdit(m)} data-testid={`button-edit-${m.documentId}`}><Pencil className="w-3.5 h-3.5" /></Button>
-                        <Button size="sm" variant="ghost" className="text-destructive hover:text-destructive" onClick={() => setDeleteTarget(m)} data-testid={`button-delete-${m.documentId}`}><Trash2 className="w-3.5 h-3.5" /></Button>
-                      </div>
-                    </td>
-                  </tr>
-                );
-              })}
+              {/* Published — hierarchical: grantha header → section sub-header → manthra rows */}
+              {(() => {
+                // Group by grantha
+                const byGrantha = new Map<string, { granthaName: string; manthras: any[] }>();
+                for (const m of displayedPublished) {
+                  const gId = (m as any).grantha?.documentId || "__none__";
+                  const gName = (m as any).grantha?.GranthaName || "No Grantha";
+                  if (!byGrantha.has(gId)) byGrantha.set(gId, { granthaName: gName, manthras: [] });
+                  byGrantha.get(gId)!.manthras.push(m);
+                }
+
+                const rows: JSX.Element[] = [];
+
+                for (const [gId, { granthaName, manthras: gManthras }] of byGrantha) {
+                  // Grantha header row (matches sections page styling)
+                  rows.push(
+                    <tr key={`grantha-${gId}`} className="bg-muted/60 border-b border-border">
+                      <td colSpan={5} className="px-4 py-2">
+                        <span className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">{granthaName}</span>
+                        <span className="ml-2 text-xs text-muted-foreground">({gManthras.length} mantra{gManthras.length !== 1 ? "s" : ""})</span>
+                      </td>
+                    </tr>
+                  );
+
+                  // Group by section within this grantha
+                  const bySection = new Map<string, { sTitle: string; sType: string | null; sDocId: string; manthras: any[] }>();
+                  for (const m of gManthras) {
+                    const sec = (m as any).section;
+                    const sId = sec?.documentId || "__none__";
+                    if (!bySection.has(sId)) bySection.set(sId, { sTitle: sec?.title || "No Section", sType: sec?.type || null, sDocId: sId, manthras: [] });
+                    bySection.get(sId)!.manthras.push(m);
+                  }
+
+                  for (const [sId, { sTitle, sType, manthras: sManthras }] of bySection) {
+                    const sectionKey = `${gId}__${sId}`;
+                    const isCollapsed = collapsedSections.has(sectionKey);
+
+                    // Section sub-header (collapsible, starts expanded)
+                    rows.push(
+                      <tr
+                        key={`section-${gId}-${sId}`}
+                        className="bg-muted/20 border-b border-border hover:bg-muted/30 transition-colors cursor-pointer select-none"
+                        onClick={() => toggleSection(sectionKey)}
+                        data-testid={`row-section-group-${sectionKey}`}
+                      >
+                        <td colSpan={5} className="px-4 py-2 pl-8">
+                          <div className="flex items-center gap-2">
+                            <span className="text-muted-foreground">
+                              {isCollapsed ? <ChevronRight className="w-3.5 h-3.5" /> : <ChevronDown className="w-3.5 h-3.5" />}
+                            </span>
+                            <span className="text-sm font-medium text-foreground">{sTitle}</span>
+                            {sType && (
+                              <Badge variant="outline" className="text-xs py-0 h-5">{sType}</Badge>
+                            )}
+                            <span className="text-xs text-muted-foreground">
+                              ({sManthras.length} mantra{sManthras.length !== 1 ? "s" : ""})
+                            </span>
+                          </div>
+                        </td>
+                      </tr>
+                    );
+
+                    // Manthra rows (hidden when section is collapsed)
+                    if (!isCollapsed) {
+                      const sorted = [...sManthras].sort((a: any, b: any) => (a.order ?? 999) - (b.order ?? 999));
+                      for (const m of sorted) {
+                        const sanskrit = blocksToText(m.ShlokaManthraEntry?.SanskritTextEntry);
+                        rows.push(
+                          <tr
+                            key={m.documentId}
+                            className="border-b border-border hover:bg-muted/20 transition-colors"
+                            data-testid={`row-manthra-${m.documentId}`}
+                          >
+                            <td className="px-4 py-3">
+                              <Badge className="bg-green-100 text-green-800 border-green-200 dark:bg-green-950/40 dark:text-green-400 dark:border-green-800 text-xs">Live</Badge>
+                            </td>
+                            <td className="px-4 py-3" style={{ paddingLeft: 56 }}>
+                              <p className="font-medium text-sm">{m.ShlokaManthraNumber || <span className="text-muted-foreground italic">No number</span>}</p>
+                              {sanskrit && <p className="text-xs text-muted-foreground font-serif line-clamp-1 mt-0.5">{sanskrit}</p>}
+                            </td>
+                            <td className="px-4 py-3 text-muted-foreground text-xs">
+                              {sTitle}{sType ? <span className="text-muted-foreground/60"> ({sType})</span> : null}
+                            </td>
+                            <td className="px-4 py-3 text-muted-foreground text-sm">{m.order ?? "—"}</td>
+                            <td className="px-4 py-3">
+                              <div className="flex justify-end gap-1">
+                                <Button size="sm" variant="ghost" onClick={(e) => { e.stopPropagation(); openEdit(m); }} data-testid={`button-edit-${m.documentId}`}><Pencil className="w-3.5 h-3.5" /></Button>
+                                <Button size="sm" variant="ghost" className="text-destructive hover:text-destructive" onClick={(e) => { e.stopPropagation(); setDeleteTarget(m); }} data-testid={`button-delete-${m.documentId}`}><Trash2 className="w-3.5 h-3.5" /></Button>
+                              </div>
+                            </td>
+                          </tr>
+                        );
+                      }
+                    }
+                  }
+                }
+
+                return rows;
+              })()}
             </tbody>
           </table>
         )}

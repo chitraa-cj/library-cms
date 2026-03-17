@@ -18,6 +18,7 @@ import {
   Library,
   Info,
   Globe,
+  ArrowLeft,
 } from "lucide-react";
 import { useState } from "react";
 import { cn } from "@/lib/utils";
@@ -191,16 +192,34 @@ export default function DashboardLayout({
       </aside>
 
       <div className="flex-1 flex flex-col min-w-0">
-        <header className="sticky top-0 z-30 bg-background/80 backdrop-blur-sm border-b border-border px-4 h-14 flex items-center lg:hidden">
+        <header className="sticky top-0 z-30 bg-background/80 backdrop-blur-sm border-b border-border px-4 h-14 flex items-center gap-2">
+          {/* Hamburger — mobile only */}
           <Button
             variant="ghost"
             size="icon"
+            className="lg:hidden shrink-0"
             onClick={() => setSidebarOpen(true)}
             data-testid="button-open-sidebar"
           >
             <Menu className="w-5 h-5" />
           </Button>
-          <span className="ml-3 font-semibold text-sm">Ekatmadham CMS</span>
+
+          {/* Back button — all screen sizes */}
+          <Button
+            variant="ghost"
+            size="icon"
+            className="shrink-0"
+            onClick={() => window.history.back()}
+            data-testid="button-back"
+            title="Go back"
+          >
+            <ArrowLeft className="w-5 h-5" />
+          </Button>
+
+          {/* Current page title */}
+          <span className="font-semibold text-sm truncate">
+            {navSections.flatMap((s) => s.items).find((i) => i.path !== "/dashboard" ? location.startsWith(i.path) : location === i.path)?.label ?? "Ekatmadham CMS"}
+          </span>
         </header>
 
         <main className="flex-1 overflow-auto">{children}</main>

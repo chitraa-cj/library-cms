@@ -117,19 +117,22 @@ export default function ManthrasPage() {
 
   const allSections = sectionsData?.data || [];
 
-  // Derive unique granthas from sections
+  // Derive unique granthas from sections AND from manthras data
   const allGranthasFromSections = useMemo(() => {
     const seen = new Set<string>();
     const result: { name: string }[] = [];
+    // From sections
     allSections.forEach((s) => {
       const name = (s as any).grantha?.GranthaName;
-      if (name && !seen.has(name)) {
-        seen.add(name);
-        result.push({ name });
-      }
+      if (name && !seen.has(name)) { seen.add(name); result.push({ name }); }
+    });
+    // From published manthras (m.grantha is the top-level field set by server normalization)
+    (data?.data || []).forEach((m: any) => {
+      const name = m.grantha?.GranthaName;
+      if (name && !seen.has(name)) { seen.add(name); result.push({ name }); }
     });
     return result.sort((a, b) => a.name.localeCompare(b.name));
-  }, [allSections]);
+  }, [allSections, data]);
 
   // Sections filtered by selected grantha (for filter dropdown cascading)
   const sectionsForFilter = useMemo(() => {
@@ -278,7 +281,8 @@ export default function ManthrasPage() {
   const displayedPublished = strapiManthras.filter((m) => {
     const text = (m.ShlokaManthraNumber || blocksToText(m.ShlokaManthraEntry?.SanskritTextEntry) || "").toLowerCase();
     const matchesSearch = text.includes(searchLower);
-    const granthaName = (m as any).section?.grantha?.GranthaName || "";
+    // server normalises grantha to top-level: m.grantha (not m.section.grantha)
+    const granthaName = (m as any).grantha?.GranthaName || "";
     const matchesGrantha = filterGrantha === "__all__" || granthaName === filterGrantha;
     const sectionDocId = (m as any).section?.documentId || "";
     const matchesSection = filterSection === "__all__" || sectionDocId === filterSection;
@@ -391,8 +395,16 @@ export default function ManthrasPage() {
                       <p className="font-medium">{draft.ShlokaManthraNumber || <span className="text-muted-foreground italic">No number</span>}</p>
                       {sanskrit && <p className="text-xs text-muted-foreground font-serif line-clamp-1 mt-0.5">{sanskrit}</p>}
                     </td>
-                    <td className="px-4 py-3 text-muted-foreground text-xs">{granthaName || "—"}</td>
-                    <td className="px-4 py-3 text-muted-foreground text-xs">{section?.title || "—"}</td>
+                    <td className="px-4 py-3 text-xs">
+                      {granthaName ? <span className="font-medium text-foreground">{granthaName}</span> : <span className="text-muted-foreground">—</span>}
+                    </td>
+                    <td className="px-4 py-3 text-xs">
+                      {section ? (
+                        <span className="text-muted-foreground">
+                          {section.title}{section.type ? <span className="text-muted-foreground/60"> ({section.type})</span> : null}
+                        </span>
+                      ) : <span className="text-muted-foreground">—</span>}
+                    </td>
                     <td className="px-4 py-3 text-muted-foreground">{draft.order ?? "—"}</td>
                     <td className="px-4 py-3">
                       <div className="flex justify-end gap-1">
@@ -411,7 +423,9 @@ export default function ManthrasPage() {
 
               {displayedPublished.map((m) => {
                 const sanskrit = blocksToText(m.ShlokaManthraEntry?.SanskritTextEntry);
-                const granthaName = (m as any).section?.grantha?.GranthaName || "";
+                // server sets m.grantha (top-level) and m.section (lowercase, with title/type)
+                const granthaName = (m as any).grantha?.GranthaName || "";
+                const sec = (m as any).section;
                 return (
                   <tr key={m.documentId} className="border-b border-border hover:bg-muted/30 transition-colors" data-testid={`row-manthra-${m.documentId}`}>
                     <td className="px-4 py-3"><Badge className="bg-green-100 text-green-800 border-green-200 text-xs">Published</Badge></td>
@@ -419,8 +433,16 @@ export default function ManthrasPage() {
                       <p className="font-medium">{m.ShlokaManthraNumber || <span className="text-muted-foreground italic">No number</span>}</p>
                       {sanskrit && <p className="text-xs text-muted-foreground font-serif line-clamp-1 mt-0.5">{sanskrit}</p>}
                     </td>
-                    <td className="px-4 py-3 text-muted-foreground text-xs">{granthaName || "—"}</td>
-                    <td className="px-4 py-3 text-muted-foreground text-xs">{(m as any).section?.title || "—"}</td>
+                    <td className="px-4 py-3 text-xs">
+                      {granthaName ? <span className="font-medium text-foreground">{granthaName}</span> : <span className="text-muted-foreground">—</span>}
+                    </td>
+                    <td className="px-4 py-3 text-xs">
+                      {sec ? (
+                        <span className="text-muted-foreground">
+                          {sec.title}{sec.type ? <span className="text-muted-foreground/60"> ({sec.type})</span> : null}
+                        </span>
+                      ) : <span className="text-muted-foreground">—</span>}
+                    </td>
                     <td className="px-4 py-3 text-muted-foreground">{m.order ?? "—"}</td>
                     <td className="px-4 py-3">
                       <div className="flex justify-end gap-1">

@@ -55,6 +55,7 @@ import {
   ChevronRight,
   ChevronDown,
   Layers,
+  X,
 } from "lucide-react";
 import { STRAPI_POLL_INTERVAL } from "@/hooks/use-strapi-sync";
 
@@ -77,6 +78,7 @@ export default function SectionsPage() {
   const [editingDraftId, setEditingDraftId] = useState<number | null>(null);
   const [viewingItem, setViewingItem] = useState<any>(null);
   const [searchQuery, setSearchQuery] = useState("");
+  const [filterGrantha, setFilterGrantha] = useState("__all__");
   const [expandedSections, setExpandedSections] = useState<Set<string>>(new Set());
   const [titleTranslations, setTitleTranslations] = useState<TitleTranslationRow[]>([]);
 
@@ -278,11 +280,18 @@ export default function SectionsPage() {
   }));
 
   const searchLower = searchQuery.toLowerCase();
-  const displayedDrafts = draftRows.filter((d) =>
-    (d.title || "").toLowerCase().includes(searchLower)
-  );
+  const hasActiveFilters = filterGrantha !== "__all__" || searchLower !== "";
+  const displayedDrafts = draftRows.filter((d) => {
+    const matchesSearch = (d.title || "").toLowerCase().includes(searchLower);
+    const matchesGrantha = filterGrantha === "__all__" || d._grantha === filterGrantha;
+    return matchesSearch && matchesGrantha;
+  });
   const displayedPublished = strapiSections
-    .filter((s) => s.title.toLowerCase().includes(searchLower))
+    .filter((s) => {
+      const matchesSearch = s.title.toLowerCase().includes(searchLower);
+      const matchesGrantha = filterGrantha === "__all__" || s.grantha?.documentId === filterGrantha;
+      return matchesSearch && matchesGrantha;
+    })
     .sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
 
   const isSaving = saveDraft.isPending;
@@ -300,7 +309,7 @@ export default function SectionsPage() {
         </Button>
       </div>
 
-      <div className="mb-4">
+      <div className="mb-4 flex flex-wrap gap-3 items-center">
         <Input
           placeholder="Search sections..."
           value={searchQuery}
@@ -308,6 +317,27 @@ export default function SectionsPage() {
           className="max-w-sm"
           data-testid="input-search-sections"
         />
+        <Select value={filterGrantha} onValueChange={setFilterGrantha}>
+          <SelectTrigger className="w-48" data-testid="select-filter-grantha">
+            <SelectValue placeholder="All Granthas" />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="__all__">All Granthas</SelectItem>
+            {allGranthas.map((g) => (
+              <SelectItem key={g.documentId} value={g.documentId}>{g.GranthaName}</SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+        {hasActiveFilters && (
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={() => { setSearchQuery(""); setFilterGrantha("__all__"); }}
+            data-testid="button-clear-filters"
+          >
+            <X className="w-3.5 h-3.5 mr-1" /> Clear filters
+          </Button>
+        )}
       </div>
 
       <div className="rounded-lg border border-border bg-card overflow-hidden">
@@ -318,7 +348,7 @@ export default function SectionsPage() {
         ) : displayedDrafts.length === 0 && displayedPublished.length === 0 ? (
           <div className="py-20 text-center text-muted-foreground">
             <FileText className="w-10 h-10 mx-auto mb-3 opacity-30" />
-            <p>No sections found. Add the first section above.</p>
+            <p>{hasActiveFilters ? "No sections match the current filters." : "No sections found. Add the first section above."}</p>
           </div>
         ) : (
           <table className="w-full text-sm">

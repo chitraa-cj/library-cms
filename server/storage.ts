@@ -9,9 +9,11 @@ export interface IStorage {
   getDrafts(userId: string): Promise<Draft[]>;
   getDraftsByType(contentType: string, userId: string): Promise<Draft[]>;
   getDraft(id: number, userId: string): Promise<Draft | undefined>;
+  getDraftByStrapiDocId(strapiDocumentId: string): Promise<Draft | undefined>;
   createDraft(draft: InsertDraft): Promise<Draft>;
   updateDraft(id: number, userId: string, data: Partial<InsertDraft>): Promise<Draft | undefined>;
   deleteDraft(id: number, userId: string): Promise<boolean>;
+  deleteDraftById(id: number): Promise<boolean>;
   markDraftPublished(id: number, userId: string, strapiDocumentId?: string): Promise<Draft | undefined>;
 }
 
@@ -68,9 +70,22 @@ export class DatabaseStorage implements IStorage {
     return updated;
   }
 
+  async getDraftByStrapiDocId(strapiDocumentId: string): Promise<Draft | undefined> {
+    const [draft] = await db.select().from(contentDrafts)
+      .where(eq(contentDrafts.strapiDocumentId, strapiDocumentId));
+    return draft;
+  }
+
   async deleteDraft(id: number, userId: string): Promise<boolean> {
     const result = await db.delete(contentDrafts)
       .where(and(eq(contentDrafts.id, id), eq(contentDrafts.createdBy, userId)))
+      .returning();
+    return result.length > 0;
+  }
+
+  async deleteDraftById(id: number): Promise<boolean> {
+    const result = await db.delete(contentDrafts)
+      .where(eq(contentDrafts.id, id))
       .returning();
     return result.length > 0;
   }

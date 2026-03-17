@@ -178,7 +178,7 @@ function GranthaCard({
   currentUserId?: string | null;
 }) {
   const isDraft = item._isDraft;
-  const canDelete = !currentUserId || !item._createdBy || item._createdBy === currentUserId;
+  const canDelete = !currentUserId || item._createdBy === currentUserId;
 
   return (
     <div

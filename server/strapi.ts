@@ -1,5 +1,6 @@
 import { Router } from "express";
 import { requireAuth } from "./auth";
+import { storage } from "./storage";
 import { execFile } from "node:child_process";
 
 const STRAPI_URL = process.env.STRAPI_URL || "http://13.53.121.15:1337";
@@ -311,11 +312,26 @@ export function createStrapiRouter() {
     });
 
     router.delete(`/${ct.path}/:documentId`, async (req, res) => {
+      const user = (req as any).user;
+      const { documentId } = req.params;
       try {
+        // Ownership check: look up the portal draft linked to this Strapi entry
+        const draft = await storage.getDraftByStrapiDocId(documentId);
+        if (draft) {
+          if (!user?.id || draft.createdBy !== user.id) {
+            return res.status(403).json({ message: "You can only delete entries you created" });
+          }
+        }
+        // If no portal draft found, the item was created directly in Strapi — allow only if
+        // there is no createdBy tracking (legacy/admin items). Still delete from Strapi.
         const data = await strapiRequest(
-          `/api/${ct.plural}/${req.params.documentId}`,
+          `/api/${ct.plural}/${documentId}`,
           { method: "DELETE" }
         );
+        // Clean up the linked portal draft now that the Strapi entry is gone
+        if (draft) {
+          await storage.deleteDraftById(draft.id);
+        }
         res.json(data);
       } catch (error: any) {
         res.status(500).json({ message: error.message || "Failed to delete entry" });

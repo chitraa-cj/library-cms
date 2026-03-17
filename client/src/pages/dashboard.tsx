@@ -3,7 +3,7 @@ import { STRAPI_POLL_INTERVAL } from "@/hooks/use-strapi-sync";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
-import { BookOpen, FileText, Users, Tag, Layers, BookMarked, ArrowRight } from "lucide-react";
+import { BookOpen, FileText, Users, Tag, ScrollText, Hash, Library, ArrowRight } from "lucide-react";
 import { Link } from "wouter";
 import { useAuth } from "@/hooks/use-auth";
 import type { Draft } from "@shared/schema";
@@ -19,13 +19,31 @@ const contentSections = [
     bgColor: "bg-blue-500/10",
   },
   {
-    key: "chapters",
-    label: "Chapters",
-    description: "Chapter management",
-    icon: Layers,
-    path: "/chapters",
+    key: "sections",
+    label: "Sections",
+    description: "Adhyaya, Valli, Brahmana divisions",
+    icon: ScrollText,
+    path: "/sections",
     color: "text-emerald-500",
     bgColor: "bg-emerald-500/10",
+  },
+  {
+    key: "manthras",
+    label: "Manthras",
+    description: "Verse & mantra entries",
+    icon: Hash,
+    path: "/manthras",
+    color: "text-cyan-500",
+    bgColor: "bg-cyan-500/10",
+  },
+  {
+    key: "teekas",
+    label: "Teekas",
+    description: "Commentary works",
+    icon: Library,
+    path: "/teekas",
+    color: "text-indigo-500",
+    bgColor: "bg-indigo-500/10",
   },
   {
     key: "articles",
@@ -53,15 +71,6 @@ const contentSections = [
     path: "/categories",
     color: "text-pink-500",
     bgColor: "bg-pink-500/10",
-  },
-  {
-    key: "prasthana-thraya-screens",
-    label: "Prasthana Thraya",
-    description: "Prasthana Thraya screens",
-    icon: BookMarked,
-    path: "/prasthana-thraya",
-    color: "text-orange-500",
-    bgColor: "bg-orange-500/10",
   },
 ];
 

@@ -77,10 +77,10 @@ export default function ManthrasPage() {
   const [searchQuery, setSearchQuery] = useState("");
   const [filterGrantha, setFilterGrantha] = useState("__all__");
   const [filterSection, setFilterSection] = useState("__all__");
-  // All sections start expanded; clicking a section header collapses it
-  const [collapsedSections, setCollapsedSections] = useState<Set<string>>(new Set());
+  // All sections start collapsed; clicking a section header expands it
+  const [expandedSections, setExpandedSections] = useState<Set<string>>(new Set());
   function toggleSection(key: string) {
-    setCollapsedSections((prev) => {
+    setExpandedSections((prev) => {
       const next = new Set(prev);
       if (next.has(key)) next.delete(key); else next.add(key);
       return next;
@@ -466,7 +466,7 @@ export default function ManthrasPage() {
 
                   for (const [sId, { sTitle, sType, manthras: sManthras }] of bySection) {
                     const sectionKey = `${gId}__${sId}`;
-                    const isCollapsed = collapsedSections.has(sectionKey);
+                    const isCollapsed = !expandedSections.has(sectionKey);
 
                     // Section sub-header (collapsible, starts expanded)
                     rows.push(

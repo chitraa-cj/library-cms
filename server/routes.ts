@@ -113,20 +113,87 @@ async function buildManthraData(
   }
   if (sectionDocId) mData.Section = sectionDocId;
   if (manthra.ShlokaManthraEntry) mData.ShlokaManthraEntry = manthra.ShlokaManthraEntry;
-  if (manthra.BhashyamForShlokaManthra) mData.BhashyamForShlokaManthra = manthra.BhashyamForShlokaManthra;
-  // Manthra-level Teekas (repeatable component) — ensure each has a TeekaName
-  if (Array.isArray(manthra.Teekas) && manthra.Teekas.length > 0) {
-    const validTeekas = manthra.Teekas
-      .map((t: any) => {
-        const name = (t.TeekaName || "").trim();
-        const author = (t.TeekaAuthor || "").trim();
-        return { ...t, TeekaName: name || (author ? `${author} Teeka` : "") };
-      })
-      .filter((t: any) => t.TeekaName);
-    if (validTeekas.length > 0) mData.Teekas = validTeekas;
-  }
+  // BhashyamForShlokaManthra is the hierarchy-builder field name; Strapi's actual field is BhashyamEntry
+  if (manthra.BhashyamForShlokaManthra) mData.BhashyamEntry = manthra.BhashyamForShlokaManthra;
+  else if (manthra.BhashyamEntry) mData.BhashyamEntry = manthra.BhashyamEntry;
+  // NOTE: Do NOT send Teekas — Strapi rejects any non-empty key inside manthra Teekas items
   // NOTE: Do NOT send NumberOfTeekas — that field belongs to Grantha, not Manthra
   return cleanPayloadForStrapi(mData);
+}
+
+// Helper: find an existing Strapi section by title+grantha+parent, or create it if missing.
+// This prevents duplicate sections on repeated publishes of the same grantha draft.
+async function findOrCreateSection(
+  title: string,
+  type: string | undefined,
+  order: number | undefined,
+  granthaDocId: string,
+  parentDocId: string | undefined
+): Promise<string | undefined> {
+  // Search for an existing section that matches title + grantha + parent
+  try {
+    const t = encodeURIComponent(title);
+    const g = encodeURIComponent(granthaDocId);
+    let url = `/api/sections?filters[title][$eq]=${t}&filters[grantha][documentId][$eq]=${g}`;
+    if (parentDocId) {
+      url += `&filters[parent][documentId][$eq]=${encodeURIComponent(parentDocId)}`;
+    } else {
+      url += `&filters[parent][$null]=true`;
+    }
+    const existing = await strapiRequest(url);
+    const existingDocId: string | undefined = existing?.data?.[0]?.documentId;
+    if (existingDocId) {
+      console.log(`[publish] Section "${title}" already exists: ${existingDocId} — reusing`);
+      return existingDocId;
+    }
+  } catch {
+    // ignore lookup failure — fall through to create
+  }
+
+  // Not found — create a new section
+  const payload: Record<string, any> = { title, grantha: granthaDocId };
+  if (type) payload.type = type;
+  if (order != null) payload.order = order;
+  if (parentDocId) payload.parent = parentDocId;
+  const r = await strapiRequest("/api/sections", {
+    method: "POST",
+    body: JSON.stringify({ data: payload }),
+  });
+  const newDocId: string | undefined = r?.data?.documentId;
+  console.log(`[publish] Section "${title}" created: ${newDocId}`);
+  return newDocId;
+}
+
+// Helper: create a manthra in Strapi if one with the same ShlokaManthraNumber+Section doesn't already exist.
+async function createOrSkipManthra(
+  mData: Record<string, any>,
+  label: string
+): Promise<void> {
+  const sectionDocId: string | undefined = mData.Section;
+  const number: string | undefined = mData.ShlokaManthraNumber;
+
+  // Deduplication: check if this manthra already exists under the same section
+  if (sectionDocId && number) {
+    try {
+      const n = encodeURIComponent(number);
+      const s = encodeURIComponent(sectionDocId);
+      const existing = await strapiRequest(
+        `/api/manthras?filters[ShlokaManthraNumber][$eq]=${n}&filters[Section][documentId][$eq]=${s}&fields[0]=documentId`
+      );
+      if ((existing?.data?.length ?? 0) > 0) {
+        console.log(`[publish] Manthra "${label}" already exists in section — skipping`);
+        return;
+      }
+    } catch {
+      // ignore lookup failure — attempt to create anyway
+    }
+  }
+
+  const mr = await strapiRequest("/api/manthras", {
+    method: "POST",
+    body: JSON.stringify({ data: mData }),
+  });
+  console.log(`[publish] Manthra "${label}" created: ${mr?.data?.documentId}`);
 }
 
 async function publishGranthaWithHierarchy(
@@ -206,6 +273,16 @@ async function publishGranthaWithHierarchy(
       const effectiveName = (teeka.TeekaName || "").trim() || (validAuthor ? `${validAuthor} Teeka` : "");
       if (!effectiveName) continue;
       try {
+        // Dedup: skip if a teeka with the same name already exists for this grantha
+        const tName = encodeURIComponent(effectiveName);
+        const tGrantha = encodeURIComponent(granthaDocId);
+        const existing = await strapiRequest(
+          `/api/teekas?filters[TeekaName][$eq]=${tName}&filters[grantha][documentId][$eq]=${tGrantha}&fields[0]=documentId`
+        );
+        if ((existing?.data?.length ?? 0) > 0) {
+          console.log(`[publish] Teeka "${effectiveName}" already exists — skipping`);
+          continue;
+        }
         await strapiRequest("/api/teekas", {
           method: "POST",
           body: JSON.stringify({
@@ -244,19 +321,9 @@ async function publishGranthaWithHierarchy(
     for (const adhyaya of hierarchy) {
       let adhyayaDocId: string | undefined;
       try {
-        const ar = await strapiRequest("/api/sections", {
-          method: "POST",
-          body: JSON.stringify({
-            data: {
-              title: adhyaya.title,
-              ...(L1type ? { type: L1type } : {}),
-              order: adhyaya.order ?? undefined,
-              grantha: granthaDocId,
-            },
-          }),
-        });
-        adhyayaDocId = ar?.data?.documentId;
-        console.log(`[publish] Section L1 "${adhyaya.title}" created: ${adhyayaDocId}`);
+        adhyayaDocId = await findOrCreateSection(
+          adhyaya.title, L1type, adhyaya.order ?? undefined, granthaDocId, undefined
+        );
       } catch (e: any) {
         console.error(`[publish] Section L1 "${adhyaya.title}" failed:`, e.message);
         continue;
@@ -269,20 +336,9 @@ async function publishGranthaWithHierarchy(
 
         if (!isDefaultKhanda) {
           try {
-            const kr = await strapiRequest("/api/sections", {
-              method: "POST",
-              body: JSON.stringify({
-                data: {
-                  title: khanda.title,
-                  ...(L2type ? { type: L2type } : {}),
-                  order: khanda.order ?? undefined,
-                  grantha: granthaDocId,
-                  ...(adhyayaDocId ? { parent: adhyayaDocId } : {}),
-                },
-              }),
-            });
-            khandaDocId = kr?.data?.documentId;
-            console.log(`[publish] Section L2 "${khanda.title}" created: ${khandaDocId}`);
+            khandaDocId = await findOrCreateSection(
+              khanda.title, L2type, khanda.order ?? undefined, granthaDocId, adhyayaDocId
+            );
           } catch (e: any) {
             console.error(`[publish] Section L2 "${khanda.title}" failed:`, e.message);
             continue;
@@ -297,20 +353,9 @@ async function publishGranthaWithHierarchy(
           for (const pada of khanda.padas) {
             let padaDocId: string | undefined;
             try {
-              const pr = await strapiRequest("/api/sections", {
-                method: "POST",
-                body: JSON.stringify({
-                  data: {
-                    title: pada.title,
-                    ...(L3type ? { type: L3type } : {}),
-                    order: pada.order ?? undefined,
-                    grantha: granthaDocId,
-                    ...(khandaDocId ? { parent: khandaDocId } : {}),
-                  },
-                }),
-              });
-              padaDocId = pr?.data?.documentId;
-              console.log(`[publish] Section L3 "${pada.title}" created: ${padaDocId}`);
+              padaDocId = await findOrCreateSection(
+                pada.title, L3type, pada.order ?? undefined, granthaDocId, khandaDocId
+              );
             } catch (e: any) {
               console.warn(`[publish] Pada "${pada.title}" failed:`, e.message);
               continue;
@@ -320,8 +365,7 @@ async function publishGranthaWithHierarchy(
               try {
                 const mData = await buildManthraData(manthra, padaDocId);
                 console.log(`[publish] Manthra payload (L3):`, JSON.stringify(mData).slice(0, 300));
-                const mr = await strapiRequest("/api/manthras", { method: "POST", body: JSON.stringify({ data: mData }) });
-                console.log(`[publish] Manthra "${manthra.title}" (L3) created: ${mr?.data?.documentId}`);
+                await createOrSkipManthra(mData, manthra.title);
               } catch (e: any) {
                 console.error(`[publish] Manthra "${manthra.title}" (L3) failed:`, e.message);
               }
@@ -333,11 +377,7 @@ async function publishGranthaWithHierarchy(
             try {
               const mData = await buildManthraData(manthra, khandaDocId);
               console.log(`[publish] Manthra payload:`, JSON.stringify(mData).slice(0, 300));
-              const mr = await strapiRequest("/api/manthras", {
-                method: "POST",
-                body: JSON.stringify({ data: mData }),
-              });
-              console.log(`[publish] Manthra "${manthra.title}" created: ${mr?.data?.documentId}`);
+              await createOrSkipManthra(mData, manthra.title);
             } catch (e: any) {
               console.error(`[publish] Manthra "${manthra.title}" FAILED:`, e.message);
             }

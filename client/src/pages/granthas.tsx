@@ -424,6 +424,7 @@ export default function GranthasPage() {
   });
 
   const {
+    drafts: allGranthaDrafts,
     unpublishedDrafts,
     isLoadingDrafts,
     saveDraft,
@@ -520,7 +521,14 @@ export default function GranthasPage() {
       setStructureConfig(d.structureConfig || DEFAULT_STRUCTURE);
       setAdhyayas(d.hierarchy || []);
     } else {
-      setEditingDraftId(null);
+      // Look up any saved portal draft for this Strapi entry (including already-published ones)
+      // to restore structureConfig and hierarchy which aren't stored in Strapi.
+      const matchingDraft = allGranthaDrafts.find(
+        (d) => d.strapiDocumentId === item.documentId
+      );
+      const savedData = matchingDraft?.data as any;
+
+      setEditingDraftId(matchingDraft?.id ?? null);
       setFormData({
         GranthaName: item.GranthaName || "",
         GranthaType: item.GranthaType || "",
@@ -553,17 +561,21 @@ export default function GranthasPage() {
             }))
           : []
       );
-      setStructureConfig(DEFAULT_STRUCTURE);
+      // Restore structure and hierarchy from saved portal draft if available
+      setStructureConfig(savedData?.structureConfig || DEFAULT_STRUCTURE);
+      setAdhyayas(savedData?.hierarchy || []);
       setTeekas(
-        Array.isArray(item.teekas)
-          ? item.teekas.map((t: any) => ({
-              id: t.documentId || uid(),
-              TeekaName: t.TeekaName || "",
-              TeekaAuthor: t.TeekaAuthor || "",
-            }))
-          : []
+        // Prefer saved draft teekas (richer data) over Strapi teekas
+        Array.isArray(savedData?.teekas) && savedData.teekas.length > 0
+          ? savedData.teekas
+          : Array.isArray(item.teekas)
+            ? item.teekas.map((t: any) => ({
+                id: t.documentId || uid(),
+                TeekaName: t.TeekaName || "",
+                TeekaAuthor: t.TeekaAuthor || "",
+              }))
+            : []
       );
-      setAdhyayas([]);
     }
     setStep(1);
     setView("form");

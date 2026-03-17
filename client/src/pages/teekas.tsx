@@ -45,6 +45,7 @@ import {
   Trash2,
   Send,
   BookOpen,
+  X,
 } from "lucide-react";
 import { STRAPI_POLL_INTERVAL } from "@/hooks/use-strapi-sync";
 
@@ -56,6 +57,7 @@ export default function TeekasPage() {
   const [editingItem, setEditingItem] = useState<any>(null);
   const [editingDraftId, setEditingDraftId] = useState<number | null>(null);
   const [searchQuery, setSearchQuery] = useState("");
+  const [filterGrantha, setFilterGrantha] = useState("__all__");
 
   const [formData, setFormData] = useState({
     TeekaName: "",
@@ -191,13 +193,20 @@ export default function TeekasPage() {
     _createdBy: d.createdBy,
   }));
 
+  const hasActiveFilters = searchQuery || filterGrantha !== "__all__";
+
   const searchLower = searchQuery.toLowerCase();
-  const displayedDrafts = draftRows.filter((d) =>
-    (d.TeekaName || "").toLowerCase().includes(searchLower)
-  );
-  const displayedPublished = strapiTeekas.filter((t) =>
-    t.TeekaName.toLowerCase().includes(searchLower)
-  );
+  const displayedDrafts = draftRows.filter((d) => {
+    const matchesSearch = (d.TeekaName || "").toLowerCase().includes(searchLower);
+    const grantha = allGranthas.find((g) => g.documentId === d._grantha);
+    const matchesGrantha = filterGrantha === "__all__" || d._grantha === filterGrantha;
+    return matchesSearch && matchesGrantha;
+  });
+  const displayedPublished = strapiTeekas.filter((t) => {
+    const matchesSearch = t.TeekaName.toLowerCase().includes(searchLower);
+    const matchesGrantha = filterGrantha === "__all__" || t.grantha?.documentId === filterGrantha;
+    return matchesSearch && matchesGrantha;
+  });
 
   const isSaving = saveDraft.isPending;
 
@@ -214,14 +223,30 @@ export default function TeekasPage() {
         </Button>
       </div>
 
-      <div className="mb-4">
+      <div className="mb-4 flex flex-wrap gap-3 items-center">
         <Input
           placeholder="Search teekas..."
           value={searchQuery}
           onChange={(e) => setSearchQuery(e.target.value)}
-          className="max-w-sm"
+          className="w-52"
           data-testid="input-search-teekas"
         />
+        <Select value={filterGrantha} onValueChange={setFilterGrantha}>
+          <SelectTrigger className="w-52" data-testid="select-filter-grantha">
+            <SelectValue placeholder="All Granthas" />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="__all__">All Granthas</SelectItem>
+            {allGranthas.map((g) => (
+              <SelectItem key={g.documentId} value={g.documentId}>{g.GranthaName}</SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+        {hasActiveFilters && (
+          <Button variant="ghost" size="sm" onClick={() => { setSearchQuery(""); setFilterGrantha("__all__"); }} className="text-muted-foreground hover:text-foreground" data-testid="button-clear-filters">
+            <X className="w-3.5 h-3.5 mr-1" /> Clear filters
+          </Button>
+        )}
       </div>
 
       <div className="rounded-lg border border-border bg-card overflow-hidden">
@@ -232,7 +257,7 @@ export default function TeekasPage() {
         ) : displayedDrafts.length === 0 && displayedPublished.length === 0 ? (
           <div className="py-20 text-center text-muted-foreground">
             <BookOpen className="w-10 h-10 mx-auto mb-3 opacity-30" />
-            <p>No teekas found. Add the first teeka above.</p>
+            <p>{hasActiveFilters ? "No teekas match the current filters." : "No teekas found. Add the first teeka above."}</p>
           </div>
         ) : (
           <table className="w-full text-sm">

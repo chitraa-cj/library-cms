@@ -48,11 +48,10 @@ import {
   Pencil,
   Trash2,
   Send,
-  Eye,
   Hash,
-  FileText,
   AlertTriangle,
   ExternalLink,
+  X,
 } from "lucide-react";
 import { blocksToText } from "@/lib/strapi-blocks";
 import { STRAPI_POLL_INTERVAL } from "@/hooks/use-strapi-sync";
@@ -74,6 +73,8 @@ export default function ManthrasPage() {
   const [editingItem, setEditingItem] = useState<any>(null);
   const [editingDraftId, setEditingDraftId] = useState<number | null>(null);
   const [searchQuery, setSearchQuery] = useState("");
+  const [filterGrantha, setFilterGrantha] = useState("__all__");
+  const [filterSection, setFilterSection] = useState("__all__");
 
   const [formData, setFormData] = useState({
     ShlokaManthraNumber: "",
@@ -115,10 +116,36 @@ export default function ManthrasPage() {
   });
 
   const allSections = sectionsData?.data || [];
+
+  // Derive unique granthas from sections
+  const allGranthasFromSections = useMemo(() => {
+    const seen = new Set<string>();
+    const result: { name: string }[] = [];
+    allSections.forEach((s) => {
+      const name = (s as any).grantha?.GranthaName;
+      if (name && !seen.has(name)) {
+        seen.add(name);
+        result.push({ name });
+      }
+    });
+    return result.sort((a, b) => a.name.localeCompare(b.name));
+  }, [allSections]);
+
+  // Sections filtered by selected grantha (for filter dropdown cascading)
+  const sectionsForFilter = useMemo(() => {
+    if (filterGrantha === "__all__") return allSections;
+    return allSections.filter((s) => (s as any).grantha?.GranthaName === filterGrantha);
+  }, [allSections, filterGrantha]);
+
   const strapiManthras = useMemo(
     () => [...(data?.data || [])].sort((a, b) => (a.order ?? 0) - (b.order ?? 0)),
     [data]
   );
+
+  function getGranthaForSection(sectionDocId: string) {
+    const sec = allSections.find((s) => s.documentId === sectionDocId);
+    return (sec as any)?.grantha?.GranthaName || "";
+  }
 
   function resetForm() {
     setFormData({
@@ -218,6 +245,14 @@ export default function ManthrasPage() {
     }
   }
 
+  function clearFilters() {
+    setSearchQuery("");
+    setFilterGrantha("__all__");
+    setFilterSection("__all__");
+  }
+
+  const hasActiveFilters = searchQuery || filterGrantha !== "__all__" || filterSection !== "__all__";
+
   const draftRows = unpublishedDrafts.map((d) => ({
     ...(d.data as any),
     _isDraft: true,
@@ -229,13 +264,25 @@ export default function ManthrasPage() {
   }));
 
   const searchLower = searchQuery.toLowerCase();
-  const displayedDrafts = draftRows.filter((d) =>
-    (d.ShlokaManthraNumber || "").toLowerCase().includes(searchLower) ||
-    blocksToText(d.ShlokaManthraEntry?.SanskritTextEntry)?.toLowerCase().includes(searchLower)
-  );
+
+  const displayedDrafts = draftRows.filter((d) => {
+    const matchesSearch =
+      (d.ShlokaManthraNumber || "").toLowerCase().includes(searchLower) ||
+      blocksToText(d.ShlokaManthraEntry?.SanskritTextEntry)?.toLowerCase().includes(searchLower);
+    const granthaName = getGranthaForSection(d._section || "");
+    const matchesGrantha = filterGrantha === "__all__" || granthaName === filterGrantha;
+    const matchesSection = filterSection === "__all__" || d._section === filterSection;
+    return matchesSearch && matchesGrantha && matchesSection;
+  });
+
   const displayedPublished = strapiManthras.filter((m) => {
     const text = (m.ShlokaManthraNumber || blocksToText(m.ShlokaManthraEntry?.SanskritTextEntry) || "").toLowerCase();
-    return text.includes(searchLower);
+    const matchesSearch = text.includes(searchLower);
+    const granthaName = (m as any).section?.grantha?.GranthaName || "";
+    const matchesGrantha = filterGrantha === "__all__" || granthaName === filterGrantha;
+    const sectionDocId = (m as any).section?.documentId || "";
+    const matchesSection = filterSection === "__all__" || sectionDocId === filterSection;
+    return matchesSearch && matchesGrantha && matchesSection;
   });
 
   const isSaving = saveDraft.isPending;
@@ -269,14 +316,44 @@ export default function ManthrasPage() {
         </div>
       </div>
 
-      <div className="mb-4">
+      {/* Filters */}
+      <div className="mb-4 flex flex-wrap gap-3 items-center">
         <Input
           placeholder="Search manthras..."
           value={searchQuery}
           onChange={(e) => setSearchQuery(e.target.value)}
-          className="max-w-sm"
+          className="w-52"
           data-testid="input-search-manthras"
         />
+        <Select value={filterGrantha} onValueChange={(v) => { setFilterGrantha(v); setFilterSection("__all__"); }}>
+          <SelectTrigger className="w-52" data-testid="select-filter-grantha">
+            <SelectValue placeholder="All Granthas" />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="__all__">All Granthas</SelectItem>
+            {allGranthasFromSections.map((g) => (
+              <SelectItem key={g.name} value={g.name}>{g.name}</SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+        <Select value={filterSection} onValueChange={setFilterSection}>
+          <SelectTrigger className="w-52" data-testid="select-filter-section">
+            <SelectValue placeholder="All Sections" />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="__all__">All Sections</SelectItem>
+            {sectionsForFilter.map((s) => (
+              <SelectItem key={s.documentId} value={s.documentId}>
+                {s.title}{s.type ? ` (${s.type})` : ""}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+        {hasActiveFilters && (
+          <Button variant="ghost" size="sm" onClick={clearFilters} className="text-muted-foreground hover:text-foreground" data-testid="button-clear-filters">
+            <X className="w-3.5 h-3.5 mr-1" /> Clear filters
+          </Button>
+        )}
       </div>
 
       <div className="rounded-lg border border-border bg-card overflow-hidden">
@@ -287,7 +364,7 @@ export default function ManthrasPage() {
         ) : displayedDrafts.length === 0 && displayedPublished.length === 0 ? (
           <div className="py-20 text-center text-muted-foreground">
             <Hash className="w-10 h-10 mx-auto mb-3 opacity-30" />
-            <p>No manthras found. Add the first manthra above.</p>
+            <p>{hasActiveFilters ? "No manthras match the current filters." : "No manthras found. Add the first manthra above."}</p>
           </div>
         ) : (
           <table className="w-full text-sm">
@@ -295,6 +372,7 @@ export default function ManthrasPage() {
               <tr className="border-b border-border bg-muted/40">
                 <th className="text-left px-4 py-3 font-medium text-muted-foreground">Status</th>
                 <th className="text-left px-4 py-3 font-medium text-muted-foreground">Number / Sanskrit</th>
+                <th className="text-left px-4 py-3 font-medium text-muted-foreground">Grantha</th>
                 <th className="text-left px-4 py-3 font-medium text-muted-foreground">Section</th>
                 <th className="text-left px-4 py-3 font-medium text-muted-foreground">Order</th>
                 <th className="text-right px-4 py-3 font-medium text-muted-foreground">Actions</th>
@@ -304,6 +382,7 @@ export default function ManthrasPage() {
               {displayedDrafts.map((draft) => {
                 const isPub = publishDraft.isPending && publishDraft.variables === draft._draftId;
                 const section = allSections.find((s) => s.documentId === draft._section);
+                const granthaName = getGranthaForSection(draft._section || "");
                 const sanskrit = blocksToText(draft.ShlokaManthraEntry?.SanskritTextEntry);
                 return (
                   <tr key={`draft-${draft._draftId}`} className="border-b border-border hover:bg-muted/30 transition-colors" data-testid={`row-draft-${draft._draftId}`}>
@@ -312,6 +391,7 @@ export default function ManthrasPage() {
                       <p className="font-medium">{draft.ShlokaManthraNumber || <span className="text-muted-foreground italic">No number</span>}</p>
                       {sanskrit && <p className="text-xs text-muted-foreground font-serif line-clamp-1 mt-0.5">{sanskrit}</p>}
                     </td>
+                    <td className="px-4 py-3 text-muted-foreground text-xs">{granthaName || "—"}</td>
                     <td className="px-4 py-3 text-muted-foreground text-xs">{section?.title || "—"}</td>
                     <td className="px-4 py-3 text-muted-foreground">{draft.order ?? "—"}</td>
                     <td className="px-4 py-3">
@@ -331,6 +411,7 @@ export default function ManthrasPage() {
 
               {displayedPublished.map((m) => {
                 const sanskrit = blocksToText(m.ShlokaManthraEntry?.SanskritTextEntry);
+                const granthaName = (m as any).section?.grantha?.GranthaName || "";
                 return (
                   <tr key={m.documentId} className="border-b border-border hover:bg-muted/30 transition-colors" data-testid={`row-manthra-${m.documentId}`}>
                     <td className="px-4 py-3"><Badge className="bg-green-100 text-green-800 border-green-200 text-xs">Published</Badge></td>
@@ -338,7 +419,8 @@ export default function ManthrasPage() {
                       <p className="font-medium">{m.ShlokaManthraNumber || <span className="text-muted-foreground italic">No number</span>}</p>
                       {sanskrit && <p className="text-xs text-muted-foreground font-serif line-clamp-1 mt-0.5">{sanskrit}</p>}
                     </td>
-                    <td className="px-4 py-3 text-muted-foreground text-xs">{m.section?.title || "—"}</td>
+                    <td className="px-4 py-3 text-muted-foreground text-xs">{granthaName || "—"}</td>
+                    <td className="px-4 py-3 text-muted-foreground text-xs">{(m as any).section?.title || "—"}</td>
                     <td className="px-4 py-3 text-muted-foreground">{m.order ?? "—"}</td>
                     <td className="px-4 py-3">
                       <div className="flex justify-end gap-1">
@@ -400,7 +482,7 @@ export default function ManthrasPage() {
                   <SelectItem value="__none__"><span className="text-muted-foreground italic">No Section</span></SelectItem>
                   {allSections.map((s) => (
                     <SelectItem key={s.documentId} value={s.documentId}>
-                      {s.title}{s.type ? ` (${s.type})` : ""}{s.grantha ? ` — ${s.grantha.GranthaName}` : ""}
+                      {s.title}{s.type ? ` (${s.type})` : ""}{(s as any).grantha ? ` — ${(s as any).grantha.GranthaName}` : ""}
                     </SelectItem>
                   ))}
                 </SelectContent>
@@ -410,7 +492,7 @@ export default function ManthrasPage() {
                   <p className="text-xs font-semibold text-primary uppercase tracking-wider mb-1">Selected Section</p>
                   <p className="font-medium">{selectedSection.title}</p>
                   {selectedSection.type && <p className="text-xs text-muted-foreground">Type: {selectedSection.type}</p>}
-                  {selectedSection.grantha && <p className="text-xs text-muted-foreground">Grantha: {selectedSection.grantha.GranthaName}</p>}
+                  {(selectedSection as any).grantha && <p className="text-xs text-muted-foreground">Grantha: {(selectedSection as any).grantha.GranthaName}</p>}
                 </div>
               )}
             </div>

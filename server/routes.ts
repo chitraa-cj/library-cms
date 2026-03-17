@@ -7,6 +7,48 @@ import type { User } from "@shared/schema";
 
 const STRAPI_INTERNAL_KEYS = new Set(["id", "_id", "__component", "createdAt", "updatedAt", "publishedAt", "documentId", "locale"]);
 
+// Strapi section.type enum — exact values the API accepts
+const STRAPI_SECTION_TYPES = new Set([
+  "adhyay", "khanda", "valli", "pada", "kanda", "sukta",
+  "varga", "anuvaka", "prakarana", "chapter", "part", "section", "book",
+]);
+
+// Map portal level names → Strapi section.type enum values (case-insensitive)
+const SECTION_TYPE_MAP: Record<string, string> = {
+  adhyaya: "adhyay",
+  adhyay: "adhyay",
+  khanda: "khanda",
+  valli: "valli",
+  valla: "valli",
+  pada: "pada",
+  kanda: "kanda",
+  sukta: "sukta",
+  varga: "varga",
+  anuvaka: "anuvaka",
+  prakarana: "prakarana",
+  chapter: "chapter",
+  part: "part",
+  section: "section",
+  book: "book",
+  parichcheda: "section",
+  pariccheda: "section",
+  prasthanam: "book",
+};
+
+function mapSectionType(name: string): string | undefined {
+  if (!name) return undefined;
+  const key = name.toLowerCase().trim();
+  return SECTION_TYPE_MAP[key];
+}
+
+// Strapi teekas.TeekaAuthor enum — exact values the API accepts
+const STRAPI_TEEKA_AUTHORS = new Set([
+  "Anandagiri", "Vachaspati Mishra", "Padmapada", "Sureshvaracharya",
+  "Prakasatman", "Govindananda", "Ramananda Saraswati", "Madhusudana Saraswati",
+  "Dhanapati Suri", "Amalananda", "Appayya Dikshita", "Shankarananda",
+  "Shriharsha", "Chitsukha", "Vidyaranya",
+]);
+
 function cleanPayloadForStrapi(data: Record<string, any>): Record<string, any> {
   const cleaned: Record<string, any> = {};
   for (const [key, value] of Object.entries(data)) {
@@ -66,7 +108,7 @@ async function buildManthraData(
     ShlokaManthraNumber: manthra.ShlokaManthraNumber || manthra.title || "",
   };
   if (manthra.order != null) mData.order = Number(manthra.order) || undefined;
-  if (sectionDocId) mData.Section = { connect: [{ documentId: sectionDocId }] };
+  if (sectionDocId) mData.Section = sectionDocId;
   if (manthra.ShlokaManthraEntry) mData.ShlokaManthraEntry = manthra.ShlokaManthraEntry;
   if (manthra.BhashyamForShlokaManthra) mData.BhashyamForShlokaManthra = manthra.BhashyamForShlokaManthra;
   if (Array.isArray(manthra.Teekas) && manthra.Teekas.length > 0) mData.Teekas = manthra.Teekas;
@@ -145,19 +187,23 @@ async function publishGranthaWithHierarchy(
   if (Array.isArray(teekaDefinitions) && granthaDocId) {
     for (const teeka of teekaDefinitions) {
       if (!teeka.TeekaName) continue;
+      // TeekaAuthor is a Strapi enum — only include if valid
+      const validAuthor = teeka.TeekaAuthor && STRAPI_TEEKA_AUTHORS.has(teeka.TeekaAuthor)
+        ? teeka.TeekaAuthor : undefined;
       try {
         await strapiRequest("/api/teekas", {
           method: "POST",
           body: JSON.stringify({
             data: {
               TeekaName: teeka.TeekaName,
-              ...(teeka.TeekaAuthor ? { TeekaAuthor: teeka.TeekaAuthor } : {}),
-              grantha: { connect: [{ documentId: granthaDocId }] },
+              ...(validAuthor ? { TeekaAuthor: validAuthor } : {}),
+              grantha: granthaDocId,
             },
           }),
         });
+        console.log(`[publish] Teeka "${teeka.TeekaName}" created`);
       } catch (e: any) {
-        console.warn(`[publish] Teeka "${teeka.TeekaName}" failed:`, e.message);
+        console.error(`[publish] Teeka "${teeka.TeekaName}" failed:`, e.message);
       }
     }
   }
@@ -165,11 +211,19 @@ async function publishGranthaWithHierarchy(
   // 3. Publish hierarchy as Sections + Manthras (best-effort)
   // Sections → /api/sections (title, type, grantha, parent)
   // Manthras → /api/manthras (ShlokaManthraNumber, Section, content fields)
-  const L1type: string = structureConfig?.levelOneName || "Adhyaya";
-  const L2type: string = structureConfig?.levelTwoName || "Khanda";
-  const L3type: string = structureConfig?.levelThreeName || "Pada";
+  const L1name: string = structureConfig?.levelOneName || "Adhyaya";
+  const L2name: string = structureConfig?.levelTwoName || "Khanda";
+  const L3name: string = structureConfig?.levelThreeName || "Pada";
   const levelTwoEnabled: boolean = structureConfig?.levelTwoEnabled !== false;
   const levelThreeEnabled: boolean = !!structureConfig?.levelThreeEnabled;
+
+  // Map display names → Strapi enum values (undefined = omit type field)
+  const L1type = mapSectionType(L1name);
+  const L2type = mapSectionType(L2name);
+  const L3type = mapSectionType(L3name);
+
+  console.log(`[publish] Hierarchy: L1=${L1name}→${L1type}, L2=${L2name}→${L2type}, L3=${L3name}→${L3type}, levelTwo=${levelTwoEnabled}, levelThree=${levelThreeEnabled}`);
+  console.log(`[publish] Adhyayas count: ${Array.isArray(hierarchy) ? hierarchy.length : 0}`);
 
   if (Array.isArray(hierarchy) && granthaDocId) {
     for (const adhyaya of hierarchy) {
@@ -180,15 +234,16 @@ async function publishGranthaWithHierarchy(
           body: JSON.stringify({
             data: {
               title: adhyaya.title,
-              type: L1type,
+              ...(L1type ? { type: L1type } : {}),
               order: adhyaya.order ?? undefined,
-              grantha: { connect: [{ documentId: granthaDocId }] },
+              grantha: granthaDocId,
             },
           }),
         });
         adhyayaDocId = ar?.data?.documentId;
+        console.log(`[publish] Section L1 "${adhyaya.title}" created: ${adhyayaDocId}`);
       } catch (e: any) {
-        console.warn(`[publish] Section L1 "${adhyaya.title}" failed:`, e.message);
+        console.error(`[publish] Section L1 "${adhyaya.title}" failed:`, e.message);
         continue;
       }
 
@@ -204,18 +259,17 @@ async function publishGranthaWithHierarchy(
               body: JSON.stringify({
                 data: {
                   title: khanda.title,
-                  type: L2type,
+                  ...(L2type ? { type: L2type } : {}),
                   order: khanda.order ?? undefined,
-                  grantha: { connect: [{ documentId: granthaDocId }] },
-                  ...(adhyayaDocId
-                    ? { parent: { connect: [{ documentId: adhyayaDocId }] } }
-                    : {}),
+                  grantha: granthaDocId,
+                  ...(adhyayaDocId ? { parent: adhyayaDocId } : {}),
                 },
               }),
             });
             khandaDocId = kr?.data?.documentId;
+            console.log(`[publish] Section L2 "${khanda.title}" created: ${khandaDocId}`);
           } catch (e: any) {
-            console.warn(`[publish] Section L2 "${khanda.title}" failed:`, e.message);
+            console.error(`[publish] Section L2 "${khanda.title}" failed:`, e.message);
             continue;
           }
         } else {
@@ -233,16 +287,15 @@ async function publishGranthaWithHierarchy(
                 body: JSON.stringify({
                   data: {
                     title: pada.title,
-                    type: L3type,
+                    ...(L3type ? { type: L3type } : {}),
                     order: pada.order ?? undefined,
-                    grantha: { connect: [{ documentId: granthaDocId }] },
-                    ...(khandaDocId
-                      ? { parent: { connect: [{ documentId: khandaDocId }] } }
-                      : {}),
+                    grantha: granthaDocId,
+                    ...(khandaDocId ? { parent: khandaDocId } : {}),
                   },
                 }),
               });
               padaDocId = pr?.data?.documentId;
+              console.log(`[publish] Section L3 "${pada.title}" created: ${padaDocId}`);
             } catch (e: any) {
               console.warn(`[publish] Pada "${pada.title}" failed:`, e.message);
               continue;
@@ -251,9 +304,10 @@ async function publishGranthaWithHierarchy(
             for (const manthra of (pada.manthras ?? [])) {
               try {
                 const mData = await buildManthraData(manthra, padaDocId);
-                await strapiRequest("/api/manthras", { method: "POST", body: JSON.stringify({ data: mData }) });
+                const mr = await strapiRequest("/api/manthras", { method: "POST", body: JSON.stringify({ data: mData }) });
+                console.log(`[publish] Manthra "${manthra.title}" (L3) created: ${mr?.data?.documentId}`);
               } catch (e: any) {
-                console.warn(`[publish] Manthra "${manthra.title}" (L3) failed:`, e.message);
+                console.error(`[publish] Manthra "${manthra.title}" (L3) failed:`, e.message);
               }
             }
           }
@@ -262,12 +316,13 @@ async function publishGranthaWithHierarchy(
           for (const manthra of (khanda.manthras ?? [])) {
             try {
               const mData = await buildManthraData(manthra, khandaDocId);
-              await strapiRequest("/api/manthras", {
+              const mr = await strapiRequest("/api/manthras", {
                 method: "POST",
                 body: JSON.stringify({ data: mData }),
               });
+              console.log(`[publish] Manthra "${manthra.title}" created: ${mr?.data?.documentId}`);
             } catch (e: any) {
-              console.warn(`[publish] Manthra "${manthra.title}" failed:`, e.message);
+              console.error(`[publish] Manthra "${manthra.title}" failed:`, e.message);
             }
           }
         }

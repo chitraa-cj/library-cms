@@ -168,10 +168,20 @@ export const translationLanguages = [
 
 export const teekaAuthors = [
   "Anandagiri",
-  "Ramaraya Kavi",
-  "Gopalananda",
-  "Narayanasrami",
+  "Vachaspati Mishra",
+  "Padmapada",
+  "Sureshvaracharya",
+  "Prakasatman",
+  "Govindananda",
+  "Ramananda Saraswati",
   "Madhusudana Saraswati",
+  "Dhanapati Suri",
+  "Amalananda",
+  "Appayya Dikshita",
+  "Shankarananda",
+  "Shriharsha",
+  "Chitsukha",
+  "Vidyaranya",
 ] as const;
 
 // ---------- Strapi block / rich-text primitives ----------

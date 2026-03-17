@@ -3,6 +3,7 @@ import { useQuery, useMutation } from "@tanstack/react-query";
 import { queryClient, apiRequest } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
 import { useDrafts } from "@/hooks/use-drafts";
+import { useAuth } from "@/hooks/use-auth";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -71,6 +72,7 @@ interface TitleTranslationRow {
 
 export default function SectionsPage() {
   const { toast } = useToast();
+  const { user } = useAuth();
   const [formOpen, setFormOpen] = useState(false);
   const [deleteTarget, setDeleteTarget] = useState<any>(null);
   const [editingItem, setEditingItem] = useState<any>(null);
@@ -274,6 +276,7 @@ export default function SectionsPage() {
     _draftStatus: d.status,
     _strapiDocId: d.strapiDocumentId,
     _draftData: d.data,
+    _createdBy: d.createdBy,
   }));
 
   const searchLower = searchQuery.toLowerCase();
@@ -364,7 +367,9 @@ export default function SectionsPage() {
                         <Button size="sm" variant="ghost" className="text-primary hover:text-primary" onClick={() => publishDraft.mutate(draft._draftId)} disabled={isPub} data-testid={`button-publish-draft-${draft._draftId}`}>
                           {isPub ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Send className="w-3.5 h-3.5" />}
                         </Button>
-                        <Button size="sm" variant="ghost" className="text-destructive hover:text-destructive" onClick={() => setDeleteTarget(draft)} data-testid={`button-delete-draft-${draft._draftId}`}><Trash2 className="w-3.5 h-3.5" /></Button>
+                        {(!user?.id || !draft._createdBy || draft._createdBy === user.id) && (
+                          <Button size="sm" variant="ghost" className="text-destructive hover:text-destructive" onClick={() => setDeleteTarget(draft)} data-testid={`button-delete-draft-${draft._draftId}`}><Trash2 className="w-3.5 h-3.5" /></Button>
+                        )}
                       </div>
                     </td>
                   </tr>

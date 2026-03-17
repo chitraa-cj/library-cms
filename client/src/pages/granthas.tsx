@@ -3,6 +3,7 @@ import { useQuery, useMutation } from "@tanstack/react-query";
 import { queryClient, apiRequest } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
 import { useDrafts } from "@/hooks/use-drafts";
+import { useAuth } from "@/hooks/use-auth";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -167,14 +168,17 @@ function GranthaCard({
   onDelete,
   onPublish,
   isPublishing,
+  currentUserId,
 }: {
   item: any;
   onEdit: () => void;
   onDelete: () => void;
   onPublish: () => void;
   isPublishing: boolean;
+  currentUserId?: string | null;
 }) {
   const isDraft = item._isDraft;
+  const canDelete = !currentUserId || !item._createdBy || item._createdBy === currentUserId;
 
   return (
     <div
@@ -243,15 +247,17 @@ function GranthaCard({
               <ExternalLink className="w-3.5 h-3.5" />
             </a>
           )}
-          <Button
-            size="icon"
-            variant="ghost"
-            className="h-7 w-7 text-destructive hover:text-destructive"
-            onClick={onDelete}
-            data-testid={`button-delete-${item.documentId || item._draftId}`}
-          >
-            <Trash2 className="w-3.5 h-3.5" />
-          </Button>
+          {canDelete && (
+            <Button
+              size="icon"
+              variant="ghost"
+              className="h-7 w-7 text-destructive hover:text-destructive"
+              onClick={onDelete}
+              data-testid={`button-delete-${item.documentId || item._draftId}`}
+            >
+              <Trash2 className="w-3.5 h-3.5" />
+            </Button>
+          )}
         </div>
       </div>
 
@@ -355,6 +361,7 @@ function StepDot({
 
 export default function GranthasPage() {
   const { toast } = useToast();
+  const { user } = useAuth();
 
   const [view, setView] = useState<"list" | "form">("list");
   const [step, setStep] = useState<1 | 2 | 3>(1);
@@ -1061,15 +1068,22 @@ export default function GranthasPage() {
       _draftStatus: d.status,
       _strapiDocId: d.strapiDocumentId,
       _draftData: d.data,
+      _createdBy: d.createdBy,
     })),
     // Suppress published Strapi entry when a local draft is editing it
     ...(data?.data || [])
       .filter((item) => !draftedStrapiIds.has(item.documentId))
-      .map((item) => ({
-        ...item,
-        _isDraft: false,
-        _draftStatus: "published",
-      })),
+      .map((item) => {
+        const linkedDraft = allGranthaDrafts.find(
+          (d) => d.strapiDocumentId === item.documentId
+        );
+        return {
+          ...item,
+          _isDraft: false,
+          _draftStatus: "published",
+          _createdBy: linkedDraft?.createdBy ?? null,
+        };
+      }),
   ];
 
   // ---------- Render: List ----------
@@ -1121,6 +1135,7 @@ export default function GranthasPage() {
                   publishDraft.isPending &&
                   (publishDraft.variables as number) === item._draftId
                 }
+                currentUserId={user?.id}
               />
             ))}
           </div>

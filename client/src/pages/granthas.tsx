@@ -1725,7 +1725,7 @@ export default function GranthasPage() {
               <div>
                 <p className="text-xs text-muted-foreground mb-2">What are these top-level divisions called?</p>
                 <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
-                  {["Adhyaya", "Chapter", "Prakarana", "Parichcheda", "Kanda", "Prasthanam", "Sarga", "Varga", "Dashaka", "Shataka", "Anuvaka", "Varsha"].map((name) => (
+                  {["Kanda", "Skandha", "Adhyaya", "Valli", "Prapathaka", "Mundaka", "Prashna"].map((name) => (
                     <button
                       key={name}
                       type="button"
@@ -1775,7 +1775,7 @@ export default function GranthasPage() {
               <div>
                 <p className="text-xs text-muted-foreground mb-2">What are these sub-sections called?</p>
                 <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
-                  {["Khanda", "Pada", "Section", "Anuvaka", "Varga", "Prakarana", "Pariccheda"].map((name) => (
+                  {["Valli", "Anuvaka", "Khanda", "Brahmana", "Adhyaya", "Adhikarana", "Varnaka"].map((name) => (
                     <button
                       key={name}
                       type="button"
@@ -1854,7 +1854,7 @@ export default function GranthasPage() {
               </p>
             </div>
             <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
-              {["Manthra", "Shloka", "Mantra", "Sutra", "Karika", "Verse", "Stanza", "Sloka", "Geeta"].map((name) => (
+              {["Khanda", "Mantra", "Pada", "Tirtha", "Utsava", "Vivarana", "Anuvaka", "Shloka", "Sutra"].map((name) => (
                 <button
                   key={name}
                   type="button"

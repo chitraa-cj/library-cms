@@ -371,7 +371,7 @@ export default function SectionsPage() {
                 );
               })}
 
-              {/* Published sections — hierarchical grouped by grantha */}
+              {/* Published sections — hierarchical grouped by grantha, recursive depth */}
               {(() => {
                 // Group sections by grantha documentId
                 const byGrantha = new Map<string, { granthaName: string; sections: any[] }>();
@@ -382,20 +382,108 @@ export default function SectionsPage() {
                   byGrantha.get(gId)!.sections.push(s);
                 }
 
+                // Recursive row renderer — handles any tree depth
+                function renderNode(
+                  node: any,
+                  childrenOf: Map<string, any[]>,
+                  granthaName: string,
+                  depth: number,
+                  parentTitle: string | null,
+                ): JSX.Element[] {
+                  const children = (childrenOf.get(node.documentId) || []).sort((a: any, b: any) => (a.order ?? 999) - (b.order ?? 999));
+                  const hasChildren = children.length > 0;
+                  const manthraCount = Array.isArray(node.manthras) ? node.manthras.length : 0;
+                  const isExpanded = expandedSections.has(node.documentId);
+                  const indentPx = depth * 24;
+                  const py = depth === 0 ? "py-3" : "py-2.5";
+                  const px = "px-4";
+                  const rowBg = depth === 0
+                    ? "hover:bg-muted/20"
+                    : depth === 1
+                      ? "bg-muted/10 hover:bg-muted/30"
+                      : "bg-muted/20 hover:bg-muted/40";
+
+                  const result: JSX.Element[] = [];
+
+                  result.push(
+                    <tr
+                      key={node.documentId}
+                      className={`border-b border-border transition-colors ${rowBg}`}
+                      data-testid={`row-section-${node.documentId}`}
+                    >
+                      <td className={`${px} ${py}`}>
+                        <Badge className="bg-green-100 text-green-800 border-green-200 dark:bg-green-950/40 dark:text-green-400 dark:border-green-800 text-xs">Live</Badge>
+                      </td>
+                      <td className={`${px} ${py}`}>
+                        <div className="flex items-center gap-1.5" style={{ paddingLeft: indentPx }}>
+                          {hasChildren ? (
+                            <button
+                              type="button"
+                              onClick={() => toggleSection(node.documentId)}
+                              className="text-muted-foreground hover:text-foreground transition-colors shrink-0"
+                              data-testid={`button-expand-${node.documentId}`}
+                            >
+                              {isExpanded ? <ChevronDown className="w-4 h-4" /> : <ChevronRight className="w-4 h-4" />}
+                            </button>
+                          ) : depth > 0 ? (
+                            <Layers className="w-3.5 h-3.5 text-muted-foreground shrink-0" />
+                          ) : (
+                            <span className="w-4 shrink-0" />
+                          )}
+                          <span className={depth === 0 ? "font-medium" : "text-sm"}>{node.title}</span>
+                        </div>
+                      </td>
+                      <td className={`${px} ${py}`}>
+                        {node.type
+                          ? <Badge variant="outline" className="text-xs">{sectionTypeLabels[node.type as keyof typeof sectionTypeLabels] ?? node.type}</Badge>
+                          : <span className="text-muted-foreground">—</span>}
+                      </td>
+                      <td className={`${px} ${py} text-muted-foreground text-xs`}>{granthaName}</td>
+                      <td className={`${px} ${py} text-muted-foreground text-xs`}>
+                        {parentTitle ?? "—"}
+                      </td>
+                      <td className={`${px} ${py} text-muted-foreground text-xs`}>
+                        {hasChildren
+                          ? <span>{children.length} sub-section{children.length !== 1 ? "s" : ""}{manthraCount > 0 ? `, ${manthraCount} entr${manthraCount !== 1 ? "ies" : "y"}` : ""}</span>
+                          : manthraCount > 0
+                            ? <span>{manthraCount} entr{manthraCount !== 1 ? "ies" : "y"}</span>
+                            : "—"}
+                      </td>
+                      <td className={`${px} ${py}`}>
+                        <div className="flex justify-end gap-1">
+                          <Button size="sm" variant="ghost" onClick={() => openEdit(node)} data-testid={`button-edit-${node.documentId}`}><Pencil className="w-3.5 h-3.5" /></Button>
+                          <Button size="sm" variant="ghost" className="text-destructive hover:text-destructive" onClick={() => setDeleteTarget(node)} data-testid={`button-delete-${node.documentId}`}><Trash2 className="w-3.5 h-3.5" /></Button>
+                        </div>
+                      </td>
+                    </tr>
+                  );
+
+                  if (isExpanded && hasChildren) {
+                    for (const child of children) {
+                      result.push(...renderNode(child, childrenOf, granthaName, depth + 1, node.title));
+                    }
+                  }
+
+                  return result;
+                }
+
                 const rows: JSX.Element[] = [];
 
                 for (const [gId, { granthaName, sections: gSections }] of byGrantha) {
-                  // Build a lookup map for this grantha's sections
-                  const sectionById = new Map(gSections.map((s) => [s.documentId, s]));
+                  const sectionById = new Map(gSections.map((s: any) => [s.documentId, s]));
 
-                  // Root sections = those whose parent is null OR whose parent is not in this grantha
-                  const roots = gSections.filter((s) => !s.parent || !sectionById.has(s.parent?.documentId));
-                  // Child map: parentDocId → children[]
+                  // Roots = sections whose parent is null OR parent not in this grantha's section set
+                  const roots = gSections
+                    .filter((s: any) => !s.parent || !sectionById.has(s.parent?.documentId))
+                    .sort((a: any, b: any) => (a.order ?? 999) - (b.order ?? 999));
+
+                  // Build children map
                   const childrenOf = new Map<string, any[]>();
                   for (const s of gSections) {
-                    if (s.parent?.documentId && sectionById.has(s.parent.documentId)) {
-                      if (!childrenOf.has(s.parent.documentId)) childrenOf.set(s.parent.documentId, []);
-                      childrenOf.get(s.parent.documentId)!.push(s);
+                    const pid = s.parent?.documentId;
+                    if (pid && sectionById.has(pid)) {
+                      if (!childrenOf.has(pid)) childrenOf.set(pid, []);
+                      childrenOf.get(pid)!.push(s);
                     }
                   }
 
@@ -409,101 +497,8 @@ export default function SectionsPage() {
                     </tr>
                   );
 
-                  // Sort roots by order
-                  roots.sort((a, b) => (a.order ?? 999) - (b.order ?? 999));
-
                   for (const root of roots) {
-                    const children = (childrenOf.get(root.documentId) || []).sort((a, b) => (a.order ?? 999) - (b.order ?? 999));
-                    const isExpanded = expandedSections.has(root.documentId);
-                    const hasChildren = children.length > 0;
-                    const manthraCount = Array.isArray(root.manthras) ? root.manthras.length : 0;
-
-                    // Root section row
-                    rows.push(
-                      <tr
-                        key={root.documentId}
-                        className="border-b border-border hover:bg-muted/20 transition-colors"
-                        data-testid={`row-section-${root.documentId}`}
-                      >
-                        <td className="px-4 py-3">
-                          <Badge className="bg-green-100 text-green-800 border-green-200 dark:bg-green-950/40 dark:text-green-400 dark:border-green-800 text-xs">Live</Badge>
-                        </td>
-                        <td className="px-4 py-3">
-                          <div className="flex items-center gap-1.5">
-                            {hasChildren ? (
-                              <button
-                                type="button"
-                                onClick={() => toggleSection(root.documentId)}
-                                className="text-muted-foreground hover:text-foreground transition-colors"
-                                data-testid={`button-expand-${root.documentId}`}
-                              >
-                                {isExpanded
-                                  ? <ChevronDown className="w-4 h-4" />
-                                  : <ChevronRight className="w-4 h-4" />}
-                              </button>
-                            ) : (
-                              <span className="w-4" />
-                            )}
-                            <span className="font-medium">{root.title}</span>
-                          </div>
-                        </td>
-                        <td className="px-4 py-3">
-                          {root.type ? <Badge variant="outline" className="text-xs">{sectionTypeLabels[root.type as keyof typeof sectionTypeLabels] ?? root.type}</Badge> : <span className="text-muted-foreground">—</span>}
-                        </td>
-                        <td className="px-4 py-3 text-muted-foreground text-xs">{granthaName}</td>
-                        <td className="px-4 py-3 text-muted-foreground text-xs">—</td>
-                        <td className="px-4 py-3 text-muted-foreground text-xs">
-                          {hasChildren
-                            ? <span className="text-xs">{children.length} sub-section{children.length !== 1 ? "s" : ""}{manthraCount > 0 ? `, ${manthraCount} entr${manthraCount !== 1 ? "ies" : "y"}` : ""}</span>
-                            : manthraCount > 0 ? <span>{manthraCount} entr{manthraCount !== 1 ? "ies" : "y"}</span> : "—"
-                          }
-                        </td>
-                        <td className="px-4 py-3">
-                          <div className="flex justify-end gap-1">
-                            <Button size="sm" variant="ghost" onClick={() => openEdit(root)} data-testid={`button-edit-${root.documentId}`}><Pencil className="w-3.5 h-3.5" /></Button>
-                            <Button size="sm" variant="ghost" className="text-destructive hover:text-destructive" onClick={() => setDeleteTarget(root)} data-testid={`button-delete-${root.documentId}`}><Trash2 className="w-3.5 h-3.5" /></Button>
-                          </div>
-                        </td>
-                      </tr>
-                    );
-
-                    // Child section rows (only shown when expanded)
-                    if (isExpanded) {
-                      for (const child of children) {
-                        const childManthraCount = Array.isArray(child.manthras) ? child.manthras.length : 0;
-                        rows.push(
-                          <tr
-                            key={child.documentId}
-                            className="border-b border-border bg-muted/10 hover:bg-muted/30 transition-colors"
-                            data-testid={`row-section-${child.documentId}`}
-                          >
-                            <td className="px-4 py-2.5">
-                              <Badge className="bg-green-100 text-green-800 border-green-200 dark:bg-green-950/40 dark:text-green-400 dark:border-green-800 text-xs">Live</Badge>
-                            </td>
-                            <td className="px-4 py-2.5">
-                              <div className="flex items-center gap-1.5 pl-6">
-                                <Layers className="w-3.5 h-3.5 text-muted-foreground shrink-0" />
-                                <span className="text-sm">{child.title}</span>
-                              </div>
-                            </td>
-                            <td className="px-4 py-2.5">
-                              {child.type ? <Badge variant="outline" className="text-xs">{sectionTypeLabels[child.type as keyof typeof sectionTypeLabels] ?? child.type}</Badge> : <span className="text-muted-foreground">—</span>}
-                            </td>
-                            <td className="px-4 py-2.5 text-muted-foreground text-xs">{granthaName}</td>
-                            <td className="px-4 py-2.5 text-muted-foreground text-xs font-medium text-foreground/70">{root.title}</td>
-                            <td className="px-4 py-2.5 text-muted-foreground text-xs">
-                              {childManthraCount > 0 ? `${childManthraCount} entr${childManthraCount !== 1 ? "ies" : "y"}` : "—"}
-                            </td>
-                            <td className="px-4 py-2.5">
-                              <div className="flex justify-end gap-1">
-                                <Button size="sm" variant="ghost" onClick={() => openEdit(child)} data-testid={`button-edit-${child.documentId}`}><Pencil className="w-3.5 h-3.5" /></Button>
-                                <Button size="sm" variant="ghost" className="text-destructive hover:text-destructive" onClick={() => setDeleteTarget(child)} data-testid={`button-delete-${child.documentId}`}><Trash2 className="w-3.5 h-3.5" /></Button>
-                              </div>
-                            </td>
-                          </tr>
-                        );
-                      }
-                    }
+                    rows.push(...renderNode(root, childrenOf, granthaName, 0, null));
                   }
                 }
 

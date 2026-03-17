@@ -107,12 +107,25 @@ async function buildManthraData(
   const mData: Record<string, any> = {
     ShlokaManthraNumber: manthra.ShlokaManthraNumber || manthra.title || "",
   };
-  if (manthra.order != null) mData.order = Number(manthra.order) || undefined;
+  if (manthra.order != null) {
+    const n = Number(manthra.order);
+    if (!isNaN(n)) mData.order = n;
+  }
   if (sectionDocId) mData.Section = sectionDocId;
   if (manthra.ShlokaManthraEntry) mData.ShlokaManthraEntry = manthra.ShlokaManthraEntry;
   if (manthra.BhashyamForShlokaManthra) mData.BhashyamForShlokaManthra = manthra.BhashyamForShlokaManthra;
-  if (Array.isArray(manthra.Teekas) && manthra.Teekas.length > 0) mData.Teekas = manthra.Teekas;
-  mData.NumberOfTeekas = manthra.NumberOfTeekas ?? 0;
+  // Manthra-level Teekas (repeatable component) — ensure each has a TeekaName
+  if (Array.isArray(manthra.Teekas) && manthra.Teekas.length > 0) {
+    const validTeekas = manthra.Teekas
+      .map((t: any) => {
+        const name = (t.TeekaName || "").trim();
+        const author = (t.TeekaAuthor || "").trim();
+        return { ...t, TeekaName: name || (author ? `${author} Teeka` : "") };
+      })
+      .filter((t: any) => t.TeekaName);
+    if (validTeekas.length > 0) mData.Teekas = validTeekas;
+  }
+  // NOTE: Do NOT send NumberOfTeekas — that field belongs to Grantha, not Manthra
   return cleanPayloadForStrapi(mData);
 }
 
@@ -306,6 +319,7 @@ async function publishGranthaWithHierarchy(
             for (const manthra of (pada.manthras ?? [])) {
               try {
                 const mData = await buildManthraData(manthra, padaDocId);
+                console.log(`[publish] Manthra payload (L3):`, JSON.stringify(mData).slice(0, 300));
                 const mr = await strapiRequest("/api/manthras", { method: "POST", body: JSON.stringify({ data: mData }) });
                 console.log(`[publish] Manthra "${manthra.title}" (L3) created: ${mr?.data?.documentId}`);
               } catch (e: any) {
@@ -318,13 +332,14 @@ async function publishGranthaWithHierarchy(
           for (const manthra of (khanda.manthras ?? [])) {
             try {
               const mData = await buildManthraData(manthra, khandaDocId);
+              console.log(`[publish] Manthra payload:`, JSON.stringify(mData).slice(0, 300));
               const mr = await strapiRequest("/api/manthras", {
                 method: "POST",
                 body: JSON.stringify({ data: mData }),
               });
               console.log(`[publish] Manthra "${manthra.title}" created: ${mr?.data?.documentId}`);
             } catch (e: any) {
-              console.error(`[publish] Manthra "${manthra.title}" failed:`, e.message);
+              console.error(`[publish] Manthra "${manthra.title}" FAILED:`, e.message);
             }
           }
         }

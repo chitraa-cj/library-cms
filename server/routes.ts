@@ -213,6 +213,18 @@ async function publishGranthaWithHierarchy(
   } = rawData;
   const granthaPayload = cleanPayloadForStrapi(granthaDataRaw);
 
+  // Strapi requires BhashyakaraIntroduction.SanskritTextEntry to always be present
+  // when BhashyakaraIntroduction is included. cleanPayloadForStrapi may have stripped
+  // it out if it was empty (empty array → dropped). Ensure it exists with a default.
+  if (
+    granthaPayload.BhashyakaraIntroduction &&
+    !granthaPayload.BhashyakaraIntroduction.SanskritTextEntry
+  ) {
+    granthaPayload.BhashyakaraIntroduction.SanskritTextEntry = [
+      { type: "paragraph", children: [{ type: "text", text: "" }] },
+    ];
+  }
+
   // Set NumberOfTeekas from the wizard's teeka count (Strapi expects a number, 0 is valid)
   granthaPayload.NumberOfTeekas = Array.isArray(teekaDefinitions) ? teekaDefinitions.length : 0;
 

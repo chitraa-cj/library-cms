@@ -409,7 +409,7 @@ export default function GranthasPage() {
     levelTwoName: "Khanda",
     levelThreeEnabled: false,
     levelThreeName: "Pada",
-    leafName: "Manthra",
+    leafName: "Mantra",
   });
 
   // Step 3
@@ -478,7 +478,7 @@ export default function GranthasPage() {
     levelTwoName: "Khanda",
     levelThreeEnabled: false,
     levelThreeName: "Pada",
-    leafName: "Manthra",
+    leafName: "Mantra",
   };
 
   function resetForm() {
@@ -1787,7 +1787,7 @@ export default function GranthasPage() {
               </p>
             </div>
             <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
-              {["Khanda", "Mantra", "Pada", "Tirtha", "Utsava", "Vivarana", "Anuvaka", "Shloka", "Sutra"].map((name) => (
+              {["Mantra", "Manthra", "Shloka", "Sutra", "Anuvaka", "Pada", "Tirtha", "Utsava", "Vivarana"].map((name) => (
                 <button
                   key={name}
                   type="button"

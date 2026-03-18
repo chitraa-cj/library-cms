@@ -86,8 +86,16 @@ export function blocksToTipTap(
   return { type: "doc", content: content.length ? content : [{ type: "paragraph" }] };
 }
 
+/** Recursively extract plain text from any TipTap node tree. */
+function extractText(node: TipTapNode): string {
+  if (node.type === "hardBreak") return "\n";
+  if (node.text !== undefined) return node.text;
+  return (node.content ?? []).map(extractText).join("");
+}
+
 /** Convert TipTap doc JSON → Strapi blocks array, called on every editor
- *  `onUpdate` event. */
+ *  `onUpdate` event. Handles all TipTap node types so pasted content is
+ *  never silently dropped. */
 export function tipTapToBlocks(json: TipTapDoc | null | undefined): StrapiBlock[] {
   if (!json?.content) return [];
 
@@ -113,11 +121,27 @@ export function tipTapToBlocks(json: TipTapDoc | null | undefined): StrapiBlock[
         });
       }
     } else if (node.type === "blockquote") {
-      const inner = node.content?.[0]?.content ?? [];
-      blocks.push({
-        type: "paragraph",
-        children: inlineToChildren(inner),
-      });
+      for (const inner of node.content ?? []) {
+        blocks.push({
+          type: "paragraph",
+          children: inlineToChildren(inner.content),
+        });
+      }
+    } else if (node.type === "codeBlock") {
+      const text = (node.content ?? []).map((c) => c.text ?? "").join("");
+      if (text.trim()) {
+        for (const line of text.split("\n")) {
+          blocks.push({ type: "paragraph", children: [{ type: "text", text: line }] });
+        }
+      }
+    } else if (node.type === "horizontalRule") {
+      // Skip — no Strapi equivalent
+    } else {
+      // Unknown block type — extract all text to avoid losing pasted content
+      const text = extractText(node);
+      if (text.trim()) {
+        blocks.push({ type: "paragraph", children: [{ type: "text", text }] });
+      }
     }
   }
 
@@ -130,13 +154,23 @@ function inlineToChildren(
   if (!content || content.length === 0) {
     return [{ type: "text", text: "" }];
   }
-  return content.map((c) => {
+  const children: ReturnType<typeof inlineToChildren> = [];
+  for (const c of content) {
+    if (c.type === "hardBreak") {
+      // Hard breaks (shift+enter or pasted <br>) become a trailing newline
+      // appended to the previous child, or a standalone empty node.
+      if (children.length > 0) {
+        children[children.length - 1].text += "\n";
+      }
+      continue;
+    }
     const marks = c.marks ?? [];
     const child: any = { type: "text", text: c.text ?? "" };
     if (marks.some((m) => m.type === "bold")) child.bold = true;
     if (marks.some((m) => m.type === "italic")) child.italic = true;
     if (marks.some((m) => m.type === "underline")) child.underline = true;
     if (marks.some((m) => m.type === "code")) child.code = true;
-    return child;
-  });
+    children.push(child);
+  }
+  return children.length > 0 ? children : [{ type: "text", text: "" }];
 }

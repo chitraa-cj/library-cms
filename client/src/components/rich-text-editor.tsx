@@ -60,12 +60,13 @@ export default function RichTextEditor({
 
   useEffect(() => {
     if (!editor) return;
-    // If this value change was triggered by the editor itself, skip setContent
-    // so we don't reset the cursor position or lose in-progress edits/pastes.
+    // Skip if this update was triggered by the editor itself (avoids paste/typing reset)
     if (suppressNextEffect.current) {
       suppressNextEffect.current = false;
       return;
     }
+    // Safety guard: never interrupt while the user is actively editing
+    if (editor.isFocused) return;
     const incoming = blocksToTipTap(value);
     editor.commands.setContent(incoming, false);
   }, [value]);

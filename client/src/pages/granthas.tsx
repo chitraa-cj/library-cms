@@ -481,6 +481,33 @@ export default function GranthasPage() {
     leafName: "Mantra",
   };
 
+  // "Khanda" was mistakenly included as a leaf-name option in older versions.
+  // When a draft was saved with leafName:"Khanda", migrate it to "Mantra" on load
+  // and rename any manthra titles that already start with "Khanda ".
+  function migrateStructureConfig(raw: any) {
+    const cfg = raw || DEFAULT_STRUCTURE;
+    if (cfg.leafName === "Khanda") return { ...cfg, leafName: "Mantra" };
+    return cfg;
+  }
+
+  function migrateHierarchyLeafName(hierarchy: any[], oldLeaf: string, newLeaf: string) {
+    if (!hierarchy?.length || oldLeaf === newLeaf) return hierarchy;
+    const prefix = oldLeaf + " ";
+    function rename(m: any) {
+      if (typeof m.title === "string" && m.title.startsWith(prefix))
+        return { ...m, title: newLeaf + " " + m.title.slice(prefix.length) };
+      return m;
+    }
+    return hierarchy.map((a: any) => ({
+      ...a,
+      khandas: (a.khandas || []).map((k: any) => ({
+        ...k,
+        manthras: (k.manthras || []).map(rename),
+        padas: (k.padas || []).map((p: any) => ({ ...p, manthras: (p.manthras || []).map(rename) })),
+      })),
+    }));
+  }
+
   function resetForm() {
     setFormData(EMPTY_FORM);
     setTeekas([]);
@@ -525,8 +552,13 @@ export default function GranthasPage() {
         }))
       );
       setGranthaNameTranslations(d.granthaNameTranslations || []);
-      setStructureConfig(d.structureConfig || DEFAULT_STRUCTURE);
-      setAdhyayas(d.hierarchy || []);
+      const rawCfg1 = d.structureConfig;
+      const migratedCfg1 = migrateStructureConfig(rawCfg1);
+      setStructureConfig(migratedCfg1);
+      const rawHier1 = d.hierarchy || [];
+      setAdhyayas(rawCfg1?.leafName === "Khanda"
+        ? migrateHierarchyLeafName(rawHier1, "Khanda", "Mantra")
+        : rawHier1);
     } else {
       // Look up any saved portal draft for this Strapi entry (including already-published ones)
       // to restore structureConfig and hierarchy which aren't stored in Strapi.
@@ -608,8 +640,13 @@ export default function GranthasPage() {
       }
 
       // Structure, hierarchy, teekas — only in portal draft, never in Strapi
-      setStructureConfig(savedData?.structureConfig || DEFAULT_STRUCTURE);
-      setAdhyayas(savedData?.hierarchy || []);
+      const rawCfg2 = savedData?.structureConfig;
+      const migratedCfg2 = migrateStructureConfig(rawCfg2);
+      setStructureConfig(migratedCfg2);
+      const rawHier2 = savedData?.hierarchy || [];
+      setAdhyayas(rawCfg2?.leafName === "Khanda"
+        ? migrateHierarchyLeafName(rawHier2, "Khanda", "Mantra")
+        : rawHier2);
       setTeekas(
         Array.isArray(savedData?.teekas) && savedData.teekas.length > 0
           ? savedData.teekas
@@ -841,7 +878,11 @@ export default function GranthasPage() {
                 padas: (k.padas ?? []).map((p) => {
                   if (p.id !== padaId) return p;
                   const pIdx = (k.padas ?? []).findIndex((x) => x.id === padaId) + 1;
-                  const mIdx = p.manthras.length + 1;
+                  const maxMIdx = p.manthras.reduce((mx, m) => {
+                    const n = parseInt((m.title?.split(".") ?? []).slice(-1)[0] ?? "0", 10);
+                    return isNaN(n) ? mx : Math.max(mx, n);
+                  }, 0);
+                  const mIdx = Math.max(maxMIdx, p.manthras.length) + 1;
                   const newManthra: ManthraNode = {
                     id: uid(),
                     title: `${leaf} ${aIdx}.${kIdx}.${pIdx}.${mIdx}`,
@@ -853,7 +894,11 @@ export default function GranthasPage() {
               };
             }
             // Add manthra directly inside Khanda (L3 disabled)
-            const mIdx = k.manthras.length + 1;
+            const maxMIdx2 = k.manthras.reduce((mx, m) => {
+              const n = parseInt((m.title?.split(".") ?? []).slice(-1)[0] ?? "0", 10);
+              return isNaN(n) ? mx : Math.max(mx, n);
+            }, 0);
+            const mIdx = Math.max(maxMIdx2, k.manthras.length) + 1;
             const newManthra: ManthraNode = {
               id: uid(),
               title: structureConfig.levelTwoEnabled
@@ -1990,7 +2035,14 @@ export default function GranthasPage() {
                               size="icon"
                               variant="ghost"
                               className="h-6 w-6 text-destructive hover:text-destructive"
-                              onClick={(e) => { e.stopPropagation(); removeKhanda(adhyaya.id, khanda.id); }}
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                const totalManthras = structureConfig.levelThreeEnabled
+                                  ? (khanda.padas ?? []).reduce((s, p) => s + p.manthras.length, 0)
+                                  : khanda.manthras.length;
+                                if (totalManthras > 0 && !window.confirm(`Delete "${khanda.title}" and all ${totalManthras} ${leaf.toLowerCase()}${totalManthras !== 1 ? "s" : ""} inside? This cannot be undone.`)) return;
+                                removeKhanda(adhyaya.id, khanda.id);
+                              }}
                               data-testid={`button-remove-khanda-${aIdx}-${kIdx}`}
                             >
                               <Trash2 className="w-3 h-3" />

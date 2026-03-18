@@ -52,10 +52,10 @@ const STRAPI_TEEKA_AUTHORS = new Set([
 function cleanPayloadForStrapi(data: Record<string, any>): Record<string, any> {
   const cleaned: Record<string, any> = {};
   for (const [key, value] of Object.entries(data)) {
-    // Preserve `text: ""` — Strapi blocks require the text field on text nodes
-    // even when it is an empty string; stripping it causes a ValidationError.
-    if (key === "text" && value === "") {
-      cleaned[key] = value;
+    // Preserve `text` field on Strapi blocks text nodes — even when empty or null.
+    // If text is null/undefined, convert it to "" so Strapi never sees a missing text field.
+    if (key === "text" && (value === "" || value === null || value === undefined)) {
+      cleaned[key] = "";
       continue;
     }
     if (value === undefined || value === null || value === "") continue;
@@ -71,7 +71,7 @@ function cleanPayloadForStrapi(data: Record<string, any>): Record<string, any> {
         cleaned[key] = sub;
       }
     } else if (Array.isArray(value)) {
-      const cleanedArr = value
+      let cleanedArr = value
         .map((item) =>
           typeof item === "object" && item !== null
             ? cleanPayloadForStrapi(item)
@@ -82,6 +82,12 @@ function cleanPayloadForStrapi(data: Record<string, any>): Record<string, any> {
             ? Object.keys(item).length > 0
             : item !== "" && item !== null && item !== undefined
         );
+      // If this looks like a Strapi blocks array, run a final sanitization pass
+      // to guarantee every text node has a `text` field and every paragraph
+      // has a valid children array — regardless of how the data arrived.
+      if (cleanedArr.some((item: any) => item?.type === "paragraph" || item?.type === "heading")) {
+        cleanedArr = sanitizeBlocksField(cleanedArr);
+      }
       if (cleanedArr.length > 0) {
         cleaned[key] = cleanedArr;
       }
@@ -90,6 +96,37 @@ function cleanPayloadForStrapi(data: Record<string, any>): Record<string, any> {
     }
   }
   return cleaned;
+}
+
+/** Ensure every node in a Strapi blocks array has valid structure.
+ *  - Every {type:"text"} child must have a `text` field (defaults to "")
+ *  - Every paragraph/heading must have a non-empty `children` array
+ *  Applied automatically by cleanPayloadForStrapi to any array that looks
+ *  like a blocks field (contains paragraph/heading nodes).
+ */
+function sanitizeBlocksField(blocks: any[]): any[] {
+  return blocks.map((block) => {
+    if (!block || typeof block !== "object" || Array.isArray(block)) return block;
+    if (block.type !== "paragraph" && block.type !== "heading") return block;
+
+    const rawChildren = Array.isArray(block.children) ? block.children : [];
+    const children =
+      rawChildren.length === 0
+        ? [{ type: "text", text: "" }]
+        : rawChildren.map((child: any) => {
+            if (!child || typeof child !== "object") {
+              return { type: "text", text: "" };
+            }
+            if (child.type === "text") {
+              // text field must always be a string
+              const t = child.text;
+              return { ...child, text: typeof t === "string" ? t : "" };
+            }
+            return child;
+          });
+
+    return { ...block, children };
+  });
 }
 
 const CONTENT_TYPE_MAP: Record<string, string> = {

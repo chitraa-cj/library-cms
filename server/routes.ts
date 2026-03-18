@@ -52,6 +52,12 @@ const STRAPI_TEEKA_AUTHORS = new Set([
 function cleanPayloadForStrapi(data: Record<string, any>): Record<string, any> {
   const cleaned: Record<string, any> = {};
   for (const [key, value] of Object.entries(data)) {
+    // Preserve `text: ""` — Strapi blocks require the text field on text nodes
+    // even when it is an empty string; stripping it causes a ValidationError.
+    if (key === "text" && value === "") {
+      cleaned[key] = value;
+      continue;
+    }
     if (value === undefined || value === null || value === "") continue;
     if (typeof value === "number" && Number.isNaN(value)) continue;
     // Strip string "NaN" — happens when a number input was left blank and serialized

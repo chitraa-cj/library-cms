@@ -57,7 +57,7 @@ export function blocksToTipTap(
 
   const content: TipTapNode[] = value.map((block: any) => {
     const children = (block.children || [])
-      .filter((c: any) => c.text !== undefined)
+      .filter((c: any) => c.text !== undefined && c.text !== "")
       .map((c: any) => {
         const marks: TipTapMark[] = [];
         if (c.bold) marks.push({ type: "bold" });

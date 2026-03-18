@@ -2,7 +2,7 @@ import { useEditor, EditorContent } from "@tiptap/react";
 import StarterKit from "@tiptap/starter-kit";
 import Placeholder from "@tiptap/extension-placeholder";
 import Underline from "@tiptap/extension-underline";
-import { useEffect } from "react";
+import { useEffect, useRef } from "react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import {
@@ -34,10 +34,15 @@ export default function RichTextEditor({
   minHeight = 120,
   "data-testid": testId,
 }: RichTextEditorProps) {
+  // Prevents the useEffect from calling setContent after the editor
+  // itself triggered an onChange (which would reset the cursor / lose pasted text).
+  const suppressNextEffect = useRef(false);
+
   const editor = useEditor({
     extensions: [
       StarterKit.configure({
         heading: { levels: [1, 2, 3] },
+        // StarterKit includes strike; make sure it doesn't duplicate underline
       }),
       Underline,
       Placeholder.configure({
@@ -48,17 +53,21 @@ export default function RichTextEditor({
     ],
     content: blocksToTipTap(value),
     onUpdate({ editor }) {
+      suppressNextEffect.current = true;
       onChange(tipTapToBlocks(editor.getJSON() as any));
     },
   });
 
   useEffect(() => {
     if (!editor) return;
-    const current = editor.getJSON();
-    const incoming = blocksToTipTap(value);
-    if (JSON.stringify(current) !== JSON.stringify(incoming)) {
-      editor.commands.setContent(incoming, false);
+    // If this value change was triggered by the editor itself, skip setContent
+    // so we don't reset the cursor position or lose in-progress edits/pastes.
+    if (suppressNextEffect.current) {
+      suppressNextEffect.current = false;
+      return;
     }
+    const incoming = blocksToTipTap(value);
+    editor.commands.setContent(incoming, false);
   }, [value]);
 
   if (!editor) return null;

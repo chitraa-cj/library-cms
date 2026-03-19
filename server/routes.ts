@@ -1,6 +1,6 @@
 import type { Express } from "express";
 import { type Server } from "http";
-import { setupAuth, requireAuth } from "./auth";
+import { setupAuth, requireAuth, requireAdmin, hashPassword } from "./auth";
 import { createStrapiRouter, strapiRequest } from "./strapi";
 import { storage } from "./storage";
 import type { User } from "@shared/schema";
@@ -658,6 +658,97 @@ export async function registerRoutes(
       res.json({ draft: updated, strapi: strapiResult });
     } catch (error: any) {
       res.status(500).json({ message: error.message || "Failed to publish draft" });
+    }
+  });
+
+  // ───────────────── Admin: User Management ─────────────────
+
+  // List all users (admin only)
+  app.get("/api/admin/users", requireAuth, requireAdmin, async (_req, res) => {
+    try {
+      const allUsers = await storage.getAllUsers();
+      const safe = allUsers.map(({ password: _, ...u }) => u);
+      res.json(safe);
+    } catch (error: any) {
+      res.status(500).json({ message: error.message || "Failed to fetch users" });
+    }
+  });
+
+  // Create a new user (admin only)
+  app.post("/api/admin/users", requireAuth, requireAdmin, async (req, res) => {
+    try {
+      const { username, password, displayName, role } = req.body;
+      if (!username || !password) {
+        return res.status(400).json({ message: "Username and password are required" });
+      }
+      if (password.length < 6) {
+        return res.status(400).json({ message: "Password must be at least 6 characters" });
+      }
+      const existing = await storage.getUserByUsername(username);
+      if (existing) {
+        return res.status(409).json({ message: "Username already exists" });
+      }
+      const hashed = await hashPassword(password);
+      const user = await storage.createUser({
+        username,
+        password: hashed,
+        displayName: displayName || username,
+        role: role === "admin" ? "admin" : "editor",
+      });
+      const { password: _, ...safe } = user;
+      res.status(201).json(safe);
+    } catch (error: any) {
+      res.status(500).json({ message: error.message || "Failed to create user" });
+    }
+  });
+
+  // Update user role (admin only)
+  app.patch("/api/admin/users/:id/role", requireAuth, requireAdmin, async (req, res) => {
+    try {
+      const { id } = req.params;
+      const { role } = req.body;
+      if (!role || !["admin", "editor"].includes(role)) {
+        return res.status(400).json({ message: "Role must be 'admin' or 'editor'" });
+      }
+      const updated = await storage.updateUserRole(id, role);
+      if (!updated) return res.status(404).json({ message: "User not found" });
+      const { password: _, ...safe } = updated;
+      res.json(safe);
+    } catch (error: any) {
+      res.status(500).json({ message: error.message || "Failed to update role" });
+    }
+  });
+
+  // Reset user password (admin only)
+  app.patch("/api/admin/users/:id/password", requireAuth, requireAdmin, async (req, res) => {
+    try {
+      const { id } = req.params;
+      const { password } = req.body;
+      if (!password || password.length < 6) {
+        return res.status(400).json({ message: "Password must be at least 6 characters" });
+      }
+      const hashed = await hashPassword(password);
+      const updated = await storage.updateUserPassword(id, hashed);
+      if (!updated) return res.status(404).json({ message: "User not found" });
+      res.json({ message: "Password updated" });
+    } catch (error: any) {
+      res.status(500).json({ message: error.message || "Failed to reset password" });
+    }
+  });
+
+  // Delete user (admin only — cannot delete yourself)
+  app.delete("/api/admin/users/:id", requireAuth, requireAdmin, async (req, res) => {
+    try {
+      const { id } = req.params;
+      const me = req.user as User;
+      if (id === me.id) {
+        return res.status(400).json({ message: "You cannot delete your own account" });
+      }
+      const deleted = await storage.deleteUser(id);
+      if (!deleted) return res.status(404).json({ message: "User not found" });
+      res.json({ message: "User deleted" });
+    } catch (error: any) {
+      res.status(500).json({ message: error.message || "Failed to delete user" });
     }
   });
 

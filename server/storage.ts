@@ -5,7 +5,11 @@ import { eq, and, desc } from "drizzle-orm";
 export interface IStorage {
   getUser(id: string): Promise<User | undefined>;
   getUserByUsername(username: string): Promise<User | undefined>;
-  createUser(user: InsertUser): Promise<User>;
+  getAllUsers(): Promise<User[]>;
+  createUser(user: InsertUser & { role?: string }): Promise<User>;
+  deleteUser(id: string): Promise<boolean>;
+  updateUserRole(id: string, role: string): Promise<User | undefined>;
+  updateUserPassword(id: string, hashedPassword: string): Promise<User | undefined>;
   getDrafts(userId: string): Promise<Draft[]>;
   getDraftsByType(contentType: string, userId: string): Promise<Draft[]>;
   getDraft(id: number, userId: string): Promise<Draft | undefined>;
@@ -31,9 +35,28 @@ export class DatabaseStorage implements IStorage {
     return user;
   }
 
-  async createUser(insertUser: InsertUser): Promise<User> {
+  async getAllUsers(): Promise<User[]> {
+    return db.select().from(users).orderBy(users.createdAt);
+  }
+
+  async createUser(insertUser: InsertUser & { role?: string }): Promise<User> {
     const [user] = await db.insert(users).values(insertUser).returning();
     return user;
+  }
+
+  async deleteUser(id: string): Promise<boolean> {
+    const result = await db.delete(users).where(eq(users.id, id)).returning();
+    return result.length > 0;
+  }
+
+  async updateUserRole(id: string, role: string): Promise<User | undefined> {
+    const [updated] = await db.update(users).set({ role }).where(eq(users.id, id)).returning();
+    return updated;
+  }
+
+  async updateUserPassword(id: string, hashedPassword: string): Promise<User | undefined> {
+    const [updated] = await db.update(users).set({ password: hashedPassword }).where(eq(users.id, id)).returning();
+    return updated;
   }
 
   async getDrafts(userId: string): Promise<Draft[]> {

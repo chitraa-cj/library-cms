@@ -77,34 +77,9 @@ export function setupAuth(app: Express) {
     }
   });
 
-  app.post("/api/auth/register", async (req, res, next) => {
-    try {
-      const { username, password, displayName } = req.body;
-
-      if (!username || !password) {
-        return res.status(400).json({ message: "Username and password are required" });
-      }
-
-      const existingUser = await storage.getUserByUsername(username);
-      if (existingUser) {
-        return res.status(409).json({ message: "Username already exists" });
-      }
-
-      const hashedPassword = await hashPassword(password);
-      const user = await storage.createUser({
-        username,
-        password: hashedPassword,
-        displayName: displayName || username,
-      });
-
-      req.login(user, (err) => {
-        if (err) return next(err);
-        const { password: _, ...safeUser } = user;
-        return res.status(201).json(safeUser);
-      });
-    } catch (error: any) {
-      return res.status(500).json({ message: error.message || "Registration failed" });
-    }
+  // Registration is admin-only — open self-registration is disabled.
+  app.post("/api/auth/register", (_req, res) => {
+    return res.status(403).json({ message: "Self-registration is disabled. Contact an administrator." });
   });
 
   app.post("/api/auth/login", (req, res, next) => {
@@ -143,3 +118,12 @@ export function requireAuth(req: any, res: any, next: any) {
   }
   return res.status(401).json({ message: "Authentication required" });
 }
+
+export function requireAdmin(req: any, res: any, next: any) {
+  if (req.isAuthenticated() && (req.user as User).role === "admin") {
+    return next();
+  }
+  return res.status(403).json({ message: "Admin access required" });
+}
+
+export { hashPassword };

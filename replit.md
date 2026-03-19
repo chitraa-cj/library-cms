@@ -64,12 +64,22 @@ A data feeding website for the Ekatmadham Library that connects to a Strapi CMS 
 - `client/src/pages/` - All page components (login, dashboard, granthas, chapters, articles, authors, categories, prasthana-thraya)
 - `client/src/components/` - Reusable components (dashboard-layout, data-table, text-translation-fields, bhashya-entry-fields)
 
+## Multi-User Data Entry
+- Sessions are stored in PostgreSQL — multiple users can log in and work simultaneously
+- Each mantra is an independent Strapi record — users working on different mantras do not conflict
+- User roles: `admin` (full access + user management) and `editor` (data entry only)
+- Admin user management at `/admin/users` — create/delete users, reset passwords, change roles
+- Self-registration is disabled — admin must create accounts for data entry staff
+- Admin API routes: `GET/POST /api/admin/users`, `PATCH /api/admin/users/:id/role`, `PATCH /api/admin/users/:id/password`, `DELETE /api/admin/users/:id`
+- "Administration" section in sidebar visible only to admin-role users
+
 ## Security
 - All draft operations are user-scoped (users can only see/edit/delete their own drafts)
 - Content type validation on draft creation
 - Draft ID validation (NaN protection)
 - Session cookies: httpOnly, secure in production, sameSite lax
 - Trust proxy enabled for production deployment behind reverse proxy
+- Self-registration disabled; admin-only user creation via `/api/admin/users`
 
 ## Environment Variables
 - `DATABASE_URL` - PostgreSQL connection string

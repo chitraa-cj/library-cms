@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { queryClient, apiRequest } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
@@ -99,6 +99,7 @@ interface ManthraNode {
   id: string;
   title: string;
   order: number;
+  strapiDocumentId?: string;
   ShlokaManthraEntry?: TextAndTranslation;
   BhashyamForShlokaManthra?: TextAndTranslation;
   Teekas?: ManthraTeekaEntry[];
@@ -190,6 +191,7 @@ function reconstructHierarchyFromStrapi(sections: any[]): AdhyayaNode[] {
               id: uid(),
               title: m.ShlokaManthraNumber || `Mantra ${mi + 1}`,
               order: m.order ?? mi + 1,
+              strapiDocumentId: m.documentId || undefined,
             })),
         })),
       },
@@ -218,6 +220,7 @@ function reconstructHierarchyFromStrapi(sections: any[]): AdhyayaNode[] {
                   id: uid(),
                   title: m.ShlokaManthraNumber || `Mantra ${mi + 1}`,
                   order: m.order ?? mi + 1,
+                  strapiDocumentId: m.documentId || undefined,
                 })),
             }))
           : [
@@ -233,6 +236,7 @@ function reconstructHierarchyFromStrapi(sections: any[]): AdhyayaNode[] {
                     id: uid(),
                     title: m.ShlokaManthraNumber || `Mantra ${mi + 1}`,
                     order: m.order ?? mi + 1,
+                    strapiDocumentId: m.documentId || undefined,
                   })),
               },
             ];
@@ -532,7 +536,83 @@ export default function GranthasPage() {
     khandaId: string;
     padaId?: string;  // only set when levelThreeEnabled
     manthraId: string;
+    strapiDocumentId?: string; // set if this mantra is already published to Strapi
   } | null>(null);
+  const [manthraLoading, setManthraLoading] = useState(false);
+
+  // When the mantra dialog opens for a published mantra (has strapiDocumentId),
+  // fetch the live Strapi content and populate the form fields so users always
+  // see the current CMS version rather than potentially stale local draft data.
+  useEffect(() => {
+    const docId = editingManthra?.strapiDocumentId;
+    if (!docId || !editingManthra) return;
+    let cancelled = false;
+    setManthraLoading(true);
+    fetch(`/api/strapi/manthras/${docId}`, { credentials: "include" })
+      .then((r) => r.json())
+      .then((res) => {
+        if (cancelled) return;
+        const m = res.data;
+        if (!m) return;
+        const { adhyayaId, khandaId, manthraId, padaId } = editingManthra;
+        setAdhyayas((prev) =>
+          prev.map((a) => {
+            if (a.id !== adhyayaId) return a;
+            return {
+              ...a,
+              khandas: a.khandas.map((k) => {
+                if (k.id !== khandaId) return k;
+                if (padaId) {
+                  return {
+                    ...k,
+                    padas: (k.padas ?? []).map((p) => {
+                      if (p.id !== padaId) return p;
+                      return {
+                        ...p,
+                        manthras: p.manthras.map((mn) =>
+                          mn.id !== manthraId ? mn : {
+                            ...mn,
+                            ShlokaManthraEntry: m.ShlokaManthraEntry || undefined,
+                            BhashyamForShlokaManthra: m.BhashyamEntry || undefined,
+                            Teekas: Array.isArray(m.Teekas) && m.Teekas.length > 0
+                              ? m.Teekas.map((t: any) => ({
+                                  TeekaName: t.teeka?.TeekaName || t.TeekaName || "",
+                                  TeekaAuthor: t.teeka?.TeekaAuthor || t.TeekaAuthor || "",
+                                  TeekaEntry: t.TeekaEntry || undefined,
+                                }))
+                              : mn.Teekas,
+                          }
+                        ),
+                      };
+                    }),
+                  };
+                }
+                return {
+                  ...k,
+                  manthras: k.manthras.map((mn) =>
+                    mn.id !== manthraId ? mn : {
+                      ...mn,
+                      ShlokaManthraEntry: m.ShlokaManthraEntry || undefined,
+                      BhashyamForShlokaManthra: m.BhashyamEntry || undefined,
+                      Teekas: Array.isArray(m.Teekas) && m.Teekas.length > 0
+                        ? m.Teekas.map((t: any) => ({
+                            TeekaName: t.teeka?.TeekaName || t.TeekaName || "",
+                            TeekaAuthor: t.teeka?.TeekaAuthor || t.TeekaAuthor || "",
+                            TeekaEntry: t.TeekaEntry || undefined,
+                          }))
+                        : mn.Teekas,
+                    }
+                  ),
+                };
+              }),
+            };
+          })
+        );
+      })
+      .catch(console.error)
+      .finally(() => { if (!cancelled) setManthraLoading(false); });
+    return () => { cancelled = true; };
+  }, [editingManthra?.manthraId, editingManthra?.strapiDocumentId]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Data
   const { data, isLoading } = useQuery<StrapiResponse<StrapiGrantha>>({
@@ -762,9 +842,47 @@ export default function GranthasPage() {
         rawHier2.length > 0
           ? rawHier2
           : reconstructHierarchyFromStrapi(Array.isArray(item.sections) ? item.sections : []);
-      setAdhyayas(rawCfg2?.leafName === "Khanda"
-        ? migrateHierarchyLeafName(hierToUse2, "Khanda", "Mantra")
-        : hierToUse2);
+
+      // Enrich hierarchy mantra nodes with strapiDocumentId by matching titles
+      // against the Strapi sections manthras list. This handles draft hierarchies
+      // (loaded from DB) that predate the strapiDocumentId field.
+      const strapiManthraByShloka = new Map<string, string>();
+      if (Array.isArray(item.sections)) {
+        for (const sec of item.sections) {
+          if (Array.isArray(sec.manthras)) {
+            for (const m of sec.manthras) {
+              if (m.ShlokaManthraNumber && m.documentId) {
+                strapiManthraByShloka.set(m.ShlokaManthraNumber, m.documentId);
+              }
+            }
+          }
+        }
+      }
+      function enrichHierarchy(hier: AdhyayaNode[]): AdhyayaNode[] {
+        return hier.map((a) => ({
+          ...a,
+          khandas: a.khandas.map((k) => ({
+            ...k,
+            padas: (k.padas ?? []).map((p) => ({
+              ...p,
+              manthras: p.manthras.map((m) =>
+                m.strapiDocumentId || !strapiManthraByShloka.has(m.title) ? m
+                  : { ...m, strapiDocumentId: strapiManthraByShloka.get(m.title) }
+              ),
+            })),
+            manthras: k.manthras.map((m) =>
+              m.strapiDocumentId || !strapiManthraByShloka.has(m.title) ? m
+                : { ...m, strapiDocumentId: strapiManthraByShloka.get(m.title) }
+            ),
+          })),
+        }));
+      }
+      const enrichedHier2 = enrichHierarchy(
+        rawCfg2?.leafName === "Khanda"
+          ? migrateHierarchyLeafName(hierToUse2, "Khanda", "Mantra")
+          : hierToUse2
+      );
+      setAdhyayas(enrichedHier2);
       setTeekas(
         Array.isArray(savedData?.teekas) && savedData.teekas.length > 0
           ? savedData.teekas
@@ -2093,7 +2211,7 @@ export default function GranthasPage() {
                             <Button
                               size="icon" variant="ghost"
                               className="h-6 w-6 opacity-0 group-hover:opacity-100 transition-opacity text-muted-foreground hover:text-foreground"
-                              onClick={() => setEditingManthra({ adhyayaId: adhyaya.id, khandaId: adhyaya.khandas[0].id, manthraId: manthra.id })}
+                              onClick={() => setEditingManthra({ adhyayaId: adhyaya.id, khandaId: adhyaya.khandas[0].id, manthraId: manthra.id, strapiDocumentId: manthra.strapiDocumentId })}
                               data-testid={`button-edit-manthra-${aIdx}-0-${mIdx}`}
                             >
                               <Pencil className="w-3 h-3" />
@@ -2218,7 +2336,7 @@ export default function GranthasPage() {
                                             <Button
                                               size="icon" variant="ghost"
                                               className="h-6 w-6 opacity-0 group-hover:opacity-100 transition-opacity text-muted-foreground hover:text-foreground"
-                                              onClick={() => setEditingManthra({ adhyayaId: adhyaya.id, khandaId: khanda.id, padaId: pada.id, manthraId: manthra.id })}
+                                              onClick={() => setEditingManthra({ adhyayaId: adhyaya.id, khandaId: khanda.id, padaId: pada.id, manthraId: manthra.id, strapiDocumentId: manthra.strapiDocumentId })}
                                               data-testid={`button-edit-manthra-${aIdx}-${kIdx}-${pIdx}-${mIdx}`}
                                             >
                                               <Pencil className="w-3 h-3" />
@@ -2281,7 +2399,7 @@ export default function GranthasPage() {
                                     <Button
                                       size="icon" variant="ghost"
                                       className="h-6 w-6 opacity-0 group-hover:opacity-100 transition-opacity text-muted-foreground hover:text-foreground"
-                                      onClick={() => setEditingManthra({ adhyayaId: adhyaya.id, khandaId: khanda.id, manthraId: manthra.id })}
+                                      onClick={() => setEditingManthra({ adhyayaId: adhyaya.id, khandaId: khanda.id, manthraId: manthra.id, strapiDocumentId: manthra.strapiDocumentId })}
                                       data-testid={`button-edit-manthra-${aIdx}-${kIdx}-${mIdx}`}
                                       title="Enter text content"
                                     >
@@ -2362,9 +2480,16 @@ export default function GranthasPage() {
       >
         <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
           <DialogHeader>
-            <DialogTitle>{currentManthra?.title ?? "Manthra"}</DialogTitle>
+            <DialogTitle className="flex items-center gap-2">
+              {currentManthra?.title ?? "Manthra"}
+              {manthraLoading && <Loader2 className="w-4 h-4 animate-spin text-muted-foreground" />}
+            </DialogTitle>
             <DialogDescription>
-              Enter the Sanskrit text and translations. These fields map directly to the CMS chapter record.
+              {manthraLoading
+                ? "Loading latest content from the CMS…"
+                : editingManthra?.strapiDocumentId
+                  ? "Showing live content from the CMS. Edit here and click Done to update."
+                  : "Enter the Sanskrit text and translations. These fields map directly to the CMS chapter record."}
             </DialogDescription>
           </DialogHeader>
 

@@ -176,6 +176,7 @@ export function createStrapiRouter() {
     "populate[Section][populate][grantha][fields][2]=GranthaName",
     "populate[ShlokaManthraEntry][populate]=*",
     "populate[BhashyamEntry][populate]=*",
+    "populate[Teekas][populate][teeka][fields][0]=TeekaName&populate[Teekas][populate][teeka][fields][1]=TeekaAuthor",
     "populate[wordMeanings]=*",
     "pagination[pageSize]=200",
   ].join("&");

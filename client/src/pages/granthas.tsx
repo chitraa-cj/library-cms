@@ -368,24 +368,39 @@ function GranthaCard({
       )}
       {!isDraft && (
         <div className="mt-3 pt-3 border-t space-y-2">
-          {Array.isArray(item.sections) && item.sections.length > 0 && (
-            <div>
-              <p className="text-xs font-medium text-muted-foreground mb-1">
-                Sections ({item.sections.length})
-              </p>
-              <div className="flex flex-wrap gap-1">
-                {item.sections.map((s: any) => (
-                  <span
-                    key={s.documentId || s.id}
-                    className="inline-flex items-center text-xs bg-muted rounded px-1.5 py-0.5 text-foreground"
-                  >
-                    {s.title || "Untitled"}
-                    {s.type && <span className="ml-1 text-muted-foreground">· {s.type}</span>}
-                  </span>
-                ))}
+          {Array.isArray(item.sections) && item.sections.length > 0 && (() => {
+            const parentDocIds = new Set(
+              item.sections
+                .filter((s: any) => s.parent?.documentId)
+                .map((s: any) => s.parent.documentId)
+            );
+            const leafSections = item.sections.filter(
+              (s: any) => !parentDocIds.has(s.documentId)
+            );
+            const totalManthras = item.sections.reduce(
+              (sum: number, s: any) => sum + (Array.isArray(s.manthras) ? s.manthras.length : 0),
+              0
+            );
+            const displaySections = leafSections.length > 0 ? leafSections : item.sections;
+            return (
+              <div>
+                <p className="text-xs font-medium text-muted-foreground mb-1">
+                  Sections ({displaySections.length}){totalManthras > 0 ? ` · ${totalManthras} mantra${totalManthras !== 1 ? "s" : ""}` : ""}
+                </p>
+                <div className="flex flex-wrap gap-1">
+                  {displaySections.map((s: any) => (
+                    <span
+                      key={s.documentId || s.id}
+                      className="inline-flex items-center text-xs bg-muted rounded px-1.5 py-0.5 text-foreground"
+                    >
+                      {s.title || "Untitled"}
+                      {s.type && <span className="ml-1 text-muted-foreground">· {s.type}</span>}
+                    </span>
+                  ))}
+                </div>
               </div>
-            </div>
-          )}
+            );
+          })()}
           {Array.isArray(item.teekas) && item.teekas.length > 0 && (
             <div>
               <p className="text-xs font-medium text-muted-foreground mb-1">

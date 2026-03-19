@@ -151,6 +151,102 @@ function hasBlocks(v: StrapiBlock[] | string | null | undefined): boolean {
   return false;
 }
 
+/**
+ * Rebuilds the portal hierarchy (AdhyayaNode[]) from Strapi section data.
+ * Used as a fallback when no local draft hierarchy exists (e.g. different user
+ * trying to edit a grantha published by someone else, or draft was cleared).
+ *
+ * Strapi sections are a flat list; each section may have a `parent` field
+ * (populated via populate[sections][populate][parent]=*) that identifies its
+ * parent section, enabling us to reconstruct the nested tree.
+ */
+function reconstructHierarchyFromStrapi(sections: any[]): AdhyayaNode[] {
+  if (!sections || sections.length === 0) return [];
+
+  // Separate top-level sections (no parent) from child sections
+  const topLevel = sections.filter((s) => !s.parent?.documentId);
+  const children = sections.filter((s) => !!s.parent?.documentId);
+
+  // If there are NO top-level sections (e.g. all sections are at one level
+  // because the grantha has no adhyaya tier), treat them all as khandas
+  // wrapped in a single implicit adhyaya.
+  if (topLevel.length === 0) {
+    const sorted = [...sections].sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
+    return [
+      {
+        id: uid(),
+        title: sorted[0]?.title || "Adhyaya",
+        order: 1,
+        expanded: true,
+        khandas: sorted.map((s, i) => ({
+          id: uid(),
+          title: s.title || `Section ${i + 1}`,
+          order: s.order ?? i + 1,
+          expanded: true,
+          padas: [],
+          manthras: [...(s.manthras || [])]
+            .sort((a, b) => (a.order ?? 0) - (b.order ?? 0))
+            .map((m: any, mi: number) => ({
+              id: uid(),
+              title: m.ShlokaManthraNumber || `Mantra ${mi + 1}`,
+              order: m.order ?? mi + 1,
+            })),
+        })),
+      },
+    ];
+  }
+
+  return topLevel
+    .sort((a, b) => (a.order ?? 0) - (b.order ?? 0))
+    .map((adhyaya, ai) => {
+      const khandas = children
+        .filter((c) => c.parent?.documentId === adhyaya.documentId)
+        .sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
+
+      // If no children found, treat the adhyaya's own manthras as its content
+      const khandaNodes: KhandaNode[] =
+        khandas.length > 0
+          ? khandas.map((k, ki) => ({
+              id: uid(),
+              title: k.title || `Section ${ki + 1}`,
+              order: k.order ?? ki + 1,
+              expanded: true,
+              padas: [],
+              manthras: [...(k.manthras || [])]
+                .sort((a, b) => (a.order ?? 0) - (b.order ?? 0))
+                .map((m: any, mi: number) => ({
+                  id: uid(),
+                  title: m.ShlokaManthraNumber || `Mantra ${mi + 1}`,
+                  order: m.order ?? mi + 1,
+                })),
+            }))
+          : [
+              {
+                id: uid(),
+                title: "_default",
+                order: 1,
+                expanded: true,
+                padas: [],
+                manthras: [...(adhyaya.manthras || [])]
+                  .sort((a, b) => (a.order ?? 0) - (b.order ?? 0))
+                  .map((m: any, mi: number) => ({
+                    id: uid(),
+                    title: m.ShlokaManthraNumber || `Mantra ${mi + 1}`,
+                    order: m.order ?? mi + 1,
+                  })),
+              },
+            ];
+
+      return {
+        id: uid(),
+        title: adhyaya.title || `Adhyaya ${ai + 1}`,
+        order: adhyaya.order ?? ai + 1,
+        expanded: true,
+        khandas: khandaNodes,
+      };
+    });
+}
+
 function hasManthraContent(m: ManthraNode) {
   return !!(
     hasBlocks(m.ShlokaManthraEntry?.SanskritTextEntry) ||
@@ -644,9 +740,16 @@ export default function GranthasPage() {
       const migratedCfg2 = migrateStructureConfig(rawCfg2);
       setStructureConfig(migratedCfg2);
       const rawHier2 = savedData?.hierarchy || [];
+      // Fallback: if local draft has no hierarchy (e.g. opened by a different user
+      // or draft was cleared), reconstruct the hierarchy from Strapi sections data.
+      // Strapi now returns sections with parent fields so we can rebuild the tree.
+      const hierToUse2 =
+        rawHier2.length > 0
+          ? rawHier2
+          : reconstructHierarchyFromStrapi(Array.isArray(item.sections) ? item.sections : []);
       setAdhyayas(rawCfg2?.leafName === "Khanda"
-        ? migrateHierarchyLeafName(rawHier2, "Khanda", "Mantra")
-        : rawHier2);
+        ? migrateHierarchyLeafName(hierToUse2, "Khanda", "Mantra")
+        : hierToUse2);
       setTeekas(
         Array.isArray(savedData?.teekas) && savedData.teekas.length > 0
           ? savedData.teekas

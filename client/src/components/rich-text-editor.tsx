@@ -51,33 +51,6 @@ export default function RichTextEditor({
       }),
     ],
     content: blocksToTipTap(value),
-    editorProps: {
-      // Clean up pasted HTML: remove styling, classes, links, and scripts
-      // so external content (websites, Word docs) pastes as clean text.
-      transformPastedHTML(html: string): string {
-        const div = document.createElement("div");
-        div.innerHTML = html;
-        // Remove elements that should never appear in content
-        div.querySelectorAll("script,style,meta,link,head,img,table,form,button,input,select,textarea,iframe,video,audio").forEach((el) => {
-          el.replaceWith(document.createTextNode(el.textContent || ""));
-        });
-        // Unwrap anchor links (keep text, drop the link)
-        div.querySelectorAll("a").forEach((el) => {
-          el.replaceWith(document.createTextNode(el.textContent || ""));
-        });
-        // Strip all class, style, id, dir, lang attributes (keep only content)
-        div.querySelectorAll("*").forEach((el) => {
-          el.removeAttribute("class");
-          el.removeAttribute("style");
-          el.removeAttribute("id");
-          el.removeAttribute("dir");
-          el.removeAttribute("lang");
-          el.removeAttribute("data-mce-style");
-          el.removeAttribute("data-mce-bogus");
-        });
-        return div.innerHTML;
-      },
-    },
     onUpdate({ editor }) {
       suppressNextEffect.current = true;
       onChange(tipTapToBlocks(editor.getJSON() as any));

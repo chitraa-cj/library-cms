@@ -13,6 +13,7 @@ import {
   List,
   ListOrdered,
   RemoveFormatting,
+  ClipboardPaste,
 } from "lucide-react";
 import type { StrapiBlock } from "@shared/schema";
 import { blocksToTipTap, tipTapToBlocks } from "@/lib/strapi-blocks";
@@ -38,6 +39,12 @@ export default function RichTextEditor({
   // itself triggered an onChange (which would reset the cursor / lose pasted text).
   const suppressNextEffect = useRef(false);
 
+  // Keep onChange stable so the stale-closure inside useEditor always calls
+  // the latest version of the callback (important for TipTap v3 which captures
+  // callbacks at editor-creation time).
+  const onChangeRef = useRef(onChange);
+  useEffect(() => { onChangeRef.current = onChange; });
+
   const editor = useEditor({
     extensions: [
       StarterKit.configure({
@@ -53,7 +60,7 @@ export default function RichTextEditor({
     content: blocksToTipTap(value),
     onUpdate({ editor }) {
       suppressNextEffect.current = true;
-      onChange(tipTapToBlocks(editor.getJSON() as any));
+      onChangeRef.current(tipTapToBlocks(editor.getJSON() as any));
     },
   });
 
@@ -68,9 +75,24 @@ export default function RichTextEditor({
     if (editor.isFocused) return;
     const incoming = blocksToTipTap(value);
     editor.commands.setContent(incoming, false);
-  }, [value]);
+  }, [value]); // eslint-disable-line react-hooks/exhaustive-deps
 
   if (!editor) return null;
+
+  // Paste button: reads clipboard text and inserts it. Useful when Ctrl+V
+  // doesn't fire because the editor hasn't been clicked yet.
+  const handlePasteButton = async () => {
+    try {
+      const text = await navigator.clipboard.readText();
+      if (text) {
+        editor.chain().focus().insertContent(text).run();
+      }
+    } catch {
+      // Permission denied or no clipboard text — focus the editor so the user
+      // can use Ctrl+V manually.
+      editor.commands.focus("end");
+    }
+  };
 
   const ToolBtn = ({
     active,
@@ -160,12 +182,24 @@ export default function RichTextEditor({
         >
           <RemoveFormatting className="w-3.5 h-3.5" />
         </ToolBtn>
+        <div className="w-px h-4 bg-border mx-1" />
+        {/* Paste button — works even before the editor is clicked */}
+        <button
+          type="button"
+          title="Paste from clipboard"
+          onClick={handlePasteButton}
+          data-testid="button-paste-clipboard"
+          className="h-6 w-6 rounded flex items-center justify-center text-muted-foreground hover:text-foreground hover:bg-muted transition-colors"
+        >
+          <ClipboardPaste className="w-3.5 h-3.5" />
+        </button>
       </div>
-      {/* Editor area */}
+      {/* Editor area — clicking anywhere in the box (including empty space below text) focuses the editor */}
       <EditorContent
         editor={editor}
-        className={cn("rich-text-editor-content px-3 py-2 text-sm focus:outline-none")}
+        className={cn("rich-text-editor-content px-3 py-2 text-sm focus:outline-none cursor-text")}
         style={{ minHeight }}
+        onClick={() => { if (!editor.isFocused) editor.commands.focus("end"); }}
       />
     </div>
   );

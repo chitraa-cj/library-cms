@@ -62,6 +62,29 @@ const EMPTY_TT: TextAndTranslation = {
   OtherTranslations: [],
 };
 
+/**
+ * When Strapi returns a TextAndTranslation object the "other language" translation
+ * lives in OtherTranslations[0].{LanguageOfTranslation, TranslationText}.
+ * TextTranslationFields reads the legacy flat fields LanguageOfTranslation and
+ * OtherLanguagesTranslation, so we copy the first array entry into those flat fields
+ * so the editor pre-fills correctly.
+ */
+function unpackOtherTranslation(tt: TextAndTranslation | null | undefined): TextAndTranslation {
+  if (!tt) return { ...EMPTY_TT };
+  const first =
+    Array.isArray(tt.OtherTranslations) && tt.OtherTranslations.length > 0
+      ? tt.OtherTranslations[0]
+      : null;
+  if (!first) return tt;
+  // Don't overwrite if the legacy flat fields are already populated
+  if (tt.LanguageOfTranslation) return tt;
+  return {
+    ...tt,
+    LanguageOfTranslation: first.LanguageOfTranslation ?? "",
+    OtherLanguagesTranslation: first.TranslationText ?? [],
+  };
+}
+
 let _uid = 0;
 function uid() { return String(++_uid); }
 
@@ -187,8 +210,8 @@ export default function ManthrasPage() {
         ShlokaManthraNumber: d.ShlokaManthraNumber || "",
         order: d.order != null ? String(d.order) : "",
         section: d._section || "",
-        ShlokaManthraEntry: d.ShlokaManthraEntry || { ...EMPTY_TT },
-        BhashyamEntry: d.BhashyamEntry || { ...EMPTY_TT },
+        ShlokaManthraEntry: unpackOtherTranslation(d.ShlokaManthraEntry),
+        BhashyamEntry: unpackOtherTranslation(d.BhashyamEntry),
         Teekas: d.Teekas || [],
         wordMeanings: (d.wordMeanings || []).map((w: WordMeaning) => ({ ...w, _id: uid() })),
       });
@@ -198,8 +221,8 @@ export default function ManthrasPage() {
         ShlokaManthraNumber: item.ShlokaManthraNumber || "",
         order: item.order != null ? String(item.order) : "",
         section: item.Section?.documentId || item.section?.documentId || "",
-        ShlokaManthraEntry: item.ShlokaManthraEntry || { ...EMPTY_TT },
-        BhashyamEntry: item.BhashyamEntry || { ...EMPTY_TT },
+        ShlokaManthraEntry: unpackOtherTranslation(item.ShlokaManthraEntry),
+        BhashyamEntry: unpackOtherTranslation(item.BhashyamEntry),
         Teekas: item.Teekas || [],
         wordMeanings: (item.wordMeanings || []).map((w: WordMeaning) => ({ ...w, _id: uid() })),
       });

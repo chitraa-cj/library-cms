@@ -207,6 +207,21 @@ async function findOrCreateSection(
   return newDocId;
 }
 
+// Helper: update an existing Strapi manthra (PUT).
+// Used when the hierarchy node already has a strapiDocumentId so content
+// changes (e.g. OtherTranslations) are persisted to the existing record.
+async function updateExistingManthra(
+  strapiDocumentId: string,
+  mData: Record<string, any>,
+  label: string
+): Promise<void> {
+  await strapiRequest(`/api/manthras/${strapiDocumentId}`, {
+    method: "PUT",
+    body: JSON.stringify({ data: mData }),
+  });
+  console.log(`[publish] Manthra "${label}" updated: ${strapiDocumentId}`);
+}
+
 // Helper: create a manthra in Strapi if one with the same ShlokaManthraNumber+Section doesn't already exist.
 async function createOrSkipManthra(
   mData: Record<string, any>,
@@ -420,7 +435,11 @@ async function publishGranthaWithHierarchy(
               try {
                 const mData = await buildManthraData(manthra, padaDocId);
                 console.log(`[publish] Manthra payload (L3):`, JSON.stringify(mData).slice(0, 300));
-                await createOrSkipManthra(mData, manthra.title);
+                if (manthra.strapiDocumentId) {
+                  await updateExistingManthra(manthra.strapiDocumentId, mData, manthra.title);
+                } else {
+                  await createOrSkipManthra(mData, manthra.title);
+                }
               } catch (e: any) {
                 console.error(`[publish] Manthra "${manthra.title}" (L3) failed:`, e.message);
               }
@@ -432,7 +451,11 @@ async function publishGranthaWithHierarchy(
             try {
               const mData = await buildManthraData(manthra, khandaDocId);
               console.log(`[publish] Manthra payload:`, JSON.stringify(mData).slice(0, 300));
-              await createOrSkipManthra(mData, manthra.title);
+              if (manthra.strapiDocumentId) {
+                await updateExistingManthra(manthra.strapiDocumentId, mData, manthra.title);
+              } else {
+                await createOrSkipManthra(mData, manthra.title);
+              }
             } catch (e: any) {
               console.error(`[publish] Manthra "${manthra.title}" FAILED:`, e.message);
             }

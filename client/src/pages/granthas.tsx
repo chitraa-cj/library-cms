@@ -2540,6 +2540,86 @@ export default function GranthasPage() {
                     data-testid="textarea-shloka-english"
                   />
                 </div>
+
+                {/* Other Language Translations for Shloka */}
+                <div className="pt-2 border-t">
+                  <div className="flex items-center justify-between mb-2">
+                    <Label className="text-xs">Other Language Translations</Label>
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      className="h-7 text-xs px-2"
+                      onClick={() => {
+                        const existing = currentManthra.ShlokaManthraEntry?.OtherTranslations ?? [];
+                        updateManthraContent(
+                          editingManthra.adhyayaId,
+                          editingManthra.khandaId,
+                          editingManthra.manthraId,
+                          { ShlokaManthraEntry: { ...currentManthra.ShlokaManthraEntry, OtherTranslations: [...existing, { LanguageOfTranslation: "" }] } },
+                          editingManthra.padaId
+                        );
+                      }}
+                      data-testid="button-add-shloka-translation"
+                    >
+                      <Plus className="w-3 h-3 mr-1" />
+                      Add Language
+                    </Button>
+                  </div>
+                  {(currentManthra.ShlokaManthraEntry?.OtherTranslations ?? []).length === 0 ? (
+                    <p className="text-xs text-muted-foreground text-center py-2">No other language translations added yet</p>
+                  ) : (
+                    <div className="space-y-2">
+                      {(currentManthra.ShlokaManthraEntry?.OtherTranslations ?? []).map((ot, i) => (
+                        <div key={i} className="p-3 bg-muted/40 rounded-lg space-y-2">
+                          <div className="flex items-center justify-between">
+                            <Select
+                              value={ot.LanguageOfTranslation ?? ""}
+                              onValueChange={(val) => {
+                                const updated = (currentManthra.ShlokaManthraEntry?.OtherTranslations ?? []).map((x, idx) =>
+                                  idx === i ? { ...x, LanguageOfTranslation: val } : x
+                                );
+                                updateManthraContent(editingManthra.adhyayaId, editingManthra.khandaId, editingManthra.manthraId, { ShlokaManthraEntry: { ...currentManthra.ShlokaManthraEntry, OtherTranslations: updated } }, editingManthra.padaId);
+                              }}
+                            >
+                              <SelectTrigger className="h-7 text-xs w-44" data-testid={`select-shloka-otlang-${i}`}>
+                                <SelectValue placeholder="Select language" />
+                              </SelectTrigger>
+                              <SelectContent>
+                                {translationLanguages.map((l) => (
+                                  <SelectItem key={l} value={l}>{l}</SelectItem>
+                                ))}
+                              </SelectContent>
+                            </Select>
+                            <Button
+                              variant="ghost"
+                              size="icon"
+                              className="h-7 w-7 text-destructive"
+                              onClick={() => {
+                                const updated = (currentManthra.ShlokaManthraEntry?.OtherTranslations ?? []).filter((_, idx) => idx !== i);
+                                updateManthraContent(editingManthra.adhyayaId, editingManthra.khandaId, editingManthra.manthraId, { ShlokaManthraEntry: { ...currentManthra.ShlokaManthraEntry, OtherTranslations: updated } }, editingManthra.padaId);
+                              }}
+                              data-testid={`button-remove-shloka-otlang-${i}`}
+                            >
+                              <Trash2 className="w-3.5 h-3.5" />
+                            </Button>
+                          </div>
+                          <RichTextEditor
+                            value={ot.TranslationText ?? []}
+                            onChange={(v) => {
+                              const updated = (currentManthra.ShlokaManthraEntry?.OtherTranslations ?? []).map((x, idx) =>
+                                idx === i ? { ...x, TranslationText: v as any } : x
+                              );
+                              updateManthraContent(editingManthra.adhyayaId, editingManthra.khandaId, editingManthra.manthraId, { ShlokaManthraEntry: { ...currentManthra.ShlokaManthraEntry, OtherTranslations: updated } }, editingManthra.padaId);
+                            }}
+                            placeholder={`${ot.LanguageOfTranslation || "Translation"} text...`}
+                            minHeight={70}
+                            data-testid={`textarea-shloka-ottext-${i}`}
+                          />
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
               </section>
 
               {/* Bhashyam */}
@@ -2586,6 +2666,86 @@ export default function GranthasPage() {
                     minHeight={100}
                     data-testid="textarea-bhashyam-english"
                   />
+                </div>
+
+                {/* Other Language Translations for Bhashyam */}
+                <div className="pt-2 border-t">
+                  <div className="flex items-center justify-between mb-2">
+                    <Label className="text-xs">Other Language Translations</Label>
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      className="h-7 text-xs px-2"
+                      onClick={() => {
+                        const existing = currentManthra.BhashyamForShlokaManthra?.OtherTranslations ?? [];
+                        updateManthraContent(
+                          editingManthra.adhyayaId,
+                          editingManthra.khandaId,
+                          editingManthra.manthraId,
+                          { BhashyamForShlokaManthra: { ...currentManthra.BhashyamForShlokaManthra, OtherTranslations: [...existing, { LanguageOfTranslation: "" }] } },
+                          editingManthra.padaId
+                        );
+                      }}
+                      data-testid="button-add-bhashyam-translation"
+                    >
+                      <Plus className="w-3 h-3 mr-1" />
+                      Add Language
+                    </Button>
+                  </div>
+                  {(currentManthra.BhashyamForShlokaManthra?.OtherTranslations ?? []).length === 0 ? (
+                    <p className="text-xs text-muted-foreground text-center py-2">No other language translations added yet</p>
+                  ) : (
+                    <div className="space-y-2">
+                      {(currentManthra.BhashyamForShlokaManthra?.OtherTranslations ?? []).map((ot, i) => (
+                        <div key={i} className="p-3 bg-muted/40 rounded-lg space-y-2">
+                          <div className="flex items-center justify-between">
+                            <Select
+                              value={ot.LanguageOfTranslation ?? ""}
+                              onValueChange={(val) => {
+                                const updated = (currentManthra.BhashyamForShlokaManthra?.OtherTranslations ?? []).map((x, idx) =>
+                                  idx === i ? { ...x, LanguageOfTranslation: val } : x
+                                );
+                                updateManthraContent(editingManthra.adhyayaId, editingManthra.khandaId, editingManthra.manthraId, { BhashyamForShlokaManthra: { ...currentManthra.BhashyamForShlokaManthra, OtherTranslations: updated } }, editingManthra.padaId);
+                              }}
+                            >
+                              <SelectTrigger className="h-7 text-xs w-44" data-testid={`select-bhashyam-otlang-${i}`}>
+                                <SelectValue placeholder="Select language" />
+                              </SelectTrigger>
+                              <SelectContent>
+                                {translationLanguages.map((l) => (
+                                  <SelectItem key={l} value={l}>{l}</SelectItem>
+                                ))}
+                              </SelectContent>
+                            </Select>
+                            <Button
+                              variant="ghost"
+                              size="icon"
+                              className="h-7 w-7 text-destructive"
+                              onClick={() => {
+                                const updated = (currentManthra.BhashyamForShlokaManthra?.OtherTranslations ?? []).filter((_, idx) => idx !== i);
+                                updateManthraContent(editingManthra.adhyayaId, editingManthra.khandaId, editingManthra.manthraId, { BhashyamForShlokaManthra: { ...currentManthra.BhashyamForShlokaManthra, OtherTranslations: updated } }, editingManthra.padaId);
+                              }}
+                              data-testid={`button-remove-bhashyam-otlang-${i}`}
+                            >
+                              <Trash2 className="w-3.5 h-3.5" />
+                            </Button>
+                          </div>
+                          <RichTextEditor
+                            value={ot.TranslationText ?? []}
+                            onChange={(v) => {
+                              const updated = (currentManthra.BhashyamForShlokaManthra?.OtherTranslations ?? []).map((x, idx) =>
+                                idx === i ? { ...x, TranslationText: v as any } : x
+                              );
+                              updateManthraContent(editingManthra.adhyayaId, editingManthra.khandaId, editingManthra.manthraId, { BhashyamForShlokaManthra: { ...currentManthra.BhashyamForShlokaManthra, OtherTranslations: updated } }, editingManthra.padaId);
+                            }}
+                            placeholder={`${ot.LanguageOfTranslation || "Translation"} text...`}
+                            minHeight={80}
+                            data-testid={`textarea-bhashyam-ottext-${i}`}
+                          />
+                        </div>
+                      ))}
+                    </div>
+                  )}
                 </div>
               </section>
 

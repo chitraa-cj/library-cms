@@ -1,7 +1,7 @@
 import { useEditor, EditorContent } from "@tiptap/react";
 import StarterKit from "@tiptap/starter-kit";
 import Placeholder from "@tiptap/extension-placeholder";
-import Underline from "@tiptap/extension-underline";
+// Note: Underline is included in StarterKit v3 by default — do NOT import separately
 import { useEffect, useRef } from "react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
@@ -50,7 +50,6 @@ export default function RichTextEditor({
       StarterKit.configure({
         heading: { levels: [1, 2, 3] },
       }),
-      Underline,
       Placeholder.configure({
         placeholder,
         emptyEditorClass:

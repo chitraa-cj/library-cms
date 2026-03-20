@@ -161,7 +161,15 @@ async function buildManthraData(
   else if (manthra.BhashyamEntry) mData.BhashyamEntry = manthra.BhashyamEntry;
   // NOTE: Do NOT send Teekas — Strapi rejects any non-empty key inside manthra Teekas items
   // NOTE: Do NOT send NumberOfTeekas — that field belongs to Grantha, not Manthra
-  return cleanPayloadForStrapi(mData);
+  const cleaned = cleanPayloadForStrapi(mData);
+  // Normalize TextAndTranslation fields so OtherTranslations is always in Strapi's
+  // repeatable-component format regardless of which format the draft stored them in.
+  for (const key of ["ShlokaManthraEntry", "BhashyamEntry"] as const) {
+    if (cleaned[key] && typeof cleaned[key] === "object" && !Array.isArray(cleaned[key])) {
+      cleaned[key] = normalizeTextAndTranslation(cleaned[key]);
+    }
+  }
+  return cleaned;
 }
 
 // Helper: find an existing Strapi section by title+grantha+parent, or create it if missing.
@@ -468,6 +476,46 @@ async function publishGranthaWithHierarchy(
   return strapiResult;
 }
 
+/**
+ * Normalize a TextAndTranslation object so Strapi always receives OtherTranslations
+ * as a repeatable component array — even when the portal stored it in the legacy
+ * flat-field format (LanguageOfTranslation + OtherLanguagesTranslation).
+ *
+ * Legacy (TextTranslationFields / Manthras page):
+ *   { LanguageOfTranslation: "Kannada", OtherLanguagesTranslation: [...blocks] }
+ *
+ * Strapi expected format (shared.translations component):
+ *   { OtherTranslations: [{ LanguageOfTranslation: "Kannada", TranslationText: [...blocks] }] }
+ */
+function normalizeTextAndTranslation(field: Record<string, any>): Record<string, any> {
+  const {
+    LanguageOfTranslation,
+    OtherLanguagesTranslation,
+    OtherTranslations,
+    ...rest
+  } = field;
+
+  // Start with any already-correct OtherTranslations entries
+  const existing: Array<Record<string, any>> = Array.isArray(OtherTranslations) ? OtherTranslations : [];
+
+  // Promote legacy flat fields into the array if both language and text are present
+  const legacyText = Array.isArray(OtherLanguagesTranslation) && OtherLanguagesTranslation.length > 0
+    ? OtherLanguagesTranslation : null;
+  if (LanguageOfTranslation && legacyText) {
+    const alreadyCovered = existing.some(
+      (t) => t.LanguageOfTranslation === LanguageOfTranslation
+    );
+    if (!alreadyCovered) {
+      existing.push({ LanguageOfTranslation, TranslationText: legacyText });
+    }
+  }
+
+  return {
+    ...rest,
+    ...(existing.length > 0 ? { OtherTranslations: existing } : {}),
+  };
+}
+
 function buildManthraPayload(data: Record<string, any>): Record<string, any> {
   const {
     section,       // lowercase local field → maps to Strapi's capital-S Section relation
@@ -477,6 +525,14 @@ function buildManthraPayload(data: Record<string, any>): Record<string, any> {
   } = data;
 
   const payload = cleanPayloadForStrapi(rest);
+
+  // Normalize ShlokaManthraEntry and BhashyamEntry so OtherTranslations is always
+  // in the repeatable-component format Strapi expects, not the legacy flat fields.
+  for (const key of ["ShlokaManthraEntry", "BhashyamEntry"] as const) {
+    if (payload[key] && typeof payload[key] === "object" && !Array.isArray(payload[key])) {
+      payload[key] = normalizeTextAndTranslation(payload[key]);
+    }
+  }
 
   // Map section documentId → Section relation (Strapi v5 accepts raw documentId string)
   if (section && typeof section === "string") {

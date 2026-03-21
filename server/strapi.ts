@@ -183,17 +183,35 @@ export function createStrapiRouter() {
 
   router.get("/manthras", async (_req, res) => {
     try {
-      const data = await strapiRequest(`/api/manthras?${MANTHRA_POPULATE}`);
-      // Normalise: expose section (lowercase) and grantha for frontend compatibility
-      const manthras = (data.data || []).map((m: any) => {
+      // Fetch all pages — Strapi hard-caps pageSize at 100, so we loop until we
+      // have collected every manthra rather than silently dropping page 2+.
+      function normaliseManthra(m: any) {
         const sec = m.Section;
         return {
           ...m,
           section: sec ? { id: sec.id, documentId: sec.documentId, title: sec.title, type: sec.type } : null,
           grantha: sec?.grantha ?? null,
         };
-      });
-      res.json({ ...data, data: manthras });
+      }
+
+      const firstPage = await strapiRequest(`/api/manthras?${MANTHRA_POPULATE}&pagination[page]=1`);
+      const allManthras: any[] = (firstPage.data || []).map(normaliseManthra);
+      const pageCount: number = firstPage.meta?.pagination?.pageCount ?? 1;
+
+      // Fetch remaining pages in parallel if there are more
+      if (pageCount > 1) {
+        const pageNumbers = Array.from({ length: pageCount - 1 }, (_, i) => i + 2);
+        const extraPages = await Promise.all(
+          pageNumbers.map((p) =>
+            strapiRequest(`/api/manthras?${MANTHRA_POPULATE}&pagination[page]=${p}`)
+          )
+        );
+        for (const page of extraPages) {
+          allManthras.push(...(page.data || []).map(normaliseManthra));
+        }
+      }
+
+      res.json({ ...firstPage, data: allManthras });
     } catch (error: any) {
       res.status(500).json({ message: error.message || "Failed to fetch manthras" });
     }

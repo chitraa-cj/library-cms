@@ -2749,58 +2749,76 @@ export default function GranthasPage() {
                 </div>
               </section>
 
-              {/* Teekas */}
-              {(currentManthra.Teekas ?? []).length > 0 && (
+              {/* Teekas — driven by the grantha's configured teekas list so entries
+                   always appear even when the mantra hasn't stored content yet.
+                   Content is matched by TeekaName and merged on every edit. */}
+              {teekas.length > 0 && (
                 <section className="space-y-3 border-t pt-4">
                   <h4 className="text-sm font-semibold flex items-center gap-2">
                     <Layers className="w-4 h-4 text-primary" />
                     Teeka Entries
                     <span className="text-xs text-muted-foreground font-normal">(Teekas)</span>
                   </h4>
-                  {(currentManthra.Teekas ?? []).map((teeka, tIdx) => (
-                    <div key={tIdx} className="rounded-lg border p-4 space-y-3">
-                      <p className="text-xs font-semibold text-foreground">
-                        {teeka.TeekaName || `Teeka ${tIdx + 1}`}
-                        {teeka.TeekaAuthor && (
-                          <span className="font-normal text-muted-foreground ml-1">
-                            — {teeka.TeekaAuthor}
-                          </span>
-                        )}
-                      </p>
-                      <div>
-                        <Label className="text-xs">Sanskrit Commentary</Label>
-                        <RichTextEditor
-                          value={teeka.TeekaEntry?.SanskritTextEntry}
-                          onChange={(v) => {
-                            const updatedTeekas = (currentManthra.Teekas ?? []).map((t, i) =>
-                              i === tIdx ? { ...t, TeekaEntry: { ...t.TeekaEntry, SanskritTextEntry: v } } : t
-                            );
-                            updateManthraContent(editingManthra.adhyayaId, editingManthra.khandaId, editingManthra.manthraId, { Teekas: updatedTeekas }, editingManthra.padaId);
-                          }}
-                          placeholder={`${teeka.TeekaName || "Teeka"} Sanskrit commentary...`}
-                          className="mt-1.5"
-                          minHeight={80}
-                          data-testid={`textarea-teeka-sanskrit-${tIdx}`}
-                        />
+                  {teekas.map((granthaTeeka, tIdx) => {
+                    // Find any existing content saved for this teeka on the mantra
+                    const existingIdx = (currentManthra.Teekas ?? []).findIndex(
+                      (t) => t.TeekaName === granthaTeeka.TeekaName
+                    );
+                    const teeka: ManthraTeekaEntry =
+                      existingIdx >= 0
+                        ? currentManthra.Teekas![existingIdx]
+                        : { TeekaName: granthaTeeka.TeekaName, TeekaAuthor: granthaTeeka.TeekaAuthor };
+
+                    // Rebuild the full Teekas array with the updated entry merged in
+                    function buildUpdated(updated: ManthraTeekaEntry): ManthraTeekaEntry[] {
+                      const existing = currentManthra.Teekas ?? [];
+                      if (existingIdx >= 0) {
+                        return existing.map((t, i) => (i === existingIdx ? updated : t));
+                      }
+                      return [...existing, updated];
+                    }
+
+                    return (
+                      <div key={tIdx} className="rounded-lg border p-4 space-y-3">
+                        <p className="text-xs font-semibold text-foreground">
+                          {teeka.TeekaName || `Teeka ${tIdx + 1}`}
+                          {teeka.TeekaAuthor && (
+                            <span className="font-normal text-muted-foreground ml-1">
+                              — {teeka.TeekaAuthor}
+                            </span>
+                          )}
+                        </p>
+                        <div>
+                          <Label className="text-xs">Sanskrit Commentary</Label>
+                          <RichTextEditor
+                            value={teeka.TeekaEntry?.SanskritTextEntry}
+                            onChange={(v) => {
+                              const updated = { ...teeka, TeekaEntry: { ...teeka.TeekaEntry, SanskritTextEntry: v } };
+                              updateManthraContent(editingManthra.adhyayaId, editingManthra.khandaId, editingManthra.manthraId, { Teekas: buildUpdated(updated) }, editingManthra.padaId);
+                            }}
+                            placeholder={`${teeka.TeekaName || "Teeka"} Sanskrit commentary...`}
+                            className="mt-1.5"
+                            minHeight={80}
+                            data-testid={`textarea-teeka-sanskrit-${tIdx}`}
+                          />
+                        </div>
+                        <div>
+                          <Label className="text-xs">English Translation</Label>
+                          <RichTextEditor
+                            value={teeka.TeekaEntry?.EnglishTranslationText}
+                            onChange={(v) => {
+                              const updated = { ...teeka, TeekaEntry: { ...teeka.TeekaEntry, EnglishTranslationText: v } };
+                              updateManthraContent(editingManthra.adhyayaId, editingManthra.khandaId, editingManthra.manthraId, { Teekas: buildUpdated(updated) }, editingManthra.padaId);
+                            }}
+                            placeholder="English translation..."
+                            className="mt-1.5"
+                            minHeight={80}
+                            data-testid={`textarea-teeka-english-${tIdx}`}
+                          />
+                        </div>
                       </div>
-                      <div>
-                        <Label className="text-xs">English Translation</Label>
-                        <RichTextEditor
-                          value={teeka.TeekaEntry?.EnglishTranslationText}
-                          onChange={(v) => {
-                            const updatedTeekas = (currentManthra.Teekas ?? []).map((t, i) =>
-                              i === tIdx ? { ...t, TeekaEntry: { ...t.TeekaEntry, EnglishTranslationText: v } } : t
-                            );
-                            updateManthraContent(editingManthra.adhyayaId, editingManthra.khandaId, editingManthra.manthraId, { Teekas: updatedTeekas }, editingManthra.padaId);
-                          }}
-                          placeholder="English translation..."
-                          className="mt-1.5"
-                          minHeight={80}
-                          data-testid={`textarea-teeka-english-${tIdx}`}
-                        />
-                      </div>
-                    </div>
-                  ))}
+                    );
+                  })}
                 </section>
               )}
 

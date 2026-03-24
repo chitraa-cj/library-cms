@@ -947,27 +947,55 @@ export default function GranthasPage() {
             // Track which Strapi records were matched so we don't add them again as "new".
             const matchedDocIds = new Set<string>();
 
-            // Helper: resolve strapiDocumentId for a manthra node using title then order.
-            function resolveDocId(m: ManthraNode): string | undefined {
-              if (m.strapiDocumentId) { matchedDocIds.add(m.strapiDocumentId); return m.strapiDocumentId; }
+            // Helper: resolve strapiDocumentId (and canonical Strapi title) for a manthra node.
+            // Returns { docId, strapiTitle } where strapiTitle is set only when the match
+            // came from Strapi (title may differ from the draft node's title — e.g. a stale
+            // draft says "Mantra 1.1.1" but Strapi only knows it as "Manthra 1.1.1").
+            function resolveDocId(m: ManthraNode): { docId: string; strapiTitle?: string } | undefined {
+              if (m.strapiDocumentId) {
+                // If the draft already has a strapiDocumentId, check it still exists in Strapi.
+                const stillExists = strapiMantrasForKhanda.some((sm) => sm.docId === m.strapiDocumentId);
+                if (!stillExists) {
+                  // The Strapi record was deleted. Try to remap by order so the correct
+                  // Strapi manthra is shown instead of a ghost entry.
+                  if (m.order != null && strapiByOrder.has(m.order)) {
+                    const sm = strapiByOrder.get(m.order)!;
+                    matchedDocIds.add(sm.docId);
+                    return { docId: sm.docId, strapiTitle: sm.title };
+                  }
+                  // Truly deleted with no order match — drop this node (return undefined).
+                  return undefined;
+                }
+                matchedDocIds.add(m.strapiDocumentId);
+                return { docId: m.strapiDocumentId };
+              }
               if (strapiManthraByShloka.has(m.title)) {
                 const id = strapiManthraByShloka.get(m.title)!;
                 matchedDocIds.add(id);
-                return id;
+                return { docId: id };
               }
-              // Fallback: match by order when the title spelling differs (e.g. "Manthra" vs "Mantra")
+              // Fallback: match by order when the title spelling differs (e.g. "Manthra" vs "Mantra").
+              // Also handles stale draft nodes whose title no longer exists in Strapi.
               if (m.order != null && strapiByOrder.has(m.order)) {
                 const sm = strapiByOrder.get(m.order)!;
                 matchedDocIds.add(sm.docId);
-                return sm.docId;
+                return { docId: sm.docId, strapiTitle: sm.title };
               }
               return undefined;
             }
 
-            const enrichedManthras = k.manthras.map((m) => {
-              const docId = resolveDocId(m);
-              return docId ? { ...m, strapiDocumentId: docId } : m;
-            });
+            const enrichedManthras = k.manthras.reduce<ManthraNode[]>((acc, m) => {
+              const resolved = resolveDocId(m);
+              if (!resolved) return acc; // dropped: Strapi record was deleted, no order remap
+              const { docId, strapiTitle } = resolved;
+              acc.push({
+                ...m,
+                strapiDocumentId: docId,
+                // Adopt the Strapi title when the match was via order (draft title is stale/wrong)
+                ...(strapiTitle ? { title: strapiTitle } : {}),
+              });
+              return acc;
+            }, []);
             const enrichedPadas = (k.padas ?? []).map((p) => {
               const padaStrapi = strapiMantrasBySecTitle.get(p.title) ?? [];
               const padaByOrder = new Map<number, { title: string; docId: string; order: number }>();

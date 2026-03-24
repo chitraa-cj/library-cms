@@ -902,10 +902,15 @@ export default function GranthasPage() {
           : reconstructHierarchyFromStrapi(fetchedSections);
 
       // Build lookup maps from fetched sections so we can enrich hierarchy nodes
-      // with strapiDocumentIds and supplement any Strapi mantras missing from the draft.
+      // with strapiDocumentIds and supplement any Strapi mantras/sections missing from the draft.
       const strapiManthraByShloka = new Map<string, string>(); // shlokaNr → documentId
       const strapiMantrasBySecTitle = new Map<string, { title: string; docId: string; order: number }[]>();
+      // Map: parent section documentId → child sections (for supplementing missing khandas)
+      const strapiChildSectionsByParentDocId = new Map<string, any[]>();
+      // Map: section title → section (for matching draft adhyayas to Strapi adhyayas)
+      const strapiSectionByTitle = new Map<string, any>();
       for (const sec of fetchedSections) {
+        if (sec.title) strapiSectionByTitle.set(sec.title, sec);
         if (Array.isArray(sec.manthras)) {
           const list: { title: string; docId: string; order: number }[] = [];
           for (const m of sec.manthras) {
@@ -915,6 +920,12 @@ export default function GranthasPage() {
             }
           }
           if (sec.title) strapiMantrasBySecTitle.set(sec.title, list);
+        }
+        // Index by parent documentId for section-level supplementation
+        const parentDocId = sec.parent?.documentId;
+        if (parentDocId) {
+          if (!strapiChildSectionsByParentDocId.has(parentDocId)) strapiChildSectionsByParentDocId.set(parentDocId, []);
+          strapiChildSectionsByParentDocId.get(parentDocId)!.push(sec);
         }
       }
 
@@ -934,9 +945,9 @@ export default function GranthasPage() {
 
       function enrichHierarchy(hier: AdhyayaNode[]): AdhyayaNode[] {
         const knownShlokas = collectKnownShlokas(hier);
-        return hier.map((a) => ({
-          ...a,
-          khandas: a.khandas.map((k) => {
+        return hier.map((a) => {
+          // ── Enrich existing khandas ──────────────────────────────────────────────────
+          const enrichedKhandas = a.khandas.map((k) => {
             const strapiMantrasForKhanda = strapiMantrasBySecTitle.get(k.title) ?? [];
 
             // Build an order→strapi lookup for this section (order-based fallback matching).
@@ -1028,16 +1039,49 @@ export default function GranthasPage() {
             }
 
             const finalManthras = [...enrichedManthras, ...newManthras].sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
-            if (k.title && (k.title.includes("Brahmana") || k.title.includes("Khanda")) && finalManthras.length <= 3) {
-              console.log(`[enrichHierarchy] Section "${k.title}": enriched=${enrichedManthras.length}, new=${newManthras.length}, final=${finalManthras.map(m => `${m.title}(ord=${m.order})`).join(", ")}`);
-            }
             return {
               ...k,
               manthras: finalManthras,
               padas: enrichedPadas,
             };
-          }),
-        }));
+          }); // end of enrichedKhandas.map
+
+          // ── Supplement: add Strapi khandas completely absent from the draft ─────────
+          // Match this draft adhyaya to its Strapi counterpart by title, then find
+          // Strapi child sections (khandas/brahmanas) that were never saved in the draft.
+          const existingKhandaTitles = new Set(enrichedKhandas.map((k) => k.title));
+          const strapiAdhyaya = strapiSectionByTitle.get(a.title);
+          const supplementKhandas: KhandaNode[] = [];
+          if (strapiAdhyaya?.documentId) {
+            const strapiChildren = (strapiChildSectionsByParentDocId.get(strapiAdhyaya.documentId) ?? [])
+              .sort((x: any, y: any) => (x.order ?? 0) - (y.order ?? 0));
+            for (const sec of strapiChildren) {
+              if (!sec.title || existingKhandaTitles.has(sec.title)) continue;
+              // This Strapi khanda is missing from the draft — add it with its manthras
+              const secManthras = (strapiMantrasBySecTitle.get(sec.title) ?? [])
+                .sort((x, y) => (x.order ?? 0) - (y.order ?? 0))
+                .map((sm) => ({
+                  id: uid(),
+                  title: sm.title,
+                  order: sm.order,
+                  strapiDocumentId: sm.docId,
+                } as ManthraNode));
+              supplementKhandas.push({
+                id: uid(),
+                title: sec.title,
+                order: sec.order ?? 0,
+                expanded: true,
+                padas: [],
+                manthras: secManthras,
+              });
+            }
+          }
+
+          return {
+            ...a,
+            khandas: [...enrichedKhandas, ...supplementKhandas].sort((x, y) => (x.order ?? 0) - (y.order ?? 0)),
+          };
+        }); // end of hier.map
       }
       const enrichedHier2 = enrichHierarchy(
         rawCfg2?.leafName === "Khanda"

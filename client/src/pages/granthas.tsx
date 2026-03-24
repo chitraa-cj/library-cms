@@ -161,6 +161,25 @@ function hasBlocks(v: StrapiBlock[] | string | null | undefined): boolean {
  * (populated via populate[sections][populate][parent]=*) that identifies its
  * parent section, enabling us to reconstruct the nested tree.
  */
+// When Strapi has two records with the same order in a section (e.g. a manually-created
+// "Mantra 1.1.1" and a portal-published "Manthra 1.1.1" both at order=1), keep only
+// the LAST one per order position.  Since Strapi returns records sorted by order:asc
+// with a secondary sort by id:asc (older first), the portal-published entry is always
+// last and will be preserved.
+function deduplicateManthrasByOrder(manthras: any[]): any[] {
+  const seenOrders = new Set<number>();
+  const result: any[] = [];
+  for (let i = manthras.length - 1; i >= 0; i--) {
+    const m = manthras[i];
+    const ord = typeof m.order === "number" ? m.order : null;
+    if (ord === null || !seenOrders.has(ord)) {
+      if (ord !== null) seenOrders.add(ord);
+      result.unshift(m);
+    }
+  }
+  return result;
+}
+
 function reconstructHierarchyFromStrapi(sections: any[]): AdhyayaNode[] {
   if (!sections || sections.length === 0) return [];
 
@@ -185,14 +204,14 @@ function reconstructHierarchyFromStrapi(sections: any[]): AdhyayaNode[] {
           order: s.order ?? i + 1,
           expanded: true,
           padas: [],
-          manthras: [...(s.manthras || [])]
-            .sort((a, b) => (a.order ?? 0) - (b.order ?? 0))
-            .map((m: any, mi: number) => ({
-              id: uid(),
-              title: m.ShlokaManthraNumber || `Mantra ${mi + 1}`,
-              order: m.order ?? mi + 1,
-              strapiDocumentId: m.documentId || undefined,
-            })),
+          manthras: deduplicateManthrasByOrder(
+            [...(s.manthras || [])].sort((a, b) => (a.order ?? 0) - (b.order ?? 0))
+          ).map((m: any, mi: number) => ({
+            id: uid(),
+            title: m.ShlokaManthraNumber || `Mantra ${mi + 1}`,
+            order: m.order ?? mi + 1,
+            strapiDocumentId: m.documentId || undefined,
+          })),
         })),
       },
     ];
@@ -214,14 +233,14 @@ function reconstructHierarchyFromStrapi(sections: any[]): AdhyayaNode[] {
               order: k.order ?? ki + 1,
               expanded: true,
               padas: [],
-              manthras: [...(k.manthras || [])]
-                .sort((a, b) => (a.order ?? 0) - (b.order ?? 0))
-                .map((m: any, mi: number) => ({
-                  id: uid(),
-                  title: m.ShlokaManthraNumber || `Mantra ${mi + 1}`,
-                  order: m.order ?? mi + 1,
-                  strapiDocumentId: m.documentId || undefined,
-                })),
+              manthras: deduplicateManthrasByOrder(
+                [...(k.manthras || [])].sort((a, b) => (a.order ?? 0) - (b.order ?? 0))
+              ).map((m: any, mi: number) => ({
+                id: uid(),
+                title: m.ShlokaManthraNumber || `Mantra ${mi + 1}`,
+                order: m.order ?? mi + 1,
+                strapiDocumentId: m.documentId || undefined,
+              })),
             }))
           : [
               {
@@ -230,14 +249,14 @@ function reconstructHierarchyFromStrapi(sections: any[]): AdhyayaNode[] {
                 order: 1,
                 expanded: true,
                 padas: [],
-                manthras: [...(adhyaya.manthras || [])]
-                  .sort((a, b) => (a.order ?? 0) - (b.order ?? 0))
-                  .map((m: any, mi: number) => ({
-                    id: uid(),
-                    title: m.ShlokaManthraNumber || `Mantra ${mi + 1}`,
-                    order: m.order ?? mi + 1,
-                    strapiDocumentId: m.documentId || undefined,
-                  })),
+                manthras: deduplicateManthrasByOrder(
+                  [...(adhyaya.manthras || [])].sort((a, b) => (a.order ?? 0) - (b.order ?? 0))
+                ).map((m: any, mi: number) => ({
+                  id: uid(),
+                  title: m.ShlokaManthraNumber || `Mantra ${mi + 1}`,
+                  order: m.order ?? mi + 1,
+                  strapiDocumentId: m.documentId || undefined,
+                })),
               },
             ];
 
@@ -968,9 +987,13 @@ export default function GranthasPage() {
               }
             }
 
+            const finalManthras = [...enrichedManthras, ...newManthras].sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
+            if (k.title && (k.title.includes("Brahmana") || k.title.includes("Khanda")) && finalManthras.length <= 3) {
+              console.log(`[enrichHierarchy] Section "${k.title}": enriched=${enrichedManthras.length}, new=${newManthras.length}, final=${finalManthras.map(m => `${m.title}(ord=${m.order})`).join(", ")}`);
+            }
             return {
               ...k,
-              manthras: [...enrichedManthras, ...newManthras].sort((a, b) => (a.order ?? 0) - (b.order ?? 0)),
+              manthras: finalManthras,
               padas: enrichedPadas,
             };
           }),

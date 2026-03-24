@@ -567,13 +567,15 @@ function normalizeTextAndTranslation(field: Record<string, any>): Record<string,
 // record by TeekaName. Entries whose Teeka record cannot be found are skipped.
 async function resolveManthraTeekas(rawTeekas: any[], granthaDocId?: string): Promise<any[]> {
   console.log(`[resolveManthraTeekas] Processing ${rawTeekas.length} raw teeka(s):`,
-    rawTeekas.map((t, i) => `[${i}] documentId=${t.teeka?.documentId || "(none)"} TeekaName="${t.TeekaName || ""}" hasTeekaEntry=${!!t.TeekaEntry}`));
+    rawTeekas.map((t, i) => `[${i}] teekaDocId=${t.teekaDocId || t.teeka?.documentId || "(none)"} TeekaName="${t.TeekaName || ""}" hasTeekaEntry=${!!t.TeekaEntry}`));
 
   const resolved: any[] = [];
   for (const t of rawTeekas) {
     // Prefer the documentId stored when user selected from the dropdown.
-    // Fall back to a name-based lookup for entries saved before the dropdown was added.
-    let teekaDocId: string | undefined = t.teeka?.documentId || undefined;
+    // teekaDocId is set by the grantha wizard to the grantha's correct teeka record;
+    // this also corrects any mis-linked teeka relations that were entered via Strapi admin.
+    // Fall back to t.teeka?.documentId (manthras page flow) then name-based lookup.
+    let teekaDocId: string | undefined = t.teekaDocId || t.teeka?.documentId || undefined;
 
     if (teekaDocId) {
       console.log(`[resolveManthraTeekas] Using stored documentId="${teekaDocId}" (from dropdown selection)`);

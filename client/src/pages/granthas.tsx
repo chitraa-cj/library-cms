@@ -180,10 +180,11 @@ function deduplicateManthrasByOrder(manthras: any[]): any[] {
     if (!existing) {
       best.set(ord, m);
     } else {
-      // Keep the one with the higher numeric id (more recently created)
-      const existingId = typeof existing.id === "number" ? existing.id : 0;
-      const candidateId = typeof m.id === "number" ? m.id : 0;
-      if (candidateId > existingId) {
+      // Keep the one with the LOWER numeric id (first-published = portal version).
+      // The portal always publishes before anyone adds a manual duplicate in Strapi.
+      const existingId = typeof existing.id === "number" ? existing.id : Infinity;
+      const candidateId = typeof m.id === "number" ? m.id : Infinity;
+      if (candidateId < existingId) {
         best.set(ord, m);
       }
     }

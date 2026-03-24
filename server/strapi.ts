@@ -89,7 +89,10 @@ export function createStrapiRouter() {
     granthas: [
       "populate[BhashyakaraIntroduction][populate]=*",
       "populate[GranthaNameTranslations]=*",
-      "populate[sections][populate][manthras][fields][0]=documentId&populate[sections][populate][manthras][fields][1]=ShlokaManthraNumber&populate[sections][populate][manthras][fields][2]=order&populate[sections][populate][parent][fields][0]=id&populate[sections][populate][parent][fields][1]=documentId",
+      // Fetch up to 100 mantras per section (Strapi hard cap). Without the
+      // explicit pageSize Strapi defaults to 25 related items and silently
+      // drops the rest for any section with more than 25 mantras.
+      "populate[sections][populate][manthras][fields][0]=documentId&populate[sections][populate][manthras][fields][1]=ShlokaManthraNumber&populate[sections][populate][manthras][fields][2]=order&populate[sections][populate][manthras][pagination][pageSize]=100&populate[sections][populate][manthras][sort]=order:asc&populate[sections][populate][parent][fields][0]=id&populate[sections][populate][parent][fields][1]=documentId",
       "populate[teekas][fields][0]=documentId&populate[teekas][fields][1]=TeekaName&populate[teekas][fields][2]=TeekaAuthor",
     ].join("&"),
     teekas: [
@@ -118,6 +121,11 @@ export function createStrapiRouter() {
     "populate[manthras][fields][0]=documentId",
     "populate[manthras][fields][1]=ShlokaManthraNumber",
     "populate[manthras][fields][2]=order",
+    // Request up to 100 mantras per section (Strapi's hard cap).
+    // Without this, Strapi defaults to 25 related items and silently
+    // drops the rest for any section that has more than 25 mantras.
+    "populate[manthras][pagination][pageSize]=100",
+    "populate[manthras][sort]=order:asc",
     "populate[titleTranslations]=*",
     "pagination[pageSize]=200",
   ].join("&");

@@ -846,35 +846,74 @@ export default function GranthasPage() {
       // Enrich hierarchy mantra nodes with strapiDocumentId by matching titles
       // against the Strapi sections manthras list. This handles draft hierarchies
       // (loaded from DB) that predate the strapiDocumentId field.
-      const strapiManthraByShloka = new Map<string, string>();
-      if (Array.isArray(item.sections)) {
-        for (const sec of item.sections) {
-          if (Array.isArray(sec.manthras)) {
-            for (const m of sec.manthras) {
-              if (m.ShlokaManthraNumber && m.documentId) {
-                strapiManthraByShloka.set(m.ShlokaManthraNumber, m.documentId);
-              }
+      // Also supplements the hierarchy with any Strapi mantras that were added
+      // after the draft was saved (so a stale draft always shows all live mantras).
+      const strapiManthraByShloka = new Map<string, string>(); // shlokaNr → documentId
+      // Map: sectionTitle → list of {ShlokaManthraNumber, documentId, order}
+      const strapiMantrasBySecTitle = new Map<string, { title: string; docId: string; order: number }[]>();
+      const strapiSections = Array.isArray(item.sections) ? item.sections : [];
+      for (const sec of strapiSections) {
+        if (Array.isArray(sec.manthras)) {
+          const list: { title: string; docId: string; order: number }[] = [];
+          for (const m of sec.manthras) {
+            if (m.ShlokaManthraNumber && m.documentId) {
+              strapiManthraByShloka.set(m.ShlokaManthraNumber, m.documentId);
+              list.push({ title: m.ShlokaManthraNumber, docId: m.documentId, order: m.order ?? 0 });
+            }
+          }
+          if (sec.title) strapiMantrasBySecTitle.set(sec.title, list);
+        }
+      }
+
+      // Track all shloka numbers already present in the hierarchy so we never duplicate
+      function collectKnownShlokas(hier: AdhyayaNode[]): Set<string> {
+        const known = new Set<string>();
+        for (const a of hier) {
+          for (const k of a.khandas) {
+            for (const m of k.manthras) if (m.title) known.add(m.title);
+            for (const p of k.padas ?? []) {
+              for (const m of p.manthras) if (m.title) known.add(m.title);
             }
           }
         }
+        return known;
       }
+
       function enrichHierarchy(hier: AdhyayaNode[]): AdhyayaNode[] {
+        const knownShlokas = collectKnownShlokas(hier);
         return hier.map((a) => ({
           ...a,
-          khandas: a.khandas.map((k) => ({
-            ...k,
-            padas: (k.padas ?? []).map((p) => ({
+          khandas: a.khandas.map((k) => {
+            // Enrich existing nodes with documentId
+            const enrichedManthras = k.manthras.map((m) =>
+              m.strapiDocumentId || !strapiManthraByShloka.has(m.title) ? m
+                : { ...m, strapiDocumentId: strapiManthraByShloka.get(m.title) }
+            );
+            const enrichedPadas = (k.padas ?? []).map((p) => ({
               ...p,
               manthras: p.manthras.map((m) =>
                 m.strapiDocumentId || !strapiManthraByShloka.has(m.title) ? m
                   : { ...m, strapiDocumentId: strapiManthraByShloka.get(m.title) }
               ),
-            })),
-            manthras: k.manthras.map((m) =>
-              m.strapiDocumentId || !strapiManthraByShloka.has(m.title) ? m
-                : { ...m, strapiDocumentId: strapiManthraByShloka.get(m.title) }
-            ),
-          })),
+            }));
+
+            // Supplement: add Strapi mantras for this section that aren't yet in the hierarchy.
+            // Match the khanda to a Strapi section by title (best-effort).
+            const strapiMantrasForKhanda = strapiMantrasBySecTitle.get(k.title) ?? [];
+            const newManthras: ManthraNode[] = [];
+            for (const sm of strapiMantrasForKhanda) {
+              if (!knownShlokas.has(sm.title)) {
+                newManthras.push({ id: uid(), title: sm.title, order: sm.order, strapiDocumentId: sm.docId });
+                knownShlokas.add(sm.title);
+              }
+            }
+
+            return {
+              ...k,
+              manthras: [...enrichedManthras, ...newManthras].sort((a, b) => (a.order ?? 0) - (b.order ?? 0)),
+              padas: enrichedPadas,
+            };
+          }),
         }));
       }
       const enrichedHier2 = enrichHierarchy(

@@ -145,7 +145,8 @@ const STRAPI_UNROUTED_TYPES = new Set(["prasthana-thraya-screens"]);
 
 async function buildManthraData(
   manthra: Record<string, any>,
-  sectionDocId: string | undefined
+  sectionDocId: string | undefined,
+  granthaDocId?: string
 ): Promise<Record<string, any>> {
   const mData: Record<string, any> = {
     ShlokaManthraNumber: manthra.ShlokaManthraNumber || manthra.title || "",
@@ -159,9 +160,9 @@ async function buildManthraData(
   // BhashyamForShlokaManthra is the hierarchy-builder field name; Strapi's actual field is BhashyamEntry
   if (manthra.BhashyamForShlokaManthra) mData.BhashyamEntry = manthra.BhashyamForShlokaManthra;
   else if (manthra.BhashyamEntry) mData.BhashyamEntry = manthra.BhashyamEntry;
-  // NOTE: Do NOT send Teekas — Strapi rejects any non-empty key inside manthra Teekas items
-  // NOTE: Do NOT send NumberOfTeekas — that field belongs to Grantha, not Manthra
+
   const cleaned = cleanPayloadForStrapi(mData);
+
   // Normalize TextAndTranslation fields so OtherTranslations is always in Strapi's
   // repeatable-component format regardless of which format the draft stored them in.
   for (const key of ["ShlokaManthraEntry", "BhashyamEntry"] as const) {
@@ -169,6 +170,18 @@ async function buildManthraData(
       cleaned[key] = normalizeTextAndTranslation(cleaned[key]);
     }
   }
+
+  // Resolve Teekas — grantha-wizard manthras store { TeekaName, TeekaAuthor, TeekaEntry }.
+  // resolveManthraTeekas looks up each Teeka record in Strapi and converts to the
+  // { teeka: documentId, TeekaEntry: {...} } format Strapi's bhashya-entries component expects.
+  const rawTeekas = manthra.Teekas;
+  if (Array.isArray(rawTeekas) && rawTeekas.length > 0) {
+    const resolvedTeekas = await resolveManthraTeekas(rawTeekas, granthaDocId);
+    if (resolvedTeekas.length > 0) {
+      cleaned.Teekas = resolvedTeekas;
+    }
+  }
+
   return cleaned;
 }
 
@@ -441,7 +454,7 @@ async function publishGranthaWithHierarchy(
 
             for (const manthra of (pada.manthras ?? [])) {
               try {
-                const mData = await buildManthraData(manthra, padaDocId);
+                const mData = await buildManthraData(manthra, padaDocId, granthaDocId);
                 console.log(`[publish] Manthra payload (L3):`, JSON.stringify(mData).slice(0, 300));
                 if (manthra.strapiDocumentId) {
                   await updateExistingManthra(manthra.strapiDocumentId, mData, manthra.title);
@@ -457,7 +470,7 @@ async function publishGranthaWithHierarchy(
           // No padas — manthras sit directly under the khanda (or adhyaya if L2 disabled)
           for (const manthra of (khanda.manthras ?? [])) {
             try {
-              const mData = await buildManthraData(manthra, khandaDocId);
+              const mData = await buildManthraData(manthra, khandaDocId, granthaDocId);
               console.log(`[publish] Manthra payload:`, JSON.stringify(mData).slice(0, 300));
               if (manthra.strapiDocumentId) {
                 await updateExistingManthra(manthra.strapiDocumentId, mData, manthra.title);
@@ -521,7 +534,7 @@ function normalizeTextAndTranslation(field: Record<string, any>): Record<string,
 //   { teeka: teekaDocumentId, TeekaEntry: {...} }
 // The `teeka` field is a relation to the Teeka collection type — we look up the
 // record by TeekaName. Entries whose Teeka record cannot be found are skipped.
-async function resolveManthraTeekas(rawTeekas: any[]): Promise<any[]> {
+async function resolveManthraTeekas(rawTeekas: any[], granthaDocId?: string): Promise<any[]> {
   console.log(`[resolveManthraTeekas] Processing ${rawTeekas.length} raw teeka(s):`,
     rawTeekas.map((t, i) => `[${i}] documentId=${t.teeka?.documentId || "(none)"} TeekaName="${t.TeekaName || ""}" hasTeekaEntry=${!!t.TeekaEntry}`));
 
@@ -539,9 +552,10 @@ async function resolveManthraTeekas(rawTeekas: any[]): Promise<any[]> {
         console.warn(`[resolveManthraTeekas] Entry has no teeka documentId and no TeekaName — skipping`);
         continue;
       }
-      console.log(`[resolveManthraTeekas] No documentId stored; looking up by TeekaName="${TeekaName}"`);
+      console.log(`[resolveManthraTeekas] No documentId stored; looking up by TeekaName="${TeekaName}"${granthaDocId ? ` grantha=${granthaDocId}` : ""}`);
       try {
-        const url = `/api/teekas?filters[TeekaName][$eq]=${encodeURIComponent(TeekaName)}&fields[0]=documentId&pagination[pageSize]=5`;
+        let url = `/api/teekas?filters[TeekaName][$eq]=${encodeURIComponent(TeekaName)}&fields[0]=documentId&pagination[pageSize]=5`;
+        if (granthaDocId) url += `&filters[grantha][documentId][$eq]=${encodeURIComponent(granthaDocId)}`;
         const found = await strapiRequest(url);
         console.log(`[resolveManthraTeekas] Lookup result for "${TeekaName}":`, JSON.stringify(found?.data || []));
         teekaDocId = found?.data?.[0]?.documentId;

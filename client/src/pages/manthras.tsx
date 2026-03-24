@@ -564,7 +564,7 @@ export default function ManthrasPage() {
                 <Label>Shloka / Manthra Number *</Label>
                 <Input
                   value={formData.ShlokaManthraNumber}
-                  onChange={(e) => setFormData({ ...formData, ShlokaManthraNumber: e.target.value })}
+                  onChange={(e) => setFormData((prev) => ({ ...prev, ShlokaManthraNumber: e.target.value }))}
                   placeholder="e.g., 1, 2.3, I-1"
                   className="mt-1.5"
                   data-testid="input-manthra-number"
@@ -575,7 +575,7 @@ export default function ManthrasPage() {
                 <Input
                   type="number"
                   value={formData.order}
-                  onChange={(e) => setFormData({ ...formData, order: e.target.value })}
+                  onChange={(e) => setFormData((prev) => ({ ...prev, order: e.target.value }))}
                   className="mt-1.5"
                   data-testid="input-manthra-order"
                 />
@@ -586,7 +586,7 @@ export default function ManthrasPage() {
               <Label>Section <span className="text-muted-foreground font-normal">(optional)</span></Label>
               <Select
                 value={formData.section || "__none__"}
-                onValueChange={(v) => setFormData({ ...formData, section: v === "__none__" ? "" : v })}
+                onValueChange={(v) => setFormData((prev) => ({ ...prev, section: v === "__none__" ? "" : v }))}
               >
                 <SelectTrigger className="mt-1.5" data-testid="select-manthra-section">
                   <SelectValue placeholder="Select Section" />
@@ -611,19 +611,21 @@ export default function ManthrasPage() {
             </div>
 
             <TextTranslationFields
-              label="Shloka / Manthra Entry"
+              title="Shloka / Manthra Entry"
+              testIdPrefix="shloka"
               value={formData.ShlokaManthraEntry}
-              onChange={(val) => setFormData({ ...formData, ShlokaManthraEntry: val })}
+              onChange={(val) => setFormData((prev) => ({ ...prev, ShlokaManthraEntry: val }))}
             />
             <TextTranslationFields
-              label="Bhashyam Entry"
+              title="Bhashyam Entry"
+              testIdPrefix="bhashyam"
               value={formData.BhashyamEntry}
-              onChange={(val) => setFormData({ ...formData, BhashyamEntry: val })}
+              onChange={(val) => setFormData((prev) => ({ ...prev, BhashyamEntry: val }))}
             />
             <BhashyaEntryFields
               title="Teekas (Commentaries)"
               entries={formData.Teekas}
-              onChange={(val) => setFormData({ ...formData, Teekas: val })}
+              onChange={(val) => setFormData((prev) => ({ ...prev, Teekas: val }))}
               testIdPrefix="teeka"
             />
 
@@ -635,7 +637,7 @@ export default function ManthrasPage() {
                   type="button"
                   size="sm"
                   variant="outline"
-                  onClick={() => setFormData({ ...formData, wordMeanings: [...formData.wordMeanings, { _id: uid(), word: "", meaning: "", position: formData.wordMeanings.length + 1 }] })}
+                  onClick={() => setFormData((prev) => ({ ...prev, wordMeanings: [...prev.wordMeanings, { _id: uid(), word: "", meaning: "", position: prev.wordMeanings.length + 1 }] }))}
                   data-testid="button-add-word-meaning"
                 >
                   <Plus className="w-3.5 h-3.5 mr-1" /> Add Word
@@ -649,22 +651,22 @@ export default function ManthrasPage() {
                     <div key={wm._id} className="grid grid-cols-[1fr_2fr_auto_auto] gap-2 items-center">
                       <Input
                         value={wm.word || ""}
-                        onChange={(e) => {
-                          const updated = [...formData.wordMeanings];
+                        onChange={(e) => setFormData((prev) => {
+                          const updated = [...prev.wordMeanings];
                           updated[idx] = { ...updated[idx], word: e.target.value };
-                          setFormData({ ...formData, wordMeanings: updated });
-                        }}
+                          return { ...prev, wordMeanings: updated };
+                        })}
                         placeholder="Word"
                         className="text-sm"
                         data-testid={`input-wm-word-${idx}`}
                       />
                       <Input
                         value={wm.meaning || ""}
-                        onChange={(e) => {
-                          const updated = [...formData.wordMeanings];
+                        onChange={(e) => setFormData((prev) => {
+                          const updated = [...prev.wordMeanings];
                           updated[idx] = { ...updated[idx], meaning: e.target.value };
-                          setFormData({ ...formData, wordMeanings: updated });
-                        }}
+                          return { ...prev, wordMeanings: updated };
+                        })}
                         placeholder="Meaning"
                         className="text-sm"
                         data-testid={`input-wm-meaning-${idx}`}
@@ -672,11 +674,11 @@ export default function ManthrasPage() {
                       <Input
                         type="number"
                         value={wm.position ?? ""}
-                        onChange={(e) => {
-                          const updated = [...formData.wordMeanings];
+                        onChange={(e) => setFormData((prev) => {
+                          const updated = [...prev.wordMeanings];
                           updated[idx] = { ...updated[idx], position: parseInt(e.target.value) || null };
-                          setFormData({ ...formData, wordMeanings: updated });
-                        }}
+                          return { ...prev, wordMeanings: updated };
+                        })}
                         placeholder="#"
                         className="text-sm w-16"
                         data-testid={`input-wm-position-${idx}`}
@@ -686,7 +688,7 @@ export default function ManthrasPage() {
                         size="sm"
                         variant="ghost"
                         className="text-destructive hover:text-destructive h-9 w-9 p-0"
-                        onClick={() => setFormData({ ...formData, wordMeanings: formData.wordMeanings.filter((_, i) => i !== idx) })}
+                        onClick={() => setFormData((prev) => ({ ...prev, wordMeanings: prev.wordMeanings.filter((_, i) => i !== idx) }))}
                         data-testid={`button-remove-wm-${idx}`}
                       >
                         <Trash2 className="w-3.5 h-3.5" />

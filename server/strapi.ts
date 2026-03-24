@@ -130,9 +130,11 @@ export function createStrapiRouter() {
     "pagination[pageSize]=200",
   ].join("&");
 
-  router.get("/sections", async (_req, res) => {
+  router.get("/sections", async (req, res) => {
     try {
-      const data = await strapiRequest(`/api/sections?${SECTION_POPULATE}`);
+      const queryString = new URLSearchParams(req.query as Record<string, string>).toString();
+      const populateParam = queryString ? `?${queryString}` : `?${SECTION_POPULATE}`;
+      const data = await strapiRequest(`/api/sections${populateParam}`);
       res.json(data);
     } catch (error: any) {
       res.status(500).json({ message: error.message || "Failed to fetch sections" });

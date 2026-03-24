@@ -82,7 +82,15 @@ function StatCard({
   draftCount: number;
 }) {
   const { data, isLoading, error } = useQuery<any>({
-    queryKey: ["/api/strapi", section.key],
+    queryKey: ["/api/strapi", section.key, "count"],
+    queryFn: async () => {
+      const res = await fetch(
+        `/api/strapi/${section.key}?pagination[pageSize]=1&fields[0]=id`,
+        { credentials: "include" }
+      );
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      return res.json();
+    },
     refetchInterval: STRAPI_POLL_INTERVAL,
     refetchOnWindowFocus: true,
   });

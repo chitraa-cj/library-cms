@@ -223,7 +223,13 @@ export default function ManthrasPage() {
         section: item.Section?.documentId || item.section?.documentId || "",
         ShlokaManthraEntry: unpackOtherTranslation(item.ShlokaManthraEntry),
         BhashyamEntry: unpackOtherTranslation(item.BhashyamEntry),
-        Teekas: item.Teekas || [],
+        // Strapi returns Teekas with a nested `teeka` relation; flatten to the
+        // shape BhashyaEntryFields expects (flat TeekaName/TeekaAuthor strings).
+        Teekas: (item.Teekas || []).map((t: any) => ({
+          TeekaName: t.teeka?.TeekaName || t.TeekaName || "",
+          TeekaAuthor: t.teeka?.TeekaAuthor || t.TeekaAuthor || "",
+          TeekaEntry: t.TeekaEntry || {},
+        })),
         wordMeanings: (item.wordMeanings || []).map((w: WordMeaning) => ({ ...w, _id: uid() })),
       });
     }

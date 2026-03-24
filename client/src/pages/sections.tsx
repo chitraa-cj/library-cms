@@ -195,7 +195,7 @@ export default function SectionsPage() {
       setEditingDraftId(null);
       setFormData({
         title: item.title || "",
-        type: item.type || "",
+        type: item.type && item.type !== "null" ? item.type : "",
         order: item.order != null ? String(item.order) : "",
         grantha: item.grantha?.documentId || "",
         parent: item.parent?.documentId || "",
@@ -454,7 +454,7 @@ export default function SectionsPage() {
                         </div>
                       </td>
                       <td className={`${px} ${py}`}>
-                        {node.type
+                        {node.type && node.type !== "null"
                           ? <Badge variant="outline" className="text-xs">{sectionTypeLabels[node.type as keyof typeof sectionTypeLabels] ?? node.type}</Badge>
                           : <span className="text-muted-foreground">—</span>}
                       </td>

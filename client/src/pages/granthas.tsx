@@ -901,6 +901,20 @@ export default function GranthasPage() {
           ? rawHier2
           : reconstructHierarchyFromStrapi(fetchedSections);
 
+      // Auto-detect flat granthas (no real khanda level).
+      // When every adhyaya has exactly one "_default" synthetic khanda, this grantha
+      // has no actual sub-section tier — disable levelTwo so manthras render directly
+      // under their adhyaya. This covers both fresh loads (no draft) and old drafts
+      // that were saved before this auto-detection was added.
+      if (hierToUse2.length > 0) {
+        const isFlat = hierToUse2.every(
+          (a) => a.khandas.length === 1 && a.khandas[0]?.title === "_default"
+        );
+        if (isFlat && migratedCfg2.levelTwoEnabled) {
+          setStructureConfig((prev) => ({ ...prev, levelTwoEnabled: false }));
+        }
+      }
+
       // Build lookup maps from fetched sections so we can enrich hierarchy nodes
       // with strapiDocumentIds and supplement any Strapi mantras/sections missing from the draft.
       const strapiManthraByShloka = new Map<string, string>(); // shlokaNr → documentId
@@ -948,7 +962,10 @@ export default function GranthasPage() {
         return hier.map((a) => {
           // ── Enrich existing khandas ──────────────────────────────────────────────────
           const enrichedKhandas = a.khandas.map((k) => {
-            const strapiMantrasForKhanda = strapiMantrasBySecTitle.get(k.title) ?? [];
+            // For flat granthas the synthetic "_default" khanda owns the adhyaya's own
+            // manthras — look them up by the adhyaya title (which IS the Strapi section title).
+            const lookupTitle = k.title === "_default" ? a.title : k.title;
+            const strapiMantrasForKhanda = strapiMantrasBySecTitle.get(lookupTitle) ?? [];
 
             // Build an order→strapi lookup for this section (order-based fallback matching).
             const strapiByOrder = new Map<number, { title: string; docId: string; order: number }>();

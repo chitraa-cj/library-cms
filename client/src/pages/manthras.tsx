@@ -380,7 +380,7 @@ export default function ManthrasPage() {
             <SelectItem value="__all__">All Sections</SelectItem>
             {sectionsForFilter.map((s) => (
               <SelectItem key={s.documentId} value={s.documentId}>
-                {s.title}{s.type ? ` (${s.type})` : ""}
+                {s.title}{s.type && s.type !== "null" ? ` (${s.type})` : ""}
               </SelectItem>
             ))}
           </SelectContent>
@@ -430,7 +430,7 @@ export default function ManthrasPage() {
                       {section ? (
                         <div>
                           {granthaName && <p className="font-medium text-foreground text-xs">{granthaName}</p>}
-                          <p className="text-muted-foreground">{section.title}{section.type ? <span className="text-muted-foreground/60"> ({section.type})</span> : null}</p>
+                          <p className="text-muted-foreground">{section.title}{section.type && section.type !== "null" ? <span className="text-muted-foreground/60"> ({section.type})</span> : null}</p>
                         </div>
                       ) : granthaName ? (
                         <span className="font-medium text-foreground">{granthaName}</span>
@@ -602,7 +602,7 @@ export default function ManthrasPage() {
                   <SelectItem value="__none__"><span className="text-muted-foreground italic">No Section</span></SelectItem>
                   {allSections.map((s) => (
                     <SelectItem key={s.documentId} value={s.documentId}>
-                      {s.title}{s.type ? ` (${s.type})` : ""}{(s as any).grantha ? ` — ${(s as any).grantha.GranthaName}` : ""}
+                      {s.title}{s.type && s.type !== "null" ? ` (${s.type})` : ""}{(s as any).grantha ? ` — ${(s as any).grantha.GranthaName}` : ""}
                     </SelectItem>
                   ))}
                 </SelectContent>
@@ -611,7 +611,7 @@ export default function ManthrasPage() {
                 <div className="mt-2 rounded-lg border border-primary/20 bg-primary/5 p-3 text-sm">
                   <p className="text-xs font-semibold text-primary uppercase tracking-wider mb-1">Selected Section</p>
                   <p className="font-medium">{selectedSection.title}</p>
-                  {selectedSection.type && <p className="text-xs text-muted-foreground">Type: {selectedSection.type}</p>}
+                  {selectedSection.type && selectedSection.type !== "null" && <p className="text-xs text-muted-foreground">Type: {selectedSection.type}</p>}
                   {(selectedSection as any).grantha && <p className="text-xs text-muted-foreground">Grantha: {(selectedSection as any).grantha.GranthaName}</p>}
                 </div>
               )}

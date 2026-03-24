@@ -1,0 +1,514 @@
+Skip to content
+Application logoStrapi DashboardWorkplace
+Home
+Content Manager
+Media Library
+Content-Type Builder
+Marketplace
+Settings
+1
+
+Chitra Jain
+Content Manager
+Search
+Collection Types
+8
+Article
+Author
+Category
+Grantha
+Manthra
+Section
+Teeka
+User
+Single Types
+2
+About
+Global
+Back
+Brihadaranyaka Upanishad
+More actions
+Published
+draft
+published
+GranthaName*
+Brihadaranyaka Upanishad
+GranthaType
+Upanishad
+BhashyamName
+Bṛhadāraṇyakopaniṣad bhāṣyam
+BhashyamAuthor
+Sri Shankarayacharya
+IntroductionToTextEnglish
+To reorder blocks, press Command or Control along with Shift and the Up or Down arrow keys
+Text
+More
+The Bṛhadāraṇyaka is the greatest of the Upaniṣads; and Śrī Śaṅkara s bhāṣya on this Upaniṣad is the greatest of his commentaries on the Upaniṣads. The Bṛhadāraṇyaka is the greatest not only in extent; but it is also the greatest in respect of its substance and theme. It is the greatest Upaniṣad in the sense that the illimitable, all-embracing, absolute, self-luminous, blissful reality—the Bṛhat or Brahman, identical with Ātman, constitutes its theme. And, according to Śrī Śaṅkara, it may be said to be the greatest Upaniṣad, ālso for the reason that it comprehends both the upadeśa or revelation of the true nature of the mystic experience of the Brahman-Ātman identity and the upapatti or logical explanations of that great doctrine of advaita through the employment of the dialectic modes of argumentation known as jalpa (arguing constructively as well as destructively for victory) and vāda (arguing for truth). Śrī Śaṅkara’s Bṛhadāraṇyaka-bhāṣya is the greatest of his commentaries on the Upaniṣads in the sense that the great Ācārya shows in this bhāṣya, in a very telling manner, how the great truth of Brahman-Ālman identity forms the main purport of all the Vedāntic texts in general and this great Upaniṣad in particular, and maintains by means of his powerful dialectics that the interpretations and views of others are unsound and untenable—those advanced by the Vedistic realists (Mīmāṃsakas), the creationistic realists (Vaiśeṣikas and Naiyāyikas) and the advocates of the doctrine of bhedābheda (difference-cum-identity) like Bhartṛprapañca. Śrī Śureśvara describes Śrī Śaṅkara’s Bṛhadāraṇyaka-bhāṣya in these terms in the second verse of his great Vārttika on his Bhāṣya:—
+
+yām kāṇvopaniṣacchalena sakalannāyārthasaṃśodhinīṃ |
+saṃcakturguravo'nutvṛtaguravo vṛttiṃ satāṃ śāntaye ||”
+
+The older meaning of the term Upaniṣad is ‘Secret word’ or ‘Secret import’ or ‘Secret doctrine.’ As long as it was understood in this sense, the emphasis was on the mystic and ultra-rational aspect of philosophical thought. When, however, Śrī Dramiḍācārya, one of the Pre-Śaṅkara thinkers who commented upon the Upaniṣads, and Śrī Śaṅkara, following Śrī Dramiḍa, interpreted the term Upaniṣad as standing for the realisation of Brahman-Ātman identity (Brahmavidyā), which annihilates the beginningless nescience called avidyā, or as standing for the ancient text helpful in that realisation, the emphasis was shifted to the harmony between the inner mystic vision of the unity and universality of Ātman as the absolute being-spirit-bliss saccidānanda) and the philosophical conclusion that may be reached by a proper use of logic and dialectics. It is necessary to bear this in mind in endeavouring to appraise justly the philosophical and exegetic worth of Śrī śaṅkara’s commentary on the Bṛhadāraṇyaka.
+
+This great Upaniṣad consists of three kāṇḍas—the first being called the Madhu-kāṇḍa, the second the Yājñavalkya-kāṇḍa or the Muni-kāṇḍa, and the third the Khila-kāṇḍa. The first kāṇḍa conveys the main teaching of the advaita doctrine and is of the nature of upadeśa; the second embodies the logical argument and explanation showing the soundness of the upadeśa; and the third deals with certain upāsanās or modes of meditation. The first two chapters of the Madhu - kāṇḍa deal with the Vedic rite, Pravargya, which forms a part of the ritualistic section (karma-kāṇḍa) of the Veda; and according to Śrī Śaṅkara, the Upaniṣad really begins with the third chapter of the Madhu-kāṇḍa. In this chapter, the phenomenal superimposition of the world on Brahman is set forth and its origin, its full reach and its acme are indicated; and all this is presented as adhyāropa or supposititious positing. The fourth or the concluding chapter of the Madhu-kāṇḍa exhibits in a telling manner the sublation which follows and stultifies the supposititious positing of the world in the preceding chapter, and elucidates the nature of the Brahman-Ātman realisation which is invariably and synchronously concomitant with the sublation; and all this is apavāda or sublation through the stultifying realisation of truth. According to Śrī Śaṅkara adhyā-ropa and apavāda constitute the chief means of fully realising the absolute reality called Śuddhaṃ Brahma. All the details of Vedic rituals, ail the forms of meditation associated with them, even the greatest of them— the horse-sacrifice (aśvamedha) and the meditation associated with it, and ail the results accruing from them—all these constitute the province of nescience (avidyā) and even the highest achievement of the Hiraṇyagarbha-loka or Brahma-loka is but a part, though the acme, of the immense cycle of tmsmigra-tion (saṃsāra). This is the substance of the account of adhyāropa in the third chapter of the Madhu-kāṇḍa. In the fourth Brāhmaṇa of this chapter, the great rewards of activities and meditation are described, so that a pure and disciplined mind may see their impermanence and detach itself from them; the undifferentiated Brahman (avyākṛta) representing the meaning of Tat. and the differentiated spirit (vyākṛta) representing the meaning of Tv am are then described; and after showing how, in the condition of nescience (avidyā), one sees difference in the multifarious non-spirit, the mature of the vidyā or knowledge of the absolute spirit, which is the Ātman-vidyā or Brahma-vidyā and brings about the realisation of the allness and the wholeness of Ātman, is indicated in the vidyā-sūtra—“ātmetyevopāsīta.” This is introduced at the end of the description of adhyāropa, so that one may not lose oneself in it and may find one’s way further to the stage of apavāda. Here Śrī Śaṅkara discusses the import of the vidyā-sūtra. It has to be considered whether this text should be taken as a complementarily restrictive injunction, (niyamavidhi), or as an injunction of something not got at in any other way (apūrvavidhî), or as an exclusively restrictive injunction (parīsaṃkhya-vidhi). From Śrī Śaṅkara’s discussion of the import of the vidyā-sūtra in the Bṛhadāraṇyaka-bhāṣya and from his observations about the import of similar texts in the Samanvayādhikaraṇa-bhāṣya, it may be gathered that this text should be understood as setting forth the great truth that the absolute Brahman indirectly indicated by the word Ātman, and not any form of matter, gross or subtle, or any of its functions, should be realised as the only reality; and, as a matter of fact, there is no scope for any kind of injunction directly with reference to such reality. Such apparent injunctions look like injunctions at the initial stages of the quest for truth; but they ultimately turn out to be valid statements of the one great truth for which the advaita system stands. The fourth chapter of the. Madhu-kāṇḍa, or the second chapter of the bhāṣya, is devoted to apavāda and to an elucidation of the purport of the vidyā-sūtra. After describing in an elaborate manner the corporeal and incorporeal forms of the corpus of the material universe superimposed on Brahman, this chapter proceeds to convey the great teaching embodied in the words of the oft-quoted text—“athāta ādeśo neti neti” and emphatically avers that Brahman is not śūnya and can never be brought within the scope of any affirmation, but one may only glimpse it indirectly through negations of eliminable factors—“Not this, Not this” ‘iti na iti na’). The fourth Brāhmaṇa of the fourth chapter introduces Yājñavalkya as offering to divide all his earthly possessions between his two wives— Kātyāyanī and Maitreyī. Maitreyī asks if she can free herself from death by possessing the whole world filled with wealth, and Yājñavalkya says ‘no’ Maitreyī refuses all the riches of the world, saying “If I am not thereby free from death, what are these to me?” Yājñavalkya commends the spiritual fitness of his wife’s mind and proceeds to teach her the great truth of the Vedāntas. Śrī Śaṅkara draws pointed attention, here, to the value of renunciation (saṃnyāsa) as the means of true knowledge (jñānà). There are two kinds of saṃnyāsa—that which the seeker for knowledge (jijñāsu) resorts to for the sake of knowledge, and that which the person who has realised the truth (jñānin) resorts to for realising, without any hitch, the blissfulness of the condition of liberation while living (jīvanmukti). King Janaka, the greatest of Yājñavalkya’s disciples, continued to be a householder (gṛhastha) and served the world in perfect detachment as a jīvanmukta; but Yājñavalkya, who was also a jīvanmukta, after making momentous contributions to the educating and uplifting of the world in the sphere of spirituality, desired to renounce his life as a householder (gārhasthya) and to become a saṃnyāsin. The ideal of a jīvanmukta continuing to serve in society is not really opposed to the ideal of saṃnyāsa and is beautifully synthesised with it in the relation between Janaka and Yājñavalkya in the Bṛhadāraṇyaka; and similarly through the delightful liaison furnished by Maitreyī, the life of a gṛhastha is unified in the fourth Brāhmaṇa of this chapter with the life of a saṃnyāsin. Yājñavalkya conveys to Maitreyī the great truth that the pure spirit—Ātman—is the ultimate object of all forms of love and is therefore to be understood as the eternal bliss: and Ātman should be realised through the duly regulated scheme of śravaṇa, manana and nididhyāsana—knowing the truth from the Upaniṣads, investigating and discussing it, and constant contemplation upon it (“ātmā vā are draṣṭavyaḥ śrotavyo mantavyo nididhyāsitavyaḥ”)
+
+The upadeśa in the Madhu-kāṇḍa is appropriately followed by the upapatti or argumentative and expository discourse in the Yājñavalkya-kānda. The latter kāṇḍa consists of the fifth and sixth chapters of the Upaniṣad. In the fifth chapter, the dialectic mode of argumentation known as jalpa, or arguing constructively as well as destructively for victory, is employed. Yājñavalkya is presented here as the stalwart dialectician in Janaka's assembly of learned philosophers and he fights his way to victory in the interest of philosophical truth. The most important Brāhmaṇa in this chapter is the eighth, in which Brahmatattva is elucidated in answer to the questions raised by Gārgī, the lady philosopher who stands out as the most outstanding personality among the philo sophical interlocutors opposing Yājñavalkya. In the sixth chapter, King Janaka plays the rôle, not of a controversialist, but of one desirous of completely knowing the truth ( tattvabubhutsu) and the discourse proceeds on the lines of argumentation for truth (vāda). In the third and fourth Brāhmaṇas of this chapter, an illustrative exposition of paraloka and mokṣa is given. The fifth Brāhmaṇa repeats the dialogue between Yājñavalkya and Maitreyī and explains the means of self-realisation in the highest sense (ātmahodha). In commenting upon the concluding sentence of this Brāhmaṇa—(“utāvadare khalvamṛtatvamiti hoktā yājñavalkyo vijahāra”) as also in commenting upon the text (“tasmādbrāhmaṇaḥ pāṇḍityaṃ nirvidya”) etc. at the end of the fifth Brāhmaṇa of the previous chapter and upon vi. iv. 22 of the sixth chapter, Śrī Śaṅkara discusses the place of saṃnyāsa and its value in the advaitic scheme of life and liberation, and emphasises the necessity for renunciation as providing special facilities for unhampered realisation; and in this connection, as elsewhere, he is not in favour of any kind of accommodation, in practice or theory, with the advocates of the karma-mārga.
+
+The third division of the Bṛhadāraṇyaka is known as the Khila-kāṇḍa and deals with certain modes of meditation. The messages of the Bṛhadāraṇyaka ontology are conveyed in the texts—(“ahaṃ brahmāsmi”; “ātmetyevopāsīta”; “athāta ādeśo neti neti”). The pragmatic message of this Upaniṣad is embodied in the text (“abhayaṃ cai janaka prāpto'si”). The discipline of this Upaniṣad and its aim are embodied in the soul-elevating abhyārohamantra—‘From non-being, lead me to being; from darkness, lead me to light; from death, lead me to deathlessness’—(“asato mā sadgamaya; tamaso mā jyotirgamaya; mṛtyormā'mṛtaṃ gamaya”). All the teachings of this Upaniṣad are summed up in the first mantra of the Khila-kāṇḍa—‘That is the whole’ the whole is this: from the whole rises up the whole; and having seized the whole of the whole, the whole alone remains’—“oṃ pūrṇamadaḥ purṇamidaṃ pūrṇātpūrṇamudacyate | purṇasya purṇamādāya purṇamevāvaśiṣyate” Such as are able to see the defects of the holism of General Smuts may find comfort in the unimpeachable wholism embodied in this mantra at the beginning of the Khila-kāṇḍa. This holism of General Smuts may have, indeed, a chance of meeting with the approval of advaitic dialectics, only if it links itself up, as an ancillary, to the wholism of the absolute monism of the Bṛhadāraṇyaka The most striking message of this Upaniṣad on the ethical side is embodied in the lesson which every meditator is asked to read in the dental rumblings of the three da’s (da-da-da) of a thunder-clap, which are suggestive of self-restraint (dama) self-sacrifice (dāna)and merciful benevolence (dayā). This great ethical teaching is embodied in the text—“tadetatrayaṃ śikṣeddamaṃdānaṃ dayāmiti” and Prajāpati conveys it to his three classes of children—the devas, the manuṣyas, and the asuras. Such of the men as are godly in their nature and are tossed about by kāma, though otherwise good, should be understood, according to Śrī Śaṅkara, as gods (devāḥ) among men; such of them as are grasping and greedy and actuated by lobha, should be taken as men (manuṣyāḥ) among men; and cruel men, demonised by krodha, should be taken as demons (asurāḥ), All men should constantly practise- dama, dāna and dayā to exorcise the monsters of kāma lobha and krodha.
+
+Some alien and alien-minded scholars are not inclined to see any systematic presentation of a philosophical doctrine in the Upaniṣads and believe that the Upaniṣads, including even the Bṛhadāraṇyaka, form a spiritual conglomerate of several things of varying value belonging to different stages—of thaumaturgic pebbles, dualistic and pluralistic toys and monistic gems. Those who carefully study the Bṛhadāraṇyaka, and Śrī Śaṅkaru’s great bhāṣya thereon, cannot easily resist the feeling that the Bṛhadāraṇyaka thought is an integral whole which is rooted on the advaita doctrine' and has it as its precious fruit, which uses a sound system of exposition and dialectics easily lending themselves to being expressed in the terms of the Gautamīya logic, and which refuses to accommodate itself in a satisfactory manner to any form of pluralistic realism or to any kind of the timid spiritual and metaphysical compromises involved in the bhedā-bheda (difference-cum-identity) phases of monistic thought belonging to the Pre-Śaṅkara or Post-Śaṅkara stage in the history of Vedānta
+
+“oṃ namo brahmādibhyo brahmavidyāsampradāyakartṛbhyo vaṃśaṛṣibhyo namo gurubhyaḥ”
+
+“śrutismṛtipurāṇānāmālayaṃ karuṇālayam
+namāmi bhagavatpādaśaṃkaraṃ lokaśaṃkaram”
+
+S. Kuppuswāmi Śāstrī
+
+Expand
+BhashyakaraIntroduction
+Reset entry
+SanskritTextEntry
+To reorder blocks, press Command or Control along with Shift and the Up or Down arrow keys
+Text
+More
+ओं नमो ब्रह्मादिभ्यो ब्रह्मविद्यासम्प्रदायकर्तृभ्यो वंशऋषिभ्यो नमो गुरुभ्यः ।
+
+‘उषा वा अश्वस्य’ (बृ. उ. १ । १ । १) इत्येवमाद्या वाजसनेयिब्राह्मणोपनिषत् । तस्या इयमल्पग्रन्था वृत्तिः आरभ्यते, संसारव्याविवृत्सुभ्यः संसारहेतुनिवृत्तिसाधनब्रह्मात्मैकत्वविद्याप्रतिपत्तये । सेयं ब्रह्मविद्या उपनिषच्छब्दवाच्या, तत्पराणां सहेतोः संसारस्यात्यन्तावसादनात् ; उपनिपूर्वस्य सदेस्तदर्थत्वात् । तादर्थ्याद्ग्रन्थोऽप्युपनिषदुच्यते । सेयं षडध्यायी अरण्येऽनूच्यमानत्वादारण्यकम् ; बृहत्त्वात्परिमाणतो बृहदारण्यकम् ॥
+
+तस्यास्य कर्मकाण्डेन सम्बन्धोऽभिधीयते । सर्वोऽप्ययं वेदः प्रत्यक्षानुमानाभ्यामनवगतेष्टानिष्टप्राप्तिपरिहारोपायप्रकाशनपरः, सर्वपुरुषाणां निसर्गत एव तत्प्राप्तिपरिहारयोरिष्टत्वात् । दृष्टविषये चेष्टानिष्टप्राप्तिपरिहारोपायज्ञानस्य प्रत्यक्षानुमानाभ्यामेव सिद्धत्वात् नागमान्वेषणा । न चासति जन्मान्तरसम्बन्ध्यात्मास्तित्वविज्ञाने जन्मान्तरेष्टानिष्टप्राप्तिपरिहारेच्छा स्यात् ; स्वभाववादिदर्शनात् । तस्माज्जन्मान्तरसम्बन्ध्यात्मास्तित्वे जन्मान्तरेष्टानिष्टप्राप्तिपरिहारोपायविशेषे च शास्त्रं प्रवर्तते । ‘येयं प्रेते विचिकित्सा मनुष्ये अस्तीत्येके नायमस्तीति चैके’ (क. उ. १ । १ । २०) इत्युपक्रम्य ‘अस्तीत्येवोपलब्धव्यः’ (क. उ. २ । ३ । १३) इत्येवमादिनिर्णयदर्शनात् ; ‘यथा च मरणं प्राप्य’ (क. उ. २ । २ । ६) इत्युपक्रम्य ‘योनिमन्ये प्रपद्यन्ते शरीरत्वाय देहिनः । स्थाणुमन्येऽनुसंयन्ति यथाकर्म यथाश्रुतम्’ (क. उ. २ । २ । ७) इति च ; ‘स्वयं ज्योतिः’ (बृ. उ. ४ । ३ । ९) इत्युपक्रम्य ‘तं विद्याकर्मणी समन्वारभेते’ (बृ. उ. ४ । ४ । २) ‘पुण्यो वै पुण्येन कर्मणा भवति पापः पापेन’ (बृ. उ. ३ । २ । १३) इति च ; ‘ज्ञपयिष्यामि’ (बृ. उ. २ । १ । १५) इत्युपक्रम्य ‘विज्ञानमयः’ (बृ. उ. २ । १ । १६) इति च — व्यतिरिक्तात्मास्तित्वम् । तत्प्रत्यक्षविषयमेवेति चेत् , न ; वादिविप्रतिपत्तिदर्शनात् । न हि देहान्तरसम्बन्धिन आत्मनः प्रत्यक्षेणास्तित्वविज्ञाने लोकायतिका बौद्धाश्च नः प्रतिकूलाः स्युः नास्त्यात्मेति वदन्तः । न हि घटादौ प्रत्यक्षविषये कश्चिद्विप्रतिपद्यते, नास्ति घट इति । स्थाण्वादौ पुरुषादिदर्शनान्नेति चेत् , न ; निरूपितेऽभावात् । न हि प्रत्यक्षेण निरूपिते स्थाण्वादौ विप्रतिपत्तिर्भवति । वैनाशिकास्त्वहमिति प्रत्यये जायमानेऽपि देहान्तरव्यतिरिक्तस्य नास्तित्वमेव प्रतिजानते । तस्मात्प्रत्यक्षविषयवैलक्षण्यात् प्रत्यक्षान्नात्मास्तित्वसिद्धिः । तथानुमानादपि । श्रुत्या आत्मास्तित्वे लिङ्गस्य दर्शितत्वात् लिङ्गस्य च प्रत्यक्षविषयत्वात् नेति चेत् , न ; जन्मान्तरसम्बन्धस्याग्रहणात् । आगमेन त्वात्मास्तित्वेऽवगते वेदप्रदर्शितलौकिकलिङ्गविशेषैश्च, तदनुसारिणो मीमांसकास्तार्किकाश्चाहंप्रत्ययलिङ्गानि च वैदिकान्येव स्वमतिप्रभवाणीति कल्पयन्तो वदन्ति प्रत्यक्षश्चानुमेयश्चात्मेति ॥
+
+सर्वथाप्यस्त्यात्मा देहान्तरसम्बन्धीत्येवं प्रतिपत्तुर्देहान्तरगतेष्टानिष्टप्राप्तिपरिहारोपायविशेषार्थिनस्तद्विशेषज्ञापनाय कर्मकाण्डमारब्धम् । न त्वात्मनः इष्टानिष्टप्राप्तिपरिहारेच्छाकारणमात्मविषयमज्ञानं कर्तृभोक्तृस्वरूपाभिमानलक्षणं तद्विपरीतब्रह्मात्मस्वरूपविज्ञानेनापनीतम् । यावद्धि तन्नापनीयते, तावदयं कर्मफलरागद्वेषादिस्वाभाविकदोषप्रयुक्तः शास्त्रविहितप्रतिषिद्धातिक्रमेणापि प्रवर्तमानो मनोवाक्कायैर्दृष्टादृष्टानिष्टसाधनान्यधर्मसंज्ञकानि कर्माण्युपचिनोति बाहुल्येन, स्वाभाविकदोषबलीयस्त्वात् । ततः स्थावरान्ताधोगतिः । कदाचिच्छास्त्रकृतसंस्कारबलीयस्त्वम् । ततो मनआदिभिरिष्टसाधनं बाहुल्येनोपचिनोति धर्माख्यम् । तद्द्विविधम् — ज्ञानपूर्वकं केवलं च । तत्र केवलं पितृलोकादिप्राप्तिफलम् । ज्ञानपूर्वकं देवलोकादिब्रह्मलोकान्तप्राप्तिफलम् । तथा च शास्त्रम् — ‘आत्मयाजी श्रेयान्देवयाजिनः’ (शत. ब्रा. १ । २ । ६ । ११३) इत्यादि । स्मृतिश्च ‘द्विविधं कर्म वैदिकम्’ (मनु. १२ । ८८) इत्याद्या । साम्ये च धर्माधर्मयोर्मनुष्यत्वप्राप्तिः । एवं ब्रह्माद्या स्थावरान्ता स्वाभाविकाविद्यादिदोषवती धर्माधर्मसाधनकृता संसारगतिर्नामरूपकर्माश्रया । तदेवेदं व्याकृतं साध्यसाधनरूपं जगत् प्रागुत्पत्तेरव्याकृतमासीत् । स एष बीजाङ्कुरादिवदविद्याकृतः संसारः आत्मनि क्रियाकारकफलाध्यारोपलक्षणोऽनादिरनन्तोऽनर्थ इत्येतस्माद्विरक्तस्याविद्यानिवृत्तये तद्विपरीतब्रह्मविद्याप्रतिपत्त्यर्थोपनिषदारभ्यते ॥
+
+अस्य त्वश्वमेधकर्मसम्बन्धिनो विज्ञानस्य प्रयोजनम् — येषामश्वमेधे नाधिकारः, तेषामस्मादेव विज्ञानात्तत्फलप्राप्तिः, विद्यया वा कर्मणा वा, ‘तद्धैतल्लोकजिदेव’ (बृ. उ. १ । ३ । २८) इत्येवमादिश्रुतिभ्यः । कर्मविषयत्वमेव विज्ञानस्येति चेत् , न ; ‘योऽश्वमेधेन यजते य उ चैनमेवं वेद’ (तै. सं. ५ । ३ । १२) इति विकल्पश्रुतेः । विद्याप्रकरणे चाम्नानात् , कर्मान्तरे च सम्पादनदर्शनात् , विज्ञानात्तत्फलप्राप्तिरस्तीत्यवगम्यते । सर्वेषां च कर्मणां परं कर्माश्वमेधः, समष्टिव्यष्टिप्राप्तिफलत्वात् । तस्य चेह ब्रह्मविद्याप्रारम्भे आम्नानं सर्वकर्मणां संसारविषयत्वप्रदर्शनार्थम् । तथा च दर्शयिष्यति फलमशनायामृत्युभावम् । न नित्यानां संसारविषयफलत्वमिति चेत् , न ; सर्वकर्मफलोपसंहारश्रुतेः । सर्वं हि पत्नीसम्बद्धं कर्म ; ‘जाया मे स्यादेतावान्वै कामः’ (बृ. उ. १ । ४ । १७) इति निसर्गत एव सर्वकर्मणां काम्यत्वं दर्शयित्वा, पुत्रकर्मापरविद्यानां च ‘अयं लोकः पितृलोको देवलोकः’ इति फलं दर्शयित्वा, त्र्यन्नात्मकतां चान्ते उपसंहरिष्यति ‘त्रयं वा इदं नाम रूपं कर्म’ (बृ. उ. १ । ६ । १) इति — सर्वकर्मणां फलं व्याकृतं संसार एवेति । इदमेव त्रयं प्रागुत्पत्तेस्तर्ह्यव्याकृतमासीत् । तदेव पुनः सर्वप्राणिकर्मवशाद्व्याक्रियते बीजादिव वृक्षः । सोऽयं व्याकृताव्याकृतरूपः संसारोऽविद्याविषयः क्रियाकारकफलात्मकतयात्मरूपत्वेनाध्यारोपितोऽविद्ययैव मूर्तामूर्ततद्वासनात्मकः । अतो विलक्षणोऽनामरूपकर्मात्मकोऽद्वयो नित्यशुद्धबुद्धमुक्तस्वभावोऽपि क्रियाकारकफलभेदादिविपर्ययेणावभासते । अतोऽस्मात्क्रियाकारकफलभेदस्वरूपात् ‘एतावदिदम्’ इति साध्यसाधनरूपाद्विरक्तस्य कामादिदोषकर्मबीजभूताविद्यानिवृत्तये रज्ज्वामिव सर्पविज्ञानापनयाय ब्रह्मविद्या आरभ्यते ॥
+
+Expand
+EnglishTranslationText
+To reorder blocks, press Command or Control along with Shift and the Up or Down arrow keys
+Text
+More
+Om. Salutation to Brahman (Hiraṇyagarbha[1]) and the other sages forming the line of teachers who have handed down the knowledge of Brahman. Salutation to our own teacher.
+
+With the words, ‘The head of the sacrificial horse is the dawn,’ etc. begins the Upaniṣad connected with the Vājasaneyi-Brāhmaṇa. This concise commentary is being written on it to explain to those who wish to turn away from this relative world (Saṃsāra), the knowledge of the identity of the individual self and Brahman, which is the means of eradicating the cause of this world (ignorance). This knowledge of Brahman is called ‘Upaniṣad’ because it entirely removes this relative world together with its cause from those who betake themselves to this study, for the root ‘sad’ prefixed by ‘upa’ and ‘ni’ means that. Books also are called Upaniṣads as they have the same end in view.
+
+This Upaniṣad consisting of six chapters is called ‘Āraṇyaka’ as it was taught in the forest (Araṇya). And because of its large size it is called Bṛhadāraṇyaka. Now we are going to describe its relation to the ceremonial portion of the Vedas. The whole of the Vedas is devoted to setting forth the means of attaining what is good and avoiding what is evil, in so far as these are not known through perception and inference, for all people naturally seek these two ends. In matters coming within the range of experience, a knowledge of the means of attaining the good and avoiding the evil ends is easily available through perception and inference. Hence the Vedas are not to be sought for that. Now, unless a person is aware of the existence of the self in a future life, he will not be induced to attain what is good and avoid what is evil in that life. For we have the example of the materialists. Therefore the scriptures proceed to discuss the existence of the self in a future life and the particular means of attaining the good and avoiding the evil in that life. For we see one of the Upaniṣads starts with the words, ‘There is a doubt among men regarding the life after death, some saying that the self exists, and others that it does not’ (Ka. I. 20), and concludes, ‘It is to be realised as existing indeed’ (Ka. VI. 13), and so on. Also, beginning with, ‘How (the self remains) after death’ (Ka. V. 6), it ends with, ‘Some souls enter the womb to get a new body, while others are born, as stationary objects (plants etc.), all according to their past work and knowledge’ (Ka. V. 7). Elsewhere beginning with, ‘The man (self) himself becomes the light’ (IV. iii. 9), it ends with, ‘It is followed by knowledge, work’ (IV. iv. 2). Also, ‘One becomes good through good work and evil through evil work’ (III. ii. 13). Again beginning with, ‘I will instruct you’ (II. i. 15), the existence of the extracorporeal self is established in the passage, ‘Full of consciousness (i.e. identified with the mind),’ etc. (II. i. 16-17).
+
+Objection: Is it not a matter of perception?
+
+Reply: No, for we see the divergence of opinion among different schools. Were the existence of the self in a future body a matter of perception, the materialists and Buddhists would not stand opposed to us, saying that there is no self. For nobody disputes regarding an object of perception such as a jar, saying it does not exist.
+
+Objection: You are wrong, since a stump, for instance, is looked upon as a man and so on.
+
+Reply: No, for it vanishes when the truth is known. There are no more contradictory views when the stump, for instance, has been definitely known as such through perception. The Buddhists, however, in spite of the fact that there is the ego-consciousness, persistently deny the existence of the self other than the subtle body.[2] Therefore, being different from objects of perception, the existence of the self cannot be proved by this means. Similarly inference too is powerless.
+
+Objection: No, since the Śruti (Veda) points out certain grounds of inference[3] for the existence of the self, and these depend on perception, (these two are also efficient means of the knowledge of the self).
+
+Reply: Not so, for the self cannot be perceived as having any relation to another life. But when its existence has been known from the Śruti and from certain empirical grounds of inference cited by it, the Mīmāṃsakas and logicians, who follow in its footsteps, fancy that those Vedic grounds of inference such as the ego-consciousness are the products of their own mind, and declare that the self is knowable through perception and inference.
+
+In any case, a man who believes that there is a self which gets into relation with a future body, seeks to know the particular means of attaining the good and avoiding the evil in connection with that body. Hence the ceremonial portion of the Vedas is introduced to acquaint him with these details. But the cause of that desire to attain the good and avoid the evil, viz. ignorance regarding the Self, which expresses itself as the idea of one’s being the agent and experiencer, has not been removed by its opposite, the knowledge of the nature of the self as being identical with Brahman. Until that is removed, a man prompted by such natural defects of his as attachment or aversion to the fruits' of his actions, proceeds to act even against the injunctions and prohibitions of the scriptures, and under the powerful urge of his natural defects accumulates in thought, word and deed a good deal of work known as iniquity, producing harm, visible and invisible. This leads to degradation down to the state of stationary objects. Sometimes the impressions made by the scriptures are very strong, in which case he accumulates in thought, word and deed a great deal of what is known as good work which contributes to his well-being. This work is twofold: that attended with meditation, and that which is mechanical. Of these, the latter results in the attaiment of the world of the Manes and so on; while work coupled with meditation leads to worlds beginning with that of the gods and ending with the world of Hiraṇyagarbha.[4] The Śruti says on the point, ‘One who sacriñces to the Self is better than one who sacrifices to the gods,’ etc. (Ś. XI. ii. 6. 13, adapted). And the Smṛti: ‘Vedic work is twofold,’ etc. (M. XII. 88).
+
+When the good work balances the evil, one becomes a man. Thus the transmigration beginning with the state of Hiraṇyagarbha and the rest and ending with that of stationary objects, which a man with his natural defects of ignorance etc. attains through his good and bad deeds, depends on name, form and action. This manifested universe, consisting of means and ends, was in an undifferentiated state before its manifestation. That relative-universe, without beginning and end like the seed and the sprout etc., created by ignorance and consisting in a superimposition of action, its factors and its results on the Self, is an evil. Hence for the removal of the ignorance of a man who is disgusted with this universe, this Upaniṣad is being commenced in order to inculcate the knowledge of Brahman which is the very opposite of that ignorance.
+
+The utility of this meditation concerning the horse sacrifice is this: Those who are not entitled to this sacrifice will get the same result through this meditation itself. Witness the Śruti passages: ‘Through meditation or through rites’ (Ś. X. iv. 3. 9), and ‘This (meditation on the vital force) certainty wins the world’ (I. iii. 28).
+
+Objection: This meditation is just a part of the rite.
+
+Reply: No, for the following Śruti passage allows option: ‘He who performs the horse sacrifice, or who knows it as such’ (Tai. S. V. iii. 12. 2). Since it occurs in a context dealing with knowledge, and since we see the same kind of meditation based on resemblance being applied to other rites[5] also, we understand that meditation will produce the same result. Of all rites the greatest is the horse sacrifice, for it leads to identity with Hiraṇyagarbha in his collective and individual aspects. And its mention here at the very beginning of this treatise on the knowledge of Brahman is an indication that all rites fall within the domain of relative existence. It will be shown later on that the result of this meditation is identification with Hunger or Death.
+
+Objection: But the regular (Nitya) rites are not productive of relative results.
+
+Reply: Not so, for the Śruti sums up the results of all rites together. Every rite is connected with the wife. In the passage, ‘Let me have a wife....... This much indeed is desire’ (I. iv. 17), it is shown that all action is naturally prompted by desire, and that the results achieved through a son, through rites and through meditation are this world, the world of the Manes and that of the gods respectively (I. v. 16), and the conclusion arrived at will be that everything consists of the three kinds of food: ‘This (universe) indeed consists of three things: name, form and action’ (I. vi. i). The manifested result of all action is nothing but the relative universe. It is these three which were in an undifferentiated state before manifestation. That again is manifested owing to the resultant of the actions of all beings, as a tree comes out of the seed. This differentiated and undifferentiated universe, consisting of the gross[6] and subtle worlds and their essence, falls within the category of ignorance, and has been superimposed by it on the Self as action, its factors and its results as if they were Its own form. Although the Self is different from them, has nothing to do with name, form and action, is one without a second and is eternal, pure, enlightened and free by nature, yet It appears as just the reverse of this, as consisting of differences of action, its factors and its results, and so on. Therefore for the removal of ignorance, the seed of defects such as desire and of action—like the removal of the idea of a snake from a rope—with regard to a man who is disgusted with this universe of means and ends, consisting of actions, their factors and their results— having realised that they are just so much, the knowledge of Brahman is being set forth.
+
+The first two sections beginning with, ‘The head of the sacrificial horse is the dawn,’ will be devoted to the meditation regarding the horse sacrifice. The meditation about the horse is described, as the horse is the most important thing in this sacrifice. Its importance is indicated by the fact that the sacrifice is named after it, and its presiding deity is Prajāpati (Hiraṇyagarbha).
+
+Expand
+OtherTranslations (1)
+Press spacebar to grab and re-order
+
+Delete
+
+Add an entry
+IASTTransliteration
+To reorder blocks, press Command or Control along with Shift and the Up or Down arrow keys
+Text
+More
+Here is the transliteration of the Sanskrit text into the Roman script (IAST - International Alphabet of Sanskrit Transliteration).
+
+Transliteration of Brihadaranyaka Upanishad Bhashya Upodghata
+
+oṃ namo brahmādibhyo brahmavidyāsampradāyakartṛbhyo vaṃśaṛṣibhyo namo gurubhyaḥ |
+
+‘uṣā vā aśvasya’ (bṛ. u. 1. 1. 1) ityevamādyā vājasaneyibrāhmaṇopaniṣat | tasyā iyamalpagranthā vṛttiḥ ārabhyate, saṃsāravyāvivṛtsubhyaḥ saṃsārahetunivṛttisādhanabrahmātmaikatvavidyāpratipattaye | seyaṃ brahmavidyā upaniṣacchabdavācyā, tatparāṇāṃ sahetoḥ saṃsārasyātyantāvasādanāt; upanipūrvasya sadestadarthatvāt | tādarthyādgrantho’pyupaniṣaducyate | seyaṃ ṣaḍadhyāyī araṇye’nūcyamānatvādāraṇyakam; bṛhattvātparimāṇato bṛhadāraṇyakam ||
+
+tasyāsya karmakāṇḍena sambandho’bhidhīyate | sarvo’pyayaṃ vedaḥ pratyakṣānumānābhyāmanavagateṣṭāniṣṭaprāptiparihāropāyaprakāśanaparaḥ, sarvapuruṣāṇāṃ nisargata eva tatprāptiparihārayoriṣṭatvāt | dṛṣṭaviṣaye ceṣṭāniṣṭprāptiparihāropāyajñānasya pratyakṣānumānābhyāmeva siddhatvāt nāgamānveṣaṇā | na cāsati janmāntarasambandhyātmāstitvavijñāne janmāntareṣṭāniṣṭaprāptiparihārecchā syāt; svabhāvavādidarśanāt | tasmājjanmāntarasambandhyātmāstitve janmāntareṣṭāniṣṭaprāptiparihāropāyaviśeṣe ca śāstraṃ pravartate | ‘yeyaṃ prete vicikitsā manuṣye astītyeke nāyamastīti caike’ (ka. u. 1. 1. 20) ityupakramya ‘astītyevopalabdhavyaḥ’ (ka. u. 2. 3. 13) ityevamādinirṇayadarśanāt; ‘yathā ca maraṇaṃ prāpya’ (ka. u. 2. 2. 6) ityupakramya ‘yonimanye prapadyante śarīratvāya dehinaḥ | sthāṇumanye’nusaṃyanti yathākarma yathāśrutam’ (ka. u. 2. 2. 7) iti ca; ‘svayaṃ jyotiḥ’ (bṛ. u. 4. 3. 9) ityupakramya ‘taṃ vidyākarmaṇī samanvārabhete’ (bṛ. u. 4. 4. 2) ‘puṇyo vai puṇyena karmaṇā bhavati pāpaḥ pāpena’ (bṛ. u. 3. 2. 13) iti ca; ‘jñapayisyāmi’ (bṛ. u. 2. 1. 15) ityupakramya ‘vijñānamayaḥ’ (bṛ. u. 2. 1. 16) iti ca — vyatirikṭātmāstitvam | tatpratyakṣaviṣayameveti cet, na; vādivipratipattidarśanāt | na hi dehāntarasambandhina ātmanaḥ pratyakṣeṇāstitvavijñāne lokāyatikā bauddhāśca naḥ pratikūlāḥ syuḥ nāstyātmeti vadantaḥ | na hi ghaṭādau pratyakṣaviṣaye kaścidvipratipadyate, nāsti ghaṭa iti | sthāṇvādau puruṣādidarśanānneti cet, na; nirūpite’bhāvāt | na hi pratyakṣeṇa nirūpite sthāṇvādau vipratipattirbhavati | vaināśikāstvahamiti pratyaye jāyamāne’pi dehāntaravyatirikṭasya nāstitvameva pratijānate | tasmātpratyakṣaviṣayavailakṣaṇyāt pratyakṣānnātmāstitvasiddhiḥ | tathānumānādapi | śrutyā ātmāstitve liṅgasya darśitatvāt liṅgasya ca pratyakṣaviṣayatvāt neti cet, na; janmāntarasambandhasyāgrahaṇāt | āgamena tvātmāstitve’vagate vedapradarśitalaukikaliṅgaviśeṣaiśca, tadunusāriṇo mīmāṃsakāstārkikāścāhaṃpratyayaliṅgāni ca vaidikānyeva svamatiprabhavāṇīti kalpayanto vadanti pratyakṣaścānumeyaścātmeti ||
+
+sarvathāpyastyātmā dehāntarasambandhītyevaṃ pratipatturdehāntaragategteṣṭāniṣṭaprāptiparihāropāyaviśeṣārthinastadviśeṣajñāpanāya karmakāṇḍamārabdham | na tvātmanaḥ iṣṭāniṣṭaprāptiparihārecchākāraṇamātmaviṣayamajñānaṃ kartṛbhoktṛsvarūpābhimānalakṣaṇaṃ tadviparītabrahmātmasvarūpavijñānenāpanītam | yāvaddhi tannāpanīyate, tāvadayaṃ karmaphalarāgadveṣādisvābhāvikadoṣaprayuktaḥ śāstravihitapratiṣiddhātikrameṇāpi pravartamāno manovākkāyairdṛṣṭādṛṣṭāniṣṭasādhanānyadharmsaṃjñakāni karmāṇyupacinoti bāhulyena, svābhāvikadoṣabalīyastvāt | tataḥ sthāvarāntādhogatiḥ | kadācicśāstrakṛtasaṃskārabalīyastvam | tato manādibhir iṣṭasādhanaṃ bāhulyenopacinoti dharmākhyam | tadvividham — jñānapūrvakaṃ kevalaṃ ca | tatra kevalaṃ pitṛlokādiprāptiphalam | jñānapūrvakaṃ devalokādibrahmalokāntaprāptiphalam | tathā ca śāstram — ‘ātmayājī śreyāndevayājinaḥ’ (śata. brā. 1. 2. 6. 113) ityādi | smṛtiśca ‘dvividhaṃ karma vaidikam’ (manu. 12. 88) ityādyā | sāmye ca dharmādharmayormanuṣyatvaprāptiḥ | evaṃ brahmādyā sthāvarāntā svābhāvikāvidyādidoṣavatī dharmādharma-sādhankṛtā saṃsāragatirnāmarūpakarmāśrayā | tadevedaṃ vyākṛtaṃ sādhyasādhanarūpaṃ jagat prāgutpatte-ravyākṛtamāsīt | sa eṣa bījāṅkurādivadavidyākṛtaḥ saṃsāraḥ ātmani kriyākārakaphalādhyāropalakṣaṇo’nādirananto’nartha ity etasmādviraktasyāvidyānivṛttaye tadviparītabrahmavidyāpratipattyarthopaniṣadārabhyate ||
+
+asya tvaśvamedhakarmasambandhino vijñānasya prayojanam — yeṣāmaśvamedhe nādhikāraḥ, teṣāmasmādeva vijñānāttatphalaprāptiḥ, vidyayā vā karmaṇā vā, ‘taddhaitallokajideva’ (bṛ. u. 1. 3. 28) ityevamādiśruti bhyaḥ | karmaviṣayatvameva vijñānasyeti cet, na; ‘yo’śvamedhena yajate ya u cainamevaṃ veda’ (tai. saṃ. 5. 3. 12) iti vikalpaśruteḥ | vidyāprakaraṇe cāmnānāt, karmāntare ca sampādanadarśanāt, vijñānāttatphalaprāptirastītyavagamyate | sarveṣāṃ ca karmaṇāṃ paraṃ karmāśvamedhaḥ, samaṣṭivyaṣṭiprāptiphalatvāt | tasya ceha brahmavidyāprārambhe āmnānaṃ sarvakarmaṇāṃ saṃsāraviṣayatvapradarśanārtham | tathā ca darśayiṣyati phalamaśanāyāmṛtyubhāvam | na nityānāṃ saṃsāraviṣayaphalatvamiti cet, na; sarvakarmaphalopasaṃhāraśruteḥ | sarvaṃ hi patnīsambaddhaṃ karma; ‘jāyā me syādetāvānvai kāmaḥ’ (bṛ. u. 1. 4. 17) iti nisargata eva sarvakarmanāṃ kāmyatvaṃ darśayitvā, putrakarmāparavidyānāṃ ca ‘ayaṃ lokaḥ pitṛloko devalokaḥ’ iti phalaṃ darśayitvā, tryannātmakatāṃ cānte upasaṃhariṣyati ‘trayaṃ vā idaṃ nāma rūpaṃ karma’ (bṛ. u. 1. 6. 1) iti — sarvakarmaṇāṃ phalaṃ vyākṛtaṃ saṃsāra eveti | idameva trayaṃ prāgutpattestarhyavyākṛtamāsīt | tadeva punaḥ sarvaprāṇikarmavaśādvyākriyate bījādiva vṛkṣaḥ | so’yaṃ vyākṛtāvyākṛtarūpaḥ saṃsāro’vidyāviṣayaḥ kriyākārakaphalātmakatayātmarūpatvenādhyāropito’vidyayaiva mūrtāmūrtatadvāsanātmakaḥ | ato vilakṣaṇo’nāmarūpakarmātmako’dvayo nityaśuddhabuddhamuktasvabhāvo’pi kriyākārakaphalabhedādiviparyayeṇāvabhāsate | ato’smātkriyākārakaphalabhedasvarūpāt ‘etāvadidam’ iti sādhyasādhanarūpādviraktasya kāmādidoṣakarmabījabhūtāvidyānivṛttaye rajjvāmiva sarpavijñānāpanayāya brahmavidyā ārabhyate ||
+
+Expand
+sections (4)
+Add or create a relation
+
+Press spacebar to grab and re-order
+NumberOfTeekas*
+1
+
+
+teekas (2)
+Add or create a relation
+
+Press spacebar to grab and re-order
+slug
+Regenerate
+GranthaNameTranslations (0)
+
+No entry yet. Click to add one.
+coverImage
+
+Click to add an asset or drag and drop one in this area
+order
+
+
+introVideoId
+introVideoTitle
+Entry
+
+Publish
+More document actions
+
+Save
+Preview
+Set up preview
+The schemas have been successfully loaded
+
+Back
+Edit a relation
+Go to entry
+Close modal
+Manthra 1.1.1
+
+Save
+Section (1)
+Add or create a relation
+
+Press spacebar to grab and re-order
+ShlokaManthraNumber
+Manthra 1.1.1
+ShlokaManthraEntry
+Reset entry
+SanskritTextEntry
+To reorder blocks, press Command or Control along with Shift and the Up or Down arrow keys
+Text
+More
+ओं । उषा वा अश्वस्य मेध्यस्य शिरः । सूर्यश्चक्षुर्वातः प्राणो व्यात्तमग्निर्वैश्वानरः संवत्सर आत्माश्वस्य मेध्यस्य । द्यौः पृष्ठमन्तरिक्षमुदरं पृथिवी पाजस्यं दिशः पार्श्वे अवान्तरदिशः पर्शव ऋतवोऽङ्गानि मासाश्चार्धमासाश्च पर्वाण्यहोरात्राणि प्रतिष्ठा नक्षत्राण्यस्थीनि नभो मांसानि । ऊवध्यं सिकताः सिन्धवो गुदा यकृच्च क्लोमानश्च पर्वता ओषधयश्च वनस्पतयश्च लोमान्युद्यन्पूर्वार्धो निम्लोचञ्जघनार्धो यद्विजृम्भते तद्विद्योतते यद्विधूनुते तत्स्तनयति यन्मेहति तद्वर्षति वागेवास्य वाक् ॥ १ ॥
+
+Expand
+EnglishTranslationText
+To reorder blocks, press Command or Control along with Shift and the Up or Down arrow keys
+Text
+More
+l. Om. The head of the sacrificial horse is the dawn, its eye the sun, its vital force[7] the air, its open mouth the fire called Vaiśvānara, and the body of the sacrificial horse is the year. Its back is heaven, its belly the sky, its hoof the earth, its sides the four quarters, its ribs the intermediate quarters, its members the seasons, its joints the months and fortnights, its feet the days and nights, its bones the stars and its flesh the clouds. Its half-digested food is the sand, its blood-vessels the rivers, its liver and spleen the mountains, its hairs the herbs and trees. Its forepart is the ascending sun, its hind part the descending sun, its yawning is lightning, its shaking the body is thundering, its making water is raining, and its neighing is voice.
+
+Expand
+OtherTranslations (1)
+Press spacebar to grab and re-order
+
+Delete
+
+Add an entry
+IASTTransliteration
+To reorder blocks, press Command or Control along with Shift and the Up or Down arrow keys
+Text
+More
+﻿
+
+Expand
+BhashyamEntry
+Reset entry
+SanskritTextEntry
+To reorder blocks, press Command or Control along with Shift and the Up or Down arrow keys
+Text
+More
+उषा इति, ब्राह्मो मुहूर्तः उषाः ; वैशब्दः स्मारणार्थः, प्रसिद्धं कालं स्मारयति ; शिरः, प्राधान्यात् ; शिरश्च प्रधानं शरीरावयवानाम् ; अश्वस्य, मेध्यस्य मेधार्हस्य यज्ञियस्य, उषाः शिर इति सम्बन्धः । कर्माङ्गस्य पशोः संस्कर्तव्यत्वात्कालादिदृष्टयः शिरआदिषु क्षिप्यन्ते ; प्राजापत्यत्वं च प्रजापतिदृष्ट्यध्यारोपणात् ; काललोकदेवतात्वाध्यारोपणं च प्रजापतित्वकरणं पशोः ; एवंरूपो हि प्रजापतिः ; विष्णुत्वादिकरणमिव प्रतिमादौ । सूर्यश्चक्षुः, शिरसोऽनन्तरत्वात्सूर्याधिदैवतत्वाच्च ; वातः प्राणः, वायुस्वाभाव्यात् ; व्यात्तं विवृतं मुखम् अग्निर्वैश्वानरः ; वैश्वानर इत्यग्नेर्विशेषणम् ; वैश्वानरो नामाग्निर्विवृतं मुखमित्यर्थः, मुखस्याग्निदैवतत्वात् ; संवत्सर आत्मा ; संवत्सरो द्वादशमासस्त्रयोदशमासो वा ; आत्मा शरीरम् ; कालावयवानां च संवत्सरः शरीरम् ; शरीरं चात्मा, ‘मध्यं ह्येषामङ्गानामात्मा’ (ऐ. आ. २ । ३ । ५) इति श्रुतेः ; अश्वस्य मेध्यस्येति सर्वत्रानुषङ्गार्थं पुनर्वचनम् । द्यौः पृष्ठम् , ऊर्ध्वत्वसामान्यात् ; अन्तरिक्षमुदरम् , सुषिरत्वसामान्यात् ; पृथिवी पाजस्यं पादस्यम् , पाजस्यमिति वर्णव्यत्ययेन, पादासनस्थानमित्यर्थः ; दिशश्चतस्रोऽपि पार्श्वे, पार्श्वेन दिशां सम्बन्धात् ; पार्श्वयोर्दिशां च सङ्ख्यावैषम्यादयुक्तमिति चेत् , न ; सर्वमुखत्वोपपत्तेरश्वस्य पार्श्वाभ्यामेव सर्वदिशां सम्बन्धाददोषः ; अवान्तरदिश आग्नेय्याद्याः पर्शवः पार्श्वास्थीनि ; ऋतवोऽङ्गानि, संवत्सरावयवत्वादङ्गसाधर्म्यात् ; मासाश्चार्धमासाश्च पर्वाणि सन्धयः, सन्धिसामान्यात् ; अहोरात्राणि प्रतिष्ठाः ; बहुवचनात्प्राजापत्यदैवपित्र्यमानुषाणि ; प्रतिष्ठाः पादाः, प्रतितिष्ठत्येतैरिति ; अहोरात्रैर्हि कालात्मा प्रतितिष्ठति, अश्वश्च पादैः ; नक्षत्राण्यस्थीनि, शुक्लत्वसामान्यात् ; नभो नभःस्था मेघाः, अन्तरिक्षस्योदरत्वोक्तेः ; मांसानि, उदकरुधिरसेचनसामान्यात् । ऊवध्यम् उदरस्थमर्धजीर्णमशनं सिकताः, विश्लिष्टावयवत्वसामान्यात् ; सिन्धवः स्यन्दनसामान्यात् नद्यः गुदा नाड्यः, बहुवचनाच्च ; यकृच्च क्लोमानश्च हृदयस्याधस्ताद्दक्षिणोत्तरौ मांसखण्डौ ; क्लोमान इति नित्यं बहुवचनमेकस्मिन्नेव ; पर्वताः, काठिन्यादुच्छ्रितत्वाच्च ; ओषधयश्च क्षुद्राः स्थावराः, वनस्पतयो महान्तः, लोमानि केशाश्च यथासम्भवम् ; उद्यन्नुद्गच्छन्भवति सविता आ मध्याह्नात् अश्वस्य पूर्वार्धः नाभेरूर्ध्वमित्यर्थः ; निम्लोचन्नस्तं यन् आ मध्याह्नात् जघनार्धोऽपरार्धः, पूर्वापरत्वसाधर्म्यात् ; यद्विजृम्भते गात्राणि विनामयति विक्षिपति, तद्विद्योतते विद्योतनम् , मुखघनविदारणसामान्यात् ; यद्विधूनुते गात्राणि कम्पयति, तत्स्तनयति, गर्जनशब्दसामान्यात् ; यन्मेहति मूत्रं करोत्यश्वः, तद्वर्षति वर्षणं तत् , सेचनसामान्यात् ; वागेव शब्द एव अस्याश्वस्य वागिति, नात्र कल्पनेत्यर्थः ॥
+
+Expand
+EnglishTranslationText
+To reorder blocks, press Command or Control along with Shift and the Up or Down arrow keys
+Text
+More
+The head of the sacrificial horse, i.e. one fit for a sacrifice, is the dawn, a period of about three quarters of an hour just before sunrise. The particle ‘vai’ recalls something well-known, here, the time of dawn. The similarity is due to the importance of each. The head is the most important part of the body (and so is the dawn of the day). The horse which is a part of the sacrifice has to be,purified; hence its head and other parts of its body are to be looked upon as certain divisions of time etc. (and not vice versa). And it will be raised to the status of Prajāpati by being meditated upon as such. In other words, the horse will be deified into Prajāpati if the ideas of time, worlds and deities be superimposed on it, for Prajāpati comprises these. It is like converting'an image etc. into the Lord Viṣṇu or any other deity. Its eye the sun, for it is next to the head (as the sun is next to, or rises just after the dawn), and has the sun for its presiding deity. Its vital force the air, because as the breath it is of the nature of air. Its open mouth the fire called Vaiśvānara. The word ‘Vaiśvānara’ specifies the fire. The mouth is fire, because that is its presiding deity. The body of the sacrificial horse is the year consisting of twelve or thirteen[8] months. The Word ‘Ātman’ here means the body. The year is the body of the divisions of time; and the body is called Ātman, as we see it in the Śruti passage, ‘For the Ātman (trunk) is the centre of these limbs' (Tai. Ā. II. iii. 5). The repetition of the phrase ‘of the sacrificial horse’ is intended to show that it is to be connected with all the terms. Its back is heaven, because both are high. Its belly the sky, because both are hollow. Its hoof the earth: ‘Pājasya’ should be ‘Pādasya’ by the usual transmutation of letters, meaning a seat for the foot. Its sides the four quarters, for they are connected with the quarters. It may be objected that the sides being two and the quarters four in number, the parallel is wrong. The aṇswer to it is that since the head of the horse can be in any direction, its two sides can easily come in contact with all the quarters. So it is all right. Its ribs the intermediate quarters such as the south-east. Its members the seasons: The latter, being parts of the year, are its limbs, which brings out the similarity. Its joints the months and fortnights, because both connect (the latter connect the parts of the year as joints do those of the body). Its feet the days and nights. The plural in the latter indicates that those[9] pertaining to Prajāpati, the gods, the Manes and men are all meant. Pratiṣṭhā literally means those by which one stands; hence feet. The deity representing time stands on the days and nights, as the horse does on its feet. Its bones the stars, both being white. Its flesh the clouds: The word used in the text means the sky, but since this has been spoken of as the belly, here it denotes the clouds which float in it. They are flesh, because they shed water as the flesh sheds blood. Its half-digested food in the stomach is the sand, because both consist of loose parts. Its blood-vessels the rivers, for both flow. The word in the text, being plural, denotes bloodvessels here. Its liver and spleen the mountains, both being hard and elevated. ‘Yakṛt’ and ‘Kloman’ are muscles below the heart on the right and left. The latter word, though always used in the plural, denotes a single thing. Its hairs the herbs and trees: These, being small and large plants respectively, should be applied to the short and long hairs according to fitness. Its forepart, from the navel onward, is the ascending (lit. ‘rising’) sun, up to noon. Its hind part the descending (lit. ‘setting’) sun, from noon on. The similarity consists in their being the anterior and posterior parts respectively in each case. Its yawning or stretching or jerking the limbs is lightning, because the one splits the cloud, and the other the mouth. Its shaking the body is thundering, both producing a sound. Its making water is raining, owing to the similarity of moistening. And its neighing is voice or sound—no fancying is needed here.
+
+Expand
+OtherTranslations (1)
+Press spacebar to grab and re-order
+
+Delete
+
+Add an entry
+IASTTransliteration
+To reorder blocks, press Command or Control along with Shift and the Up or Down arrow keys
+Text
+More
+﻿
+
+Expand
+Teekas (1)
+Press spacebar to grab and re-order
+
+Delete
+TeekaEntry
+Reset entry
+SanskritTextEntry
+To reorder blocks, press Command or Control along with Shift and the Up or Down arrow keys
+Text
+More
+प्रतीकमादाय व्याचष्टे —
+
+उषा इत्यादिना ।
+
+स्मारणार्थत्वमेव निपातस्य स्फुटयति —
+
+प्रसिद्धमिति ।
+
+शास्त्रीये लौकिके च व्यवहारे प्रसिद्धो ब्राह्मो मुहूर्तस्तं कालमिति यावत् ।
+
+उषसि शिरःशब्दप्रयोगे दिनावयवेषु तस्य प्राधान्यं हेतुमाह —
+
+प्राधान्यादिति ।
+
+तथापि कथं तत्र तच्छब्दप्रयोगस्तत्राऽऽह —
+
+शिरश्चेति ।
+
+आश्वमेधिकाश्वशिरस्युषसो दृष्टिः कर्तव्येत्याह —
+
+अश्वस्येति ।
+
+कालादिदृष्टिरश्वाङ्गेषु किमिति क्षिप्यतेऽश्वाङ्गदृष्टिरेव तेषु किं न स्यादित्याशङ्क्याऽऽह —
+
+कर्माङ्गस्येति ।
+
+अङ्गेष्वनङ्गमतिक्षेपे हेत्वन्तरमाह —
+
+प्राजापत्यत्वं चेति ।
+
+अश्वस्य सेत्स्यतीति शेषः, तत्र हेतुः —
+
+प्रजापतीति ।
+
+ननु कालादिदृष्ट्योऽश्वावयवेष्वारोप्यन्ते न तस्य प्रजापतित्वं क्रियते तत्राऽऽह —
+
+कालेति ।
+
+कालाद्यात्मको हि प्रजापतिः । तया च यथा प्रतिमायां विष्णुत्वकरणं तद्दृष्टिस्तथा कालादिदृष्टिरश्वावयवेषु तस्य प्रजापतित्वकरणम् । अश्वमेधाधिकारी हि सत्यश्वे कर्मणो वीर्यवत्तरत्वार्थं कालादिदृष्टीरश्वावयवेषु कुर्यात् । तदनधिकारी त्वश्वाभावे स्वात्मानमश्वं कल्पयित्वा स्वशिरःप्रभृतिषु कालादिदृष्टिकरणेन प्रजापतित्वं संपाद्य प्रजापतिरस्मीति ज्ञानात्तद्भावं प्रतिपद्येतेति भावः ।
+
+चक्षुषि सूर्यदृष्टौ हेतुमाह —
+
+शिरस इति ।
+
+उषसोऽनन्तरत्वं सूर्ये दृष्टं चक्षुषि च शिरसोऽनन्तरत्वं दृश्यते तस्मात्तत्र तद्दृष्टिर्युक्तेत्यर्थः ।
+
+तत्रैव हेत्वन्तरमाह —
+
+सूर्येति ।
+
+“आदित्यश्चक्षुर्भूत्वाऽक्षिणी प्राविशत्” इति श्रुतेश्चक्षुषि सूर्योऽधिष्ठात्री देवता तेन सामीप्यात्तत्र तद्दृष्टिरित्यर्थः । अश्वप्राणे वायुदृष्टौ चलनस्वाभाव्यं हेतुः ।
+
+अश्वस्य विदारिते मुखे भवत्वग्निदृष्टिस्तथाऽपि पर्यायोपादानं व्यर्थमित्याशङ्क्य क्रव्यादादिव्यावृत्त्यर्थं विशेषणमित्याह —
+
+वैश्वानर इत्यग्नेरिति ।
+
+“अग्निर्वाग्भूत्वा मुखं प्राविशत्” इति श्रुतिमाश्रित्य मुखे तद्दृष्टौ हेतुमाह —
+
+मुखस्येति ।
+
+अधिकमासमनुसृत्य त्रयोदशमासो वेत्युक्तम् ।
+
+शरीरे संवत्सरदृष्टिरित्यत्राऽऽत्मत्वं हेतुमाह —
+
+कालेति ।
+
+आत्मा हस्तादीनामङ्गानामिति शेषः ।
+
+कालावयवानां संवत्सरस्याऽऽत्मत्ववदङ्गानां शरीरस्याऽऽत्मत्वे प्रमाणमाह —
+
+मध्यं हीति ।
+
+पुनरुक्तेरर्थवत्त्वमाह —
+
+अश्वस्येति ।
+
+पृष्टे द्युलोकदृष्टौ हेतुमाह —
+
+ऊर्ध्वत्वेति ।
+
+उदरेऽन्तरिक्षदृष्टौ निमित्तमाह —
+
+सुषिरत्वेति ।
+
+पादा अस्यन्ते यस्मिन्निति व्युत्पत्तिमाश्रित्य विवक्षितमाह —
+
+पादेति ।
+
+अश्वस्य हि खुरे पादासनत्वसामान्यात्पृथिवीदृष्टिरित्यर्थः ।
+
+पार्श्वयोर्दिक्चतुष्टयदृष्टौ हेतुमाह —
+
+पार्श्वेनेति ।
+
+द्वे पार्श्वे चतस्रश्च दिशस्तत्र कथं तयोस्तदारोपणं द्वाभ्यामेव द्वयोः संबन्धादिति शङ्कते —
+
+पार्श्वयोरिति ।
+
+यद्यपि द्वे दिशौ द्वाभ्यां पार्श्वाभ्यां संबध्येते तथाऽप्यश्वस्य प्राङ्मुखत्वे प्रत्यङ्मुखत्वे च दक्षिणोत्तरयोस्तन्मुखत्वे च प्राक्प्रतीच्योर्दिशोस्ताभ्यां संबन्धसंभवात्तत्र तद्दृष्टिरविरुद्धेति परिहरति —
+
+नेत्यादिना ।
+
+तदुपपत्तौ चाश्वस्य चरिष्णुत्वं हेतूकर्तव्यम् । पार्श्वास्थिष्ववान्तरदिशामारोपे पार्श्वदिक्संबन्धो हेतुः ।
+
+ऋतवः संवत्सरस्याङ्गानि हस्तादीनि च देहस्यावयवास्तस्मादृतुदृष्टिरङ्गेषु कर्तव्येत्याह —
+
+ऋतव इति ।
+
+अस्ति मासादीनां संवत्सरसन्धित्वमस्ति च शरीरसन्धित्वं पर्वणामतस्तेषु मासादिदृष्टिरित्याह —
+
+सन्धीति ।
+
+युगसहस्राभ्यां प्राजापत्यमेकमहोरात्रम् । अयनाभ्यां दैवम् । पक्षाभ्यां पित्र्यम् । षष्टिघटिकाभिर्मानुषमिति भेदः ।
+
+प्रतिष्ठाशब्दस्य पादविषयत्वं व्युत्पादयति —
+
+प्रतितिष्ठतीति ।
+
+पादेष्वहोरात्रदृष्टिसिद्ध्यर्थं युक्तिमुपपादयति —
+
+अहोरात्रैरिति ।
+
+अस्थिषु नक्षत्रदृष्टौ हेतुमाह —
+
+शुक्लत्वेति ।
+
+नभःशब्देनान्तरिक्षं किमिति न गृह्यते मुख्ये सत्युपचारायोगादित्याशङ्क्य पुनरुक्तिं परिहर्तुमित्याह —
+
+अन्तरिक्षस्येति ।
+
+उदकं सिञ्चन्ति मेधा मांसानि रुधिरमतः सेककर्तृत्वसामान्यान्मांसेषु मेधदृष्टिरित्याह —
+
+उदकेति ।
+
+अश्वजठरविपरिवर्तिन्यर्धजीर्णे सिकतादृष्टौ हेतुमाह —
+
+विश्लिष्टेति ।
+
+किमिति गुदशब्देन पायुरेव न गृह्यते शिराग्रहणे हि मुख्यार्थातिक्रमः स्यात्तत्राह —
+
+बहुवचनाच्चेति ।
+
+चकारोऽवधारणार्थः । यद्यपि बहूक्त्या शिराभ्योऽर्थान्तरमपि गुदशब्दमर्हति तथाऽपि स्यन्दनसादृश्यात्तास्वेव सिन्धुदृष्टिरिति तासामिह ग्रहणमिति भावः ।
+
+कुतो मांसखण्डयोर्द्वित्वमेकत्र बहुवचनाद्बहुत्वप्रतीतेरित्याशङ्क्य दारा इतिवद्बहूक्तेर्गतिमाह —
+
+क्लोमान इति ।
+
+तयोः पर्वतदृष्टौ हेतुद्वयमाह —
+
+काठिन्यादित्यादिना ।
+
+क्षुद्रत्वसाधर्म्यादोषधिदृष्टिर्लोमसु महत्त्वसामान्याद्वनस्पतिदृष्टिश्चाश्वकेशेषु कर्तव्येत्याह —
+
+यथासंभवमिति ।
+
+पूर्वत्वसामान्यान्मध्याह्नात्प्रागवस्थादित्यदृष्टिरश्वस्य नाभेरूर्ध्वभागे कर्तव्येत्याह —
+
+उद्यन्नित्यादिना ।
+
+अपरत्वसादृश्यादश्वस्य नाभेरपरार्धे मध्याह्नादनन्तरभाव्यादित्यदृष्टिःकार्येत्याह —
+
+निम्लोचन्नित्यादिना ।
+
+विजृम्भत इत्यादौ प्रत्ययार्थो न विवक्षितः ।
+
+विजृम्भणं मुखविदारणं विद्योतनं पुनर्मेघगतमतो विद्योतनदृष्टिर्जृम्भणे कर्तव्येत्याह —
+
+मुखेति ।
+
+स्तनयतीति स्तनितमुच्यते तद्दृष्टिर्गात्रकम्पे कर्तव्येत्यत्र हेतुमाह —
+
+गर्जनेति ।
+
+मूत्रकरण वर्षणदृष्टौ कारणमाह —
+
+सेचनेति ।
+
+अश्वस्य हेषितशब्दे नास्त्यारोपणमित्यतो न सादृश्यं वक्तव्यमित्याह —
+
+नात्रेति ॥१॥
+
+Expand
+EnglishTranslationText
+To reorder blocks, press Command or Control along with Shift and the Up or Down arrow keys
+Text
+More
+This text is a classical Sanskrit commentary (specifically from Anandagiri’s Tika on the Brihadaranyaka Upanishad) explaining the symbolic meditation (vidya) on the sacrificial horse as the Cosmic Person (Prajapati).
+
+It breaks down the correspondences between the parts of the horse’s body and the elements of the universe (Time, Space, and Nature).
+
+Translation
+
+He [the commentator] explains the opening passage by taking up the keywords, starting with "Usha" (Dawn). He clarifies that the particle is used for the purpose of recollection, saying "it is well-known." In both Vedic and worldly usage, the Brahma-muhurta is well-known; it refers to that specific time. Regarding the use of the word "head" for the Dawn, he gives the reason for its primacy among the parts of the day, saying "due to its importance." Even so, how can that word be applied there? He answers: "And the head..." He states that one should perform the meditation of the Dawn upon the head of the sacrificial horse, saying "of the horse." An objection is raised: Why is the vision of Time and other elements superimposed on the limbs of the horse? Why not simply view the horse's limbs as they are? To this, he says: "of the limb of the ritual..." He provides another reason for superimposing non-limbs onto the limbs: "And the nature of Prajapati." The implication is that this will be accomplished for the horse. The reason for that is: "Prajapati [is Time]." Now, one might object that visions of Time, etc., are merely superimposed on the horse’s parts, not that the horse is actually made into Prajapati. To this, he says: "Time, etc." Indeed, Prajapati consists of Time and the universe. Just as the thought of Vishnu is applied to an idol, so too the vision of Time, etc., upon the horse's parts is the making of it into Prajapati. A person qualified for the Ashvamedha (Horse Sacrifice), when the horse is present, should perform these meditations on its limbs to increase the potency of the ritual. However, one not qualified for the ritual, in the absence of a horse, should imagine themselves as the horse, establish the nature of Prajapati by meditating on Time, etc., starting from their own head, and thus attain that state through the knowledge "I am Prajapati." This is the underlying intent.
+
+He gives the reason for viewing the Sun in the eye: "From the head..." It is observed that the Sun follows the Dawn, and in the body, the eye is seen to follow the head; therefore, that vision is appropriate. He gives another reason: "Sun..." Based on the scripture "The Sun, becoming sight, entered the eyes," the Sun is the presiding deity of the eye; hence, due to proximity, that vision is enjoined.
+
+The reason for viewing the Wind (Vayu) in the breath of the horse is its natural quality of motion.
+
+One might ask: Let there be a vision of Fire in the open mouth of the horse, but why the use of a synonym (Vaishvanara)? Suspecting it might be redundant, he says it is a qualifier to exclude "flesh-eating" (corpse) fire, etc.: "Vaishvanara refers to Fire." Relying on the scripture "Fire, becoming speech, entered the mouth," he gives the reason for that vision in the mouth: "of the mouth." Following the occurrence of the intercalary month, it is said: "or the thirteenth month." In the meditation of the Year as the body (Atman), he gives "self-hood" as the reason: "Time..." The "self" (trunk) is the core of the limbs like hands, etc. To prove that the body is the "self" of the limbs just as the Year is the "self" of the parts of time, he says: "Indeed, the middle..." He explains the purpose of the repetition regarding the horse. He gives "height" as the reason for viewing the Sky in the back. He gives "hollowness" as the reason for viewing the Atmosphere in the belly. Relying on the etymology "that in which the feet are placed," he states the intended meaning: "the placing of the feet." Because of the similarity of the horse's hoof being the place where the foot rests, there is the vision of the Earth.
+
+He gives the reason for viewing the four directions in the two flanks: "by the flank." An objection is raised: There are two flanks and four directions; how can the latter be superimposed on the former since only two can be connected to two? He refutes this, saying "No, etc." because as the horse moves and turns (facing East, West, North, or South), both flanks can be associated with all four directions. To establish this, the horse’s "movability" must be taken as the cause. For the superimposition of the intermediate directions on the ribs, the connection between the flanks and directions is the cause.
+
+The Seasons are the limbs of the Year, and the limbs (hands, etc.) are the parts of the body; therefore, the vision of seasons should be done in the limbs: "The seasons..." Just as there are junctions (sandhi) of months in a year, there are junctions in the body (joints); therefore, the vision of months and half-months is in the joints.
+
+A "Day and Night of Prajapati" consists of two thousand Yugas. A divine day consists of two solstices (Ayanas). A parental day consists of two fortnights (Pakshas). A human day consists of sixty ghatikas (24 hours)—this is the distinction.
+
+He derives the word "foundation" (pratishtha) as referring to the feet, saying "it stands upon." He provides the logic for establishing the vision of Days and Nights in the feet: "By days and nights..." He gives "whiteness" as the reason for the vision of Stars in the bones.
+
+Why is the atmosphere not taken by the word "Sky" (nabhas)? Suspecting that one shouldn't use figurative meaning when the primary is available, he says it is to avoid repetition: "of the atmosphere." Clouds pour water and flesh pours blood; therefore, due to the similarity of "pouring," the vision of the Cloud is in the flesh.
+
+The reason for the vision of sand in the half-digested food in the horse’s stomach is "discreteness" (separateness of particles).
+
+Why does the word "Guda" not simply mean the anus? If it means the veins/vessels (shira), it would be a departure from the primary meaning. To this, he says: "And because of the plural number." The word "and" here is for emphasis. Although the plural could technically refer to something other than veins, because of the similarity of "flowing," the vision of rivers (Sindhu) is in the veins; that is the intent here.
+
+How can the two pieces of flesh (the liver and spleen/lung) be twofold when the plural number is used, suggesting many? Suspecting this, he explains the plural usage (like the word dara which is always plural): "the Klomanah." He gives two reasons for the vision of mountains in them: "due to hardness," etc.
+
+Due to the commonality of "smallness," the vision of herbs is in the small hairs, and due to the similarity of "greatness," the vision of trees is in the long hairs (mane/tail); he says: "according to possibility." Because of the commonality of "being first/prior," the vision of the rising sun (before noon) should be in the upper part of the navel: "The rising [sun]," etc. Because of the similarity of "being later/posterior," the vision of the setting sun (after noon) should be in the lower part of the navel: "The setting [sun]," etc.
+
+In words like "yawns" (vijrimbhate), the literal grammatical tense is not the main intent. Yawning is the opening of the mouth; lightning belongs to the clouds; therefore, the vision of lightning is to be done in the yawning: "the mouth..." "Thunder" refers to the sound of the clouds; the reason for viewing that in the shaking of the body is: "the roaring." The reason for viewing rain in the passing of urine is "sprinkling."
+
+Regarding the neighing of the horse, there is no superimposition [on a cosmic sound]; therefore, no similarity needs to be stated: "Not here."
+
+﻿
+
+Expand
+OtherTranslations (0)
+
+No entry yet. Click to add one.
+IASTTransliteration
+To reorder blocks, press Command or Control along with Shift and the Up or Down arrow keys
+Text
+More
+﻿
+
+Expand
+teeka (1)
+Add or create a relation
+
+Press spacebar to grab and re-order
+
+Add an entry
+order
+1
+
+
+wordMeanings (0)
+
+No entry yet. Click to add one.

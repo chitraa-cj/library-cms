@@ -1,4 +1,4 @@
-import { Input } from "@/components/ui/input";
+import { useQuery } from "@tanstack/react-query";
 import { Label } from "@/components/ui/label";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -10,8 +10,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import TextTranslationFields from "./text-translation-fields";
-import type { BhashyaEntry, TextAndTranslation } from "@shared/schema";
-import { teekaAuthors } from "@shared/schema";
+import type { BhashyaEntry, TextAndTranslation, StrapiTeeka, StrapiResponse } from "@shared/schema";
 import { Plus, Trash2, BookText } from "lucide-react";
 
 interface BhashyaEntryFieldsProps {
@@ -29,10 +28,16 @@ export default function BhashyaEntryFields({
 }: BhashyaEntryFieldsProps) {
   const entries: BhashyaEntry[] = entriesProp ?? [];
 
+  const { data: teekasData } = useQuery<StrapiResponse<StrapiTeeka>>({
+    queryKey: ["/api/strapi/teekas"],
+    refetchOnWindowFocus: false,
+  });
+  const allTeekas: StrapiTeeka[] = (teekasData?.data as any) || [];
+
   const addEntry = () => {
     onChange([
       ...entries,
-      { TeekaName: "", TeekaAuthor: "", TeekaEntry: {} },
+      { teeka: null, TeekaName: "", TeekaAuthor: "", TeekaEntry: {} },
     ]);
   };
 
@@ -40,10 +45,39 @@ export default function BhashyaEntryFields({
     onChange(entries.filter((_, i) => i !== index));
   };
 
+  const selectTeeka = (index: number, documentId: string) => {
+    const teekaRecord = allTeekas.find((t: any) => t.documentId === documentId);
+    if (!teekaRecord) return;
+    const updated = [...entries];
+    updated[index] = {
+      ...updated[index],
+      teeka: {
+        id: teekaRecord.id!,
+        documentId: teekaRecord.documentId!,
+        TeekaName: (teekaRecord as any).TeekaName || "",
+        TeekaAuthor: (teekaRecord as any).TeekaAuthor || undefined,
+      },
+      TeekaName: (teekaRecord as any).TeekaName || "",
+      TeekaAuthor: (teekaRecord as any).TeekaAuthor || "",
+    };
+    onChange(updated);
+  };
+
   const updateEntry = (index: number, field: string, value: any) => {
     const updated = [...entries];
     (updated[index] as any)[field] = value;
     onChange(updated);
+  };
+
+  const getSelectedDocId = (entry: BhashyaEntry): string => {
+    return entry.teeka?.documentId || "";
+  };
+
+  const getDisplayLabel = (entry: BhashyaEntry): string => {
+    const name = entry.teeka?.TeekaName || entry.TeekaName || "";
+    const author = entry.teeka?.TeekaAuthor || entry.TeekaAuthor || "";
+    if (name && author) return `${name} — ${author}`;
+    return name || author || "";
   };
 
   return (
@@ -80,6 +114,11 @@ export default function BhashyaEntryFields({
             <div className="flex items-center justify-between">
               <span className="text-xs font-medium text-muted-foreground uppercase tracking-wider">
                 Teeka {index + 1}
+                {getDisplayLabel(entry) && (
+                  <span className="ml-2 normal-case font-normal text-foreground">
+                    — {getDisplayLabel(entry)}
+                  </span>
+                )}
               </span>
               <Button
                 type="button"
@@ -92,47 +131,39 @@ export default function BhashyaEntryFields({
                 <Trash2 className="w-3 h-3" />
               </Button>
             </div>
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              <div>
-                <Label className="text-xs text-muted-foreground">
-                  Teeka Name
-                </Label>
-                <Input
-                  value={entry.TeekaName || ""}
-                  onChange={(e) =>
-                    updateEntry(index, "TeekaName", e.target.value)
-                  }
-                  placeholder="Name of the Teeka"
+
+            <div>
+              <Label className="text-xs text-muted-foreground">
+                Select Teeka
+              </Label>
+              <Select
+                value={getSelectedDocId(entry)}
+                onValueChange={(val) => selectTeeka(index, val)}
+              >
+                <SelectTrigger
                   className="mt-1.5"
-                  data-testid={`${testIdPrefix}-name-${index}`}
-                />
-              </div>
-              <div>
-                <Label className="text-xs text-muted-foreground">
-                  Teeka Author
-                </Label>
-                <Select
-                  value={entry.TeekaAuthor || ""}
-                  onValueChange={(val) =>
-                    updateEntry(index, "TeekaAuthor", val)
-                  }
+                  data-testid={`${testIdPrefix}-select-${index}`}
                 >
-                  <SelectTrigger
-                    className="mt-1.5"
-                    data-testid={`${testIdPrefix}-author-${index}`}
-                  >
-                    <SelectValue placeholder="Select Teeka Author" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {teekaAuthors.map((author) => (
-                      <SelectItem key={author} value={author}>
-                        {author}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </div>
+                  <SelectValue placeholder="Choose a teeka commentary…">
+                    {getSelectedDocId(entry) ? getDisplayLabel(entry) : undefined}
+                  </SelectValue>
+                </SelectTrigger>
+                <SelectContent>
+                  {allTeekas.length === 0 && (
+                    <SelectItem value="__loading__" disabled>
+                      Loading teekas…
+                    </SelectItem>
+                  )}
+                  {allTeekas.map((t: any) => (
+                    <SelectItem key={t.documentId} value={t.documentId}>
+                      {t.TeekaName || "(unnamed)"}
+                      {t.TeekaAuthor ? ` — ${t.TeekaAuthor}` : ""}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
             </div>
+
             <TextTranslationFields
               title="Teeka Entry"
               value={entry.TeekaEntry || {}}

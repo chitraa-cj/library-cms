@@ -223,9 +223,16 @@ export default function ManthrasPage() {
         section: item.Section?.documentId || item.section?.documentId || "",
         ShlokaManthraEntry: unpackOtherTranslation(item.ShlokaManthraEntry),
         BhashyamEntry: unpackOtherTranslation(item.BhashyamEntry),
-        // Strapi returns Teekas with a nested `teeka` relation; flatten to the
-        // shape BhashyaEntryFields expects (flat TeekaName/TeekaAuthor strings).
+        // Strapi returns Teekas with a nested `teeka` relation.
+        // Preserve the teeka object (with documentId) so BhashyaEntryFields can
+        // show the correct dropdown selection and publish uses the stored documentId.
         Teekas: (item.Teekas || []).map((t: any) => ({
+          teeka: t.teeka ? {
+            id: t.teeka.id,
+            documentId: t.teeka.documentId,
+            TeekaName: t.teeka.TeekaName || "",
+            TeekaAuthor: t.teeka.TeekaAuthor || undefined,
+          } : null,
           TeekaName: t.teeka?.TeekaName || t.TeekaName || "",
           TeekaAuthor: t.teeka?.TeekaAuthor || t.TeekaAuthor || "",
           TeekaEntry: t.TeekaEntry || {},

@@ -516,11 +516,49 @@ function normalizeTextAndTranslation(field: Record<string, any>): Record<string,
   };
 }
 
-function buildManthraPayload(data: Record<string, any>): Record<string, any> {
+// Resolve raw Teeka entries (stored as { TeekaName, TeekaAuthor, TeekaEntry })
+// into the format Strapi's default.bhashya-entries component expects:
+//   { teeka: teekaDocumentId, TeekaEntry: {...} }
+// The `teeka` field is a relation to the Teeka collection type — we look up the
+// record by TeekaName. Entries whose Teeka record cannot be found are skipped.
+async function resolveManthraTeekas(rawTeekas: any[]): Promise<any[]> {
+  const resolved: any[] = [];
+  for (const t of rawTeekas) {
+    // Prefer the documentId stored when user selected from the dropdown.
+    // Fall back to a name-based lookup for entries saved before the dropdown was added.
+    let teekaDocId: string | undefined = t.teeka?.documentId || undefined;
+
+    if (!teekaDocId) {
+      const TeekaName = (t.TeekaName || "").trim();
+      if (!TeekaName) continue;
+      try {
+        const url = `/api/teekas?filters[TeekaName][$eq]=${encodeURIComponent(TeekaName)}&fields[0]=documentId&pagination[pageSize]=1`;
+        const found = await strapiRequest(url);
+        teekaDocId = found?.data?.[0]?.documentId;
+      } catch {
+        // ignore — skip this entry
+      }
+      if (!teekaDocId) {
+        console.warn(`[resolveManthraTeekas] Teeka record not found: "${TeekaName}" — skipping`);
+        continue;
+      }
+    }
+
+    const item: any = { teeka: teekaDocId };
+    if (t.TeekaEntry && typeof t.TeekaEntry === "object") {
+      item.TeekaEntry = normalizeTextAndTranslation(t.TeekaEntry);
+    }
+    resolved.push(item);
+  }
+  return resolved;
+}
+
+async function buildManthraPayloadAsync(data: Record<string, any>): Promise<Record<string, any>> {
   const {
     section,       // lowercase local field → maps to Strapi's capital-S Section relation
     grantha,       // local tracking only — not a direct field in Strapi Manthra schema
-    Teekas: _teekas, // stored as complex objects; omit — set relations manually in Strapi
+    Teekas: rawTeekas,
+    _section,      // also local tracking
     ...rest
   } = data;
 
@@ -535,8 +573,9 @@ function buildManthraPayload(data: Record<string, any>): Record<string, any> {
   }
 
   // Map section documentId → Section relation (Strapi v5 accepts raw documentId string)
-  if (section && typeof section === "string") {
-    payload.Section = section;
+  const sectionDocId = section || _section;
+  if (sectionDocId && typeof sectionDocId === "string") {
+    payload.Section = sectionDocId;
   }
 
   // order must be a number (not string)
@@ -544,6 +583,14 @@ function buildManthraPayload(data: Record<string, any>): Record<string, any> {
     const n = Number(payload.order);
     if (!Number.isNaN(n)) payload.order = n;
     else delete payload.order;
+  }
+
+  // Resolve teekas: look up each Teeka record by name and build the component array
+  if (Array.isArray(rawTeekas) && rawTeekas.length > 0) {
+    const resolvedTeekas = await resolveManthraTeekas(rawTeekas);
+    if (resolvedTeekas.length > 0) {
+      payload.Teekas = resolvedTeekas;
+    }
   }
 
   return payload;
@@ -708,7 +755,7 @@ export async function registerRoutes(
       } else {
         const cleanedData =
           draft.contentType === "manthras"
-            ? buildManthraPayload(draft.data as Record<string, any>)
+            ? await buildManthraPayloadAsync(draft.data as Record<string, any>)
             : draft.contentType === "sections"
             ? buildSectionPayload(draft.data as Record<string, any>)
             : cleanPayloadForStrapi(draft.data as Record<string, any>);

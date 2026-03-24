@@ -539,6 +539,7 @@ export default function GranthasPage() {
     strapiDocumentId?: string; // set if this mantra is already published to Strapi
   } | null>(null);
   const [manthraLoading, setManthraLoading] = useState(false);
+  const [editingGranthaSectionsLoading, setEditingGranthaSectionsLoading] = useState(false);
 
   // When the mantra dialog opens for a published mantra (has strapiDocumentId),
   // fetch the live Strapi content and populate the form fields so users always
@@ -716,7 +717,7 @@ export default function GranthasPage() {
     setView("form");
   }
 
-  function openEdit(item: any) {
+  async function openEdit(item: any) {
     setEditingItem(item);
     if (item._isDraft) {
       setEditingDraftId(item._draftId);
@@ -830,29 +831,50 @@ export default function GranthasPage() {
         );
       }
 
-      // Structure, hierarchy, teekas — only in portal draft, never in Strapi
+      // Structure and teekas (synchronous — don't depend on sections)
       const rawCfg2 = savedData?.structureConfig;
       const migratedCfg2 = migrateStructureConfig(rawCfg2);
       setStructureConfig(migratedCfg2);
+      setTeekas(
+        Array.isArray(savedData?.teekas) && savedData.teekas.length > 0
+          ? savedData.teekas
+          : Array.isArray(item.teekas)
+            ? item.teekas.map((t: any) => ({
+                id: t.documentId || uid(),
+                TeekaName: t.TeekaName || "",
+                TeekaAuthor: t.TeekaAuthor || "",
+              }))
+            : []
+      );
+
+      // Fetch sections for this grantha on-demand (sections are no longer pre-loaded
+      // in the granthas list query to avoid timeouts). The dialog opens after the fetch.
+      setEditingGranthaSectionsLoading(true);
+      let fetchedSections: any[] = [];
+      try {
+        const sectionsRes = await fetch(
+          `/api/strapi/sections/by-grantha/${item.documentId}`,
+          { credentials: "include" }
+        );
+        if (sectionsRes.ok) {
+          const sectionsData = await sectionsRes.json();
+          fetchedSections = sectionsData?.data || [];
+        }
+      } catch { /* use empty sections */ }
+      setEditingGranthaSectionsLoading(false);
+
+      // Hierarchy: prefer portal draft; fall back to reconstructing from Strapi sections.
       const rawHier2 = savedData?.hierarchy || [];
-      // Fallback: if local draft has no hierarchy (e.g. opened by a different user
-      // or draft was cleared), reconstruct the hierarchy from Strapi sections data.
-      // Strapi now returns sections with parent fields so we can rebuild the tree.
       const hierToUse2 =
         rawHier2.length > 0
           ? rawHier2
-          : reconstructHierarchyFromStrapi(Array.isArray(item.sections) ? item.sections : []);
+          : reconstructHierarchyFromStrapi(fetchedSections);
 
-      // Enrich hierarchy mantra nodes with strapiDocumentId by matching titles
-      // against the Strapi sections manthras list. This handles draft hierarchies
-      // (loaded from DB) that predate the strapiDocumentId field.
-      // Also supplements the hierarchy with any Strapi mantras that were added
-      // after the draft was saved (so a stale draft always shows all live mantras).
+      // Build lookup maps from fetched sections so we can enrich hierarchy nodes
+      // with strapiDocumentIds and supplement any Strapi mantras missing from the draft.
       const strapiManthraByShloka = new Map<string, string>(); // shlokaNr → documentId
-      // Map: sectionTitle → list of {ShlokaManthraNumber, documentId, order}
       const strapiMantrasBySecTitle = new Map<string, { title: string; docId: string; order: number }[]>();
-      const strapiSections = Array.isArray(item.sections) ? item.sections : [];
-      for (const sec of strapiSections) {
+      for (const sec of fetchedSections) {
         if (Array.isArray(sec.manthras)) {
           const list: { title: string; docId: string; order: number }[] = [];
           for (const m of sec.manthras) {
@@ -922,17 +944,6 @@ export default function GranthasPage() {
           : hierToUse2
       );
       setAdhyayas(enrichedHier2);
-      setTeekas(
-        Array.isArray(savedData?.teekas) && savedData.teekas.length > 0
-          ? savedData.teekas
-          : Array.isArray(item.teekas)
-            ? item.teekas.map((t: any) => ({
-                id: t.documentId || uid(),
-                TeekaName: t.TeekaName || "",
-                TeekaAuthor: t.TeekaAuthor || "",
-              }))
-            : []
-      );
     }
     setStep(1);
     setView("form");

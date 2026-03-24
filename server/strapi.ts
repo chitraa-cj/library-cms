@@ -89,10 +89,9 @@ export function createStrapiRouter() {
     granthas: [
       "populate[BhashyakaraIntroduction][populate]=*",
       "populate[GranthaNameTranslations]=*",
-      // Fetch up to 100 mantras per section (Strapi hard cap). Without the
-      // explicit pageSize Strapi defaults to 25 related items and silently
-      // drops the rest for any section with more than 25 mantras.
-      "populate[sections][populate][manthras][fields][0]=documentId&populate[sections][populate][manthras][fields][1]=ShlokaManthraNumber&populate[sections][populate][manthras][fields][2]=order&populate[sections][populate][manthras][pagination][pageSize]=100&populate[sections][populate][manthras][sort]=order:asc&populate[sections][populate][parent][fields][0]=id&populate[sections][populate][parent][fields][1]=documentId",
+      // Sections are intentionally excluded from the list populate to keep
+      // the response small. Section hierarchy (with manthras) is fetched
+      // on-demand via /sections/by-grantha/:granthaDocId when editing.
       "populate[teekas][fields][0]=documentId&populate[teekas][fields][1]=TeekaName&populate[teekas][fields][2]=TeekaAuthor",
     ].join("&"),
     teekas: [
@@ -138,6 +137,19 @@ export function createStrapiRouter() {
       res.json(data);
     } catch (error: any) {
       res.status(500).json({ message: error.message || "Failed to fetch sections" });
+    }
+  });
+
+  // Fetch all sections (with manthras) belonging to a specific grantha.
+  // Called on-demand when opening the grantha edit dialog.
+  router.get("/sections/by-grantha/:granthaDocId", async (req, res) => {
+    try {
+      const g = encodeURIComponent(req.params.granthaDocId);
+      const filter = `filters[grantha][documentId][$eq]=${g}`;
+      const data = await strapiRequest(`/api/sections?${filter}&${SECTION_POPULATE}`);
+      res.json(data);
+    } catch (error: any) {
+      res.status(500).json({ message: error.message || "Failed to fetch sections for grantha" });
     }
   });
 

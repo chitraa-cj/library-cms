@@ -108,6 +108,8 @@ export function createStrapiRouter() {
   };
 
   // ── Sections: fetch directly from /api/sections ──
+  // Full populate — used by the by-grantha endpoint (grantha edit dialog needs
+  // ShlokaManthraNumber and order to reconstruct the hierarchy).
   const SECTION_POPULATE = [
     "populate[grantha][fields][0]=id",
     "populate[grantha][fields][1]=documentId",
@@ -120,21 +122,65 @@ export function createStrapiRouter() {
     "populate[manthras][fields][0]=documentId",
     "populate[manthras][fields][1]=ShlokaManthraNumber",
     "populate[manthras][fields][2]=order",
-    // Request up to 100 mantras per section (Strapi's hard cap).
-    // Without this, Strapi defaults to 25 related items and silently
-    // drops the rest for any section that has more than 25 mantras.
     "populate[manthras][pagination][pageSize]=100",
     "populate[manthras][sort]=order:asc",
     "populate[titleTranslations]=*",
-    "pagination[pageSize]=200",
+    "pagination[pageSize]=100",
+  ].join("&");
+
+  // Lightweight populate — used by the sections list page.
+  // Fetches only manthra IDs (for count) — no content fields needed for the list.
+  const SECTION_LIST_POPULATE = [
+    "populate[grantha][fields][0]=id",
+    "populate[grantha][fields][1]=documentId",
+    "populate[grantha][fields][2]=GranthaName",
+    "populate[parent][fields][0]=documentId",
+    "populate[parent][fields][1]=title",
+    "populate[parent][fields][2]=type",
+    "populate[sub_sections][fields][0]=documentId",
+    "populate[sub_sections][fields][1]=title",
+    // Only id for manthra count — avoids fetching content for the list view
+    "populate[manthras][fields][0]=id",
+    "populate[manthras][pagination][pageSize]=100",
+    "populate[titleTranslations]=*",
+    "pagination[pageSize]=100",
   ].join("&");
 
   router.get("/sections", async (req, res) => {
     try {
       const queryString = new URLSearchParams(req.query as Record<string, string>).toString();
-      const populateParam = queryString ? `?${queryString}` : `?${SECTION_POPULATE}`;
-      const data = await strapiRequest(`/api/sections${populateParam}`);
-      res.json(data);
+      // Passthrough: if caller supplies their own params (e.g. dashboard count query),
+      // use those as-is. Otherwise paginate through all sections with the lightweight populate.
+      if (queryString) {
+        const data = await strapiRequest(`/api/sections?${queryString}`);
+        return res.json(data);
+      }
+
+      // Multi-page fetch: collect all sections across every page.
+      const firstPage = await strapiRequest(`/api/sections?${SECTION_LIST_POPULATE}&pagination[page]=1`);
+      const total: number = firstPage?.meta?.pagination?.total ?? 0;
+      const pageSize: number = firstPage?.meta?.pagination?.pageSize ?? 100;
+      const pageCount = Math.ceil(total / pageSize);
+
+      if (pageCount <= 1) {
+        return res.json(firstPage);
+      }
+
+      const restPages = await Promise.all(
+        Array.from({ length: pageCount - 1 }, (_, i) =>
+          strapiRequest(`/api/sections?${SECTION_LIST_POPULATE}&pagination[page]=${i + 2}`)
+        )
+      );
+
+      const allData = [
+        ...(firstPage?.data ?? []),
+        ...restPages.flatMap((p: any) => p?.data ?? []),
+      ];
+
+      return res.json({
+        data: allData,
+        meta: { pagination: { page: 1, pageSize: allData.length, pageCount: 1, total: allData.length } },
+      });
     } catch (error: any) {
       res.status(500).json({ message: error.message || "Failed to fetch sections" });
     }

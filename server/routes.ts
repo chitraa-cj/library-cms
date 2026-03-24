@@ -10,7 +10,7 @@ const STRAPI_INTERNAL_KEYS = new Set(["id", "_id", "__component", "createdAt", "
 // Strapi section.type enum — exact values the API accepts
 const STRAPI_SECTION_TYPES = new Set([
   "adhyay", "khanda", "valli", "pada", "kanda", "sukta",
-  "varga", "anuvaka", "prakarana", "chapter", "part", "section", "book",
+  "varga", "anuvaka", "prakarana", "brahmana", "chapter", "part", "section", "book",
 ]);
 
 // Map portal level names → Strapi section.type enum values (case-insensitive)
@@ -26,6 +26,7 @@ const SECTION_TYPE_MAP: Record<string, string> = {
   varga: "varga",
   anuvaka: "anuvaka",
   prakarana: "prakarana",
+  brahmana: "brahmana",
   chapter: "chapter",
   part: "part",
   section: "section",
@@ -198,16 +199,30 @@ async function findOrCreateSection(
   try {
     const t = encodeURIComponent(title);
     const g = encodeURIComponent(granthaDocId);
-    let url = `/api/sections?filters[title][$eq]=${t}&filters[grantha][documentId][$eq]=${g}`;
+    let url = `/api/sections?filters[title][$eq]=${t}&filters[grantha][documentId][$eq]=${g}&fields[0]=documentId&fields[1]=type`;
     if (parentDocId) {
       url += `&filters[parent][documentId][$eq]=${encodeURIComponent(parentDocId)}`;
     } else {
       url += `&filters[parent][$null]=true`;
     }
     const existing = await strapiRequest(url);
-    const existingDocId: string | undefined = existing?.data?.[0]?.documentId;
+    const existingRecord = existing?.data?.[0];
+    const existingDocId: string | undefined = existingRecord?.documentId;
     if (existingDocId) {
-      console.log(`[publish] Section "${title}" already exists: ${existingDocId} — reusing`);
+      // If the existing section has no type but we know one now, update it (best-effort)
+      if (type && !existingRecord?.type) {
+        try {
+          await strapiRequest(`/api/sections/${existingDocId}`, {
+            method: "PUT",
+            body: JSON.stringify({ data: { type } }),
+          });
+          console.log(`[publish] Section "${title}" (${existingDocId}) updated type → ${type}`);
+        } catch (e: any) {
+          console.warn(`[publish] Section "${title}" type update failed (may be enum mismatch): ${e.message}`);
+        }
+      } else {
+        console.log(`[publish] Section "${title}" already exists: ${existingDocId} — reusing`);
+      }
       return existingDocId;
     }
   } catch {

@@ -906,25 +906,56 @@ export default function GranthasPage() {
         return hier.map((a) => ({
           ...a,
           khandas: a.khandas.map((k) => {
-            // Enrich existing nodes with documentId
-            const enrichedManthras = k.manthras.map((m) =>
-              m.strapiDocumentId || !strapiManthraByShloka.has(m.title) ? m
-                : { ...m, strapiDocumentId: strapiManthraByShloka.get(m.title) }
-            );
-            const enrichedPadas = (k.padas ?? []).map((p) => ({
-              ...p,
-              manthras: p.manthras.map((m) =>
-                m.strapiDocumentId || !strapiManthraByShloka.has(m.title) ? m
-                  : { ...m, strapiDocumentId: strapiManthraByShloka.get(m.title) }
-              ),
-            }));
-
-            // Supplement: add Strapi mantras for this section that aren't yet in the hierarchy.
-            // Match the khanda to a Strapi section by title (best-effort).
             const strapiMantrasForKhanda = strapiMantrasBySecTitle.get(k.title) ?? [];
+
+            // Build an order→strapi lookup for this section (order-based fallback matching).
+            const strapiByOrder = new Map<number, { title: string; docId: string; order: number }>();
+            for (const sm of strapiMantrasForKhanda) {
+              if (sm.order != null) strapiByOrder.set(sm.order, sm);
+            }
+            // Track which Strapi records were matched so we don't add them again as "new".
+            const matchedDocIds = new Set<string>();
+
+            // Helper: resolve strapiDocumentId for a manthra node using title then order.
+            function resolveDocId(m: ManthraNode): string | undefined {
+              if (m.strapiDocumentId) { matchedDocIds.add(m.strapiDocumentId); return m.strapiDocumentId; }
+              if (strapiManthraByShloka.has(m.title)) {
+                const id = strapiManthraByShloka.get(m.title)!;
+                matchedDocIds.add(id);
+                return id;
+              }
+              // Fallback: match by order when the title spelling differs (e.g. "Manthra" vs "Mantra")
+              if (m.order != null && strapiByOrder.has(m.order)) {
+                const sm = strapiByOrder.get(m.order)!;
+                matchedDocIds.add(sm.docId);
+                return sm.docId;
+              }
+              return undefined;
+            }
+
+            const enrichedManthras = k.manthras.map((m) => {
+              const docId = resolveDocId(m);
+              return docId ? { ...m, strapiDocumentId: docId } : m;
+            });
+            const enrichedPadas = (k.padas ?? []).map((p) => {
+              const padaStrapi = strapiMantrasBySecTitle.get(p.title) ?? [];
+              const padaByOrder = new Map<number, { title: string; docId: string; order: number }>();
+              for (const sm of padaStrapi) { if (sm.order != null) padaByOrder.set(sm.order, sm); }
+              return {
+                ...p,
+                manthras: p.manthras.map((m) => {
+                  if (m.strapiDocumentId) return m;
+                  if (strapiManthraByShloka.has(m.title)) return { ...m, strapiDocumentId: strapiManthraByShloka.get(m.title) };
+                  if (m.order != null && padaByOrder.has(m.order)) return { ...m, strapiDocumentId: padaByOrder.get(m.order)!.docId };
+                  return m;
+                }),
+              };
+            });
+
+            // Supplement: add Strapi mantras that aren't already covered by a local node.
             const newManthras: ManthraNode[] = [];
             for (const sm of strapiMantrasForKhanda) {
-              if (!knownShlokas.has(sm.title)) {
+              if (!matchedDocIds.has(sm.docId) && !knownShlokas.has(sm.title)) {
                 newManthras.push({ id: uid(), title: sm.title, order: sm.order, strapiDocumentId: sm.docId });
                 knownShlokas.add(sm.title);
               }

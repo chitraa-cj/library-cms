@@ -422,6 +422,27 @@ export function createStrapiRouter() {
     }
   });
 
+  // ── Teekas: fetch all teekas for a specific grantha ──
+  // Used by the grantha editor to load teeka definitions so the manthra
+  // entry form can show teeka sections for each mantra.
+  router.get("/teekas/by-grantha/:granthaDocId", async (req, res) => {
+    try {
+      const g = encodeURIComponent(req.params.granthaDocId);
+      const query = [
+        `filters[grantha][documentId][$eq]=${g}`,
+        "fields[0]=documentId",
+        "fields[1]=TeekaName",
+        "fields[2]=TeekaAuthor",
+        "sort=TeekaName:asc",
+        "pagination[pageSize]=100",
+      ].join("&");
+      const data = await strapiRequest(`/api/teekas?${query}`);
+      res.json(data);
+    } catch (error: any) {
+      res.status(500).json({ message: error.message || "Failed to fetch teekas for grantha" });
+    }
+  });
+
   // ── Prasthana Thraya Screens: portal-only, no Strapi collection ──
   router.get("/prasthana-thraya-screens", (_req, res) => {
     res.json({ data: [], meta: { pagination: { page: 1, pageSize: 25, pageCount: 0, total: 0 } } });

@@ -862,36 +862,55 @@ export default function GranthasPage() {
         );
       }
 
-      // Structure and teekas (synchronous — don't depend on sections)
+      // Structure config (synchronous)
       const rawCfg2 = savedData?.structureConfig;
       const migratedCfg2 = migrateStructureConfig(rawCfg2);
       setStructureConfig(migratedCfg2);
-      setTeekas(
-        Array.isArray(savedData?.teekas) && savedData.teekas.length > 0
-          ? savedData.teekas
-          : Array.isArray(item.teekas)
-            ? item.teekas.map((t: any) => ({
-                id: t.documentId || uid(),
-                TeekaName: t.TeekaName || "",
-                TeekaAuthor: t.TeekaAuthor || "",
-              }))
-            : []
-      );
 
-      // Fetch sections for this grantha on-demand (sections are no longer pre-loaded
-      // in the granthas list query to avoid timeouts). The dialog opens after the fetch.
+      // Fetch sections + teekas in parallel.
+      // Teekas: prefer saved draft, then inline item.teekas, then fetch from Strapi.
+      const hasSavedTeekas = Array.isArray(savedData?.teekas) && savedData.teekas.length > 0;
+      const hasInlineTeekas = Array.isArray(item.teekas) && item.teekas.length > 0;
+
       setEditingGranthaSectionsLoading(true);
       let fetchedSections: any[] = [];
       try {
-        const sectionsRes = await fetch(
-          `/api/strapi/sections/by-grantha/${item.documentId}`,
-          { credentials: "include" }
-        );
+        const sectionsFetch = fetch(`/api/strapi/sections/by-grantha/${item.documentId}`, { credentials: "include" });
+        const teekasFetch = (!hasSavedTeekas && !hasInlineTeekas)
+          ? fetch(`/api/strapi/teekas/by-grantha/${item.documentId}`, { credentials: "include" })
+          : Promise.resolve(null as unknown as Response);
+
+        const [sectionsRes, teekasRes] = await Promise.all([sectionsFetch, teekasFetch]);
+
         if (sectionsRes.ok) {
           const sectionsData = await sectionsRes.json();
           fetchedSections = sectionsData?.data || [];
         }
-      } catch { /* use empty sections */ }
+
+        if (hasSavedTeekas) {
+          setTeekas(savedData.teekas);
+        } else if (hasInlineTeekas) {
+          setTeekas(
+            item.teekas.map((t: any) => ({
+              id: t.documentId || uid(),
+              TeekaName: t.TeekaName || "",
+              TeekaAuthor: t.TeekaAuthor || "",
+            }))
+          );
+        } else if (teekasRes?.ok) {
+          const teekasData = await teekasRes.json();
+          const strapiTeekas: any[] = teekasData?.data || [];
+          setTeekas(
+            strapiTeekas.map((t: any) => ({
+              id: t.documentId || uid(),
+              TeekaName: t.TeekaName || "",
+              TeekaAuthor: t.TeekaAuthor || "",
+            }))
+          );
+        } else {
+          setTeekas([]);
+        }
+      } catch { setTeekas([]); /* use empty teekas on error */ }
       setEditingGranthaSectionsLoading(false);
 
       // Hierarchy: prefer portal draft; fall back to reconstructing from Strapi sections.

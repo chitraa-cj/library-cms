@@ -953,9 +953,16 @@ export default function GranthasPage() {
             });
 
             // Supplement: add Strapi mantras that aren't already covered by a local node.
+            // Also skip any whose order is already taken by an enriched local node —
+            // this collapses actual Strapi duplicates (e.g. "Mantra 1.1.1" + "Manthra 1.1.1"
+            // both at order=1 in the same section) without showing phantom entries.
+            const usedOrders = new Set(
+              enrichedManthras.map((m) => m.order).filter((o): o is number => o != null)
+            );
             const newManthras: ManthraNode[] = [];
             for (const sm of strapiMantrasForKhanda) {
               if (!matchedDocIds.has(sm.docId) && !knownShlokas.has(sm.title)) {
+                if (sm.order != null && usedOrders.has(sm.order)) continue;
                 newManthras.push({ id: uid(), title: sm.title, order: sm.order, strapiDocumentId: sm.docId });
                 knownShlokas.add(sm.title);
               }

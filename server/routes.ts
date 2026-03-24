@@ -266,20 +266,36 @@ async function createOrSkipManthra(
   const sectionDocId: string | undefined = mData.Section;
   const number: string | undefined = mData.ShlokaManthraNumber;
 
-  // Deduplication: check if this manthra already exists under the same section
-  if (sectionDocId && number) {
-    try {
-      const n = encodeURIComponent(number);
-      const s = encodeURIComponent(sectionDocId);
-      const existing = await strapiRequest(
-        `/api/manthras?filters[ShlokaManthraNumber][$eq]=${n}&filters[Section][documentId][$eq]=${s}&fields[0]=documentId`
-      );
-      if ((existing?.data?.length ?? 0) > 0) {
-        console.log(`[publish] Manthra "${label}" already exists in section — skipping`);
-        return;
-      }
-    } catch {
-      // ignore lookup failure — attempt to create anyway
+  // Deduplication: check by ShlokaManthraNumber first, then by order.
+  // The order-based check catches cases where another user created the same manthra
+  // under a different number (e.g. "Mantra 1.1.1" vs "Manthra 1.1.1" at order=1).
+  if (sectionDocId) {
+    const s = encodeURIComponent(sectionDocId);
+    // 1) Exact number match
+    if (number) {
+      try {
+        const n = encodeURIComponent(number);
+        const existing = await strapiRequest(
+          `/api/manthras?filters[ShlokaManthraNumber][$eq]=${n}&filters[Section][documentId][$eq]=${s}&fields[0]=documentId`
+        );
+        if ((existing?.data?.length ?? 0) > 0) {
+          console.log(`[publish] Manthra "${label}" already exists in section (by name) — skipping`);
+          return;
+        }
+      } catch { /* ignore */ }
+    }
+    // 2) Order match — different name but same position → likely a Strapi duplicate
+    if (mData.order != null) {
+      try {
+        const o = encodeURIComponent(String(mData.order));
+        const existingByOrder = await strapiRequest(
+          `/api/manthras?filters[order][$eq]=${o}&filters[Section][documentId][$eq]=${s}&fields[0]=documentId`
+        );
+        if ((existingByOrder?.data?.length ?? 0) > 0) {
+          console.log(`[publish] Manthra "${label}" already exists in section (by order=${mData.order}) — skipping duplicate`);
+          return;
+        }
+      } catch { /* ignore */ }
     }
   }
 

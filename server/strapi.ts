@@ -108,8 +108,17 @@ export function createStrapiRouter() {
   };
 
   // ── Sections: fetch directly from /api/sections ──
-  // Full populate — used by the by-grantha endpoint (grantha edit dialog needs
-  // ShlokaManthraNumber and order to reconstruct the hierarchy).
+  // Strapi v5 does NOT support `populate[relation][pagination]` or
+  // `populate[relation][sort]` for direct relation populates. Those keys are only
+  // valid inside the deep-populate `[populate]` nesting syntax. Using them causes
+  // a 400 ValidationError. Both section populate configs below intentionally omit
+  // those keys. The default Strapi relation limit (25) applies for inline manthras;
+  // the by-grantha endpoint supplements with a separate paginated manthra fetch to
+  // guarantee completeness.
+
+  // Metadata-only section populate — used by the sections list page and by-grantha.
+  // Manthra count for the list is derived from the (up to 25) inline manthras;
+  // by-grantha supplements with a separate complete manthra fetch.
   const SECTION_POPULATE = [
     "populate[grantha][fields][0]=id",
     "populate[grantha][fields][1]=documentId",
@@ -122,14 +131,12 @@ export function createStrapiRouter() {
     "populate[manthras][fields][0]=documentId",
     "populate[manthras][fields][1]=ShlokaManthraNumber",
     "populate[manthras][fields][2]=order",
-    "populate[manthras][pagination][pageSize]=100",
-    "populate[manthras][sort]=order:asc",
     "populate[titleTranslations]=*",
     "pagination[pageSize]=100",
   ].join("&");
 
-  // Lightweight populate — used by the sections list page.
-  // Fetches only manthra IDs (for count) — no content fields needed for the list.
+  // Lightweight populate for the sections list page (same as SECTION_POPULATE —
+  // manthra ids only, no ShlokaManthraNumber/order needed for the list count).
   const SECTION_LIST_POPULATE = [
     "populate[grantha][fields][0]=id",
     "populate[grantha][fields][1]=documentId",
@@ -139,9 +146,7 @@ export function createStrapiRouter() {
     "populate[parent][fields][2]=type",
     "populate[sub_sections][fields][0]=documentId",
     "populate[sub_sections][fields][1]=title",
-    // Only id for manthra count — avoids fetching content for the list view
     "populate[manthras][fields][0]=id",
-    "populate[manthras][pagination][pageSize]=100",
     "populate[titleTranslations]=*",
     "pagination[pageSize]=100",
   ].join("&");
@@ -186,14 +191,99 @@ export function createStrapiRouter() {
     }
   });
 
-  // Fetch all sections (with manthras) belonging to a specific grantha.
+  // Fetch all sections + all manthras for a specific grantha.
   // Called on-demand when opening the grantha edit dialog.
+  // Two-step strategy:
+  //   1. Fetch sections for this grantha (metadata only, paginated)
+  //   2. Fetch ALL manthras for this grantha separately (paginated, unaffected by the
+  //      Strapi v5 25-item relation cap), then attach them to their sections server-side.
   router.get("/sections/by-grantha/:granthaDocId", async (req, res) => {
     try {
       const g = encodeURIComponent(req.params.granthaDocId);
-      const filter = `filters[grantha][documentId][$eq]=${g}`;
-      const data = await strapiRequest(`/api/sections?${filter}&${SECTION_POPULATE}`);
-      res.json(data);
+
+      // Section metadata populate — no manthras inline (avoids the 25-item cap issue).
+      const sectionMeta = [
+        "populate[grantha][fields][0]=id",
+        "populate[grantha][fields][1]=documentId",
+        "populate[grantha][fields][2]=GranthaName",
+        "populate[parent][fields][0]=documentId",
+        "populate[parent][fields][1]=title",
+        "populate[parent][fields][2]=type",
+        "populate[sub_sections][fields][0]=documentId",
+        "populate[sub_sections][fields][1]=title",
+        "populate[titleTranslations]=*",
+        "pagination[pageSize]=100",
+      ].join("&");
+
+      const sectionFilter = `filters[grantha][documentId][$eq]=${g}`;
+
+      // ── Step 1: collect all sections ──
+      const firstSectionPage = await strapiRequest(
+        `/api/sections?${sectionFilter}&${sectionMeta}&pagination[page]=1`
+      );
+      const sectionTotal: number = firstSectionPage?.meta?.pagination?.total ?? 0;
+      const sectionPageSize: number = firstSectionPage?.meta?.pagination?.pageSize ?? 100;
+      const sectionPageCount = Math.ceil(sectionTotal / sectionPageSize);
+
+      let allSections: any[] = [...(firstSectionPage?.data ?? [])];
+      if (sectionPageCount > 1) {
+        const restSectionPages = await Promise.all(
+          Array.from({ length: sectionPageCount - 1 }, (_, i) =>
+            strapiRequest(`/api/sections?${sectionFilter}&${sectionMeta}&pagination[page]=${i + 2}`)
+          )
+        );
+        allSections = allSections.concat(restSectionPages.flatMap((p: any) => p?.data ?? []));
+      }
+
+      // ── Step 2: collect all manthras for this grantha (paginated) ──
+      const manthraQuery = [
+        "fields[0]=documentId",
+        "fields[1]=ShlokaManthraNumber",
+        "fields[2]=order",
+        "populate[Section][fields][0]=documentId",
+        `filters[Section][grantha][documentId][$eq]=${g}`,
+        "sort[0]=order:asc",
+        "pagination[pageSize]=100",
+      ].join("&");
+
+      const firstManthraPage = await strapiRequest(`/api/manthras?${manthraQuery}&pagination[page]=1`);
+      const manthraTotal: number = firstManthraPage?.meta?.pagination?.total ?? 0;
+      const manthraPageSize: number = firstManthraPage?.meta?.pagination?.pageSize ?? 100;
+      const manthraPageCount = Math.ceil(manthraTotal / manthraPageSize);
+
+      let allManthras: any[] = [...(firstManthraPage?.data ?? [])];
+      if (manthraPageCount > 1) {
+        const restManthraPages = await Promise.all(
+          Array.from({ length: manthraPageCount - 1 }, (_, i) =>
+            strapiRequest(`/api/manthras?${manthraQuery}&pagination[page]=${i + 2}`)
+          )
+        );
+        allManthras = allManthras.concat(restManthraPages.flatMap((p: any) => p?.data ?? []));
+      }
+
+      // ── Step 3: group manthras by section documentId ──
+      const manthrasBySection = new Map<string, any[]>();
+      for (const m of allManthras) {
+        const sectionDocId = m.Section?.documentId;
+        if (!sectionDocId) continue;
+        if (!manthrasBySection.has(sectionDocId)) manthrasBySection.set(sectionDocId, []);
+        manthrasBySection.get(sectionDocId)!.push({
+          documentId: m.documentId,
+          ShlokaManthraNumber: m.ShlokaManthraNumber,
+          order: m.order,
+        });
+      }
+
+      // ── Step 4: attach manthras to sections ──
+      const enrichedSections = allSections.map((s: any) => ({
+        ...s,
+        manthras: manthrasBySection.get(s.documentId) ?? [],
+      }));
+
+      res.json({
+        data: enrichedSections,
+        meta: { pagination: { page: 1, pageSize: enrichedSections.length, pageCount: 1, total: enrichedSections.length } },
+      });
     } catch (error: any) {
       res.status(500).json({ message: error.message || "Failed to fetch sections for grantha" });
     }

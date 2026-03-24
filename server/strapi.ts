@@ -242,6 +242,7 @@ export function createStrapiRouter() {
         "fields[0]=documentId",
         "fields[1]=ShlokaManthraNumber",
         "fields[2]=order",
+        "fields[3]=id",
         "populate[Section][fields][0]=documentId",
         `filters[Section][grantha][documentId][$eq]=${g}`,
         "sort[0]=order:asc",
@@ -270,6 +271,7 @@ export function createStrapiRouter() {
         if (!sectionDocId) continue;
         if (!manthrasBySection.has(sectionDocId)) manthrasBySection.set(sectionDocId, []);
         manthrasBySection.get(sectionDocId)!.push({
+          id: m.id,
           documentId: m.documentId,
           ShlokaManthraNumber: m.ShlokaManthraNumber,
           order: m.order,

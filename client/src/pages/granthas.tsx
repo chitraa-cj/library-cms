@@ -163,21 +163,32 @@ function hasBlocks(v: StrapiBlock[] | string | null | undefined): boolean {
  */
 // When Strapi has two records with the same order in a section (e.g. a manually-created
 // "Mantra 1.1.1" and a portal-published "Manthra 1.1.1" both at order=1), keep only
-// the LAST one per order position.  Since Strapi returns records sorted by order:asc
-// with a secondary sort by id:asc (older first), the portal-published entry is always
-// last and will be preserved.
+// the one with the HIGHER numeric Strapi id (most recently created = portal-published).
+// This is more reliable than relying on array position since Strapi's secondary sort
+// for populated relations is not guaranteed.
 function deduplicateManthrasByOrder(manthras: any[]): any[] {
-  const seenOrders = new Set<number>();
-  const result: any[] = [];
-  for (let i = manthras.length - 1; i >= 0; i--) {
-    const m = manthras[i];
+  // Build a map from order → best manthra (highest numeric id wins)
+  const best = new Map<number, any>();
+  const noOrder: any[] = [];
+  for (const m of manthras) {
     const ord = typeof m.order === "number" ? m.order : null;
-    if (ord === null || !seenOrders.has(ord)) {
-      if (ord !== null) seenOrders.add(ord);
-      result.unshift(m);
+    if (ord === null) {
+      noOrder.push(m);
+      continue;
+    }
+    const existing = best.get(ord);
+    if (!existing) {
+      best.set(ord, m);
+    } else {
+      // Keep the one with the higher numeric id (more recently created)
+      const existingId = typeof existing.id === "number" ? existing.id : 0;
+      const candidateId = typeof m.id === "number" ? m.id : 0;
+      if (candidateId > existingId) {
+        best.set(ord, m);
+      }
     }
   }
-  return result;
+  return [...best.values(), ...noOrder];
 }
 
 function reconstructHierarchyFromStrapi(sections: any[]): AdhyayaNode[] {

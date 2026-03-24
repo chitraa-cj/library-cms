@@ -522,24 +522,34 @@ function normalizeTextAndTranslation(field: Record<string, any>): Record<string,
 // The `teeka` field is a relation to the Teeka collection type — we look up the
 // record by TeekaName. Entries whose Teeka record cannot be found are skipped.
 async function resolveManthraTeekas(rawTeekas: any[]): Promise<any[]> {
+  console.log(`[resolveManthraTeekas] Processing ${rawTeekas.length} raw teeka(s):`,
+    rawTeekas.map((t, i) => `[${i}] documentId=${t.teeka?.documentId || "(none)"} TeekaName="${t.TeekaName || ""}" hasTeekaEntry=${!!t.TeekaEntry}`));
+
   const resolved: any[] = [];
   for (const t of rawTeekas) {
     // Prefer the documentId stored when user selected from the dropdown.
     // Fall back to a name-based lookup for entries saved before the dropdown was added.
     let teekaDocId: string | undefined = t.teeka?.documentId || undefined;
 
-    if (!teekaDocId) {
+    if (teekaDocId) {
+      console.log(`[resolveManthraTeekas] Using stored documentId="${teekaDocId}" (from dropdown selection)`);
+    } else {
       const TeekaName = (t.TeekaName || "").trim();
-      if (!TeekaName) continue;
+      if (!TeekaName) {
+        console.warn(`[resolveManthraTeekas] Entry has no teeka documentId and no TeekaName — skipping`);
+        continue;
+      }
+      console.log(`[resolveManthraTeekas] No documentId stored; looking up by TeekaName="${TeekaName}"`);
       try {
-        const url = `/api/teekas?filters[TeekaName][$eq]=${encodeURIComponent(TeekaName)}&fields[0]=documentId&pagination[pageSize]=1`;
+        const url = `/api/teekas?filters[TeekaName][$eq]=${encodeURIComponent(TeekaName)}&fields[0]=documentId&pagination[pageSize]=5`;
         const found = await strapiRequest(url);
+        console.log(`[resolveManthraTeekas] Lookup result for "${TeekaName}":`, JSON.stringify(found?.data || []));
         teekaDocId = found?.data?.[0]?.documentId;
-      } catch {
-        // ignore — skip this entry
+      } catch (e: any) {
+        console.error(`[resolveManthraTeekas] Lookup error for "${TeekaName}": ${e.message}`);
       }
       if (!teekaDocId) {
-        console.warn(`[resolveManthraTeekas] Teeka record not found: "${TeekaName}" — skipping`);
+        console.warn(`[resolveManthraTeekas] Teeka record not found in Strapi: "${TeekaName}" — skipping this teeka entry`);
         continue;
       }
     }
@@ -547,9 +557,13 @@ async function resolveManthraTeekas(rawTeekas: any[]): Promise<any[]> {
     const item: any = { teeka: teekaDocId };
     if (t.TeekaEntry && typeof t.TeekaEntry === "object") {
       item.TeekaEntry = normalizeTextAndTranslation(t.TeekaEntry);
+      console.log(`[resolveManthraTeekas] TeekaEntry keys: ${Object.keys(t.TeekaEntry).join(", ")}`);
+    } else {
+      console.warn(`[resolveManthraTeekas] No TeekaEntry for teeka documentId="${teekaDocId}" — teeka relation will be linked but entry content will be empty`);
     }
     resolved.push(item);
   }
+  console.log(`[resolveManthraTeekas] Resolved ${resolved.length}/${rawTeekas.length} teeka(s)`);
   return resolved;
 }
 

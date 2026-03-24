@@ -96,6 +96,8 @@ export function createStrapiRouter() {
     ].join("&"),
     teekas: [
       "populate[grantha][fields][0]=documentId&populate[grantha][fields][1]=GranthaName",
+      "pagination[pageSize]=100",
+      "sort=TeekaName:asc",
     ].join("&"),
     chapters: [
       "populate[grantha][fields][0]=documentId&populate[grantha][fields][1]=GranthaName",

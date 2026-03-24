@@ -1,0 +1,538 @@
+Skip to content
+Application logoStrapi DashboardWorkplace
+Home
+Content Manager
+Media Library
+Content-Type Builder
+Marketplace
+Settings
+1
+
+Chitra Jain
+Content Manager
+Search
+Collection Types
+8
+Article
+Author
+Category
+Grantha
+Manthra
+Section
+Teeka
+User
+Single Types
+2
+About
+Global
+Back
+Aitareya upanishad
+More actions
+Published
+draft
+published
+GranthaName*
+Aitareya upanishad
+GranthaType
+Upanishad
+BhashyamName
+shankara bhashyam
+BhashyamAuthor
+Sri Shankarayacharya
+IntroductionToTextEnglish
+To reorder blocks, press Command or Control along with Shift and the Up or Down arrow keys
+Text
+More
+The Aitareya Upanishad is one of the important Upanishads belonging to the Rigveda. It deals with the nature of the Self (Ātman), the origin of the universe, and the essence of Brahma-vidyā (knowledge of Brahman). The text teaches that the Self alone is the ultimate reality and the source of all creation. It is considered highly significant in Advaita Vedānta philosophy.
+
+Expand
+BhashyakaraIntroduction
+Reset entry
+SanskritTextEntry
+To reorder blocks, press Command or Control along with Shift and the Up or Down arrow keys
+Text
+More
+अवतारस्य दिव्यप्रयोजनम्
+
+यदा आध्यात्मिकतमः मानवजीवनं व्याप्नोति तथा सनातनधर्मस्य शाश्वतसिद्धान्ताः लुप्तप्रायाः भवन्ति, तदा परमचैतन्यम् एव लोकसंरक्षणार्थं मानवरूपेण अवतीर्यते। एते अवताराः स्वस्वकालस्य आध्यात्मिकसंकटानुसारं विशिष्टस्वरूपं धृत्वा प्रादुर्भवन्ति। Adi Shankaracharya तेषु महानुभावेषु एकः, स्वयं भगवान् शङ्करस्य अवताररूपेण प्रसिद्धः, यः द्वादशशताब्द्यपूर्वं भारतस्य आध्यात्मिकजीवनं पुनर्जीवितवान्, वेदान्तस्य गूढतत्त्वानि पुनः प्रकाशयामास, तथा राष्ट्रैक्यं सुदृढीकृतवान्। अद्य अपि सनातनधर्मस्य स्थितिः तस्यैव अनुग्रहेण सम्भवतीति सर्वैः स्वीक्रियते।
+
+समये अवतरणम्
+
+यस्मिन् काले वैदिकमार्गः संप्रदायभेदैः, नास्तिकदर्शनैः च आच्छन्नः आसीत्, तस्मिन् काले श्रीभगवत्पादः मानवजातेः आध्यात्मिकसंकटस्य समाधानरूपेण अवतीर्णः। तदा समाजः अनेकसंप्रदायेषु विभक्तः सन् विवादैः क्लिष्टः आसीत्। अस्मिन् कलुषे काले सः अद्वैतवेदान्तस्य निर्मलतत्त्वं पुनः प्रकाशयामास।
+
+सम्पूर्णाचार्यस्य बहुमुखप्रतिभा
+
+स्वात्मसाक्षात्कारस्थितौ स्थितोऽपि सः लोकानुग्रहार्थं कार्यरतः आसीत्। सः भिन्नभिन्नाधिकारिणां जनानां प्रति उपयुक्तरीत्या उपदेशं कृतवान्। तस्य वैशिष्ट्यानि—
+
+गहनतत्त्वानां सरलव्याख्यानसमर्थता
+
+अनुभवरूपा आत्मविद्या
+
+काव्यरचना तथा स्तोत्रनिर्माणकौशलम्
+
+संस्थापनशक्ति
+
+करुणामयी नेतृत्वशक्ति
+
+केवलं द्वात्रिंशद्वर्षपर्यन्ते जीवने सः उपनिषद्भगवद्गीताब्रह्मसूत्राणां भाष्यानि विरच्य अमूल्यं योगदानम् अकरोत्।
+
+तस्य उपदेशस्य सारः
+
+ब्रह्मैव एकं परमार्थसत्यम्
+
+जगन्मायया प्रतीयमानम्
+
+जीवः ब्रह्मणः अभिन्नः
+
+मोक्षः तस्यैकत्वस्य साक्षात्कारः
+
+कर्मभक्त्यादयः चित्तशुद्धये साधनानि भवन्ति
+
+करुणायाः व्यवहारः
+
+सः केवलं दार्शनिकः नासीत्, अपि तु लोककल्याणाय योगशक्तिम् अपि प्रयुक्तवान्। कनकधारास्तोत्रेण दरिद्रस्त्रियै धनलाभः, पद्मपादस्य महिमानं च दर्शितवान्।
+
+दूरदर्शिनः विरासत्
+
+सः चतुर्षु दिशासु चत्वारि मठानि स्थापितवान्—
+
+श्रृङ्गेरी (दक्षिणम्)
+
+पुरी (पूर्वम्)
+
+द्वारका (पश्चिमम्)
+
+बदरी (उत्तरम्)
+
+एतेषु मठेषु अद्यापि गुरुपरम्परा अविच्छिन्नरूपेण प्रवहति, या तस्य उपदेशान् जीवयति।
+
+इदं सम्पूर्णं तस्य दिव्यकार्यस्य प्रमाणं यत् सः न केवलं दार्शनिकः, अपि तु लोकगुरुः आसीत्, यस्य उपदेशाः अद्यापि मोक्षमार्गं प्रकाशयन्ति।
+
+Expand
+EnglishTranslationText
+To reorder blocks, press Command or Control along with Shift and the Up or Down arrow keys
+Text
+More
+The Divine Purpose of Avatara
+
+When spiritual darkness engulfs humanity and eternal principles of Dharma face extinction, the Supreme Consciousness manifests in human form to restore cosmic order. These divine incarnations—Avataras—emerge with specific forms and purposes uniquely suited to address the spiritual crises of their time. Sri Adi Shankaracharya stands among these luminaries as an Avatara of Lord Shiva Himself, whose appearance twelve centuries ago transformed the spiritual landscape of India, revitalized the profound wisdom of Vedanta, and forged national integration across diverse regions. It is universally acknowledged that if Sanatana Dharma thrives today, allowing us to partake in its spiritual treasures, it is primarily due to Sri Shankaracharya's divine intervention and tireless work. His legacy continues to illuminate the path for seekers worldwide, serving as the foundation upon which the living tradition of eternal wisdom stands.
+
+A Timely Manifestation
+
+In an era when the pristine wisdom of Sanatana Dharma faced unprecedented peril, when the Vedic path to liberation lay obscured beneath divisive sectarianism and materialistic philosophies, Sri Shankaracharya emerged as the divine response to humanity's spiritual crisis. The Hindu society of His time had fractured into countless competing sects, each advancing contradictory interpretations and engaging in endless disputations that served only to weaken the unified spiritual foundation of the culture.
+
+Into this intellectual chaos, Sri Bhagavatpada brought the crystalline clarity of Advaita Vedanta—the non-dual wisdom of the Upanishads. With matchless eloquence and penetrating insight, He revitalized the eternal truths that had become clouded by misinterpretation and neglect. His accomplishment becomes even more remarkable considering the absence of modern communication technologies and transportation systems, as He traveled the length and breadth of India on foot, igniting a spiritual renaissance.
+
+The Multifaceted Brilliance of a Perfect Master
+
+Though established in the sublime state of Self-realization, where He could have remained in solitary bliss, Sri Shankaracharya chose instead to embrace humanity with boundless compassion. Recognizing the diverse spiritual capacities of seekers, He communicated transcendent wisdom at multiple levels, meeting souls precisely where they stood on the spiritual journey.
+
+His extraordinary talents included:
+
+Intellectual brilliance that could distill the most profound metaphysical truths into accessible understanding
+
+Spiritual realization that transcended mere scholarship to embody the truth He taught
+
+Poetic genius that flowed effortlessly from rigorous philosophical treatises to soul-stirring devotional hymns
+
+Organizational vision that established enduring institutions to preserve and transmit wisdom
+
+Compassionate leadership that reformed religious practices while honoring authentic tradition
+
+Within the remarkably brief span of His manifest life—completing His earthly mission by age 32—Sri Shankaracharya accomplished what would seem impossible for many lifetimes. His commentaries on the principal Upanishads, the Brahma Sutras, and the Bhagavad Gita (collectively known as the Prasthanatraya) remain definitive expositions that have guided generations of seekers to the highest truth.
+
+The Essence of His Teaching
+
+The heart of Sri Shankaracharya's philosophy reveals that:
+
+Brahman—the eternal, impersonal, conscious Absolute—is the only reality
+
+The universe, with all its names and forms, appears within this reality through the power of Maya
+
+The individual soul (jiva) is fundamentally non-different from Brahman, appearing separate only due to limiting adjuncts (upadhis)
+
+Liberation (Moksha) is the direct recognition of this eternal oneness, as proclaimed in the Mahavakyas of the Upanishads
+
+Karma (action) and Bhakti (devotion), when performed with proper understanding, purify the mind and prepare it for this supreme knowledge
+
+Many forms, one Bhagavan – all divine forms are manifestations of the same Supreme and there is no difference in the essence
+
+While maintaining that Brahman alone is the Absolute Truth (Paramarthika), Sri Shankaracharya acknowledged the practical reality (Vyavaharika) of the world for purposes of spiritual practice and daily living. This balanced approach allowed Him to integrate diverse spiritual practices within a coherent framework, leading ultimately to non-dual realization.
+
+Compassion in Action
+
+Though His philosophical achievements alone would secure His place among humanity's greatest teachers, Sri Shankaracharya's compassion extended beyond the intellectual realm to address practical human suffering. Numerous accounts attest to His willingness to employ yogic powers for the welfare of others—from blessing a destitute woman with prosperity through the Kanakadhara Stotram to revealing the greatness of His disciple Padmapadacharya through the miracle of lotus flowers manifesting upon the waters of the Ganga.
+
+A Visionary Legacy for Millennia
+
+Perhaps the most enduring testament to Sri Shankaracharya's visionary leadership lies in the establishment of the four Chaturamnaya Peethams (monastic centers) at the cardinal points of India. With remarkable foresight, He created a network of spiritual epicenters that would preserve and propagate Sanatana Dharma through the centuries:
+
+Dakshinamnaya Sri Sharada Peetham at Sringeri in the South
+
+Poorvamnaya Sri Govardhana Peetham at Puri in the East
+
+Paschimamnaya Sri Kalika Peetham at Dwarka in the West
+
+Uttaramnaya Sri Jyotir Peetham at Badrinath in the North
+
+In structuring these institutions, Sri Bhagavatpada demonstrated profound wisdom about human nature and national integration. Sri Sureshwaracharya, hailing from the North, was placed in charge of the Sringeri Peetham in the South, while Totakacharya from the South was assigned to the Jyotir Peetham in the North. He ordained that the Nampoothris from Kerala should perform Puja at the Badrinath temple in Badri, while the Brahmins from Karnataka were assigned to perform Puja at the Pashupatinath temple Nepal. Similarly, He entrusted Maharashtra Brahmins with the Pujas at the Sri Ramanathaswamy temple in Rameshwaram. Thus, by strategically assigning Acharyas from different regions to lead Maths in distant quarters of the country, He established cross-regional ritual practices that fostered cultural exchange.
+
+Among these four pillars of Vedic tradition, the Dakshinamnaya Sringeri Sharada Peetham holds the distinction of maintaining an unbroken succession of enlightened Jagadgurus who continue to embody Sri Shankaracharya's divine qualities, from profound Self-realization to comprehensive mastery of the scriptural tradition.
+
+For over twelve centuries, this living stream of realized masters has preserved not merely the letter but the very spirit of Sri Adi Shankaracharya's teachings, offering seekers in every generation direct access to the transformative wisdom He bestowed upon humanity. Through their presence, the light kindled by the Master continues to illuminate the path to ultimate truth for all who yearn for liberation. to sanskrit
+
+Expand
+OtherTranslations (0)
+
+No entry yet. Click to add one.
+IASTTransliteration
+To reorder blocks, press Command or Control along with Shift and the Up or Down arrow keys
+Text
+More
+xAvatārasya divyaprayojanam
+
+Yadā ādhyātmikatamaḥ mānavajīvanaṃ vyāpnoti tathā sanātanadharmasya śāśvatasiddhāntāḥ luptaprāyāḥ bhavanti, tadā paramacaitanyam eva lokasaṃrakṣaṇārthaṃ mānavarūpeṇa avatīryate. Ete avatārāḥ svasvakālasya ādhyātmikasaṅkaṭānusāraṃ viśiṣṭasvarūpaṃ dhṛtvā prādurbhavanti. Ādi Śaṅkarācārya teṣu mahānubhāveṣu ekaḥ, svayaṃ bhagavataḥ Śaṅkarasya avatārarūpeṇa prasiddhaḥ, yaḥ dvādaśaśatābdyapūrvaṃ Bhāratasya ādhyātmikajīvanaṃ punarjīvitavān, vedāntasya gūḍhatattvāni punaḥ prakāśayāmāsa, tathā rāṣṭraikyaṃ sudṛḍhīkṛtavān. Adya api sanātanadharmasya sthitiḥ tasyaiva anugraheṇa sambhavatīti sarvaiḥ svīkriyate.
+
+Samaye avataraṇam
+
+Yasmin kāle vaidikamārgaḥ saṃpradāyabhedaiḥ, nāstikadarśanaiś ca ācchannaḥ āsīt, tasmin kāle Śrībhagavatpādaḥ mānavajāteḥ ādhyātmikasaṅkaṭasya samādhānarūpeṇa avatīrṇaḥ. Tadā samājaḥ anekasaṃpradāyeṣu vibhaktaḥ san vivādaiḥ kliṣṭaḥ āsīt. Asmin kaluṣe kāle saḥ advaitavedāntasya nirmalatattvaṃ punaḥ prakāśayāmāsa.
+
+Sampūrṇācāryasya bahumukhapratibhā
+
+Svātmasākṣātkārasthitau sthito'pi saḥ lokānugrahārthaṃ kāryarataḥ āsīt. Saḥ bhinnabhinnādhikāriṇāṃ janānāṃ prati upayuktarītyā upadeśaṃ kṛtavān. Tasya vaiśiṣṭyāni—
+
+Gahanatattvānāṃ saralavyākhyānasamarthatā
+
+Anubhavarūpā ātmavidyā
+
+Kāvyaracanā tathā stotranirmāṇakauśalam
+
+Saṃsthāpanaśakti
+
+Karuṇāmayī netṛtvaśakti
+
+Kevalaṃ dvātriṃśadvarṣaparyante jīvane saḥ upaniṣadbhagavadgītābrahmasūtrāṇāṃ bhāṣyāni viracya amūlyaṃ yogadānam akarot.
+
+Tasya upadeśasya sāraḥ
+
+Brahmaiva ekaṃ paramārthasatyam
+
+Jagan māyayā pratīyamānam
+
+Jīvaḥ brahmaṇaḥ abhinnaḥ
+
+Mokṣaḥ tasyaikatvasya sākṣātkāraḥ
+
+Karmabhaktyādayaḥ cittaśuddhaye sādhanāni bhavanti
+
+Karuṇāyāḥ vyavahāraḥ
+
+Saḥ kevalaṃ dārśanikaḥ nāsīt, api tu lokakalyāṇāya yogaśaktim api prayuktavān. Kanakadhārāstotreṇa daridrastriyai dhanalābhaḥ, Padmapādasya mahimānaṃ ca darśitavān.
+
+Dūradarśinaḥ virāsat
+
+Saḥ caturṣu diśāsu catvāri maṭhāni sthāpitavān—
+
+Śṛṅgeri (dakṣiṇam)
+
+Purī (pūrvam)
+
+Dvārakā (paścimam)
+
+Badarī (uttaram)
+
+Eteṣu maṭheṣu adyāpi guruparamparā avicchinnarūpeṇa pravahati, yā tasya upadeśān jīvayati.
+
+Expand
+sections (8)
+Add or create a relation
+
+Press spacebar to grab and re-order
+NumberOfTeekas*
+1
+
+
+teekas (1)
+Add or create a relation
+
+Press spacebar to grab and re-order
+slug
+Regenerate
+GranthaNameTranslations (0)
+
+No entry yet. Click to add one.
+coverImage
+
+Click to add an asset or drag and drop one in this area
+order
+
+
+introVideoId
+introVideoTitle
+Entry
+
+Publish
+More document actions
+
+Save
+Preview
+Set up preview
+The schemas have been successfully loaded
+
+Back
+Edit a relation
+Go to entry
+Close modal
+Mantra 1.1.1
+
+Save
+Section (1)
+Add or create a relation
+
+Press spacebar to grab and re-order
+ShlokaManthraNumber
+Mantra 1.1.1
+ShlokaManthraEntry
+Reset entry
+SanskritTextEntry
+To reorder blocks, press Command or Control along with Shift and the Up or Down arrow keys
+Text
+More
+आत्मा वा इदमेक एवाग्र आसीत् । नान्यत्किञ्चन मिषत् । स ईक्षत लोकान्नु सृजा इति ॥ १ ॥
+
+Expand
+EnglishTranslationText
+To reorder blocks, press Command or Control along with Shift and the Up or Down arrow keys
+Text
+More
+this was only one A'tman at first. There was nothing else active. He thought I shall create worlds.
+
+Expand
+OtherTranslations (43)
+Press spacebar to grab and re-order
+
+Delete
+
+Delete
+
+Delete
+
+Delete
+
+Delete
+
+Delete
+
+Delete
+
+Delete
+
+Delete
+
+Delete
+
+Delete
+
+Delete
+
+Delete
+
+Delete
+
+Delete
+
+Delete
+
+Delete
+
+Delete
+
+Delete
+
+Delete
+
+Delete
+
+Delete
+
+Delete
+
+Delete
+
+Delete
+
+Delete
+
+Delete
+
+Delete
+
+Delete
+
+Delete
+
+Delete
+
+Delete
+
+Delete
+
+Delete
+
+Delete
+
+Delete
+
+Delete
+
+Delete
+
+Delete
+
+Delete
+
+Delete
+
+Delete
+
+Delete
+
+Add an entry
+IASTTransliteration
+To reorder blocks, press Command or Control along with Shift and the Up or Down arrow keys
+Text
+More
+﻿
+
+Expand
+BhashyamEntry
+Reset entry
+SanskritTextEntry
+To reorder blocks, press Command or Control along with Shift and the Up or Down arrow keys
+Text
+More
+﻿ पूर्वपृष्ठम्      उत्तरपृष्ठम्
+
+आनन्दगिरिटीका (ऐतरेय)
+
+ 
+
+आत्मा वा इदमेक एवाग्र आसीत् । नान्यत्किञ्चन मिषत् । स ईक्षत लोकान्नु सृजा इति ॥ १ ॥
+
+आत्मेति । आत्मा आप्नोतेरत्तेरततेर्वा परः सर्वज्ञः सर्वशक्तिरशनायादिसर्वसंसारधर्मवर्जितो नित्यत्यशुद्धबुद्धमुक्तस्वभावोऽजोऽजरोऽमरोऽमृतोऽभयोऽद्वयो वै । इदं यदुक्तं नामरूपकर्मभेदभिन्नं जगत् आत्मैव एकः अग्रे जगतः सृष्टेः प्राक् आसीत् । किं नेदानीं स एवैकः ? न । कथं तर्हि आसीदित्युच्यते ? यद्यपीदानीं स एवैकः, तथाप्यस्ति विशेषः । प्रागुत्पत्तेः अव्याकृतनामरूपभेदमात्मभूतमात्मैकशब्दप्रत्ययगोचरं जगत् इदानीं व्याकृतनामरूपभेदत्वादनेकशब्दप्रत्ययगोचरमात्मैकशब्दप्रत्ययगोचरं चेति विशेषः । यथा सलिलात्पृथक् फेननामरूपव्याकरणात्प्राक्सलिलैकशब्दप्रत्ययगोचरमेव फेनम् , यदा सलिलात्पृथङ् नामरूपभेदेन व्याकृतं भवति, तदा सलिलं फेनं चेति अनेकशब्दप्रत्ययभाक् सलिलमेवेति चैकशब्दप्रत्ययभाक्च फेनं भवति, तद्वत् । न अन्यत्किञ्चन न किञ्चिदपि मिषत् निमिषद्व्यापारवदितरद्वा । यथा साङ्‍ख्यानामनात्मपक्षपाति स्वतन्त्रं प्रधानम् , यथा च काणादानामणवः, न तद्वदिहान्यदात्मनः किञ्चिदपि वस्तु विद्यते । किं तर्हि ? आत्मैवैक आसीदित्यभिप्रायः । सः सर्वज्ञस्वाभाव्यात् आत्मा एक एव सन् ईक्षत । ननु प्रागुत्पत्तेरकार्यकरणत्वात्कथमीक्षितवान् ? नायं दोषः, सर्वज्ञस्वाभाव्यात् । तथा च मन्त्रवर्णः — ‘अपाणिपादो जवनो ग्रहीता’ (श्वे. उ. ३ । २९) इत्यादिः । केनाभिप्रायेणेत्याह — लोकान् अम्भःप्रभृतीन्प्राणिकर्मफलोपभोगस्थानभूतान् नु सृजै सृजेऽहम् इति ॥
+
+Expand
+EnglishTranslationText
+To reorder blocks, press Command or Control along with Shift and the Up or Down arrow keys
+Text
+More
+A'tman is from the root which means 'to obtain;' 'to eat,' or 'to enjoy;' or 'to pervade all.' The A'tmun is the highest, omniscient, omnipotent, devoid of all the attributes of Samsûra, such as hunger etc., naturally eternal, pure, intelligent and free, unborn, undecaying, immortal, fearless and without a second. Idam,-the universe already stated and diversified with the distinctions of name, form and Karma, was the one A'tman alone. Agre,-before the creation of the uníverse, Is he not now the same, the one entity? Not that he is not. Why then is it said it was? Though even now hhe is surely the one entity still there is a distinction. The distinction is that before the creation, the universe, with no manifested difference of nanme and form and one with the 
+
+Expand
+OtherTranslations (43)
+Press spacebar to grab and re-order
+
+Delete
+
+Delete
+
+Delete
+
+Delete
+
+Delete
+
+Delete
+
+Delete
+
+Delete
+
+Delete
+
+Delete
+
+Delete
+
+Delete
+
+Delete
+
+Delete
+
+Delete
+
+Delete
+
+Delete
+
+Delete
+
+Delete
+
+Delete
+
+Delete
+
+Delete
+
+Delete
+
+Delete
+
+Delete
+
+Delete
+
+Delete
+
+Delete
+
+Delete
+
+Delete
+
+Delete
+
+Delete
+
+Delete
+
+Delete
+
+Delete
+
+Delete
+
+Delete
+
+Delete
+
+Delete
+
+Delete
+
+Delete
+
+Delete
+
+Delete
+
+Add an entry
+IASTTransliteration
+To reorder blocks, press Command or Control along with Shift and the Up or Down arrow keys
+Text
+More
+﻿
+
+Expand
+Teekas (0)
+
+No entry yet. Click to add one.
+order
+1
+
+
+wordMeanings (0)
+
+No entry yet. Click to add one.

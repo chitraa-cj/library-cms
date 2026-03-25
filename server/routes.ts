@@ -138,6 +138,7 @@ const CONTENT_TYPE_MAP: Record<string, string> = {
   authors: "authors",
   categories: "categories",
   manthras: "manthras",
+  chapters: "chapters",
 };
 
 // These content types exist in the portal but have no REST API route in Strapi.
@@ -795,6 +796,56 @@ function buildSectionPayload(data: Record<string, any>): Record<string, any> {
   return payload;
 }
 
+async function buildChapterPayload(data: Record<string, any>): Promise<Record<string, any>> {
+  const {
+    _grantha,                // local-only prefix copy
+    _parentDocId,            // local-only prefix copy
+    grantha,                 // documentId string for the Grantha relation
+    parent,                  // documentId string for the parent Chapter relation
+    Teekas: rawTeekas,
+    order,
+    ...rest
+  } = data;
+
+  const payload = cleanPayloadForStrapi(rest);
+
+  // Normalize TextAndTranslation fields so OtherTranslations is always
+  // in the repeatable-component format Strapi expects.
+  for (const key of ["ShlokaManthraEntry", "BhashyamForShlokaManthra"] as const) {
+    if (payload[key] && typeof payload[key] === "object" && !Array.isArray(payload[key])) {
+      payload[key] = normalizeTextAndTranslation(payload[key]);
+    }
+  }
+
+  // Map grantha → Strapi relation
+  const granthaId = grantha || _grantha;
+  if (granthaId && typeof granthaId === "string") {
+    payload.grantha = granthaId;
+  }
+
+  // Map parent → Strapi relation
+  const parentId = parent || _parentDocId;
+  if (parentId && typeof parentId === "string") {
+    payload.parent = parentId;
+  }
+
+  // order must be a number
+  if (order !== undefined && order !== null && order !== "") {
+    const n = Number(order);
+    if (!Number.isNaN(n)) payload.order = n;
+  }
+
+  // Resolve Teekas (same format as manthras)
+  if (Array.isArray(rawTeekas) && rawTeekas.length > 0) {
+    const resolvedTeekas = await resolveManthraTeekas(rawTeekas, granthaId || _grantha);
+    if (resolvedTeekas.length > 0) {
+      payload.Teekas = resolvedTeekas;
+    }
+  }
+
+  return payload;
+}
+
 export async function registerRoutes(
   httpServer: Server,
   app: Express
@@ -927,6 +978,8 @@ export async function registerRoutes(
             ? await buildManthraPayloadAsync(draft.data as Record<string, any>)
             : draft.contentType === "sections"
             ? buildSectionPayload(draft.data as Record<string, any>)
+            : draft.contentType === "chapters"
+            ? await buildChapterPayload(draft.data as Record<string, any>)
             : cleanPayloadForStrapi(draft.data as Record<string, any>);
 
         console.log(`[publish] ${draft.contentType} payload:`, JSON.stringify(cleanedData));

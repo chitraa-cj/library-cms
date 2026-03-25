@@ -107,6 +107,8 @@ export function createStrapiRouter() {
       // the response small. Section hierarchy (with manthras) is fetched
       // on-demand via /sections/by-grantha/:granthaDocId when editing.
       "populate[teekas][fields][0]=documentId&populate[teekas][fields][1]=TeekaName&populate[teekas][fields][2]=TeekaAuthor",
+      "pagination[pageSize]=100",
+      "sort=GranthaName:asc",
     ].join("&"),
     teekas: [
       "populate[grantha][fields][0]=documentId&populate[grantha][fields][1]=GranthaName",
@@ -120,6 +122,22 @@ export function createStrapiRouter() {
       "populate[ShlokaManthraEntry]=*",
       "populate[BhashyamForShlokaManthra]=*",
       "populate[Teekas]=*",
+      "pagination[pageSize]=100",
+    ].join("&"),
+    articles: [
+      "populate=*",
+      "pagination[pageSize]=100",
+      "sort=createdAt:desc",
+    ].join("&"),
+    authors: [
+      "populate=*",
+      "pagination[pageSize]=100",
+      "sort=name:asc",
+    ].join("&"),
+    categories: [
+      "populate=*",
+      "pagination[pageSize]=100",
+      "sort=name:asc",
     ].join("&"),
   };
 
@@ -477,10 +495,44 @@ export function createStrapiRouter() {
         const queryString = new URLSearchParams(
           req.query as Record<string, string>
         ).toString();
-        const defaultPopulate = DEEP_POPULATE[ct.path] ?? "populate=*";
-        const populateParam = queryString ? `?${queryString}` : `?${defaultPopulate}`;
-        const data = await strapiRequest(`/api/${ct.plural}${populateParam}`);
-        res.json(data);
+        const defaultPopulate = DEEP_POPULATE[ct.path] ?? "populate=*&pagination[pageSize]=100";
+
+        if (queryString) {
+          // Passthrough: caller supplied their own params (e.g. dashboard count query)
+          const data = await strapiRequest(`/api/${ct.plural}?${queryString}`);
+          return res.json(data);
+        }
+
+        // No custom query: paginate through ALL pages so we never silently drop records
+        // when a collection has more than Strapi's default 25-item page limit.
+        const firstPage = await strapiRequest(
+          `/api/${ct.plural}?${defaultPopulate}&pagination[page]=1`
+        );
+        const total: number = firstPage?.meta?.pagination?.total ?? 0;
+        const pageSize: number = firstPage?.meta?.pagination?.pageSize ?? 25;
+        const pageCount = Math.ceil(total / pageSize) || 1;
+
+        if (pageCount <= 1) {
+          return res.json(firstPage);
+        }
+
+        const restPages = await Promise.all(
+          Array.from({ length: pageCount - 1 }, (_, i) =>
+            strapiRequest(
+              `/api/${ct.plural}?${defaultPopulate}&pagination[page]=${i + 2}`
+            )
+          )
+        );
+
+        const allData = [
+          ...(firstPage?.data ?? []),
+          ...restPages.flatMap((p: any) => p?.data ?? []),
+        ];
+
+        return res.json({
+          data: allData,
+          meta: { pagination: { page: 1, pageSize: allData.length, pageCount: 1, total: allData.length } },
+        });
       } catch (error: any) {
         if (error.status === 404) {
           return res.json({ data: [], meta: { pagination: { page: 1, pageSize: 25, pageCount: 0, total: 0 } } });

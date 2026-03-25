@@ -62,6 +62,7 @@ import {
   FileText,
   ExternalLink,
   Eye,
+  AlertTriangle,
 } from "lucide-react";
 
 const STRAPI_ADMIN = "http://13.53.121.15:1337/admin";
@@ -305,6 +306,7 @@ function GranthaCard({
   onPublish,
   isPublishing,
   currentUserId,
+  isDuplicate,
 }: {
   item: any;
   onEdit: () => void;
@@ -313,6 +315,7 @@ function GranthaCard({
   onPublish: () => void;
   isPublishing: boolean;
   currentUserId?: string | null;
+  isDuplicate?: boolean;
 }) {
   const isDraft = item._isDraft;
   const canDelete = !currentUserId || item._createdBy === currentUserId;
@@ -405,6 +408,14 @@ function GranthaCard({
       </h3>
       {item.BhashyamName && (
         <p className="text-xs text-muted-foreground mt-1">{item.BhashyamName}</p>
+      )}
+      {isDuplicate && (
+        <div className="flex items-center gap-1.5 mt-2 px-2 py-1 rounded-md bg-amber-50 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-800">
+          <AlertTriangle className="w-3.5 h-3.5 text-amber-600 dark:text-amber-400 flex-shrink-0" />
+          <p className="text-xs text-amber-700 dark:text-amber-400 font-medium">
+            Duplicate name detected — another entry with a similar name exists in Strapi
+          </p>
+        </div>
       )}
       {!isDraft && (
         <div className="mt-3 pt-3 border-t space-y-2">
@@ -1651,21 +1662,40 @@ export default function GranthasPage() {
           </div>
         ) : (
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-            {mergedData.map((item, idx) => (
-              <GranthaCard
-                key={item.documentId || item._draftId || idx}
-                item={item}
-                onEdit={() => openEdit(item)}
-                onView={openView}
-                onDelete={() => setDeleteTarget(item)}
-                onPublish={() => handlePublish(item)}
-                isPublishing={
-                  publishDraft.isPending &&
-                  (publishDraft.variables as number) === item._draftId
-                }
-                currentUserId={user?.id}
-              />
-            ))}
+            {(() => {
+              // Detect duplicate grantha names (case-insensitive, trimmed)
+              const normalizedNames = mergedData.map((item) =>
+                (item.GranthaName || "").trim().toLowerCase()
+              );
+              const nameCounts: Record<string, number> = {};
+              normalizedNames.forEach((n) => {
+                if (n) nameCounts[n] = (nameCounts[n] || 0) + 1;
+              });
+              const duplicateSet = new Set(
+                Object.entries(nameCounts)
+                  .filter(([, count]) => count > 1)
+                  .map(([name]) => name)
+              );
+              return mergedData.map((item, idx) => {
+                const norm = (item.GranthaName || "").trim().toLowerCase();
+                return (
+                  <GranthaCard
+                    key={item.documentId || item._draftId || idx}
+                    item={item}
+                    onEdit={() => openEdit(item)}
+                    onView={openView}
+                    onDelete={() => setDeleteTarget(item)}
+                    onPublish={() => handlePublish(item)}
+                    isPublishing={
+                      publishDraft.isPending &&
+                      (publishDraft.variables as number) === item._draftId
+                    }
+                    currentUserId={user?.id}
+                    isDuplicate={norm ? duplicateSet.has(norm) : false}
+                  />
+                );
+              });
+            })()}
           </div>
         )}
 

@@ -357,12 +357,15 @@ async function publishGranthaWithHierarchy(
   } else {
     // Check whether a Grantha with the same name already exists in Strapi
     // to avoid creating duplicates when the same text is published more than once.
+    // Uses case-insensitive ($eqi) matching and normalizes trailing whitespace.
     let existingDocId: string | undefined;
     if (granthaPayload.GranthaName) {
       try {
-        const searchName = encodeURIComponent(granthaPayload.GranthaName as string);
+        const trimmedName = (granthaPayload.GranthaName as string).trim();
+        const searchName = encodeURIComponent(trimmedName);
+        // First try case-insensitive exact match ($eqi supported in Strapi v5)
         const existing = await strapiRequest(
-          `/api/granthas?filters[GranthaName][$eq]=${searchName}`
+          `/api/granthas?filters[GranthaName][$eqi]=${searchName}&fields[0]=documentId&fields[1]=GranthaName`
         );
         existingDocId = existing?.data?.[0]?.documentId;
       } catch {

@@ -100,6 +100,7 @@ export default function ManthrasPage() {
   const [filterSection, setFilterSection] = useState("__all__");
   // All sections start expanded; clicking a section header collapses it
   const [collapsedSections, setCollapsedSections] = useState<Set<string>>(new Set());
+  const [fetchingEditDocId, setFetchingEditDocId] = useState<string | null>(null);
   function toggleSection(key: string) {
     setCollapsedSections((prev) => {
       const next = new Set(prev);
@@ -222,8 +223,8 @@ export default function ManthrasPage() {
   }
 
   function openEdit(item: any) {
-    setEditingItem(item);
     if (item._isDraft) {
+      setEditingItem(item);
       setEditingDraftId(item._draftId);
       const d = item._draftData;
       setFormData({
@@ -235,32 +236,43 @@ export default function ManthrasPage() {
         Teekas: d.Teekas || [],
         wordMeanings: (d.wordMeanings || []).map((w: WordMeaning) => ({ ...w, _id: uid() })),
       });
+      setFormOpen(true);
     } else {
-      setEditingDraftId(null);
-      setFormData({
-        ShlokaManthraNumber: item.ShlokaManthraNumber || "",
-        order: item.order != null ? String(item.order) : "",
-        section: item.Section?.documentId || item.section?.documentId || "",
-        ShlokaManthraEntry: unpackOtherTranslation(item.ShlokaManthraEntry),
-        BhashyamEntry: unpackOtherTranslation(item.BhashyamEntry),
-        // Strapi returns Teekas with a nested `teeka` relation.
-        // Preserve the teeka object (with documentId) so BhashyaEntryFields can
-        // show the correct dropdown selection and publish uses the stored documentId.
-        Teekas: (item.Teekas || []).map((t: any) => ({
-          teeka: t.teeka ? {
-            id: t.teeka.id,
-            documentId: t.teeka.documentId,
-            TeekaName: t.teeka.TeekaName || "",
-            TeekaAuthor: t.teeka.TeekaAuthor || undefined,
-          } : null,
-          TeekaName: t.teeka?.TeekaName || t.TeekaName || "",
-          TeekaAuthor: t.teeka?.TeekaAuthor || t.TeekaAuthor || "",
-          TeekaEntry: t.TeekaEntry || {},
-        })),
-        wordMeanings: (item.wordMeanings || []).map((w: WordMeaning) => ({ ...w, _id: uid() })),
-      });
+      // The list only fetches lightweight data (no bhashyam/teekas/OtherTranslations).
+      // Fetch the full manthra detail before opening the edit form.
+      setFetchingEditDocId(item.documentId);
+      fetch(`/api/strapi/manthras/${item.documentId}`)
+        .then((r) => r.json())
+        .then((resp) => {
+          const fullItem = resp.data ?? resp;
+          setEditingItem(fullItem);
+          setEditingDraftId(null);
+          setFormData({
+            ShlokaManthraNumber: fullItem.ShlokaManthraNumber || "",
+            order: fullItem.order != null ? String(fullItem.order) : "",
+            section: fullItem.Section?.documentId || fullItem.section?.documentId || "",
+            ShlokaManthraEntry: unpackOtherTranslation(fullItem.ShlokaManthraEntry),
+            BhashyamEntry: unpackOtherTranslation(fullItem.BhashyamEntry),
+            Teekas: (fullItem.Teekas || []).map((t: any) => ({
+              teeka: t.teeka ? {
+                id: t.teeka.id,
+                documentId: t.teeka.documentId,
+                TeekaName: t.teeka.TeekaName || "",
+                TeekaAuthor: t.teeka.TeekaAuthor || undefined,
+              } : null,
+              TeekaName: t.teeka?.TeekaName || t.TeekaName || "",
+              TeekaAuthor: t.teeka?.TeekaAuthor || t.TeekaAuthor || "",
+              TeekaEntry: t.TeekaEntry || {},
+            })),
+            wordMeanings: (fullItem.wordMeanings || []).map((w: WordMeaning) => ({ ...w, _id: uid() })),
+          });
+          setFormOpen(true);
+        })
+        .catch((err) => {
+          toast({ variant: "destructive", title: "Error loading manthra", description: err.message });
+        })
+        .finally(() => setFetchingEditDocId(null));
     }
-    setFormOpen(true);
   }
 
   function handleSubmit(e: React.FormEvent) {
@@ -558,7 +570,9 @@ export default function ManthrasPage() {
                             <td className="px-4 py-3 text-muted-foreground text-sm">{m.order ?? "—"}</td>
                             <td className="px-4 py-3">
                               <div className="flex justify-end gap-1">
-                                <Button size="sm" variant="ghost" onClick={(e) => { e.stopPropagation(); openEdit(m); }} data-testid={`button-edit-${m.documentId}`}><Pencil className="w-3.5 h-3.5" /></Button>
+                                <Button size="sm" variant="ghost" onClick={(e) => { e.stopPropagation(); openEdit(m); }} disabled={fetchingEditDocId === m.documentId} data-testid={`button-edit-${m.documentId}`}>
+                                  {fetchingEditDocId === m.documentId ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Pencil className="w-3.5 h-3.5" />}
+                                </Button>
                                 <Button size="sm" variant="ghost" className="text-destructive hover:text-destructive" onClick={(e) => { e.stopPropagation(); setDeleteTarget(m); }} data-testid={`button-delete-${m.documentId}`}><Trash2 className="w-3.5 h-3.5" /></Button>
                               </div>
                             </td>

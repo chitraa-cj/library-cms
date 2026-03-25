@@ -360,6 +360,25 @@ export function createStrapiRouter() {
   });
 
   // ── Manthras: fetch directly from /api/manthras ──
+
+  // Lightweight populate — only what's needed to render the list rows.
+  // Omits heavy bhashyam / teeka / OtherTranslations content so that all
+  // pages fit well within response-size limits and Section.grantha is
+  // reliably populated for every record (Strapi v5 silently drops nested
+  // sub-relations when individual record payloads are very large).
+  const MANTHRA_LIST_POPULATE = [
+    "populate[Section][fields][0]=id",
+    "populate[Section][fields][1]=documentId",
+    "populate[Section][fields][2]=title",
+    "populate[Section][fields][3]=type",
+    "populate[Section][populate][grantha][fields][0]=id",
+    "populate[Section][populate][grantha][fields][1]=documentId",
+    "populate[Section][populate][grantha][fields][2]=GranthaName",
+    "populate[ShlokaManthraEntry][fields][0]=SanskritTextEntry",
+    "pagination[pageSize]=100",
+  ].join("&");
+
+  // Full populate — used only for the single-manthra detail fetch (edit form).
   const MANTHRA_POPULATE = [
     "populate[Section][fields][0]=id",
     "populate[Section][fields][1]=documentId",
@@ -372,7 +391,7 @@ export function createStrapiRouter() {
     "populate[BhashyamEntry][populate]=*",
     "populate[Teekas][populate][teeka][fields][0]=documentId&populate[Teekas][populate][teeka][fields][1]=TeekaName&populate[Teekas][populate][teeka][fields][2]=TeekaAuthor&populate[Teekas][populate][TeekaEntry][populate]=*",
     "populate[wordMeanings]=*",
-    "pagination[pageSize]=200",
+    "pagination[pageSize]=100",
   ].join("&");
 
   router.get("/manthras", async (_req, res) => {
@@ -388,7 +407,7 @@ export function createStrapiRouter() {
         };
       }
 
-      const firstPage = await strapiRequest(`/api/manthras?${MANTHRA_POPULATE}&pagination[page]=1`);
+      const firstPage = await strapiRequest(`/api/manthras?${MANTHRA_LIST_POPULATE}&pagination[page]=1`);
       const allManthras: any[] = (firstPage.data || []).map(normaliseManthra);
       const pageCount: number = firstPage.meta?.pagination?.pageCount ?? 1;
 
@@ -397,7 +416,7 @@ export function createStrapiRouter() {
         const pageNumbers = Array.from({ length: pageCount - 1 }, (_, i) => i + 2);
         const extraPages = await Promise.all(
           pageNumbers.map((p) =>
-            strapiRequest(`/api/manthras?${MANTHRA_POPULATE}&pagination[page]=${p}`)
+            strapiRequest(`/api/manthras?${MANTHRA_LIST_POPULATE}&pagination[page]=${p}`)
           )
         );
         for (const page of extraPages) {

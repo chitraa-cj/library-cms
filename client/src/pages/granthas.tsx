@@ -1484,6 +1484,39 @@ export default function GranthasPage() {
     return k?.manthras.find((x) => x.id === editingManthra.manthraId) ?? null;
   })();
 
+  // ---------- Validation ----------
+
+  function validateSectionTitles(): string[] {
+    const errors: string[] = [];
+    const L1name = structureConfig?.levelOneName || "Adhyaya";
+    const L2name = structureConfig?.levelTwoName || "Khanda";
+    const L3name = structureConfig?.levelThreeName || "Pada";
+    const levelTwoEnabled = structureConfig?.levelTwoEnabled !== false;
+    const levelThreeEnabled = !!structureConfig?.levelThreeEnabled;
+
+    adhyayas.forEach((a, ai) => {
+      if (!a.title?.trim()) {
+        errors.push(`${L1name} #${ai + 1} has no title`);
+      }
+      if (levelTwoEnabled) {
+        (a.khandas ?? []).forEach((k, ki) => {
+          if (k.title === "_default") return;
+          if (!k.title?.trim()) {
+            errors.push(`${L2name} #${ki + 1} inside "${a.title || `${L1name} #${ai + 1}`}" has no title`);
+          }
+          if (levelThreeEnabled) {
+            (k.padas ?? []).forEach((p, pi) => {
+              if (!p.title?.trim()) {
+                errors.push(`${L3name} #${pi + 1} inside "${k.title || `${L2name} #${ki + 1}`}" has no title`);
+              }
+            });
+          }
+        });
+      }
+    });
+    return errors;
+  }
+
   // ---------- Save / Delete / Publish ----------
 
   function handleSaveAndExit() {
@@ -2409,7 +2442,21 @@ export default function GranthasPage() {
               <ArrowLeft className="w-4 h-4 mr-2" />
               Back
             </Button>
-            <Button onClick={() => setStep(3)} data-testid="button-next-content">
+            <Button
+              onClick={() => {
+                const errs = validateSectionTitles();
+                if (errs.length > 0) {
+                  toast({
+                    variant: "destructive",
+                    title: "Some sections are missing titles",
+                    description: errs.slice(0, 3).join(" • ") + (errs.length > 3 ? ` (+${errs.length - 3} more)` : ""),
+                  });
+                  return;
+                }
+                setStep(3);
+              }}
+              data-testid="button-next-content"
+            >
               Next: Build Content
               <ChevronRight className="w-4 h-4 ml-2" />
             </Button>

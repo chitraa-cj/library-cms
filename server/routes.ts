@@ -196,6 +196,13 @@ async function findOrCreateSection(
   granthaDocId: string,
   parentDocId: string | undefined
 ): Promise<string | undefined> {
+  // Guard: never create or look up a section with a blank title.
+  // Blank-titled sections corrupt the hierarchy and are impossible to reliably dedup.
+  if (!title || !title.trim()) {
+    console.warn(`[publish] Skipping section with blank title (type=${type}, order=${order}) — not publishing to Strapi`);
+    return undefined;
+  }
+
   // Search for an existing section that matches title + grantha + parent.
   // Use $eqi (case-insensitive) so "Prathama Adhyaya" and "prathama adhyaya" are treated as the same section.
   try {
@@ -211,16 +218,17 @@ async function findOrCreateSection(
     const existingRecord = existing?.data?.[0];
     const existingDocId: string | undefined = existingRecord?.documentId;
     if (existingDocId) {
-      // If the existing section has no type but we know one now, update it (best-effort)
-      if (type && !existingRecord?.type) {
+      // Correct the type whenever it doesn't match — not just when it's missing.
+      // This repairs sections that were created with the wrong type in an earlier publish.
+      if (type && existingRecord?.type !== type) {
         try {
           await strapiRequest(`/api/sections/${existingDocId}`, {
             method: "PUT",
             body: JSON.stringify({ data: { type } }),
           });
-          console.log(`[publish] Section "${title}" (${existingDocId}) updated type → ${type}`);
+          console.log(`[publish] Section "${title}" (${existingDocId}) type corrected: ${existingRecord?.type || "(none)"} → ${type}`);
         } catch (e: any) {
-          console.warn(`[publish] Section "${title}" type update failed (may be enum mismatch): ${e.message}`);
+          console.warn(`[publish] Section "${title}" type correction failed: ${e.message}`);
         }
       } else {
         console.log(`[publish] Section "${title}" already exists: ${existingDocId} — reusing`);
@@ -232,7 +240,7 @@ async function findOrCreateSection(
   }
 
   // Not found — create a new section
-  const payload: Record<string, any> = { title, grantha: granthaDocId };
+  const payload: Record<string, any> = { title: title.trim(), grantha: granthaDocId };
   if (type) payload.type = type;
   if (order != null) payload.order = order;
   if (parentDocId) payload.parent = parentDocId;
@@ -493,6 +501,12 @@ async function publishGranthaWithHierarchy(
 
   if (Array.isArray(hierarchy) && granthaDocId) {
     for (const adhyaya of hierarchy) {
+      // Guard: skip L1 sections with blank titles — they cannot be deduped and corrupt Strapi
+      if (!adhyaya.title?.trim()) {
+        console.warn(`[publish] Skipping L1 section with blank title (order=${adhyaya.order}) — fix the title in the portal before publishing`);
+        continue;
+      }
+
       let adhyayaDocId: string | undefined;
       try {
         adhyayaDocId = await findOrCreateSection(
@@ -502,12 +516,19 @@ async function publishGranthaWithHierarchy(
         console.error(`[publish] Section L1 "${adhyaya.title}" failed:`, e.message);
         continue;
       }
+      // Skip manthras for this adhyaya if the section couldn't be created/found
+      if (!adhyayaDocId) continue;
 
       for (const khanda of (adhyaya.khandas ?? [])) {
         const isDefaultKhanda = khanda.title === "_default" || !levelTwoEnabled;
         let khandaDocId: string | undefined;
 
         if (!isDefaultKhanda) {
+          // Guard: skip L2 sections with blank titles
+          if (!khanda.title?.trim()) {
+            console.warn(`[publish] Skipping L2 section with blank title under "${adhyaya.title}" (order=${khanda.order}) — fix the title in the portal before publishing`);
+            continue;
+          }
           try {
             khandaDocId = await findOrCreateSection(
               khanda.title, L2type, khanda.order ?? undefined, granthaDocId, adhyayaDocId
@@ -516,12 +537,19 @@ async function publishGranthaWithHierarchy(
             console.error(`[publish] Section L2 "${khanda.title}" failed:`, e.message);
             continue;
           }
+          // Skip manthras for this khanda if the section couldn't be created/found
+          if (!khandaDocId) continue;
         } else {
           khandaDocId = adhyayaDocId;
         }
 
         if (levelThreeEnabled && Array.isArray(khanda.padas) && khanda.padas.length > 0) {
           for (const pada of khanda.padas) {
+            // Guard: skip L3 sections with blank titles
+            if (!pada.title?.trim()) {
+              console.warn(`[publish] Skipping L3 section with blank title under "${khanda.title}" (order=${pada.order}) — fix the title in the portal before publishing`);
+              continue;
+            }
             let padaDocId: string | undefined;
             try {
               padaDocId = await findOrCreateSection(
@@ -531,6 +559,7 @@ async function publishGranthaWithHierarchy(
               console.warn(`[publish] Pada "${pada.title}" failed:`, e.message);
               continue;
             }
+            if (!padaDocId) continue;
             for (const manthra of (pada.manthras ?? [])) {
               await publishManthra(manthra, padaDocId);
             }

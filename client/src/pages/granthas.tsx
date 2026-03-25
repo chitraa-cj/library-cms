@@ -61,6 +61,7 @@ import {
   Send,
   FileText,
   ExternalLink,
+  Eye,
 } from "lucide-react";
 
 const STRAPI_ADMIN = "http://13.53.121.15:1337/admin";
@@ -299,6 +300,7 @@ function hasManthraContent(m: ManthraNode) {
 function GranthaCard({
   item,
   onEdit,
+  onView,
   onDelete,
   onPublish,
   isPublishing,
@@ -306,6 +308,7 @@ function GranthaCard({
 }: {
   item: any;
   onEdit: () => void;
+  onView?: (item: any) => void;
   onDelete: () => void;
   onPublish: () => void;
   isPublishing: boolean;
@@ -369,17 +372,16 @@ function GranthaCard({
               )}
             </Button>
           )}
-          {!isDraft && item.documentId && (
-            <a
-              href={strapiAdminUrl("api::grantha.grantha", item.documentId)}
-              target="_blank"
-              rel="noopener noreferrer"
-              title="Open in Strapi CMS"
+          {!isDraft && item.documentId && onView && (
+            <button
+              type="button"
+              onClick={() => onView(item)}
+              title="View content (read-only)"
               className="inline-flex items-center justify-center h-7 w-7 rounded-md hover:bg-muted text-muted-foreground hover:text-foreground transition-colors"
-              data-testid={`link-cms-${item.documentId}`}
+              data-testid={`button-view-${item.documentId}`}
             >
               <ExternalLink className="w-3.5 h-3.5" />
-            </a>
+            </button>
           )}
           {canDelete && (
             <Button
@@ -514,6 +516,7 @@ export default function GranthasPage() {
 
   const [view, setView] = useState<"list" | "form">("list");
   const [step, setStep] = useState<1 | 2 | 3>(1);
+  const [viewOnly, setViewOnly] = useState(false);
   const [editingItem, setEditingItem] = useState<any>(null);
   const [editingDraftId, setEditingDraftId] = useState<number | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<any>(null);
@@ -745,6 +748,7 @@ export default function GranthasPage() {
     setAdhyayas([]);
     setEditingDraftId(null);
     setEditingItem(null);
+    setViewOnly(false);
   }
 
   function openAdd() {
@@ -1133,6 +1137,12 @@ export default function GranthasPage() {
     }
     setStep(1);
     setView("form");
+  }
+
+  async function openView(item: any) {
+    setViewOnly(true);
+    await openEdit(item);
+    setStep(3);
   }
 
   // ---------- Teeka handlers ----------
@@ -1646,6 +1656,7 @@ export default function GranthasPage() {
                 key={item.documentId || item._draftId || idx}
                 item={item}
                 onEdit={() => openEdit(item)}
+                onView={openView}
                 onDelete={() => setDeleteTarget(item)}
                 onPublish={() => handlePublish(item)}
                 isPublishing={
@@ -1693,14 +1704,29 @@ export default function GranthasPage() {
 
   return (
     <div className="p-6 lg:p-8 max-w-4xl mx-auto">
-      {/* Step indicator */}
-      <div className="flex items-end gap-0 mb-10">
-        <StepDot n={1} active={step === 1} done={step > 1} label="Configuration" />
-        <div className={`flex-1 h-0.5 mb-5 transition-colors ${step > 1 ? "bg-primary" : "bg-border"}`} />
-        <StepDot n={2} active={step === 2} done={step > 2} label="Book Structure" />
-        <div className={`flex-1 h-0.5 mb-5 transition-colors ${step > 2 ? "bg-primary" : "bg-border"}`} />
-        <StepDot n={3} active={step === 3} done={false} label="Build Content" />
-      </div>
+      {/* View-only banner */}
+      {viewOnly && (
+        <div className="flex items-center justify-between gap-3 mb-6 px-4 py-3 rounded-lg bg-muted/60 border border-border">
+          <div className="flex items-center gap-2 text-sm text-muted-foreground">
+            <Eye className="w-4 h-4 shrink-0" />
+            <span>You are viewing <strong>{formData.GranthaName}</strong> in read-only mode. No changes can be made.</span>
+          </div>
+          <Button size="sm" variant="outline" onClick={() => { setView("list"); resetForm(); }} data-testid="button-close-view">
+            Close
+          </Button>
+        </div>
+      )}
+
+      {/* Step indicator — hidden in view-only mode */}
+      {!viewOnly && (
+        <div className="flex items-end gap-0 mb-10">
+          <StepDot n={1} active={step === 1} done={step > 1} label="Configuration" />
+          <div className={`flex-1 h-0.5 mb-5 transition-colors ${step > 1 ? "bg-primary" : "bg-border"}`} />
+          <StepDot n={2} active={step === 2} done={step > 2} label="Book Structure" />
+          <div className={`flex-1 h-0.5 mb-5 transition-colors ${step > 2 ? "bg-primary" : "bg-border"}`} />
+          <StepDot n={3} active={step === 3} done={false} label="Build Content" />
+        </div>
+      )}
 
       {step === 1 ? (
         /* ====== STEP 1 ====== */
@@ -2414,15 +2440,17 @@ export default function GranthasPage() {
                         : `${flatLeafCount} ${leaf.toLowerCase()}${flatLeafCount !== 1 ? "s" : ""}`
                       }
                     </span>
-                    <Button
-                      size="icon"
-                      variant="ghost"
-                      className="h-7 w-7 text-destructive hover:text-destructive"
-                      onClick={(e) => { e.stopPropagation(); removeAdhyaya(adhyaya.id); }}
-                      data-testid={`button-remove-adhyaya-${aIdx}`}
-                    >
-                      <Trash2 className="w-3.5 h-3.5" />
-                    </Button>
+                    {!viewOnly && (
+                      <Button
+                        size="icon"
+                        variant="ghost"
+                        className="h-7 w-7 text-destructive hover:text-destructive"
+                        onClick={(e) => { e.stopPropagation(); removeAdhyaya(adhyaya.id); }}
+                        data-testid={`button-remove-adhyaya-${aIdx}`}
+                      >
+                        <Trash2 className="w-3.5 h-3.5" />
+                      </Button>
+                    )}
                     {adhyaya.expanded
                       ? <ChevronDown className="w-4 h-4 text-muted-foreground" />
                       : <ChevronRight className="w-4 h-4 text-muted-foreground" />}
@@ -2444,34 +2472,40 @@ export default function GranthasPage() {
                             <Hash className="w-3.5 h-3.5 text-muted-foreground shrink-0" />
                             <span className="text-sm flex-1">{manthra.title}</span>
                             {hasContent && <FileText className="w-3.5 h-3.5 text-primary" />}
-                            <Button
-                              size="icon" variant="ghost"
-                              className="h-6 w-6 opacity-0 group-hover:opacity-100 transition-opacity text-muted-foreground hover:text-foreground"
-                              onClick={() => setEditingManthra({ adhyayaId: adhyaya.id, khandaId: adhyaya.khandas[0].id, manthraId: manthra.id, strapiDocumentId: manthra.strapiDocumentId })}
-                              data-testid={`button-edit-manthra-${aIdx}-0-${mIdx}`}
-                            >
-                              <Pencil className="w-3 h-3" />
-                            </Button>
-                            <Button
-                              size="icon" variant="ghost"
-                              className="h-6 w-6 opacity-0 group-hover:opacity-100 transition-opacity text-destructive hover:text-destructive"
-                              onClick={() => removeManthra(adhyaya.id, adhyaya.khandas[0].id, manthra.id)}
-                              data-testid={`button-remove-manthra-${aIdx}-0-${mIdx}`}
-                            >
-                              <X className="w-3 h-3" />
-                            </Button>
+                            {!viewOnly && (
+                              <>
+                                <Button
+                                  size="icon" variant="ghost"
+                                  className="h-6 w-6 opacity-0 group-hover:opacity-100 transition-opacity text-muted-foreground hover:text-foreground"
+                                  onClick={() => setEditingManthra({ adhyayaId: adhyaya.id, khandaId: adhyaya.khandas[0].id, manthraId: manthra.id, strapiDocumentId: manthra.strapiDocumentId })}
+                                  data-testid={`button-edit-manthra-${aIdx}-0-${mIdx}`}
+                                >
+                                  <Pencil className="w-3 h-3" />
+                                </Button>
+                                <Button
+                                  size="icon" variant="ghost"
+                                  className="h-6 w-6 opacity-0 group-hover:opacity-100 transition-opacity text-destructive hover:text-destructive"
+                                  onClick={() => removeManthra(adhyaya.id, adhyaya.khandas[0].id, manthra.id)}
+                                  data-testid={`button-remove-manthra-${aIdx}-0-${mIdx}`}
+                                >
+                                  <X className="w-3 h-3" />
+                                </Button>
+                              </>
+                            )}
                           </div>
                         );
                       })}
-                      <Button
-                        size="sm" variant="ghost"
-                        className="w-full justify-start text-muted-foreground hover:text-foreground text-xs h-7 mt-1 pl-0"
-                        onClick={() => addManthra(adhyaya.id, adhyaya.khandas[0].id)}
-                        data-testid={`button-add-manthra-${aIdx}-0`}
-                      >
-                        <Plus className="w-3.5 h-3.5 mr-1" />
-                        Add {leaf}
-                      </Button>
+                      {!viewOnly && (
+                        <Button
+                          size="sm" variant="ghost"
+                          className="w-full justify-start text-muted-foreground hover:text-foreground text-xs h-7 mt-1 pl-0"
+                          onClick={() => addManthra(adhyaya.id, adhyaya.khandas[0].id)}
+                          data-testid={`button-add-manthra-${aIdx}-0`}
+                        >
+                          <Plus className="w-3.5 h-3.5 mr-1" />
+                          Add {leaf}
+                        </Button>
+                      )}
                     </div>
                   </div>
                 )}
@@ -2503,22 +2537,24 @@ export default function GranthasPage() {
                                 : `${khanda.manthras.length} ${leaf.toLowerCase()}${khanda.manthras.length !== 1 ? "s" : ""}`
                               }
                             </span>
-                            <Button
-                              size="icon"
-                              variant="ghost"
-                              className="h-6 w-6 text-destructive hover:text-destructive"
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                const totalManthras = structureConfig.levelThreeEnabled
-                                  ? (khanda.padas ?? []).reduce((s, p) => s + p.manthras.length, 0)
-                                  : khanda.manthras.length;
-                                if (totalManthras > 0 && !window.confirm(`Delete "${khanda.title}" and all ${totalManthras} ${leaf.toLowerCase()}${totalManthras !== 1 ? "s" : ""} inside? This cannot be undone.`)) return;
-                                removeKhanda(adhyaya.id, khanda.id);
-                              }}
-                              data-testid={`button-remove-khanda-${aIdx}-${kIdx}`}
-                            >
-                              <Trash2 className="w-3 h-3" />
-                            </Button>
+                            {!viewOnly && (
+                              <Button
+                                size="icon"
+                                variant="ghost"
+                                className="h-6 w-6 text-destructive hover:text-destructive"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  const totalManthras = structureConfig.levelThreeEnabled
+                                    ? (khanda.padas ?? []).reduce((s, p) => s + p.manthras.length, 0)
+                                    : khanda.manthras.length;
+                                  if (totalManthras > 0 && !window.confirm(`Delete "${khanda.title}" and all ${totalManthras} ${leaf.toLowerCase()}${totalManthras !== 1 ? "s" : ""} inside? This cannot be undone.`)) return;
+                                  removeKhanda(adhyaya.id, khanda.id);
+                                }}
+                                data-testid={`button-remove-khanda-${aIdx}-${kIdx}`}
+                              >
+                                <Trash2 className="w-3 h-3" />
+                              </Button>
+                            )}
                             {khanda.expanded
                               ? <ChevronDown className="w-3.5 h-3.5 text-muted-foreground" />
                               : <ChevronRight className="w-3.5 h-3.5 text-muted-foreground" />}
@@ -2546,14 +2582,16 @@ export default function GranthasPage() {
                                     <span className="text-xs text-muted-foreground">
                                       {pada.manthras.length} {leaf.toLowerCase()}{pada.manthras.length !== 1 ? "s" : ""}
                                     </span>
-                                    <Button
-                                      size="icon" variant="ghost"
-                                      className="h-5 w-5 text-destructive hover:text-destructive"
-                                      onClick={(e) => { e.stopPropagation(); removePada(adhyaya.id, khanda.id, pada.id); }}
-                                      data-testid={`button-remove-pada-${aIdx}-${kIdx}-${pIdx}`}
-                                    >
-                                      <Trash2 className="w-3 h-3" />
-                                    </Button>
+                                    {!viewOnly && (
+                                      <Button
+                                        size="icon" variant="ghost"
+                                        className="h-5 w-5 text-destructive hover:text-destructive"
+                                        onClick={(e) => { e.stopPropagation(); removePada(adhyaya.id, khanda.id, pada.id); }}
+                                        data-testid={`button-remove-pada-${aIdx}-${kIdx}-${pIdx}`}
+                                      >
+                                        <Trash2 className="w-3 h-3" />
+                                      </Button>
+                                    )}
                                     {pada.expanded
                                       ? <ChevronDown className="w-3 h-3 text-muted-foreground" />
                                       : <ChevronRight className="w-3 h-3 text-muted-foreground" />}
@@ -2569,48 +2607,56 @@ export default function GranthasPage() {
                                             <Hash className="w-3.5 h-3.5 text-muted-foreground shrink-0" />
                                             <span className="text-sm flex-1">{manthra.title}</span>
                                             {hasContent && <FileText className="w-3.5 h-3.5 text-primary" />}
-                                            <Button
-                                              size="icon" variant="ghost"
-                                              className="h-6 w-6 opacity-0 group-hover:opacity-100 transition-opacity text-muted-foreground hover:text-foreground"
-                                              onClick={() => setEditingManthra({ adhyayaId: adhyaya.id, khandaId: khanda.id, padaId: pada.id, manthraId: manthra.id, strapiDocumentId: manthra.strapiDocumentId })}
-                                              data-testid={`button-edit-manthra-${aIdx}-${kIdx}-${pIdx}-${mIdx}`}
-                                            >
-                                              <Pencil className="w-3 h-3" />
-                                            </Button>
-                                            <Button
-                                              size="icon" variant="ghost"
-                                              className="h-6 w-6 opacity-0 group-hover:opacity-100 transition-opacity text-destructive hover:text-destructive"
-                                              onClick={() => removeManthra(adhyaya.id, khanda.id, manthra.id, pada.id)}
-                                              data-testid={`button-remove-manthra-${aIdx}-${kIdx}-${pIdx}-${mIdx}`}
-                                            >
-                                              <X className="w-3 h-3" />
-                                            </Button>
+                                            {!viewOnly && (
+                                              <>
+                                                <Button
+                                                  size="icon" variant="ghost"
+                                                  className="h-6 w-6 opacity-0 group-hover:opacity-100 transition-opacity text-muted-foreground hover:text-foreground"
+                                                  onClick={() => setEditingManthra({ adhyayaId: adhyaya.id, khandaId: khanda.id, padaId: pada.id, manthraId: manthra.id, strapiDocumentId: manthra.strapiDocumentId })}
+                                                  data-testid={`button-edit-manthra-${aIdx}-${kIdx}-${pIdx}-${mIdx}`}
+                                                >
+                                                  <Pencil className="w-3 h-3" />
+                                                </Button>
+                                                <Button
+                                                  size="icon" variant="ghost"
+                                                  className="h-6 w-6 opacity-0 group-hover:opacity-100 transition-opacity text-destructive hover:text-destructive"
+                                                  onClick={() => removeManthra(adhyaya.id, khanda.id, manthra.id, pada.id)}
+                                                  data-testid={`button-remove-manthra-${aIdx}-${kIdx}-${pIdx}-${mIdx}`}
+                                                >
+                                                  <X className="w-3 h-3" />
+                                                </Button>
+                                              </>
+                                            )}
                                           </div>
                                         );
                                       })}
-                                      <Button
-                                        size="sm" variant="ghost"
-                                        className="w-full justify-start text-muted-foreground hover:text-foreground text-xs h-7 mt-1 pl-0"
-                                        onClick={() => addManthra(adhyaya.id, khanda.id, pada.id)}
-                                        data-testid={`button-add-manthra-${aIdx}-${kIdx}-${pIdx}`}
-                                      >
-                                        <Plus className="w-3.5 h-3.5 mr-1" />
-                                        Add {leaf}
-                                      </Button>
+                                      {!viewOnly && (
+                                        <Button
+                                          size="sm" variant="ghost"
+                                          className="w-full justify-start text-muted-foreground hover:text-foreground text-xs h-7 mt-1 pl-0"
+                                          onClick={() => addManthra(adhyaya.id, khanda.id, pada.id)}
+                                          data-testid={`button-add-manthra-${aIdx}-${kIdx}-${pIdx}`}
+                                        >
+                                          <Plus className="w-3.5 h-3.5 mr-1" />
+                                          Add {leaf}
+                                        </Button>
+                                      )}
                                     </div>
                                   </div>
                                 )}
                               </div>
                             ))}
-                            <Button
-                              size="sm" variant="outline"
-                              className="w-full border-dashed text-muted-foreground hover:text-foreground mt-1"
-                              onClick={() => addPada(adhyaya.id, khanda.id)}
-                              data-testid={`button-add-pada-${aIdx}-${kIdx}`}
-                            >
-                              <Plus className="w-3.5 h-3.5 mr-1.5" />
-                              Add New {L3}
-                            </Button>
+                            {!viewOnly && (
+                              <Button
+                                size="sm" variant="outline"
+                                className="w-full border-dashed text-muted-foreground hover:text-foreground mt-1"
+                                onClick={() => addPada(adhyaya.id, khanda.id)}
+                                data-testid={`button-add-pada-${aIdx}-${kIdx}`}
+                              >
+                                <Plus className="w-3.5 h-3.5 mr-1.5" />
+                                Add New {L3}
+                              </Button>
+                            )}
                           </div>
                         )}
 
@@ -2632,35 +2678,41 @@ export default function GranthasPage() {
                                         <FileText className="w-3.5 h-3.5" />
                                       </span>
                                     )}
-                                    <Button
-                                      size="icon" variant="ghost"
-                                      className="h-6 w-6 opacity-0 group-hover:opacity-100 transition-opacity text-muted-foreground hover:text-foreground"
-                                      onClick={() => setEditingManthra({ adhyayaId: adhyaya.id, khandaId: khanda.id, manthraId: manthra.id, strapiDocumentId: manthra.strapiDocumentId })}
-                                      data-testid={`button-edit-manthra-${aIdx}-${kIdx}-${mIdx}`}
-                                      title="Enter text content"
-                                    >
-                                      <Pencil className="w-3 h-3" />
-                                    </Button>
-                                    <Button
-                                      size="icon" variant="ghost"
-                                      className="h-6 w-6 opacity-0 group-hover:opacity-100 transition-opacity text-destructive hover:text-destructive"
-                                      onClick={() => removeManthra(adhyaya.id, khanda.id, manthra.id)}
-                                      data-testid={`button-remove-manthra-${aIdx}-${kIdx}-${mIdx}`}
-                                    >
-                                      <X className="w-3 h-3" />
-                                    </Button>
+                                    {!viewOnly && (
+                                      <>
+                                        <Button
+                                          size="icon" variant="ghost"
+                                          className="h-6 w-6 opacity-0 group-hover:opacity-100 transition-opacity text-muted-foreground hover:text-foreground"
+                                          onClick={() => setEditingManthra({ adhyayaId: adhyaya.id, khandaId: khanda.id, manthraId: manthra.id, strapiDocumentId: manthra.strapiDocumentId })}
+                                          data-testid={`button-edit-manthra-${aIdx}-${kIdx}-${mIdx}`}
+                                          title="Enter text content"
+                                        >
+                                          <Pencil className="w-3 h-3" />
+                                        </Button>
+                                        <Button
+                                          size="icon" variant="ghost"
+                                          className="h-6 w-6 opacity-0 group-hover:opacity-100 transition-opacity text-destructive hover:text-destructive"
+                                          onClick={() => removeManthra(adhyaya.id, khanda.id, manthra.id)}
+                                          data-testid={`button-remove-manthra-${aIdx}-${kIdx}-${mIdx}`}
+                                        >
+                                          <X className="w-3 h-3" />
+                                        </Button>
+                                      </>
+                                    )}
                                   </div>
                                 );
                               })}
-                              <Button
-                                size="sm" variant="ghost"
-                                className="w-full justify-start text-muted-foreground hover:text-foreground text-xs h-7 mt-1 pl-0"
-                                onClick={() => addManthra(adhyaya.id, khanda.id)}
-                                data-testid={`button-add-manthra-${aIdx}-${kIdx}`}
-                              >
-                                <Plus className="w-3.5 h-3.5 mr-1" />
-                                Add {leaf}
-                              </Button>
+                              {!viewOnly && (
+                                <Button
+                                  size="sm" variant="ghost"
+                                  className="w-full justify-start text-muted-foreground hover:text-foreground text-xs h-7 mt-1 pl-0"
+                                  onClick={() => addManthra(adhyaya.id, khanda.id)}
+                                  data-testid={`button-add-manthra-${aIdx}-${kIdx}`}
+                                >
+                                  <Plus className="w-3.5 h-3.5 mr-1" />
+                                  Add {leaf}
+                                </Button>
+                              )}
                             </div>
                           </div>
                         )}
@@ -2668,22 +2720,24 @@ export default function GranthasPage() {
                       );
                     })}
 
-                    <Button
-                      size="sm"
-                      variant="outline"
-                      className="w-full border-dashed text-muted-foreground hover:text-foreground"
-                      onClick={() => addKhanda(adhyaya.id)}
-                      data-testid={`button-add-khanda-${aIdx}`}
-                    >
-                      <Plus className="w-3.5 h-3.5 mr-1.5" />
-                      Add New {L2}
-                    </Button>
+                    {!viewOnly && (
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        className="w-full border-dashed text-muted-foreground hover:text-foreground"
+                        onClick={() => addKhanda(adhyaya.id)}
+                        data-testid={`button-add-khanda-${aIdx}`}
+                      >
+                        <Plus className="w-3.5 h-3.5 mr-1.5" />
+                        Add New {L2}
+                      </Button>
+                    )}
                   </div>
                 )}
               </div>
             ); })}
 
-            {structureConfig.levelOneEnabled && (
+            {structureConfig.levelOneEnabled && !viewOnly && (
               <Button
                 variant="outline"
                 className="w-full border-dashed text-muted-foreground hover:text-foreground"
@@ -2697,14 +2751,23 @@ export default function GranthasPage() {
           </div>
 
           <div className="flex justify-between items-center pt-2">
-            <Button variant="outline" onClick={() => setStep(2)} data-testid="button-back-to-structure">
-              <ArrowLeft className="w-4 h-4 mr-2" />
-              Back
-            </Button>
-            <Button onClick={handleSaveAndExit} disabled={saveDraft.isPending} data-testid="button-save-exit">
-              {saveDraft.isPending && <Loader2 className="w-4 h-4 mr-2 animate-spin" />}
-              Save & Exit
-            </Button>
+            {viewOnly ? (
+              <Button variant="outline" onClick={() => { setView("list"); resetForm(); }} data-testid="button-close-view-bottom">
+                <ArrowLeft className="w-4 h-4 mr-2" />
+                Back to List
+              </Button>
+            ) : (
+              <>
+                <Button variant="outline" onClick={() => setStep(2)} data-testid="button-back-to-structure">
+                  <ArrowLeft className="w-4 h-4 mr-2" />
+                  Back
+                </Button>
+                <Button onClick={handleSaveAndExit} disabled={saveDraft.isPending} data-testid="button-save-exit">
+                  {saveDraft.isPending && <Loader2 className="w-4 h-4 mr-2 animate-spin" />}
+                  Save & Exit
+                </Button>
+              </>
+            )}
           </div>
         </div>
       )}

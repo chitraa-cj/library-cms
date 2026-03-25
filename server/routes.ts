@@ -259,41 +259,48 @@ async function updateExistingManthra(
   console.log(`[publish] Manthra "${label}" updated: ${strapiDocumentId}`);
 }
 
-// Helper: create a manthra in Strapi if one with the same ShlokaManthraNumber+Section doesn't already exist.
-async function createOrSkipManthra(
+// Helper: create a manthra in Strapi if one with the same ShlokaManthraNumber+Section doesn't exist.
+// If one IS found, UPDATE it so that content changes (teeka entries, shloka text, etc.)
+// are never silently discarded.  A manthra can end up here without a stored strapiDocumentId
+// when the draft was created before Strapi IDs were synced back, but the manthra already
+// exists in Strapi — skipping it would throw away the user's edits.
+async function createOrUpdateManthra(
   mData: Record<string, any>,
   label: string
 ): Promise<void> {
   const sectionDocId: string | undefined = mData.Section;
   const number: string | undefined = mData.ShlokaManthraNumber;
 
-  // Deduplication: check by ShlokaManthraNumber first, then by order.
-  // The order-based check catches cases where another user created the same manthra
-  // under a different number (e.g. "Mantra 1.1.1" vs "Manthra 1.1.1" at order=1).
   if (sectionDocId) {
     const s = encodeURIComponent(sectionDocId);
-    // 1) Exact number match
+
+    // 1) Exact ShlokaManthraNumber match within the same section
     if (number) {
       try {
         const n = encodeURIComponent(number);
         const existing = await strapiRequest(
           `/api/manthras?filters[ShlokaManthraNumber][$eq]=${n}&filters[Section][documentId][$eq]=${s}&fields[0]=documentId`
         );
-        if ((existing?.data?.length ?? 0) > 0) {
-          console.log(`[publish] Manthra "${label}" already exists in section (by name) — skipping`);
+        const existingDocId: string | undefined = existing?.data?.[0]?.documentId;
+        if (existingDocId) {
+          console.log(`[publish] Manthra "${label}" already exists (by name) — updating instead of skipping`);
+          await updateExistingManthra(existingDocId, mData, label + " [auto-update]");
           return;
         }
-      } catch { /* ignore */ }
+      } catch { /* ignore lookup failure — fall through to create */ }
     }
-    // 2) Order match — different name but same position → likely a Strapi duplicate
+
+    // 2) Order match — same position → likely the same manthra entered under a slightly different label
     if (mData.order != null) {
       try {
         const o = encodeURIComponent(String(mData.order));
         const existingByOrder = await strapiRequest(
           `/api/manthras?filters[order][$eq]=${o}&filters[Section][documentId][$eq]=${s}&fields[0]=documentId`
         );
-        if ((existingByOrder?.data?.length ?? 0) > 0) {
-          console.log(`[publish] Manthra "${label}" already exists in section (by order=${mData.order}) — skipping duplicate`);
+        const existingDocId: string | undefined = existingByOrder?.data?.[0]?.documentId;
+        if (existingDocId) {
+          console.log(`[publish] Manthra "${label}" already exists (by order=${mData.order}) — updating instead of skipping`);
+          await updateExistingManthra(existingDocId, mData, label + " [auto-update by order]");
           return;
         }
       } catch { /* ignore */ }
@@ -506,7 +513,7 @@ async function publishGranthaWithHierarchy(
                 if (manthra.strapiDocumentId) {
                   await updateExistingManthra(manthra.strapiDocumentId, mData, manthra.title);
                 } else {
-                  await createOrSkipManthra(mData, manthra.title);
+                  await createOrUpdateManthra(mData, manthra.title);
                 }
               } catch (e: any) {
                 console.error(`[publish] Manthra "${manthra.title}" (L3) failed:`, e.message);
@@ -522,7 +529,7 @@ async function publishGranthaWithHierarchy(
               if (manthra.strapiDocumentId) {
                 await updateExistingManthra(manthra.strapiDocumentId, mData, manthra.title);
               } else {
-                await createOrSkipManthra(mData, manthra.title);
+                await createOrUpdateManthra(mData, manthra.title);
               }
             } catch (e: any) {
               console.error(`[publish] Manthra "${manthra.title}" FAILED:`, e.message);

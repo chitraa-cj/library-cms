@@ -2,6 +2,9 @@ import { Router } from "express";
 import { requireAuth } from "./auth";
 import { storage } from "./storage";
 import { execFile } from "node:child_process";
+import { writeFileSync, unlinkSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
 const STRAPI_URL = process.env.STRAPI_URL || "http://13.53.121.15:1337";
 const STRAPI_TOKEN = () => process.env.STRAPI_API_TOKEN || "";
@@ -23,13 +26,24 @@ function curlRequest(
       "-H", "Content-Type: application/json",
     ];
 
+    // Write the body to a temp file to avoid E2BIG when the payload is large
+    // (e.g. manthras with many teeka entries containing long Sanskrit blocks).
+    // curl's `--data @filepath` reads from file, bypassing the OS ARG_MAX limit.
+    let tmpFile: string | undefined;
     if (body) {
-      args.push("-d", body);
+      tmpFile = join(tmpdir(), `strapi_body_${Date.now()}_${Math.random().toString(36).slice(2)}.json`);
+      writeFileSync(tmpFile, body, "utf8");
+      args.push("--data", `@${tmpFile}`);
     }
 
     args.push(url);
 
     execFile("curl", args, { timeout: 25000, maxBuffer: 10 * 1024 * 1024 }, (err, stdout, stderr) => {
+      // Always clean up the temp file
+      if (tmpFile) {
+        try { unlinkSync(tmpFile); } catch { /* ignore */ }
+      }
+
       if (err && !stdout) {
         return reject(new Error(`curl failed: ${err.message} | stderr: ${stderr?.slice(0, 200)}`));
       }

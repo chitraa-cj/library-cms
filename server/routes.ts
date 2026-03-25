@@ -196,11 +196,12 @@ async function findOrCreateSection(
   granthaDocId: string,
   parentDocId: string | undefined
 ): Promise<string | undefined> {
-  // Search for an existing section that matches title + grantha + parent
+  // Search for an existing section that matches title + grantha + parent.
+  // Use $eqi (case-insensitive) so "Prathama Adhyaya" and "prathama adhyaya" are treated as the same section.
   try {
-    const t = encodeURIComponent(title);
+    const t = encodeURIComponent(title.trim());
     const g = encodeURIComponent(granthaDocId);
-    let url = `/api/sections?filters[title][$eq]=${t}&filters[grantha][documentId][$eq]=${g}&fields[0]=documentId&fields[1]=type`;
+    let url = `/api/sections?filters[title][$eqi]=${t}&filters[grantha][documentId][$eq]=${g}&fields[0]=documentId&fields[1]=type`;
     if (parentDocId) {
       url += `&filters[parent][documentId][$eq]=${encodeURIComponent(parentDocId)}`;
     } else {
@@ -251,12 +252,13 @@ async function updateExistingManthra(
   strapiDocumentId: string,
   mData: Record<string, any>,
   label: string
-): Promise<void> {
+): Promise<string> {
   await strapiRequest(`/api/manthras/${strapiDocumentId}`, {
     method: "PUT",
     body: JSON.stringify({ data: mData }),
   });
   console.log(`[publish] Manthra "${label}" updated: ${strapiDocumentId}`);
+  return strapiDocumentId;
 }
 
 // Helper: create a manthra in Strapi if one with the same ShlokaManthraNumber+Section doesn't exist.
@@ -264,28 +266,30 @@ async function updateExistingManthra(
 // are never silently discarded.  A manthra can end up here without a stored strapiDocumentId
 // when the draft was created before Strapi IDs were synced back, but the manthra already
 // exists in Strapi — skipping it would throw away the user's edits.
+// Returns the Strapi documentId of the manthra that was created or updated,
+// so callers can sync it back into the portal draft hierarchy.
 async function createOrUpdateManthra(
   mData: Record<string, any>,
   label: string
-): Promise<void> {
+): Promise<string | undefined> {
   const sectionDocId: string | undefined = mData.Section;
   const number: string | undefined = mData.ShlokaManthraNumber;
 
   if (sectionDocId) {
     const s = encodeURIComponent(sectionDocId);
 
-    // 1) Exact ShlokaManthraNumber match within the same section
+    // 1) ShlokaManthraNumber match within the same section — case-insensitive + trimmed
+    //    so "Mantra 1.1.2" and "mantra 1.1.2 " are treated as the same manthra.
     if (number) {
       try {
-        const n = encodeURIComponent(number);
+        const n = encodeURIComponent(number.trim());
         const existing = await strapiRequest(
-          `/api/manthras?filters[ShlokaManthraNumber][$eq]=${n}&filters[Section][documentId][$eq]=${s}&fields[0]=documentId`
+          `/api/manthras?filters[ShlokaManthraNumber][$eqi]=${n}&filters[Section][documentId][$eq]=${s}&fields[0]=documentId`
         );
         const existingDocId: string | undefined = existing?.data?.[0]?.documentId;
         if (existingDocId) {
           console.log(`[publish] Manthra "${label}" already exists (by name) — updating instead of skipping`);
-          await updateExistingManthra(existingDocId, mData, label + " [auto-update]");
-          return;
+          return await updateExistingManthra(existingDocId, mData, label + " [auto-update]");
         }
       } catch { /* ignore lookup failure — fall through to create */ }
     }
@@ -300,8 +304,7 @@ async function createOrUpdateManthra(
         const existingDocId: string | undefined = existingByOrder?.data?.[0]?.documentId;
         if (existingDocId) {
           console.log(`[publish] Manthra "${label}" already exists (by order=${mData.order}) — updating instead of skipping`);
-          await updateExistingManthra(existingDocId, mData, label + " [auto-update by order]");
-          return;
+          return await updateExistingManthra(existingDocId, mData, label + " [auto-update by order]");
         }
       } catch { /* ignore */ }
     }
@@ -311,7 +314,9 @@ async function createOrUpdateManthra(
     method: "POST",
     body: JSON.stringify({ data: mData }),
   });
-  console.log(`[publish] Manthra "${label}" created: ${mr?.data?.documentId}`);
+  const createdDocId: string | undefined = mr?.data?.documentId;
+  console.log(`[publish] Manthra "${label}" created: ${createdDocId}`);
+  return createdDocId;
 }
 
 async function publishGranthaWithHierarchy(
@@ -462,6 +467,30 @@ async function publishGranthaWithHierarchy(
   console.log(`[publish] Hierarchy: L1=${L1name}→${L1type}, L2=${L2name}→${L2type}, L3=${L3name}→${L3type}, levelTwo=${levelTwoEnabled}, levelThree=${levelThreeEnabled}`);
   console.log(`[publish] Adhyayas count: ${Array.isArray(hierarchy) ? hierarchy.length : 0}`);
 
+  // manthraIdToDocId: local portal manthra id → Strapi documentId
+  // Built during the traversal below; used to sync Strapi docIds back into the
+  // draft hierarchy after publish so that the NEXT publish can do a direct PUT
+  // (no dedup API calls) for every manthra whose docId is now known.
+  const manthraIdToDocId: Map<string, string> = new Map();
+
+  async function publishManthra(
+    manthra: any,
+    sectionDocId: string | undefined
+  ): Promise<void> {
+    try {
+      const mData = await buildManthraData(manthra, sectionDocId, granthaDocId, teekaNameToDocId);
+      console.log(`[publish] Manthra payload:`, JSON.stringify(mData).slice(0, 300));
+      const returnedDocId = manthra.strapiDocumentId
+        ? await updateExistingManthra(manthra.strapiDocumentId, mData, manthra.title)
+        : await createOrUpdateManthra(mData, manthra.title);
+      if (returnedDocId && manthra.id) {
+        manthraIdToDocId.set(manthra.id, returnedDocId);
+      }
+    } catch (e: any) {
+      console.error(`[publish] Manthra "${manthra.title}" failed:`, e.message);
+    }
+  }
+
   if (Array.isArray(hierarchy) && granthaDocId) {
     for (const adhyaya of hierarchy) {
       let adhyayaDocId: string | undefined;
@@ -475,7 +504,6 @@ async function publishGranthaWithHierarchy(
       }
 
       for (const khanda of (adhyaya.khandas ?? [])) {
-        // When L2 is disabled, khandas[0] is a "_default" container — skip creating a section for it
         const isDefaultKhanda = khanda.title === "_default" || !levelTwoEnabled;
         let khandaDocId: string | undefined;
 
@@ -489,11 +517,9 @@ async function publishGranthaWithHierarchy(
             continue;
           }
         } else {
-          // No L2 — manthras attach directly to the adhyaya section
           khandaDocId = adhyayaDocId;
         }
 
-        // Level 3 (Pada) — if padas array is present and non-empty
         if (levelThreeEnabled && Array.isArray(khanda.padas) && khanda.padas.length > 0) {
           for (const pada of khanda.padas) {
             let padaDocId: string | undefined;
@@ -505,42 +531,42 @@ async function publishGranthaWithHierarchy(
               console.warn(`[publish] Pada "${pada.title}" failed:`, e.message);
               continue;
             }
-
             for (const manthra of (pada.manthras ?? [])) {
-              try {
-                const mData = await buildManthraData(manthra, padaDocId, granthaDocId, teekaNameToDocId);
-                console.log(`[publish] Manthra payload (L3):`, JSON.stringify(mData).slice(0, 300));
-                if (manthra.strapiDocumentId) {
-                  await updateExistingManthra(manthra.strapiDocumentId, mData, manthra.title);
-                } else {
-                  await createOrUpdateManthra(mData, manthra.title);
-                }
-              } catch (e: any) {
-                console.error(`[publish] Manthra "${manthra.title}" (L3) failed:`, e.message);
-              }
+              await publishManthra(manthra, padaDocId);
             }
           }
         } else {
-          // No padas — manthras sit directly under the khanda (or adhyaya if L2 disabled)
           for (const manthra of (khanda.manthras ?? [])) {
-            try {
-              const mData = await buildManthraData(manthra, khandaDocId, granthaDocId, teekaNameToDocId);
-              console.log(`[publish] Manthra payload:`, JSON.stringify(mData).slice(0, 300));
-              if (manthra.strapiDocumentId) {
-                await updateExistingManthra(manthra.strapiDocumentId, mData, manthra.title);
-              } else {
-                await createOrUpdateManthra(mData, manthra.title);
-              }
-            } catch (e: any) {
-              console.error(`[publish] Manthra "${manthra.title}" FAILED:`, e.message);
-            }
+            await publishManthra(manthra, khandaDocId);
           }
         }
       }
     }
   }
 
-  return strapiResult;
+  // Apply collected Strapi documentIds back to the hierarchy so the next publish
+  // skips dedup API lookups and does direct PUTs for every manthra whose docId is known.
+  const updatedHierarchy: any[] | undefined = manthraIdToDocId.size > 0 && Array.isArray(hierarchy)
+    ? hierarchy.map((adhyaya: any) => ({
+        ...adhyaya,
+        khandas: (adhyaya.khandas ?? []).map((khanda: any) => ({
+          ...khanda,
+          padas: (khanda.padas ?? []).map((pada: any) => ({
+            ...pada,
+            manthras: (pada.manthras ?? []).map((m: any) =>
+              manthraIdToDocId.has(m.id) ? { ...m, strapiDocumentId: manthraIdToDocId.get(m.id) } : m
+            ),
+          })),
+          manthras: (khanda.manthras ?? []).map((m: any) =>
+            manthraIdToDocId.has(m.id) ? { ...m, strapiDocumentId: manthraIdToDocId.get(m.id) } : m
+          ),
+        })),
+      }))
+    : undefined;
+
+  console.log(`[publish] Syncing back ${manthraIdToDocId.size} manthra docId(s) into draft hierarchy`);
+
+  return { strapiResult, updatedHierarchy };
 }
 
 /**
@@ -858,11 +884,14 @@ export async function registerRoutes(
       }
 
       let strapiResult: any;
+      let updatedHierarchy: any[] | undefined;
 
       if (draft.contentType === "granthas") {
         // Granthas need special handling: strip wizard-only fields and
         // create chapter records separately in the correct order.
-        strapiResult = await publishGranthaWithHierarchy(draft);
+        const result = await publishGranthaWithHierarchy(draft);
+        strapiResult = result.strapiResult;
+        updatedHierarchy = result.updatedHierarchy;
       } else {
         const cleanedData =
           draft.contentType === "manthras"
@@ -887,6 +916,15 @@ export async function registerRoutes(
             body: JSON.stringify({ data: cleanedData }),
           });
         }
+      }
+
+      // Sync Strapi documentIds back into the draft hierarchy so subsequent
+      // publishes skip dedup API lookups and do direct PUTs for known manthras.
+      if (updatedHierarchy) {
+        const existingData = (draft.data as Record<string, any>) ?? {};
+        await storage.updateDraft(id, user.id, {
+          data: { ...existingData, hierarchy: updatedHierarchy },
+        });
       }
 
       const newDocumentId = strapiResult?.data?.documentId || draft.strapiDocumentId;

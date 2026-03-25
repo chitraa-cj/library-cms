@@ -71,7 +71,7 @@ export default function DashboardLayout({
   const [sidebarOpen, setSidebarOpen] = useState(false);
 
   return (
-    <div className="min-h-screen bg-background flex">
+    <div className="h-screen overflow-hidden bg-background flex">
       <div
         className={cn(
           "fixed inset-0 z-40 bg-black/50 lg:hidden transition-opacity",
@@ -82,7 +82,7 @@ export default function DashboardLayout({
 
       <aside
         className={cn(
-          "fixed z-50 inset-y-0 left-0 w-72 bg-sidebar border-r border-sidebar-border flex flex-col transition-transform lg:translate-x-0 lg:static lg:z-0",
+          "fixed z-50 inset-y-0 left-0 w-72 bg-sidebar border-r border-sidebar-border flex flex-col transition-transform lg:translate-x-0 lg:static lg:z-0 lg:h-full",
           sidebarOpen ? "translate-x-0" : "-translate-x-full"
         )}
       >

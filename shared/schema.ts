@@ -184,6 +184,7 @@ export const teekaAuthors = [
   "Shriharsha",
   "Chitsukha",
   "Vidyaranya",
+  "Achyutakrishnananda Tirtha",
 ] as const;
 
 // ---------- Strapi block / rich-text primitives ----------

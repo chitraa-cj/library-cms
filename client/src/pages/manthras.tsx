@@ -172,10 +172,30 @@ export default function ManthrasPage() {
     return allSections.filter((s) => (s as any).grantha?.GranthaName === filterGrantha);
   }, [allSections, filterGrantha]);
 
-  const strapiManthras = useMemo(
-    () => [...(data?.data || [])].sort((a, b) => (a.order ?? 0) - (b.order ?? 0)),
-    [data]
-  );
+  // Build a fast lookup: sectionDocId → section (with grantha) from the sections list.
+  // This is used to fill in missing grantha data on manthras where Strapi's nested
+  // populate didn't return the grantha (Strapi v5 nested populate can silently omit
+  // sub-relations for some records when the response is very large).
+  const sectionByDocId = useMemo(() => {
+    const map = new Map<string, any>();
+    for (const s of allSections) {
+      if (s.documentId) map.set(s.documentId, s);
+    }
+    return map;
+  }, [allSections]);
+
+  const strapiManthras = useMemo(() => {
+    return [...(data?.data || [])].map((m: any) => {
+      // If the server normalization already gave us a grantha, use it.
+      if (m.grantha) return m;
+      // Otherwise supplement from the sections list using the section documentId.
+      const sectionDocId = m.section?.documentId;
+      if (!sectionDocId) return m;
+      const sec = sectionByDocId.get(sectionDocId);
+      if (!sec?.grantha) return m;
+      return { ...m, grantha: sec.grantha };
+    }).sort((a: any, b: any) => (a.order ?? 0) - (b.order ?? 0));
+  }, [data, sectionByDocId]);
 
   function getGranthaForSection(sectionDocId: string) {
     const sec = allSections.find((s) => s.documentId === sectionDocId);

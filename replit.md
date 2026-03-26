@@ -69,7 +69,7 @@ A data feeding website for the Ekatmadham Library that connects to a Strapi CMS 
 - Each mantra is an independent Strapi record — users working on different mantras do not conflict
 - User roles: `admin` (full access + user management) and `editor` (data entry only)
 - Admin user management at `/admin/users` — create/delete users, reset passwords, change roles
-- Self-registration is disabled — admin must create accounts for data entry staff
+- Self-registration is enabled — anyone can create an account via the Register tab; new accounts get the "editor" role automatically
 - Admin API routes: `GET/POST /api/admin/users`, `PATCH /api/admin/users/:id/role`, `PATCH /api/admin/users/:id/password`, `DELETE /api/admin/users/:id`
 - "Administration" section in sidebar visible only to admin-role users
 
@@ -79,7 +79,7 @@ A data feeding website for the Ekatmadham Library that connects to a Strapi CMS 
 - Draft ID validation (NaN protection)
 - Session cookies: httpOnly, secure in production, sameSite lax
 - Trust proxy enabled for production deployment behind reverse proxy
-- Self-registration disabled; admin-only user creation via `/api/admin/users`
+- Self-registration enabled; new users automatically receive the "editor" role; admins can still manage users via `/api/admin/users`
 
 ## Environment Variables
 - `DATABASE_URL` - PostgreSQL connection string

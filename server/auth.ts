@@ -77,9 +77,26 @@ export function setupAuth(app: Express) {
     }
   });
 
-  // Registration is admin-only — open self-registration is disabled.
-  app.post("/api/auth/register", (_req, res) => {
-    return res.status(403).json({ message: "Self-registration is disabled. Contact an administrator." });
+  app.post("/api/auth/register", async (req, res, next) => {
+    try {
+      const { username, password, displayName } = req.body;
+      if (!username || !password || !displayName) {
+        return res.status(400).json({ message: "Username, display name, and password are required." });
+      }
+      const existing = await storage.getUserByUsername(username);
+      if (existing) {
+        return res.status(409).json({ message: "Username already taken. Please choose another." });
+      }
+      const hashed = await hashPassword(password);
+      const user = await storage.createUser({ username, password: hashed, displayName, role: "editor" });
+      req.login(user, (err) => {
+        if (err) return next(err);
+        const { password: _, ...safeUser } = user;
+        return res.status(201).json(safeUser);
+      });
+    } catch (err) {
+      next(err);
+    }
   });
 
   app.post("/api/auth/login", (req, res, next) => {

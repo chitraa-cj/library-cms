@@ -360,11 +360,14 @@ async function publishGranthaWithHierarchy(
   // Set NumberOfTeekas from the wizard's teeka count (Strapi expects a number, 0 is valid)
   granthaPayload.NumberOfTeekas = Array.isArray(teekaDefinitions) ? teekaDefinitions.length : 0;
 
-  // Convert local granthaNameTranslations → Strapi GranthaNameTranslations format
+  // Convert local granthaNameTranslations → Strapi GranthaNameTranslations format.
+  // The shared.translations component uses TranslationText (blocks) not GranthaNameTranslation.
   if (Array.isArray(granthaNameTranslationsLocal) && granthaNameTranslationsLocal.length > 0) {
     granthaPayload.GranthaNameTranslations = granthaNameTranslationsLocal.map((t: any) => ({
       LanguageOfTranslation: t.language || "",
-      GranthaNameTranslation: t.name || "",
+      TranslationText: t.name
+        ? [{ type: "paragraph", children: [{ type: "text", text: t.name }] }]
+        : [{ type: "paragraph", children: [{ type: "text", text: "" }] }],
     }));
   }
 

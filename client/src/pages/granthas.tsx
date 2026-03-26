@@ -45,6 +45,7 @@ import {
 } from "@shared/schema";
 import StrapiSyncBar from "@/components/strapi-sync-bar";
 import { STRAPI_POLL_INTERVAL } from "@/hooks/use-strapi-sync";
+import { blocksToText } from "@/lib/strapi-blocks";
 import {
   Loader2,
   Plus,
@@ -876,7 +877,7 @@ export default function GranthasPage() {
             ? item.GranthaNameTranslations.map((t: any) => ({
                 id: uid(),
                 language: t.LanguageOfTranslation || "",
-                name: t.GranthaNameTranslation || t.name || "",
+                name: (Array.isArray(t.TranslationText) ? blocksToText(t.TranslationText) : null) || t.GranthaNameTranslation || t.name || "",
               }))
             : []
         );

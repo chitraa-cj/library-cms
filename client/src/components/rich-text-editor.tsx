@@ -73,6 +73,17 @@ export default function RichTextEditor({
     // Safety guard: never interrupt while the user is actively editing
     if (editor.isFocused) return;
     const incoming = blocksToTipTap(value);
+    // Guard: if incoming resolves to empty but editor currently has content, do not
+    // overwrite — this prevents a form-reset during a Radix UI exit animation from
+    // wiping text the user already entered.
+    const incomingIsEmpty =
+      !value ||
+      (typeof value === "string" && value === "") ||
+      (Array.isArray(value) && value.length === 0);
+    if (incomingIsEmpty) {
+      const currentText = editor.getText();
+      if (currentText.trim().length > 0) return;
+    }
     editor.commands.setContent(incoming, false);
   }, [value]); // eslint-disable-line react-hooks/exhaustive-deps
 

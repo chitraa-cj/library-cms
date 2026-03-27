@@ -485,12 +485,33 @@ async function publishGranthaWithHierarchy(
   // (no dedup API calls) for every manthra whose docId is now known.
   const manthraIdToDocId: Map<string, string> = new Map();
 
+  // Keys that carry no rich content — only identify/position the manthra.
+  // A cleaned mData that only has these keys is a "Strapi-only" node: the user
+  // never entered any content for it in the portal (it was supplemented from Strapi
+  // to show context). Publishing a PUT on such a node would overwrite a collaborator's
+  // content with an empty payload, so we skip the update entirely.
+  const IDENTITY_ONLY_KEYS = new Set(["ShlokaManthraNumber", "order", "Section"]);
+
   async function publishManthra(
     manthra: any,
     sectionDocId: string | undefined
   ): Promise<void> {
     try {
       const mData = await buildManthraData(manthra, sectionDocId, granthaDocId, teekaNameToDocId);
+
+      // ── Collaborative-publish guard ──────────────────────────────────────────
+      // If this manthra has a Strapi docId (from a prior publish or from the Strapi
+      // supplement logic) but the cleaned payload has NO content beyond identity/
+      // position fields, it means the current user never edited this manthra locally.
+      // Skip the PUT so we don't silently erase another collaborator's work.
+      // We still record the docId so the next draft open can reference it directly.
+      const hasLocalContent = Object.keys(mData).some((k) => !IDENTITY_ONLY_KEYS.has(k));
+      if (manthra.strapiDocumentId && !hasLocalContent) {
+        console.log(`[publish] Manthra "${manthra.title}" — Strapi-only node (no local content), skipping PUT, syncing docId`);
+        if (manthra.id) manthraIdToDocId.set(manthra.id, manthra.strapiDocumentId);
+        return;
+      }
+
       console.log(`[publish] Manthra payload:`, JSON.stringify(mData).slice(0, 300));
       const returnedDocId = manthra.strapiDocumentId
         ? await updateExistingManthra(manthra.strapiDocumentId, mData, manthra.title)

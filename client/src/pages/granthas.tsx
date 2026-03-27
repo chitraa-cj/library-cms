@@ -1145,7 +1145,71 @@ export default function GranthasPage() {
           ? migrateHierarchyLeafName(hierToUse2, "Khanda", "Mantra")
           : hierToUse2
       );
-      setAdhyayas(enrichedHier2);
+
+      // ── Supplement: add top-level Strapi sections absent from the draft ──────────
+      // The enrichHierarchy above only supplements missing *khandas within existing
+      // adhyayas*. If the draft itself is missing entire top-level adhyayas (e.g. the
+      // user published 3 more khandas in Strapi after saving a portal draft that only
+      // had 1), those adhyayas are never shown. Fix: append them here.
+      const existingAdhyayaTitles = new Set(enrichedHier2.map((a) => a.title));
+      const topLevelStrapiSections = fetchedSections
+        .filter((s: any) => !s.parent?.documentId)
+        .sort((a: any, b: any) => (a.order ?? 0) - (b.order ?? 0));
+      const missingAdhyayas: AdhyayaNode[] = [];
+      for (const sec of topLevelStrapiSections) {
+        if (!sec.title || existingAdhyayaTitles.has(sec.title)) continue;
+        // Child sections of this Strapi section → become khandas
+        const strapiChildren = (strapiChildSectionsByParentDocId.get(sec.documentId) ?? [])
+          .sort((x: any, y: any) => (x.order ?? 0) - (y.order ?? 0));
+        let khandas: KhandaNode[];
+        if (strapiChildren.length > 0) {
+          khandas = strapiChildren.map((child: any) => ({
+            id: uid(),
+            title: child.title,
+            order: child.order ?? 0,
+            expanded: true,
+            padas: [],
+            manthras: (strapiMantrasBySecTitle.get(child.title) ?? [])
+              .sort((x: any, y: any) => (x.order ?? 0) - (y.order ?? 0))
+              .map((sm: any, mi: number) => ({
+                id: uid(),
+                title: sm.title,
+                order: sm.order ?? mi + 1,
+                strapiDocumentId: sm.docId,
+              } as ManthraNode)),
+          } as KhandaNode));
+        } else {
+          // Flat section — create a synthetic "_default" khanda with this section's manthras
+          const manthrasForSec = (strapiMantrasBySecTitle.get(sec.title) ?? [])
+            .sort((x: any, y: any) => (x.order ?? 0) - (y.order ?? 0))
+            .map((sm: any, mi: number) => ({
+              id: uid(),
+              title: sm.title,
+              order: sm.order ?? mi + 1,
+              strapiDocumentId: sm.docId,
+            } as ManthraNode));
+          khandas = [{
+            id: uid(),
+            title: "_default",
+            order: 0,
+            expanded: true,
+            padas: [],
+            manthras: manthrasForSec,
+          } as KhandaNode];
+        }
+        missingAdhyayas.push({
+          id: uid(),
+          title: sec.title,
+          order: sec.order ?? 0,
+          expanded: true,
+          khandas,
+        } as AdhyayaNode);
+      }
+      const finalHier2 = missingAdhyayas.length > 0
+        ? [...enrichedHier2, ...missingAdhyayas].sort((a, b) => (a.order ?? 0) - (b.order ?? 0))
+        : enrichedHier2;
+
+      setAdhyayas(finalHier2);
     }
     setStep(1);
     setView("form");

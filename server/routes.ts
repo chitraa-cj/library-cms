@@ -1161,6 +1161,26 @@ export async function registerRoutes(
     }
   });
 
+  app.get("/api/admin/backups/:id/data", requireAuth, async (req, res) => {
+    try {
+      const id = parseInt(req.params.id);
+      if (isNaN(id)) return res.status(400).json({ message: "Invalid backup ID" });
+      const backup = await storage.getBackup(id);
+      if (!backup) return res.status(404).json({ message: "Backup not found" });
+      res.json({
+        id: backup.id,
+        label: backup.label,
+        createdAt: backup.createdAt,
+        granthaCount: backup.granthaCount,
+        sectionCount: backup.sectionCount,
+        manthraCount: backup.manthraCount,
+        data: backup.data,
+      });
+    } catch (e: any) {
+      res.status(500).json({ message: e.message || "Failed to load backup" });
+    }
+  });
+
   app.get("/api/admin/backups/:id/download", requireAuth, async (req, res) => {
     try {
       const id = parseInt(req.params.id);

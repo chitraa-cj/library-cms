@@ -1,13 +1,14 @@
 import { useState } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { queryClient, apiRequest } from "@/lib/queryClient";
+import { Link } from "wouter";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useToast } from "@/hooks/use-toast";
 import { useAuth } from "@/hooks/use-auth";
-import { Download, DatabaseBackup, BookOpen, ScrollText, Hash, Loader2, ShieldCheck } from "lucide-react";
+import { Download, DatabaseBackup, BookOpen, ScrollText, Hash, Loader2, ShieldCheck, Eye } from "lucide-react";
 import type { GranthaBackupMeta } from "@shared/schema";
 
 export default function BackupsPage() {
@@ -124,15 +125,23 @@ export default function BackupsPage() {
                     </CardTitle>
                     <Badge variant="outline" className="text-xs shrink-0">Immutable</Badge>
                   </div>
-                  <Button
-                    size="sm"
-                    variant="outline"
-                    onClick={() => handleDownload(backup.id)}
-                    data-testid={`button-download-backup-${backup.id}`}
-                  >
-                    <Download className="w-3.5 h-3.5 mr-1.5" />
-                    Download
-                  </Button>
+                  <div className="flex items-center gap-2">
+                    <Link href={`/admin/backups/${backup.id}`}>
+                      <Button size="sm" variant="default" data-testid={`button-browse-backup-${backup.id}`}>
+                        <Eye className="w-3.5 h-3.5 mr-1.5" />
+                        Browse
+                      </Button>
+                    </Link>
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      onClick={() => handleDownload(backup.id)}
+                      data-testid={`button-download-backup-${backup.id}`}
+                    >
+                      <Download className="w-3.5 h-3.5 mr-1.5" />
+                      Download
+                    </Button>
+                  </div>
                 </div>
                 <CardDescription className="text-xs" data-testid={`text-backup-date-${backup.id}`}>
                   Created {new Date(backup.createdAt).toLocaleString()}

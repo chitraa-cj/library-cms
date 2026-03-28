@@ -7,26 +7,44 @@ import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Separator } from "@/components/ui/separator";
-import { ArrowLeft, BookOpen, ChevronRight, Hash, ScrollText, Download } from "lucide-react";
+import {
+  ArrowLeft, BookOpen, ChevronRight, Hash, ScrollText, Download,
+  ChevronDown, ChevronUp, Languages, BookMarked, Type,
+} from "lucide-react";
 
+// ── Types ──────────────────────────────────────────────────────────
 type TextNode = { type: "text"; text: string; bold?: boolean; italic?: boolean };
 type Block = { type: string; children: TextNode[] };
 
-type GranthaInfo = {
+type Translation = {
   id: number;
-  documentId: string;
-  GranthaName: string;
-  GranthaType?: string;
+  LanguageOfTranslation: string;
+  TranslationText: Block[];
+  isAiTranslated?: boolean | null;
 };
 
-type SectionInfo = {
+type ShlokEntry = {
   id: number;
-  documentId: string;
-  title: string;
-  type?: string | null;
-  order?: number | null;
-  grantha?: GranthaInfo | null;
+  SanskritTextEntry?: Block[];
+  IASTTransliteration?: string | null;
+  EnglishTranslationText?: Block[];
+  OtherTranslations?: Translation[];
 };
+
+type TeekaItem = {
+  id: number;
+  teeka?: { TeekaName: string; TeekaAuthor?: string };
+  TeekaEntry?: ShlokEntry;
+};
+
+type WordMeaning = {
+  id: number;
+  word?: string;
+  meaning?: string;
+};
+
+type GranthaInfo = { id: number; documentId: string; GranthaName: string; GranthaType?: string };
+type SectionInfo = { id: number; documentId: string; title: string; type?: string | null; order?: number | null; grantha?: GranthaInfo | null };
 
 type ManthraEntry = {
   id: number;
@@ -34,44 +52,252 @@ type ManthraEntry = {
   ShlokaManthraNumber: string;
   order?: number | null;
   Section: SectionInfo;
-  ShlokaManthraEntry?: { SanskritTextEntry: Block[] };
-  BhashyamEntry?: { SanskritTextEntry: Block[] };
-  wordMeanings?: any[];
-  Teekas?: any[];
+  ShlokaManthraEntry?: ShlokEntry;
+  BhashyamEntry?: ShlokEntry | null;
+  Teekas?: TeekaItem[];
+  wordMeanings?: WordMeaning[];
 };
 
 type BackupData = {
-  id: number;
-  label: string;
-  createdAt: string;
-  granthaCount: number;
-  sectionCount: number;
-  manthraCount: number;
-  data: {
-    granthas: GranthaInfo[];
-    sections: SectionInfo[];
-    manthras: ManthraEntry[];
-  };
+  id: number; label: string; createdAt: string;
+  granthaCount: number; sectionCount: number; manthraCount: number;
+  data: { granthas: GranthaInfo[]; sections: SectionInfo[]; manthras: ManthraEntry[] };
 };
 
-function renderBlocks(blocks: Block[] | undefined): string {
-  if (!blocks || blocks.length === 0) return "";
-  return blocks
-    .map((b) => b.children?.map((c) => c.text).join("") ?? "")
-    .join("\n")
-    .trim();
+// ── Helpers ────────────────────────────────────────────────────────
+function blocksToText(blocks: Block[] | undefined): string {
+  if (!blocks?.length) return "";
+  return blocks.map((b) => b.children?.map((c) => c.text).join("") ?? "").join("\n").trim();
 }
 
-function SanskritText({ blocks }: { blocks: Block[] | undefined }) {
-  const text = renderBlocks(blocks);
+function BlockText({ blocks, className = "" }: { blocks: Block[] | undefined; className?: string }) {
+  const text = blocksToText(blocks);
   if (!text) return null;
+  return <p className={`whitespace-pre-wrap leading-relaxed ${className}`}>{text}</p>;
+}
+
+function SectionLabel({ label }: { label: string }) {
   return (
-    <p className="text-sm whitespace-pre-wrap leading-relaxed font-[Noto_Serif_Devanagari,serif]">
-      {text}
-    </p>
+    <p className="text-[10px] font-semibold uppercase tracking-widest text-muted-foreground mb-1.5">{label}</p>
   );
 }
 
+function EntryBlock({ entry, showBadge }: { entry: ShlokEntry; showBadge?: string }) {
+  const hasSanskrit = !!blocksToText(entry.SanskritTextEntry);
+  const hasIAST = !!entry.IASTTransliteration?.trim();
+  const hasEnglish = !!blocksToText(entry.EnglishTranslationText);
+  const otherTranslations = entry.OtherTranslations?.filter(
+    (t) => blocksToText(t.TranslationText)
+  ) ?? [];
+
+  if (!hasSanskrit && !hasIAST && !hasEnglish && !otherTranslations.length) return null;
+
+  return (
+    <div className="space-y-3">
+      {showBadge && (
+        <div className="flex items-center gap-2">
+          <Badge variant="secondary" className="text-xs">{showBadge}</Badge>
+        </div>
+      )}
+      {hasSanskrit && (
+        <div>
+          <SectionLabel label="Sanskrit" />
+          <BlockText blocks={entry.SanskritTextEntry} className="text-sm font-[Noto_Serif_Devanagari,serif]" />
+        </div>
+      )}
+      {hasIAST && (
+        <div>
+          <SectionLabel label="IAST Transliteration" />
+          <p className="text-sm italic text-muted-foreground whitespace-pre-wrap leading-relaxed">{entry.IASTTransliteration}</p>
+        </div>
+      )}
+      {hasEnglish && (
+        <div>
+          <SectionLabel label="English Translation" />
+          <BlockText blocks={entry.EnglishTranslationText} className="text-sm" />
+        </div>
+      )}
+      {otherTranslations.map((t) => (
+        <div key={t.id}>
+          <div className="flex items-center gap-1.5 mb-1.5">
+            <Languages className="w-3 h-3 text-muted-foreground" />
+            <SectionLabel label={t.LanguageOfTranslation} />
+            {t.isAiTranslated && <Badge variant="outline" className="text-[9px] py-0">AI</Badge>}
+          </div>
+          <BlockText blocks={t.TranslationText} className="text-sm" />
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function ManthraCard({ manthra }: { manthra: ManthraEntry }) {
+  const [expanded, setExpanded] = useState(false);
+
+  const shloka = manthra.ShlokaManthraEntry;
+  const bhashyam = manthra.BhashyamEntry;
+  const teekas = manthra.Teekas?.filter((t) => t.TeekaEntry) ?? [];
+  const wordMeanings = manthra.wordMeanings?.filter((w) => w.word || w.meaning) ?? [];
+
+  const hasBhashyam = bhashyam && (
+    !!blocksToText(bhashyam.SanskritTextEntry) ||
+    !!blocksToText(bhashyam.EnglishTranslationText) ||
+    !!(bhashyam.OtherTranslations?.filter((t) => blocksToText(t.TranslationText)).length)
+  );
+  const hasExtras = hasBhashyam || teekas.length > 0 || wordMeanings.length > 0 ||
+    shloka?.IASTTransliteration || blocksToText(shloka?.EnglishTranslationText) ||
+    (shloka?.OtherTranslations?.filter((t) => blocksToText(t.TranslationText)).length ?? 0) > 0;
+
+  return (
+    <Card data-testid={`card-manthra-${manthra.id}`} className="overflow-hidden">
+      <CardHeader className="pb-0 pt-4 px-5">
+        <div className="flex items-center justify-between gap-2">
+          <div className="flex items-center gap-2 min-w-0">
+            <Hash className="w-3.5 h-3.5 text-primary flex-shrink-0" />
+            <CardTitle className="text-sm font-semibold text-primary" data-testid={`text-manthra-num-${manthra.id}`}>
+              {manthra.ShlokaManthraNumber}
+            </CardTitle>
+          </div>
+          <div className="flex items-center gap-1.5 flex-shrink-0">
+            {hasBhashyam && <Badge variant="outline" className="text-[10px]">Bhashyam</Badge>}
+            {teekas.length > 0 && <Badge variant="outline" className="text-[10px]">{teekas.length} Teeka{teekas.length > 1 ? "s" : ""}</Badge>}
+            {hasExtras && (
+              <Button variant="ghost" size="icon" className="h-6 w-6" onClick={() => setExpanded((e) => !e)} data-testid={`button-expand-manthra-${manthra.id}`}>
+                {expanded ? <ChevronUp className="w-3.5 h-3.5" /> : <ChevronDown className="w-3.5 h-3.5" />}
+              </Button>
+            )}
+          </div>
+        </div>
+      </CardHeader>
+
+      <CardContent className="px-5 pt-3 pb-4 space-y-4">
+        {/* Always visible: Sanskrit */}
+        {shloka && <BlockText blocks={shloka.SanskritTextEntry} className="text-sm font-[Noto_Serif_Devanagari,serif]" />}
+
+        {expanded && (
+          <>
+            {/* Manthra additional fields */}
+            {shloka && (shloka.IASTTransliteration || blocksToText(shloka.EnglishTranslationText) || (shloka.OtherTranslations?.length ?? 0) > 0) && (
+              <div className="space-y-3 pl-3 border-l-2 border-muted">
+                {shloka.IASTTransliteration?.trim() && (
+                  <div>
+                    <div className="flex items-center gap-1.5 mb-1.5"><Type className="w-3 h-3 text-muted-foreground" /><SectionLabel label="IAST Transliteration" /></div>
+                    <p className="text-sm italic text-muted-foreground whitespace-pre-wrap leading-relaxed">{shloka.IASTTransliteration}</p>
+                  </div>
+                )}
+                {!!blocksToText(shloka.EnglishTranslationText) && (
+                  <div>
+                    <SectionLabel label="English Translation" />
+                    <BlockText blocks={shloka.EnglishTranslationText} className="text-sm" />
+                  </div>
+                )}
+                {shloka.OtherTranslations?.filter((t) => blocksToText(t.TranslationText)).map((t) => (
+                  <div key={t.id}>
+                    <div className="flex items-center gap-1.5 mb-1.5">
+                      <Languages className="w-3 h-3 text-muted-foreground" />
+                      <SectionLabel label={t.LanguageOfTranslation} />
+                      {t.isAiTranslated && <Badge variant="outline" className="text-[9px] py-0">AI</Badge>}
+                    </div>
+                    <BlockText blocks={t.TranslationText} className="text-sm" />
+                  </div>
+                ))}
+              </div>
+            )}
+
+            {/* Bhashyam */}
+            {hasBhashyam && bhashyam && (
+              <>
+                <Separator />
+                <div className="space-y-3">
+                  <div className="flex items-center gap-2">
+                    <BookMarked className="w-4 h-4 text-amber-600" />
+                    <span className="text-sm font-semibold text-amber-700 dark:text-amber-400">Bhashyam</span>
+                  </div>
+                  <div className="pl-3 border-l-2 border-amber-200 dark:border-amber-800 space-y-3">
+                    {!!blocksToText(bhashyam.SanskritTextEntry) && (
+                      <div>
+                        <SectionLabel label="Sanskrit" />
+                        <BlockText blocks={bhashyam.SanskritTextEntry} className="text-sm font-[Noto_Serif_Devanagari,serif]" />
+                      </div>
+                    )}
+                    {bhashyam.IASTTransliteration?.trim() && (
+                      <div>
+                        <div className="flex items-center gap-1.5 mb-1.5"><Type className="w-3 h-3 text-muted-foreground" /><SectionLabel label="IAST" /></div>
+                        <p className="text-sm italic text-muted-foreground whitespace-pre-wrap leading-relaxed">{bhashyam.IASTTransliteration}</p>
+                      </div>
+                    )}
+                    {!!blocksToText(bhashyam.EnglishTranslationText) && (
+                      <div>
+                        <SectionLabel label="English Translation" />
+                        <BlockText blocks={bhashyam.EnglishTranslationText} className="text-sm" />
+                      </div>
+                    )}
+                    {bhashyam.OtherTranslations?.filter((t) => blocksToText(t.TranslationText)).map((t) => (
+                      <div key={t.id}>
+                        <div className="flex items-center gap-1.5 mb-1.5">
+                          <Languages className="w-3 h-3 text-muted-foreground" />
+                          <SectionLabel label={t.LanguageOfTranslation} />
+                          {t.isAiTranslated && <Badge variant="outline" className="text-[9px] py-0">AI</Badge>}
+                        </div>
+                        <BlockText blocks={t.TranslationText} className="text-sm" />
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              </>
+            )}
+
+            {/* Teekas */}
+            {teekas.length > 0 && (
+              <>
+                <Separator />
+                <div className="space-y-4">
+                  <div className="flex items-center gap-2">
+                    <BookOpen className="w-4 h-4 text-indigo-600" />
+                    <span className="text-sm font-semibold text-indigo-700 dark:text-indigo-400">Teekas ({teekas.length})</span>
+                  </div>
+                  {teekas.map((tk) => (
+                    <div key={tk.id} className="pl-3 border-l-2 border-indigo-200 dark:border-indigo-800 space-y-3">
+                      <div>
+                        <p className="text-xs font-semibold">{tk.teeka?.TeekaName ?? "Teeka"}</p>
+                        {tk.teeka?.TeekaAuthor && (
+                          <p className="text-[10px] text-muted-foreground">{tk.teeka.TeekaAuthor}</p>
+                        )}
+                      </div>
+                      {tk.TeekaEntry && (
+                        <EntryBlock entry={tk.TeekaEntry} />
+                      )}
+                    </div>
+                  ))}
+                </div>
+              </>
+            )}
+
+            {/* Word Meanings */}
+            {wordMeanings.length > 0 && (
+              <>
+                <Separator />
+                <div className="space-y-2">
+                  <p className="text-xs font-semibold uppercase tracking-widest text-muted-foreground">Word Meanings</p>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-6 gap-y-1">
+                    {wordMeanings.map((wm) => (
+                      <div key={wm.id} className="text-xs flex gap-2">
+                        <span className="font-medium text-primary min-w-0">{wm.word}</span>
+                        <span className="text-muted-foreground min-w-0">{wm.meaning}</span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              </>
+            )}
+          </>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
+// ── Main Page ──────────────────────────────────────────────────────
 export default function BackupDetailPage() {
   const params = useParams<{ id: string }>();
   const id = params.id;
@@ -90,7 +316,11 @@ export default function BackupDetailPage() {
   });
 
   const { granthaList, sectionsByGrantha, manthrasBySection } = useMemo(() => {
-    if (!backup) return { granthaList: [], sectionsByGrantha: new Map<number, Map<number, SectionInfo>>(), manthrasBySection: new Map<number, ManthraEntry[]>() };
+    if (!backup) return {
+      granthaList: [] as GranthaInfo[],
+      sectionsByGrantha: new Map<number, Map<number, SectionInfo>>(),
+      manthrasBySection: new Map<number, ManthraEntry[]>(),
+    };
 
     const granthaMap = new Map<number, GranthaInfo>();
     const sectionsByGrantha = new Map<number, Map<number, SectionInfo>>();
@@ -104,17 +334,14 @@ export default function BackupDetailPage() {
     for (const manthra of backup.data.manthras) {
       const sec = manthra.Section;
       if (!sec) continue;
-
       const grantha = sec.grantha || sectionGranthaMap.get(sec.id) || null;
       const granthaId = grantha?.id ?? -1;
       const granthaInfo: GranthaInfo = grantha ?? { id: -1, documentId: "", GranthaName: "Ungrouped" };
 
       if (!granthaMap.has(granthaId)) granthaMap.set(granthaId, granthaInfo);
-
       if (!sectionsByGrantha.has(granthaId)) sectionsByGrantha.set(granthaId, new Map());
       const sections = sectionsByGrantha.get(granthaId)!;
       if (!sections.has(sec.id)) sections.set(sec.id, { ...sec, grantha });
-
       if (!manthrasBySection.has(sec.id)) manthrasBySection.set(sec.id, []);
       manthrasBySection.get(sec.id)!.push(manthra);
     }
@@ -134,7 +361,8 @@ export default function BackupDetailPage() {
 
   const selectedGrantha = granthaList.find((g) => g.id === selectedGranthaId) ?? null;
   const sections = selectedGranthaId !== null
-    ? Array.from(sectionsByGrantha.get(selectedGranthaId)?.values() ?? []).sort((a, b) => (a.order ?? 999) - (b.order ?? 999))
+    ? Array.from(sectionsByGrantha.get(selectedGranthaId)?.values() ?? [])
+        .sort((a, b) => (a.order ?? 999) - (b.order ?? 999))
     : [];
   const selectedSection = sections.find((s) => s.id === selectedSectionId) ?? null;
   const manthras = selectedSectionId !== null ? (manthrasBySection.get(selectedSectionId) ?? []) : [];
@@ -213,10 +441,10 @@ export default function BackupDetailPage() {
         </div>
       </div>
 
-      {/* Content area */}
+      {/* Content */}
       <div className="flex-1 overflow-hidden flex min-h-0">
 
-        {/* Level 1: Grantha list */}
+        {/* Level 1: Granthas */}
         {!selectedGrantha && (
           <ScrollArea className="flex-1">
             <div className="p-6 max-w-2xl mx-auto space-y-2">
@@ -224,21 +452,14 @@ export default function BackupDetailPage() {
                 const sects = Array.from(sectionsByGrantha.get(g.id)?.values() ?? []);
                 const mCount = sects.reduce((sum, s) => sum + (manthrasBySection.get(s.id)?.length ?? 0), 0);
                 return (
-                  <button
-                    key={g.id}
-                    onClick={() => { setSelectedGranthaId(g.id); setSelectedSectionId(null); }}
-                    className="w-full text-left"
-                    data-testid={`card-grantha-${g.id}`}
-                  >
+                  <button key={g.id} onClick={() => { setSelectedGranthaId(g.id); setSelectedSectionId(null); }} className="w-full text-left" data-testid={`card-grantha-${g.id}`}>
                     <Card className="hover:shadow-sm transition-shadow hover:border-primary/40">
                       <CardContent className="py-3 px-4">
                         <div className="flex items-center justify-between gap-3">
                           <div className="flex items-center gap-2 min-w-0">
                             <BookOpen className="w-4 h-4 text-primary flex-shrink-0" />
                             <span className="font-medium text-sm truncate">{g.GranthaName}</span>
-                            {g.GranthaType && (
-                              <Badge variant="outline" className="text-xs flex-shrink-0">{g.GranthaType}</Badge>
-                            )}
+                            {g.GranthaType && <Badge variant="outline" className="text-xs flex-shrink-0">{g.GranthaType}</Badge>}
                           </div>
                           <div className="flex items-center gap-4 text-xs text-muted-foreground flex-shrink-0">
                             <span className="flex items-center gap-1"><ScrollText className="w-3 h-3" />{sects.length}</span>
@@ -255,7 +476,7 @@ export default function BackupDetailPage() {
           </ScrollArea>
         )}
 
-        {/* Level 2+: Sections sidebar + Manthra content */}
+        {/* Level 2+: Sections + Manthras */}
         {selectedGrantha && (
           <>
             {/* Sections sidebar */}
@@ -285,9 +506,7 @@ export default function BackupDetailPage() {
                           <span className="truncate">{s.title}</span>
                           <span className="text-xs text-muted-foreground flex-shrink-0 tabular-nums">{count}</span>
                         </div>
-                        {s.type && (
-                          <p className="text-[10px] text-muted-foreground/60 mt-0.5 capitalize">{s.type}</p>
-                        )}
+                        {s.type && <p className="text-[10px] text-muted-foreground/60 mt-0.5 capitalize">{s.type}</p>}
                       </button>
                     );
                   })}
@@ -306,46 +525,18 @@ export default function BackupDetailPage() {
                 </div>
               ) : (
                 <>
-                  <div className="px-6 py-3 border-b flex-shrink-0">
+                  <div className="px-6 py-3 border-b flex-shrink-0 flex items-center justify-between gap-4">
                     <p className="text-[10px] font-semibold uppercase tracking-widest text-muted-foreground">
-                      {selectedSection.title} &mdash; {manthras.length} manthras
+                      {selectedSection.title} — {manthras.length} manthras
                     </p>
+                    <p className="text-[10px] text-muted-foreground">Click ↕ on any manthra to expand teekas & translations</p>
                   </div>
                   <ScrollArea className="flex-1">
-                    <div className="p-6 space-y-4 max-w-3xl">
+                    <div className="p-6 space-y-3 max-w-3xl">
                       {manthras.length === 0 && (
                         <p className="text-sm text-muted-foreground">No manthras in this section.</p>
                       )}
-                      {manthras.map((m) => {
-                        const hasBhashyam = !!renderBlocks(m.BhashyamEntry?.SanskritTextEntry);
-                        return (
-                          <Card key={m.id} data-testid={`card-manthra-${m.id}`}>
-                            <CardHeader className="pb-0 pt-4 px-5">
-                              <div className="flex items-center gap-2">
-                                <Hash className="w-3.5 h-3.5 text-primary flex-shrink-0" />
-                                <CardTitle className="text-sm font-semibold text-primary" data-testid={`text-manthra-num-${m.id}`}>
-                                  {m.ShlokaManthraNumber}
-                                </CardTitle>
-                                {hasBhashyam && (
-                                  <Badge variant="outline" className="text-[10px] ml-auto">Bhashyam</Badge>
-                                )}
-                              </div>
-                            </CardHeader>
-                            <CardContent className="px-5 pt-3 pb-4 space-y-3">
-                              <SanskritText blocks={m.ShlokaManthraEntry?.SanskritTextEntry} />
-                              {hasBhashyam && (
-                                <>
-                                  <Separator />
-                                  <div>
-                                    <p className="text-[10px] uppercase tracking-wider text-muted-foreground mb-1.5">Bhashyam</p>
-                                    <SanskritText blocks={m.BhashyamEntry?.SanskritTextEntry} />
-                                  </div>
-                                </>
-                              )}
-                            </CardContent>
-                          </Card>
-                        );
-                      })}
+                      {manthras.map((m) => <ManthraCard key={m.id} manthra={m} />)}
                     </div>
                   </ScrollArea>
                 </>

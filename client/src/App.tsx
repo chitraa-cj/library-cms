@@ -17,6 +17,7 @@ import CategoriesPage from "@/pages/categories";
 import AboutPage from "@/pages/about";
 import GlobalPage from "@/pages/global";
 import AdminUsersPage from "@/pages/admin-users";
+import BackupsPage from "@/pages/backups";
 import NotFound from "@/pages/not-found";
 import { Loader2 } from "lucide-react";
 
@@ -36,6 +37,7 @@ function AuthenticatedRoutes() {
         <Route path="/about" component={AboutPage} />
         <Route path="/global" component={GlobalPage} />
         <Route path="/admin/users" component={AdminUsersPage} />
+        <Route path="/admin/backups" component={BackupsPage} />
         <Route component={NotFound} />
       </Switch>
     </DashboardLayout>

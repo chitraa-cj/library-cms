@@ -1,4 +1,4 @@
-import { type User, type InsertUser, type Draft, type InsertDraft, users, contentDrafts } from "@shared/schema";
+import { type User, type InsertUser, type Draft, type InsertDraft, users, contentDrafts, granthaBackups, type GranthaBackup, type GranthaBackupMeta } from "@shared/schema";
 import { db } from "./db";
 import { eq, and, desc } from "drizzle-orm";
 
@@ -19,6 +19,9 @@ export interface IStorage {
   deleteDraft(id: number, userId: string): Promise<boolean>;
   deleteDraftById(id: number): Promise<boolean>;
   markDraftPublished(id: number, userId: string, strapiDocumentId?: string): Promise<Draft | undefined>;
+  createBackup(label: string, data: any, granthaCount: number, sectionCount: number, manthraCount: number): Promise<GranthaBackup>;
+  listBackups(): Promise<GranthaBackupMeta[]>;
+  getBackup(id: number): Promise<GranthaBackup | null>;
 }
 
 export class DatabaseStorage implements IStorage {
@@ -124,6 +127,34 @@ export class DatabaseStorage implements IStorage {
       .where(and(eq(contentDrafts.id, id), eq(contentDrafts.createdBy, userId)))
       .returning();
     return updated;
+  }
+
+  async createBackup(label: string, data: any, granthaCount: number, sectionCount: number, manthraCount: number): Promise<GranthaBackup> {
+    const [backup] = await db
+      .insert(granthaBackups)
+      .values({ label, data, granthaCount, sectionCount, manthraCount })
+      .returning();
+    return backup;
+  }
+
+  async listBackups(): Promise<GranthaBackupMeta[]> {
+    const rows = await db
+      .select({
+        id: granthaBackups.id,
+        label: granthaBackups.label,
+        createdAt: granthaBackups.createdAt,
+        granthaCount: granthaBackups.granthaCount,
+        sectionCount: granthaBackups.sectionCount,
+        manthraCount: granthaBackups.manthraCount,
+      })
+      .from(granthaBackups)
+      .orderBy(desc(granthaBackups.createdAt));
+    return rows;
+  }
+
+  async getBackup(id: number): Promise<GranthaBackup | null> {
+    const [backup] = await db.select().from(granthaBackups).where(eq(granthaBackups.id, id));
+    return backup ?? null;
   }
 }
 

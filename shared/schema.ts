@@ -1,5 +1,5 @@
 import { sql } from "drizzle-orm";
-import { pgTable, text, varchar, timestamp, serial, jsonb } from "drizzle-orm/pg-core";
+import { pgTable, text, varchar, timestamp, serial, jsonb, integer } from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod";
 
@@ -47,6 +47,19 @@ export const insertDraftSchema = createInsertSchema(contentDrafts).omit({
 
 export type InsertDraft = z.infer<typeof insertDraftSchema>;
 export type Draft = typeof contentDrafts.$inferSelect;
+
+export const granthaBackups = pgTable("grantha_backups", {
+  id: serial("id").primaryKey(),
+  label: text("label").notNull(),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  granthaCount: integer("grantha_count").notNull().default(0),
+  sectionCount: integer("section_count").notNull().default(0),
+  manthraCount: integer("manthra_count").notNull().default(0),
+  data: jsonb("data").notNull(),
+});
+
+export type GranthaBackup = typeof granthaBackups.$inferSelect;
+export type GranthaBackupMeta = Omit<GranthaBackup, "data">;
 
 // ---------- Controlled vocabularies ----------
 // Values match the Strapi schema enumerations exactly.

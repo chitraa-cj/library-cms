@@ -1,7 +1,7 @@
 import type { Express } from "express";
 import { type Server } from "http";
 import { setupAuth, requireAuth, requireAdmin, hashPassword } from "./auth";
-import { createStrapiRouter, strapiRequest } from "./strapi";
+import { createStrapiRouter, strapiRequest, strapiRequestLarge } from "./strapi";
 import { storage } from "./storage";
 import type { User } from "@shared/schema";
 
@@ -1114,6 +1114,133 @@ export async function registerRoutes(
       res.json({ message: "Password updated" });
     } catch (error: any) {
       res.status(500).json({ message: error.message || "Failed to reset password" });
+    }
+  });
+
+  // ── Backup routes (admin only — read-only snapshots of all Strapi content) ──
+  // Backups are immutable: no update or delete routes exist.
+
+  async function fetchAllStrapiPages(basePath: string): Promise<any[]> {
+    const all: any[] = [];
+    let page = 1;
+    while (true) {
+      const sep = basePath.includes("?") ? "&" : "?";
+      const url = `${basePath}${sep}pagination[page]=${page}&pagination[pageSize]=100`;
+      const result = await strapiRequest(url);
+      if (!result?.data || !Array.isArray(result.data)) break;
+      all.push(...result.data);
+      const { pageCount } = result.meta?.pagination ?? {};
+      if (!pageCount || page >= pageCount) break;
+      page++;
+    }
+    return all;
+  }
+
+  async function fetchAllStrapiPagesLarge(basePath: string): Promise<any[]> {
+    const all: any[] = [];
+    let page = 1;
+    while (true) {
+      const sep = basePath.includes("?") ? "&" : "?";
+      const url = `${basePath}${sep}pagination[page]=${page}&pagination[pageSize]=100`;
+      const result = await strapiRequestLarge(url);
+      if (!result?.data || !Array.isArray(result.data)) break;
+      all.push(...result.data);
+      const { pageCount } = result.meta?.pagination ?? {};
+      if (!pageCount || page >= pageCount) break;
+      page++;
+    }
+    return all;
+  }
+
+  app.get("/api/admin/backups", requireAuth, requireAdmin, async (_req, res) => {
+    try {
+      const backups = await storage.listBackups();
+      res.json(backups);
+    } catch (e: any) {
+      res.status(500).json({ message: e.message || "Failed to list backups" });
+    }
+  });
+
+  app.get("/api/admin/backups/:id/download", requireAuth, requireAdmin, async (req, res) => {
+    try {
+      const id = parseInt(req.params.id);
+      if (isNaN(id)) return res.status(400).json({ message: "Invalid backup ID" });
+      const backup = await storage.getBackup(id);
+      if (!backup) return res.status(404).json({ message: "Backup not found" });
+      const label = (backup.label as string).replace(/[^a-z0-9_\-]/gi, "_");
+      res.setHeader("Content-Type", "application/json");
+      res.setHeader("Content-Disposition", `attachment; filename="ekatmadham-backup-${label}-${backup.id}.json"`);
+      res.json(backup.data);
+    } catch (e: any) {
+      res.status(500).json({ message: e.message || "Failed to download backup" });
+    }
+  });
+
+  app.post("/api/admin/backup", requireAuth, requireAdmin, async (_req, res) => {
+    try {
+      console.log("[backup] Starting full Strapi snapshot...");
+
+      const granthaFields =
+        "/api/granthas?" +
+        "populate[BhashyakaraIntroduction][populate][OtherTranslations]=true" +
+        "&populate[GranthaNameTranslations]=true" +
+        "&populate[teekas]=true";
+
+      const sectionFields =
+        "/api/sections?" +
+        "populate[grantha][fields][0]=documentId&populate[grantha][fields][1]=GranthaName" +
+        "&populate[parent][fields][0]=documentId&populate[parent][fields][1]=title" +
+        "&populate[titleTranslations]=true";
+
+      const manthraFields =
+        "/api/manthras?" +
+        "populate[ShlokaManthraEntry][populate][OtherTranslations]=true" +
+        "&populate[BhashyamEntry][populate][OtherTranslations]=true" +
+        "&populate[Teekas][populate][teeka]=true" +
+        "&populate[Teekas][populate][TeekaEntry][populate][OtherTranslations]=true" +
+        "&populate[wordMeanings]=true" +
+        "&populate[Section][populate][grantha][fields][0]=documentId" +
+        "&populate[Section][populate][grantha][fields][1]=GranthaName";
+
+      const [granthas, sections, manthras] = await Promise.all([
+        fetchAllStrapiPages(granthaFields),
+        fetchAllStrapiPages(sectionFields),
+        fetchAllStrapiPagesLarge(manthraFields),
+      ]);
+
+      console.log(`[backup] Fetched: ${granthas.length} granthas, ${sections.length} sections, ${manthras.length} manthras`);
+
+      const label = new Date().toISOString().slice(0, 19).replace("T", " ");
+      const snapshotData = {
+        timestamp: new Date().toISOString(),
+        granthaCount: granthas.length,
+        sectionCount: sections.length,
+        manthraCount: manthras.length,
+        granthas,
+        sections,
+        manthras,
+      };
+
+      const backup = await storage.createBackup(
+        label,
+        snapshotData,
+        granthas.length,
+        sections.length,
+        manthras.length
+      );
+
+      console.log(`[backup] Saved as backup #${backup.id}`);
+      res.json({
+        id: backup.id,
+        label: backup.label,
+        granthaCount: backup.granthaCount,
+        sectionCount: backup.sectionCount,
+        manthraCount: backup.manthraCount,
+        createdAt: backup.createdAt,
+      });
+    } catch (e: any) {
+      console.error("[backup] Failed:", e.message);
+      res.status(500).json({ message: e.message || "Backup failed" });
     }
   });
 

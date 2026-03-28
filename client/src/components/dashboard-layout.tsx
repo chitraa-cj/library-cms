@@ -20,6 +20,7 @@ import {
   Globe,
   ArrowLeft,
   ShieldCheck,
+  DatabaseBackup,
 } from "lucide-react";
 import { useState } from "react";
 import { cn } from "@/lib/utils";
@@ -162,7 +163,10 @@ export default function DashboardLayout({
                   Administration
                 </p>
                 <div className="space-y-0.5">
-                  {[{ label: "User Management", path: "/admin/users", icon: ShieldCheck }].map((item) => {
+                  {[
+                    { label: "User Management", path: "/admin/users", icon: ShieldCheck },
+                    { label: "Snapshots", path: "/admin/backups", icon: DatabaseBackup },
+                  ].map((item) => {
                     const isActive = location.startsWith(item.path);
                     return (
                       <Link key={item.path} href={item.path}>

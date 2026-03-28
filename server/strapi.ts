@@ -2,7 +2,7 @@ import { Router } from "express";
 import { requireAuth } from "./auth";
 import { storage } from "./storage";
 import { execFile } from "node:child_process";
-import { writeFileSync, unlinkSync } from "node:fs";
+import { writeFileSync, unlinkSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -83,6 +83,51 @@ export async function strapiRequest(path: string, options: { method?: string; bo
   } catch {
     return { data: null };
   }
+}
+
+/**
+ * Like strapiRequest but writes the response body to a temp file first,
+ * bypassing the execFile maxBuffer limit. Use for endpoints that can return
+ * very large payloads (e.g., full populate of manthras with rich-text blocks).
+ */
+export function strapiRequestLarge(path: string): Promise<any> {
+  const url = `${STRAPI_URL}${path}`;
+  const outFile = join(tmpdir(), `strapi_large_${Date.now()}_${Math.random().toString(36).slice(2)}.json`);
+
+  return new Promise((resolve, reject) => {
+    const args = [
+      "-g", "-s", "-k",
+      "--max-time", "30",
+      "-H", `Authorization: Bearer ${STRAPI_TOKEN()}`,
+      "-H", "Content-Type: application/json",
+      "-o", outFile,
+      "-w", `%{http_code}`,
+      url,
+    ];
+
+    execFile("curl", args, { timeout: 35000, maxBuffer: 64 * 1024 }, (err, stdout) => {
+      const status = parseInt(stdout?.trim() || "0", 10);
+      let rawBody = "";
+      try { rawBody = readFileSync(outFile, "utf8"); } catch { /* empty */ }
+      try { unlinkSync(outFile); } catch { /* ignore */ }
+
+      if (err && !rawBody) {
+        return reject(new Error(`curl large failed: ${err.message}`));
+      }
+      if (status < 200 || status >= 300) {
+        const errBody = rawBody.slice(0, 300);
+        const e = new Error(`Strapi error ${status}: ${errBody}`) as any;
+        e.status = status;
+        return reject(e);
+      }
+      if (!rawBody.trim()) return resolve({ data: null });
+      try {
+        resolve(JSON.parse(rawBody));
+      } catch {
+        resolve({ data: null });
+      }
+    });
+  });
 }
 
 export function createStrapiRouter() {

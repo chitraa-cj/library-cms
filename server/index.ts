@@ -2,6 +2,9 @@ import express, { type Request, Response, NextFunction } from "express";
 import { registerRoutes } from "./routes";
 import { serveStatic } from "./static";
 import { createServer } from "http";
+import { db } from "./db";
+import { users } from "@shared/schema";
+import { eq, sql } from "drizzle-orm";
 
 const app = express();
 app.set("trust proxy", 1);
@@ -62,6 +65,23 @@ app.use((req, res, next) => {
 });
 
 (async () => {
+  // Ensure at least one admin exists; if none, promote designated admin usernames
+  const ADMIN_USERNAMES = ["admin", "chitra.jain"];
+  try {
+    const [{ count }] = await db
+      .select({ count: sql<number>`count(*)::int` })
+      .from(users)
+      .where(eq(users.role, "admin"));
+    if (count === 0) {
+      for (const username of ADMIN_USERNAMES) {
+        await db.update(users).set({ role: "admin" }).where(eq(users.username, username));
+      }
+      console.log("[startup] No admins found — promoted designated users to admin:", ADMIN_USERNAMES.join(", "));
+    }
+  } catch (e) {
+    console.error("[startup] Admin seed error:", e);
+  }
+
   await registerRoutes(httpServer, app);
 
   app.use((err: any, _req: Request, res: Response, next: NextFunction) => {

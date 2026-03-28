@@ -156,6 +156,35 @@ export default function DashboardLayout({
               </div>
             ))}
 
+            {/* Snapshots — visible to all authenticated users */}
+            <div>
+              <p className="px-3 mb-1 text-[10px] font-semibold uppercase tracking-widest text-muted-foreground/60">
+                Snapshots
+              </p>
+              <div className="space-y-0.5">
+                {[{ label: "Snapshots", path: "/admin/backups", icon: DatabaseBackup }].map((item) => {
+                  const isActive = location.startsWith(item.path);
+                  return (
+                    <Link key={item.path} href={item.path}>
+                      <div
+                        className={cn(
+                          "flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm transition-colors cursor-pointer group",
+                          isActive
+                            ? "bg-sidebar-accent text-sidebar-foreground font-medium"
+                            : "text-muted-foreground hover:text-sidebar-foreground hover:bg-sidebar-accent/50"
+                        )}
+                        data-testid="nav-snapshots"
+                      >
+                        <item.icon className={cn("w-4 h-4 flex-shrink-0", isActive ? "text-primary" : "text-muted-foreground group-hover:text-sidebar-foreground")} />
+                        <span className="flex-1">{item.label}</span>
+                        {isActive && <ChevronRight className="w-4 h-4 text-muted-foreground" />}
+                      </div>
+                    </Link>
+                  );
+                })}
+              </div>
+            </div>
+
             {/* Admin-only section */}
             {user?.role === "admin" && (
               <div>
@@ -163,10 +192,7 @@ export default function DashboardLayout({
                   Administration
                 </p>
                 <div className="space-y-0.5">
-                  {[
-                    { label: "User Management", path: "/admin/users", icon: ShieldCheck },
-                    { label: "Snapshots", path: "/admin/backups", icon: DatabaseBackup },
-                  ].map((item) => {
+                  {[{ label: "User Management", path: "/admin/users", icon: ShieldCheck }].map((item) => {
                     const isActive = location.startsWith(item.path);
                     return (
                       <Link key={item.path} href={item.path}>

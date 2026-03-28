@@ -1152,7 +1152,7 @@ export async function registerRoutes(
     return all;
   }
 
-  app.get("/api/admin/backups", requireAuth, requireAdmin, async (_req, res) => {
+  app.get("/api/admin/backups", requireAuth, async (_req, res) => {
     try {
       const backups = await storage.listBackups();
       res.json(backups);
@@ -1161,7 +1161,7 @@ export async function registerRoutes(
     }
   });
 
-  app.get("/api/admin/backups/:id/download", requireAuth, requireAdmin, async (req, res) => {
+  app.get("/api/admin/backups/:id/download", requireAuth, async (req, res) => {
     try {
       const id = parseInt(req.params.id);
       if (isNaN(id)) return res.status(400).json({ message: "Invalid backup ID" });

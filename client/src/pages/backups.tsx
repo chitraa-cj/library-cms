@@ -6,11 +6,14 @@ import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useToast } from "@/hooks/use-toast";
+import { useAuth } from "@/hooks/use-auth";
 import { Download, DatabaseBackup, BookOpen, ScrollText, Hash, Loader2, ShieldCheck } from "lucide-react";
 import type { GranthaBackupMeta } from "@shared/schema";
 
 export default function BackupsPage() {
   const { toast } = useToast();
+  const { user } = useAuth();
+  const isAdmin = user?.role === "admin";
   const [creatingId, setCreatingId] = useState<number | null>(null);
 
   const { data: backups = [], isLoading } = useQuery<GranthaBackupMeta[]>({
@@ -55,23 +58,25 @@ export default function BackupsPage() {
             Snapshots cannot be edited or deleted.
           </p>
         </div>
-        <Button
-          onClick={() => createBackupMutation.mutate()}
-          disabled={createBackupMutation.isPending}
-          data-testid="button-create-backup"
-        >
-          {createBackupMutation.isPending ? (
-            <>
-              <Loader2 className="w-4 h-4 mr-2 animate-spin" />
-              Creating…
-            </>
-          ) : (
-            <>
-              <DatabaseBackup className="w-4 h-4 mr-2" />
-              Take Snapshot
-            </>
-          )}
-        </Button>
+        {isAdmin && (
+          <Button
+            onClick={() => createBackupMutation.mutate()}
+            disabled={createBackupMutation.isPending}
+            data-testid="button-create-backup"
+          >
+            {createBackupMutation.isPending ? (
+              <>
+                <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                Creating…
+              </>
+            ) : (
+              <>
+                <DatabaseBackup className="w-4 h-4 mr-2" />
+                Take Snapshot
+              </>
+            )}
+          </Button>
+        )}
       </div>
 
       {createBackupMutation.isPending && (
@@ -102,7 +107,7 @@ export default function BackupsPage() {
             <DatabaseBackup className="w-10 h-10 mx-auto text-muted-foreground/40 mb-3" />
             <p className="text-sm font-medium text-muted-foreground">No snapshots yet</p>
             <p className="text-xs text-muted-foreground mt-1">
-              Click "Take Snapshot" to create the first full backup.
+              {isAdmin ? 'Click "Take Snapshot" to create the first full backup.' : "No snapshots have been created yet. Ask an administrator to take one."}
             </p>
           </CardContent>
         </Card>

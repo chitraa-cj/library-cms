@@ -2379,7 +2379,7 @@ export default function GranthasPage() {
               <div>
                 <p className="text-xs text-muted-foreground mb-2">What are these sub-sections called?</p>
                 <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
-                  {["Valli", "Anuvaka", "Khanda", "Brahmana", "Adhyaya", "Adhikarana", "Varnaka"].map((name) => (
+                  {["Valli", "Anuvaka", "Khanda", "Brahmana", "Adhyaya", "Adhikarana", "Varnaka", "Pada"].map((name) => (
                     <button
                       key={name}
                       type="button"
@@ -2428,7 +2428,7 @@ export default function GranthasPage() {
                 <div>
                   <p className="text-xs text-muted-foreground mb-2">What are these sub-sub-sections called?</p>
                   <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
-                    {["Pada", "Varga", "Anuvaka", "Khanda", "Section", "Part", "Sukta"].map((name) => (
+                    {["Pada", "Varga", "Anuvaka", "Khanda", "Section", "Part", "Sukta", "Adhikaranam"].map((name) => (
                       <button
                         key={name}
                         type="button"

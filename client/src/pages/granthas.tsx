@@ -1417,12 +1417,20 @@ export default function GranthasPage() {
 
   // ── Manthra functions (handle L2 and L3 paths) ──
   function addManthra(adhyayaId: string, khandaId: string, padaId?: string) {
+    // Use the adhyaya's 1-indexed position in the sorted array as its section number.
     const aIdx = adhyayas.findIndex((x) => x.id === adhyayaId) + 1;
     const leaf = structureConfig.leafName;
     setAdhyayas(
       adhyayas.map((a) => {
         if (a.id !== adhyayaId) return a;
-        const kIdx = structureConfig.levelTwoEnabled
+        // kIdx: position of this khanda within its adhyaya (1-indexed).
+        // For a synthetic "_default" khanda (flat section — no real child sections in
+        // Strapi), skip the khanda index so the number stays 2-part (aIdx.mIdx)
+        // instead of 3-part (aIdx.1.mIdx), keeping it consistent with the existing
+        // ShlokaManthraNumbers already stored in Strapi for that section.
+        const targetKhanda = a.khandas.find((x) => x.id === khandaId);
+        const isDefaultKhanda = targetKhanda?.title === "_default";
+        const kIdx = structureConfig.levelTwoEnabled && !isDefaultKhanda
           ? a.khandas.findIndex((x) => x.id === khandaId) + 1
           : aIdx;
         return {
@@ -1443,7 +1451,10 @@ export default function GranthasPage() {
                   const mIdx = Math.max(maxMIdx, p.manthras.length) + 1;
                   const newManthra: ManthraNode = {
                     id: uid(),
-                    title: `${leaf} ${aIdx}.${kIdx}.${pIdx}.${mIdx}`,
+                    // For _default khanda, keep 2-part numbering in the pada path too
+                    title: isDefaultKhanda
+                      ? `${leaf} ${aIdx}.${pIdx}.${mIdx}`
+                      : `${leaf} ${aIdx}.${kIdx}.${pIdx}.${mIdx}`,
                     order: mIdx,
                     Teekas: teekas.map((t) => ({ TeekaName: t.TeekaName, TeekaAuthor: t.TeekaAuthor })),
                   };
@@ -1459,7 +1470,10 @@ export default function GranthasPage() {
             const mIdx = Math.max(maxMIdx2, k.manthras.length) + 1;
             const newManthra: ManthraNode = {
               id: uid(),
-              title: structureConfig.levelTwoEnabled
+              // _default khanda → flat section → use 2-part number (aIdx.mIdx)
+              // Real khanda with levelTwoEnabled → 3-part (aIdx.kIdx.mIdx)
+              // levelTwoEnabled=false → 2-part (aIdx.mIdx)
+              title: structureConfig.levelTwoEnabled && !isDefaultKhanda
                 ? `${leaf} ${aIdx}.${kIdx}.${mIdx}`
                 : `${leaf} ${aIdx}.${mIdx}`,
               order: mIdx,

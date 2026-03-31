@@ -284,7 +284,10 @@ function reconstructHierarchyFromStrapi(sections: any[]): AdhyayaNode[] {
         order: adhyaya.order ?? ai + 1,
         expanded: true,
         khandas: khandaNodes,
-      };
+        // Preserve the Strapi section documentId so enrichHierarchy can look up child sections
+        // by parent docId (unique) rather than by title (non-unique across adhyayas).
+        documentId: adhyaya.documentId || undefined,
+      } as AdhyayaNode & { documentId?: string };
     });
 }
 
@@ -990,7 +993,12 @@ export default function GranthasPage() {
       // Build lookup maps from fetched sections so we can enrich hierarchy nodes
       // with strapiDocumentIds and supplement any Strapi mantras/sections missing from the draft.
       const strapiManthraByShloka = new Map<string, string>(); // shlokaNr → documentId
+      // Title-based map (kept for flat-grantha adhyaya lookups where titles ARE unique at root level).
+      // NOTE: NOT safe for khanda-level lookups — multiple khandas across different adhyayas can
+      // share the same title (e.g. "Prathama Khanda" under every Mundika in Mundaka Upanishad).
       const strapiMantrasBySecTitle = new Map<string, { title: string; docId: string; order: number }[]>();
+      // DocId-based map: section documentId → its manthras (always unique, preferred over title map).
+      const strapiMantrasBySecDocId = new Map<string, { title: string; docId: string; order: number }[]>();
       // Map: parent section documentId → child sections (for supplementing missing khandas)
       const strapiChildSectionsByParentDocId = new Map<string, any[]>();
       // Map: section title → section (for matching draft adhyayas to Strapi adhyayas)
@@ -1006,6 +1014,7 @@ export default function GranthasPage() {
             }
           }
           if (sec.title) strapiMantrasBySecTitle.set(sec.title, list);
+          if (sec.documentId) strapiMantrasBySecDocId.set(sec.documentId, list);
         }
         // Index by parent documentId for section-level supplementation
         const parentDocId = sec.parent?.documentId;
@@ -1033,11 +1042,33 @@ export default function GranthasPage() {
         const knownShlokas = collectKnownShlokas(hier);
         return hier.map((a) => {
           // ── Enrich existing khandas ──────────────────────────────────────────────────
+          // Resolve this adhyaya's Strapi documentId once (used for child-section lookup below).
+          const adhyaDocId: string | undefined =
+            (a as any).documentId || strapiSectionByTitle.get(a.title)?.documentId;
+
           const enrichedKhandas = a.khandas.map((k) => {
-            // For flat granthas the synthetic "_default" khanda owns the adhyaya's own
-            // manthras — look them up by the adhyaya title (which IS the Strapi section title).
-            const lookupTitle = k.title === "_default" ? a.title : k.title;
-            const strapiMantrasForKhanda = strapiMantrasBySecTitle.get(lookupTitle) ?? [];
+            // Determine which Strapi section's manthras belong to this khanda node.
+            // IMPORTANT: We look up by (adhyaya docId + khanda title), NOT by khanda title alone.
+            // Multiple khandas across different adhyayas can share the same title, so a plain
+            // title-keyed map would return manthras from the wrong adhyaya (e.g. Mundaka bug
+            // where "Prathama Khanda" existed under all 3 Mundikas — the last writer won and
+            // ALL three rendered Tritiya Mundaka's "Mantra 3.1.X" manthras).
+            let strapiMantrasForKhanda: { title: string; docId: string; order: number }[];
+            if (k.title === "_default") {
+              // Flat section: the "_default" synthetic khanda maps to the adhyaya itself.
+              // Adhyaya titles are unique at root level, so the title-keyed map is safe here.
+              strapiMantrasForKhanda = strapiMantrasBySecTitle.get(a.title) ?? [];
+            } else if (adhyaDocId) {
+              // Real khanda: find this khanda's specific Strapi section via parent docId + title.
+              const childSecs = strapiChildSectionsByParentDocId.get(adhyaDocId) ?? [];
+              const matchSec = childSecs.find((c: any) => c.title === k.title);
+              strapiMantrasForKhanda = matchSec?.documentId
+                ? (strapiMantrasBySecDocId.get(matchSec.documentId) ?? [])
+                : [];
+            } else {
+              // No adhyaya docId available (very rare) — fall back to title-based lookup.
+              strapiMantrasForKhanda = strapiMantrasBySecTitle.get(k.title) ?? [];
+            }
 
             // Build an order→strapi lookup for this section (order-based fallback matching).
             const strapiByOrder = new Map<number, { title: string; docId: string; order: number }>();
@@ -1146,8 +1177,13 @@ export default function GranthasPage() {
               .sort((x: any, y: any) => (x.order ?? 0) - (y.order ?? 0));
             for (const sec of strapiChildren) {
               if (!sec.title || existingKhandaTitles.has(sec.title)) continue;
-              // This Strapi khanda is missing from the draft — add it with its manthras
-              const secManthras = (strapiMantrasBySecTitle.get(sec.title) ?? [])
+              // This Strapi khanda is missing from the draft — add it with its manthras.
+              // Use the section's own documentId (unique) rather than its title (non-unique)
+              // to fetch the correct manthras for THIS specific section.
+              const secList = sec.documentId
+                ? (strapiMantrasBySecDocId.get(sec.documentId) ?? [])
+                : (strapiMantrasBySecTitle.get(sec.title) ?? []);
+              const secManthras = secList
                 .sort((x, y) => (x.order ?? 0) - (y.order ?? 0))
                 .map((sm) => ({
                   id: uid(),

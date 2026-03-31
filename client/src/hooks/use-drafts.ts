@@ -65,13 +65,26 @@ export function useDrafts(contentType: string) {
       const res = await apiRequest("POST", `/api/drafts/${draftId}/publish`);
       return res.json();
     },
-    onSuccess: () => {
+    onSuccess: (data: any) => {
       queryClient.invalidateQueries({ queryKey: ["/api/drafts", contentType] });
       queryClient.invalidateQueries({ queryKey: ["/api/strapi"] });
-      toast({
-        title: "Published",
-        description: "Content has been published to the CMS.",
-      });
+
+      const warnings: Array<{ manthra: string; error: string }> | undefined = data?.warnings;
+      if (warnings && warnings.length > 0) {
+        const list = warnings
+          .map((w) => `• ${w.manthra}: ${w.error}`)
+          .join("\n");
+        toast({
+          variant: "destructive",
+          title: `Published with ${warnings.length} error${warnings.length === 1 ? "" : "s"}`,
+          description: `The grantha was saved but ${warnings.length} mantra${warnings.length === 1 ? "" : "s"} failed to sync to Strapi:\n${list}`,
+        });
+      } else {
+        toast({
+          title: "Published",
+          description: "Content has been published to the CMS.",
+        });
+      }
     },
     onError: (err: any) => {
       toast({

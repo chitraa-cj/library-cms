@@ -485,6 +485,10 @@ async function publishGranthaWithHierarchy(
   // (no dedup API calls) for every manthra whose docId is now known.
   const manthraIdToDocId: Map<string, string> = new Map();
 
+  // Collect manthra publish failures so they can be surfaced to the user.
+  // Each entry: { manthra: string (number/title), error: string }
+  const publishFailures: Array<{ manthra: string; error: string }> = [];
+
   // Keys that carry no rich content — only identify/position the manthra.
   // A cleaned mData that only has these keys is a "Strapi-only" node: the user
   // never entered any content for it in the portal (it was supplemented from Strapi
@@ -520,7 +524,10 @@ async function publishGranthaWithHierarchy(
         manthraIdToDocId.set(manthra.id, returnedDocId);
       }
     } catch (e: any) {
-      console.error(`[publish] Manthra "${manthra.title}" failed:`, e.message);
+      const label = manthra.ShlokaManthraNumber || manthra.title || "(unknown)";
+      const msg: string = e?.message || String(e);
+      console.error(`[publish] Manthra "${label}" failed:`, msg);
+      publishFailures.push({ manthra: label, error: msg });
     }
   }
 
@@ -619,8 +626,13 @@ async function publishGranthaWithHierarchy(
     : undefined;
 
   console.log(`[publish] Syncing back ${manthraIdToDocId.size} manthra docId(s) into draft hierarchy`);
+  if (publishFailures.length > 0) {
+    console.warn(`[publish] ${publishFailures.length} manthra(s) failed to publish:`,
+      publishFailures.map(f => `"${f.manthra}": ${f.error}`).join("; ")
+    );
+  }
 
-  return { strapiResult, updatedHierarchy };
+  return { strapiResult, updatedHierarchy, publishFailures };
 }
 
 /**
@@ -989,6 +1001,7 @@ export async function registerRoutes(
 
       let strapiResult: any;
       let updatedHierarchy: any[] | undefined;
+      let publishFailures: Array<{ manthra: string; error: string }> | undefined;
 
       if (draft.contentType === "granthas") {
         // Granthas need special handling: strip wizard-only fields and
@@ -996,6 +1009,7 @@ export async function registerRoutes(
         const result = await publishGranthaWithHierarchy(draft);
         strapiResult = result.strapiResult;
         updatedHierarchy = result.updatedHierarchy;
+        publishFailures = result.publishFailures;
       } else {
         const cleanedData =
           draft.contentType === "manthras"
@@ -1036,7 +1050,11 @@ export async function registerRoutes(
       const newDocumentId = strapiResult?.data?.documentId || draft.strapiDocumentId;
       const updated = await storage.markDraftPublished(id, user.id, newDocumentId);
 
-      res.json({ draft: updated, strapi: strapiResult });
+      const responseBody: Record<string, any> = { draft: updated, strapi: strapiResult };
+      if (publishFailures && publishFailures.length > 0) {
+        responseBody.warnings = publishFailures;
+      }
+      res.json(responseBody);
     } catch (error: any) {
       res.status(500).json({ message: error.message || "Failed to publish draft" });
     }

@@ -1179,6 +1179,7 @@ export async function registerRoutes(
     }
   });
 
+  // Full data dump (kept for download; not used by Browse UI).
   app.get("/api/admin/backups/:id/data", requireAuth, async (req, res) => {
     try {
       const id = parseInt(req.params.id);
@@ -1196,6 +1197,64 @@ export async function registerRoutes(
       });
     } catch (e: any) {
       res.status(500).json({ message: e.message || "Failed to load backup" });
+    }
+  });
+
+  // Lightweight summary: metadata + granthas + sections (no manthra text).
+  // Used by the Browse UI to populate the sidebar without fetching the full blob.
+  app.get("/api/admin/backups/:id/summary", requireAuth, async (req, res) => {
+    try {
+      const id = parseInt(req.params.id);
+      if (isNaN(id)) return res.status(400).json({ message: "Invalid backup ID" });
+      const backup = await storage.getBackup(id);
+      if (!backup) return res.status(404).json({ message: "Backup not found" });
+      const d = backup.data as any;
+
+      // Build per-section manthra count from the manthras array.
+      const manthraCountBySection: Record<number, number> = {};
+      for (const m of (d.manthras ?? [])) {
+        const sid = m?.Section?.id;
+        if (sid != null) manthraCountBySection[sid] = (manthraCountBySection[sid] ?? 0) + 1;
+      }
+
+      res.json({
+        id: backup.id,
+        label: backup.label,
+        createdAt: backup.createdAt,
+        granthaCount: backup.granthaCount,
+        sectionCount: backup.sectionCount,
+        manthraCount: backup.manthraCount,
+        granthas: d.granthas ?? [],
+        sections: (d.sections ?? []).map((s: any) => ({
+          id: s.id,
+          documentId: s.documentId,
+          title: s.title,
+          type: s.type,
+          order: s.order,
+          grantha: s.grantha,
+          parent: s.parent,
+          manthraCount: manthraCountBySection[s.id] ?? 0,
+        })),
+      });
+    } catch (e: any) {
+      res.status(500).json({ message: e.message || "Failed to load backup summary" });
+    }
+  });
+
+  // Manthras for a specific section — fetched on demand by the Browse UI.
+  app.get("/api/admin/backups/:id/sections/:sectionId/manthras", requireAuth, async (req, res) => {
+    try {
+      const id = parseInt(req.params.id);
+      const sectionId = parseInt(req.params.sectionId);
+      if (isNaN(id) || isNaN(sectionId)) return res.status(400).json({ message: "Invalid ID" });
+      const backup = await storage.getBackup(id);
+      if (!backup) return res.status(404).json({ message: "Backup not found" });
+      const d = backup.data as any;
+      const manthras = (d.manthras ?? []).filter((m: any) => m?.Section?.id === sectionId);
+      manthras.sort((a: any, b: any) => (a.order ?? 999) - (b.order ?? 999));
+      res.json(manthras);
+    } catch (e: any) {
+      res.status(500).json({ message: e.message || "Failed to load manthras" });
     }
   });
 

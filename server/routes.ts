@@ -1273,6 +1273,25 @@ export async function registerRoutes(
     }
   });
 
+  // Import a backup snapshot from another environment (e.g. copy dev → prod).
+  // Body: { label, granthaCount, sectionCount, manthraCount, data }
+  app.post("/api/admin/backups/import", requireAuth, requireAdmin, async (req, res) => {
+    try {
+      const { label, granthaCount, sectionCount, manthraCount, data } = req.body;
+      if (!data || typeof data !== "object") return res.status(400).json({ message: "Missing data payload" });
+      const backup = await storage.createBackup(
+        label ?? new Date().toISOString(),
+        data,
+        Number(granthaCount ?? 0),
+        Number(sectionCount ?? 0),
+        Number(manthraCount ?? 0),
+      );
+      res.status(201).json({ id: backup.id, label: backup.label });
+    } catch (e: any) {
+      res.status(500).json({ message: e.message || "Import failed" });
+    }
+  });
+
   // Track in-progress backup to prevent duplicate requests.
   let backupInProgress = false;
 

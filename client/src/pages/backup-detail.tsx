@@ -9,7 +9,7 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import { Separator } from "@/components/ui/separator";
 import {
   ArrowLeft, BookOpen, ChevronRight, Hash, ScrollText, Download,
-  ChevronDown, ChevronUp, Languages, BookMarked, Type,
+  ChevronDown, ChevronUp, Languages, BookMarked, Type, Loader2,
 } from "lucide-react";
 
 // ── Types ──────────────────────────────────────────────────────────
@@ -44,24 +44,28 @@ type WordMeaning = {
 };
 
 type GranthaInfo = { id: number; documentId: string; GranthaName: string; GranthaType?: string };
-type SectionInfo = { id: number; documentId: string; title: string; type?: string | null; order?: number | null; grantha?: GranthaInfo | null };
+type SectionInfo = {
+  id: number; documentId: string; title: string; type?: string | null;
+  order?: number | null; grantha?: GranthaInfo | null; manthraCount: number;
+};
 
 type ManthraEntry = {
   id: number;
   documentId: string;
   ShlokaManthraNumber: string;
   order?: number | null;
-  Section: SectionInfo;
+  Section: { id: number; documentId: string; title: string };
   ShlokaManthraEntry?: ShlokEntry;
   BhashyamEntry?: ShlokEntry | null;
   Teekas?: TeekaItem[];
   wordMeanings?: WordMeaning[];
 };
 
-type BackupData = {
+type BackupSummary = {
   id: number; label: string; createdAt: string;
   granthaCount: number; sectionCount: number; manthraCount: number;
-  data: { granthas: GranthaInfo[]; sections: SectionInfo[]; manthras: ManthraEntry[] };
+  granthas: GranthaInfo[];
+  sections: SectionInfo[];
 };
 
 // ── Helpers ────────────────────────────────────────────────────────
@@ -171,12 +175,10 @@ function ManthraCard({ manthra }: { manthra: ManthraEntry }) {
       </CardHeader>
 
       <CardContent className="px-5 pt-3 pb-4 space-y-4">
-        {/* Always visible: Sanskrit */}
         {shloka && <BlockText blocks={shloka.SanskritTextEntry} className="text-sm font-[Noto_Serif_Devanagari,serif]" />}
 
         {expanded && (
           <>
-            {/* Manthra additional fields */}
             {shloka && (shloka.IASTTransliteration || blocksToText(shloka.EnglishTranslationText) || (shloka.OtherTranslations?.length ?? 0) > 0) && (
               <div className="space-y-3 pl-3 border-l-2 border-muted">
                 {shloka.IASTTransliteration?.trim() && (
@@ -204,7 +206,6 @@ function ManthraCard({ manthra }: { manthra: ManthraEntry }) {
               </div>
             )}
 
-            {/* Bhashyam */}
             {hasBhashyam && bhashyam && (
               <>
                 <Separator />
@@ -247,7 +248,6 @@ function ManthraCard({ manthra }: { manthra: ManthraEntry }) {
               </>
             )}
 
-            {/* Teekas */}
             {teekas.length > 0 && (
               <>
                 <Separator />
@@ -264,16 +264,13 @@ function ManthraCard({ manthra }: { manthra: ManthraEntry }) {
                           <p className="text-[10px] text-muted-foreground">{tk.teeka.TeekaAuthor}</p>
                         )}
                       </div>
-                      {tk.TeekaEntry && (
-                        <EntryBlock entry={tk.TeekaEntry} />
-                      )}
+                      {tk.TeekaEntry && <EntryBlock entry={tk.TeekaEntry} />}
                     </div>
                   ))}
                 </div>
               </>
             )}
 
-            {/* Word Meanings */}
             {wordMeanings.length > 0 && (
               <>
                 <Separator />
@@ -305,49 +302,47 @@ export default function BackupDetailPage() {
   const [selectedGranthaId, setSelectedGranthaId] = useState<number | null>(null);
   const [selectedSectionId, setSelectedSectionId] = useState<number | null>(null);
 
-  const { data: backup, isLoading, error } = useQuery<BackupData>({
-    queryKey: ["/api/admin/backups", id, "data"],
+  // ── Load lightweight summary (granthas + section list, no manthra text) ──
+  const { data: summary, isLoading, error } = useQuery<BackupSummary>({
+    queryKey: ["/api/admin/backups", id, "summary"],
     queryFn: async () => {
-      const res = await fetch(`/api/admin/backups/${id}/data`);
+      const res = await fetch(`/api/admin/backups/${id}/summary`);
       if (!res.ok) throw new Error("Failed to load snapshot");
       return res.json();
     },
-    staleTime: 5 * 60 * 1000,
+    staleTime: 10 * 60 * 1000,
   });
 
-  const { granthaList, sectionsByGrantha, manthrasBySection } = useMemo(() => {
-    if (!backup) return {
-      granthaList: [] as GranthaInfo[],
-      sectionsByGrantha: new Map<number, Map<number, SectionInfo>>(),
-      manthrasBySection: new Map<number, ManthraEntry[]>(),
-    };
+  // ── Load manthras for the selected section only ──
+  const { data: manthras = [], isLoading: manthrasLoading } = useQuery<ManthraEntry[]>({
+    queryKey: ["/api/admin/backups", id, "sections", selectedSectionId, "manthras"],
+    queryFn: async () => {
+      const res = await fetch(`/api/admin/backups/${id}/sections/${selectedSectionId}/manthras`);
+      if (!res.ok) throw new Error("Failed to load manthras");
+      return res.json();
+    },
+    enabled: selectedSectionId !== null,
+    staleTime: 10 * 60 * 1000,
+  });
+
+  // ── Build grantha → sections map from summary ──
+  const { granthaList, sectionsByGrantha } = useMemo(() => {
+    if (!summary) return { granthaList: [] as GranthaInfo[], sectionsByGrantha: new Map<number, SectionInfo[]>() };
 
     const granthaMap = new Map<number, GranthaInfo>();
-    const sectionsByGrantha = new Map<number, Map<number, SectionInfo>>();
-    const manthrasBySection = new Map<number, ManthraEntry[]>();
+    const sectionsByGrantha = new Map<number, SectionInfo[]>();
 
-    const sectionGranthaMap = new Map<number, GranthaInfo>();
-    for (const sec of backup.data.sections) {
-      if (sec.grantha) sectionGranthaMap.set(sec.id, sec.grantha);
-    }
-
-    for (const manthra of backup.data.manthras) {
-      const sec = manthra.Section;
-      if (!sec) continue;
-      const grantha = sec.grantha || sectionGranthaMap.get(sec.id) || null;
+    for (const sec of summary.sections) {
+      const grantha = sec.grantha;
       const granthaId = grantha?.id ?? -1;
       const granthaInfo: GranthaInfo = grantha ?? { id: -1, documentId: "", GranthaName: "Ungrouped" };
-
       if (!granthaMap.has(granthaId)) granthaMap.set(granthaId, granthaInfo);
-      if (!sectionsByGrantha.has(granthaId)) sectionsByGrantha.set(granthaId, new Map());
-      const sections = sectionsByGrantha.get(granthaId)!;
-      if (!sections.has(sec.id)) sections.set(sec.id, { ...sec, grantha });
-      if (!manthrasBySection.has(sec.id)) manthrasBySection.set(sec.id, []);
-      manthrasBySection.get(sec.id)!.push(manthra);
+      if (!sectionsByGrantha.has(granthaId)) sectionsByGrantha.set(granthaId, []);
+      sectionsByGrantha.get(granthaId)!.push(sec);
     }
 
-    for (const [, manthras] of manthrasBySection) {
-      manthras.sort((a, b) => (a.order ?? 999) - (b.order ?? 999));
+    for (const [, secs] of sectionsByGrantha) {
+      secs.sort((a, b) => (a.order ?? 999) - (b.order ?? 999));
     }
 
     const granthaList = Array.from(granthaMap.values()).sort((a, b) => {
@@ -356,16 +351,12 @@ export default function BackupDetailPage() {
       return a.GranthaName.localeCompare(b.GranthaName);
     });
 
-    return { granthaList, sectionsByGrantha, manthrasBySection };
-  }, [backup]);
+    return { granthaList, sectionsByGrantha };
+  }, [summary]);
 
   const selectedGrantha = granthaList.find((g) => g.id === selectedGranthaId) ?? null;
-  const sections = selectedGranthaId !== null
-    ? Array.from(sectionsByGrantha.get(selectedGranthaId)?.values() ?? [])
-        .sort((a, b) => (a.order ?? 999) - (b.order ?? 999))
-    : [];
+  const sections = selectedGranthaId !== null ? (sectionsByGrantha.get(selectedGranthaId) ?? []) : [];
   const selectedSection = sections.find((s) => s.id === selectedSectionId) ?? null;
-  const manthras = selectedSectionId !== null ? (manthrasBySection.get(selectedSectionId) ?? []) : [];
 
   if (isLoading) {
     return (
@@ -379,7 +370,7 @@ export default function BackupDetailPage() {
     );
   }
 
-  if (error || !backup) {
+  if (error || !summary) {
     return (
       <div className="max-w-4xl mx-auto p-6">
         <Link href="/admin/backups">
@@ -401,9 +392,9 @@ export default function BackupDetailPage() {
             </Button>
           </Link>
           <div className="flex-1 min-w-0">
-            <h1 className="font-semibold" data-testid="page-title-backup-detail">Snapshot #{backup.id}</h1>
+            <h1 className="font-semibold" data-testid="page-title-backup-detail">Snapshot #{summary.id}</h1>
             <p className="text-xs text-muted-foreground">
-              {new Date(backup.createdAt).toLocaleString()} &middot; {backup.granthaCount} granthas &middot; {backup.sectionCount} sections &middot; {backup.manthraCount} manthras
+              {new Date(summary.createdAt).toLocaleString()} &middot; {summary.granthaCount} granthas &middot; {summary.sectionCount} sections &middot; {summary.manthraCount} manthras
             </p>
           </div>
           <Button variant="outline" size="sm" onClick={() => window.open(`/api/admin/backups/${id}/download`, "_blank")} data-testid="button-download-snapshot">
@@ -449,8 +440,8 @@ export default function BackupDetailPage() {
           <ScrollArea className="flex-1">
             <div className="p-6 max-w-2xl mx-auto space-y-2">
               {granthaList.map((g) => {
-                const sects = Array.from(sectionsByGrantha.get(g.id)?.values() ?? []);
-                const mCount = sects.reduce((sum, s) => sum + (manthrasBySection.get(s.id)?.length ?? 0), 0);
+                const sects = sectionsByGrantha.get(g.id) ?? [];
+                const mCount = sects.reduce((sum, s) => sum + (s.manthraCount ?? 0), 0);
                 return (
                   <button key={g.id} onClick={() => { setSelectedGranthaId(g.id); setSelectedSectionId(null); }} className="w-full text-left" data-testid={`card-grantha-${g.id}`}>
                     <Card className="hover:shadow-sm transition-shadow hover:border-primary/40">
@@ -476,7 +467,7 @@ export default function BackupDetailPage() {
           </ScrollArea>
         )}
 
-        {/* Level 2+: Sections + Manthras */}
+        {/* Level 2+: Sections sidebar + Manthra list */}
         {selectedGrantha && (
           <>
             {/* Sections sidebar */}
@@ -489,7 +480,6 @@ export default function BackupDetailPage() {
               <ScrollArea className="flex-1">
                 <div className="p-2 space-y-0.5">
                   {sections.map((s) => {
-                    const count = manthrasBySection.get(s.id)?.length ?? 0;
                     const isActive = s.id === selectedSectionId;
                     return (
                       <button
@@ -504,7 +494,7 @@ export default function BackupDetailPage() {
                       >
                         <div className="flex items-center justify-between gap-2">
                           <span className="truncate">{s.title}</span>
-                          <span className="text-xs text-muted-foreground flex-shrink-0 tabular-nums">{count}</span>
+                          <span className="text-xs text-muted-foreground flex-shrink-0 tabular-nums">{s.manthraCount}</span>
                         </div>
                         {s.type && <p className="text-[10px] text-muted-foreground/60 mt-0.5 capitalize">{s.type}</p>}
                       </button>
@@ -517,29 +507,27 @@ export default function BackupDetailPage() {
             {/* Manthra list */}
             <div className="flex-1 min-w-0 min-h-0 overflow-hidden flex flex-col">
               {!selectedSection ? (
-                <div className="flex-1 flex items-center justify-center">
-                  <div className="text-center text-muted-foreground">
-                    <ScrollText className="w-10 h-10 mx-auto mb-3 opacity-30" />
-                    <p className="text-sm">Select a section to view its manthras</p>
-                  </div>
+                <div className="flex-1 flex items-center justify-center text-muted-foreground text-sm">
+                  Select a section to view manthras
+                </div>
+              ) : manthrasLoading ? (
+                <div className="flex-1 flex flex-col items-center justify-center gap-3 text-muted-foreground">
+                  <Loader2 className="w-6 h-6 animate-spin" />
+                  <span className="text-sm">Loading manthras…</span>
                 </div>
               ) : (
-                <>
-                  <div className="px-6 py-3 border-b flex-shrink-0 flex items-center justify-between gap-4">
-                    <p className="text-[10px] font-semibold uppercase tracking-widest text-muted-foreground">
-                      {selectedSection.title} — {manthras.length} manthras
+                <ScrollArea className="flex-1">
+                  <div className="p-4 space-y-3 max-w-3xl">
+                    <p className="text-xs text-muted-foreground px-1">
+                      {selectedSection.title} &middot; {manthras.length} mantra{manthras.length !== 1 ? "s" : ""}
                     </p>
-                    <p className="text-[10px] text-muted-foreground">Click ↕ on any manthra to expand teekas & translations</p>
+                    {manthras.length === 0 ? (
+                      <p className="text-sm text-muted-foreground px-1">No manthras in this section.</p>
+                    ) : (
+                      manthras.map((m) => <ManthraCard key={m.id} manthra={m} />)
+                    )}
                   </div>
-                  <ScrollArea className="flex-1">
-                    <div className="p-6 space-y-3 max-w-3xl">
-                      {manthras.length === 0 && (
-                        <p className="text-sm text-muted-foreground">No manthras in this section.</p>
-                      )}
-                      {manthras.map((m) => <ManthraCard key={m.id} manthra={m} />)}
-                    </div>
-                  </ScrollArea>
-                </>
+                </ScrollArea>
               )}
             </div>
           </>

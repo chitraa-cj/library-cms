@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { queryClient, apiRequest } from "@/lib/queryClient";
 import { Link } from "wouter";
@@ -8,17 +8,19 @@ import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/com
 import { Skeleton } from "@/components/ui/skeleton";
 import { useToast } from "@/hooks/use-toast";
 import { useAuth } from "@/hooks/use-auth";
-import { Download, DatabaseBackup, BookOpen, ScrollText, Hash, Loader2, ShieldCheck, Eye } from "lucide-react";
+import { Download, DatabaseBackup, BookOpen, ScrollText, Hash, Loader2, ShieldCheck, Eye, Upload } from "lucide-react";
 import type { GranthaBackupMeta } from "@shared/schema";
 
 export default function BackupsPage() {
   const { toast } = useToast();
   const { user } = useAuth();
   const isAdmin = user?.role === "admin";
+  const importInputRef = useRef<HTMLInputElement>(null);
 
   // When a snapshot is kicked off we poll the status + list until it lands.
   const [polling, setPolling] = useState(false);
   const [prevCount, setPrevCount] = useState<number | null>(null);
+  const [importing, setImporting] = useState(false);
 
   const { data: backups = [], isLoading } = useQuery<GranthaBackupMeta[]>({
     queryKey: ["/api/admin/backups"],
@@ -81,6 +83,51 @@ export default function BackupsPage() {
     },
   });
 
+  async function handleImportFile(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    e.target.value = "";
+    setImporting(true);
+    try {
+      const text = await file.text();
+      const data = JSON.parse(text);
+
+      // Accept either raw data blob or a wrapped export with metadata
+      const payload = data.data ?? data;
+      const granthaCount = data.granthaCount ?? (payload.granthas?.length ?? 0);
+      const sectionCount = data.sectionCount ?? (payload.sections?.length ?? 0);
+      const manthraCount = data.manthraCount ?? (payload.manthras?.length ?? 0);
+      const label = data.label ?? file.name.replace(/\.json$/i, "");
+
+      const res = await apiRequest("POST", "/api/admin/backups/import", {
+        label,
+        granthaCount,
+        sectionCount,
+        manthraCount,
+        data: payload,
+      });
+
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.message || "Import failed");
+      }
+
+      await queryClient.invalidateQueries({ queryKey: ["/api/admin/backups"] });
+      toast({
+        title: "Snapshot imported",
+        description: `Imported ${manthraCount} manthras across ${granthaCount} granthas.`,
+      });
+    } catch (err: any) {
+      toast({
+        title: "Import failed",
+        description: err.message || "Could not parse or import the snapshot file.",
+        variant: "destructive",
+      });
+    } finally {
+      setImporting(false);
+    }
+  }
+
   function handleDownload(backupId: number) {
     window.open(`/api/admin/backups/${backupId}/download`, "_blank");
   }
@@ -89,6 +136,16 @@ export default function BackupsPage() {
 
   return (
     <div className="max-w-4xl mx-auto p-6 space-y-6">
+      {/* Hidden file input for import */}
+      <input
+        ref={importInputRef}
+        type="file"
+        accept=".json,application/json"
+        className="hidden"
+        onChange={handleImportFile}
+        data-testid="input-import-file"
+      />
+
       <div className="flex items-start justify-between gap-4">
         <div>
           <div className="flex items-center gap-2 mb-1">
@@ -101,23 +158,31 @@ export default function BackupsPage() {
           </p>
         </div>
         {isAdmin && (
-          <Button
-            onClick={() => createBackupMutation.mutate()}
-            disabled={isCreating}
-            data-testid="button-create-backup"
-          >
-            {isCreating ? (
-              <>
-                <Loader2 className="w-4 h-4 mr-2 animate-spin" />
-                Creating…
-              </>
-            ) : (
-              <>
-                <DatabaseBackup className="w-4 h-4 mr-2" />
-                Take Snapshot
-              </>
-            )}
-          </Button>
+          <div className="flex items-center gap-2 flex-shrink-0">
+            <Button
+              variant="outline"
+              onClick={() => importInputRef.current?.click()}
+              disabled={importing || isCreating}
+              data-testid="button-import-backup"
+            >
+              {importing ? (
+                <><Loader2 className="w-4 h-4 mr-2 animate-spin" />Importing…</>
+              ) : (
+                <><Upload className="w-4 h-4 mr-2" />Import Snapshot</>
+              )}
+            </Button>
+            <Button
+              onClick={() => createBackupMutation.mutate()}
+              disabled={isCreating || importing}
+              data-testid="button-create-backup"
+            >
+              {isCreating ? (
+                <><Loader2 className="w-4 h-4 mr-2 animate-spin" />Creating…</>
+              ) : (
+                <><DatabaseBackup className="w-4 h-4 mr-2" />Take Snapshot</>
+              )}
+            </Button>
+          </div>
         )}
       </div>
 
@@ -138,6 +203,20 @@ export default function BackupsPage() {
         </Card>
       )}
 
+      {importing && (
+        <Card className="border-primary/30 bg-primary/5">
+          <CardContent className="py-4">
+            <div className="flex items-center gap-3">
+              <Loader2 className="w-5 h-5 animate-spin text-primary" />
+              <div>
+                <p className="text-sm font-medium">Importing snapshot…</p>
+                <p className="text-xs text-muted-foreground">Reading and saving the uploaded file.</p>
+              </div>
+            </div>
+          </CardContent>
+        </Card>
+      )}
+
       {isLoading ? (
         <div className="space-y-3">
           {[1, 2, 3].map((i) => (
@@ -150,7 +229,9 @@ export default function BackupsPage() {
             <DatabaseBackup className="w-10 h-10 mx-auto text-muted-foreground/40 mb-3" />
             <p className="text-sm font-medium text-muted-foreground">No snapshots yet</p>
             <p className="text-xs text-muted-foreground mt-1">
-              {isAdmin ? 'Click "Take Snapshot" to create the first full backup.' : "No snapshots have been created yet. Ask an administrator to take one."}
+              {isAdmin
+                ? 'Click "Take Snapshot" to create a full backup, or use "Import Snapshot" to upload a previously downloaded backup file.'
+                : "No snapshots have been created yet. Ask an administrator to take one."}
             </p>
           </CardContent>
         </Card>

@@ -517,9 +517,25 @@ async function publishGranthaWithHierarchy(
       }
 
       console.log(`[publish] Manthra payload:`, JSON.stringify(mData).slice(0, 300));
-      const returnedDocId = manthra.strapiDocumentId
-        ? await updateExistingManthra(manthra.strapiDocumentId, mData, manthra.title)
-        : await createOrUpdateManthra(mData, manthra.title);
+      let returnedDocId: string | undefined;
+      if (manthra.strapiDocumentId) {
+        try {
+          returnedDocId = await updateExistingManthra(manthra.strapiDocumentId, mData, manthra.title);
+        } catch (putErr: any) {
+          if (putErr?.status === 404) {
+            // The stored Strapi docId is orphaned (manthra was deleted in Strapi).
+            // Fall back to create-or-update so the manthra is not silently lost.
+            console.warn(
+              `[publish] Manthra "${manthra.ShlokaManthraNumber || manthra.title}" — PUT 404 (orphaned docId ${manthra.strapiDocumentId}), falling back to create`
+            );
+            returnedDocId = await createOrUpdateManthra(mData, manthra.title);
+          } else {
+            throw putErr;
+          }
+        }
+      } else {
+        returnedDocId = await createOrUpdateManthra(mData, manthra.title);
+      }
       if (returnedDocId && manthra.id) {
         manthraIdToDocId.set(manthra.id, returnedDocId);
       }

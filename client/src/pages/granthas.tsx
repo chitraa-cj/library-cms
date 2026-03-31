@@ -1132,7 +1132,10 @@ export default function GranthasPage() {
             // Returns { docId, strapiTitle } where strapiTitle is set only when the match
             // came from Strapi (title may differ from the draft node's title — e.g. a stale
             // draft says "Mantra 1.1.1" but Strapi only knows it as "Manthra 1.1.1").
-            function resolveDocId(m: ManthraNode): { docId: string; strapiTitle?: string } | undefined {
+            // docId may be undefined when the Strapi record is orphaned — the node is kept
+            // but the stale docId is cleared so the next publish re-creates it via POST.
+            // Returns undefined only when the node is a pure ghost (no local content, no remap).
+            function resolveDocId(m: ManthraNode): { docId: string | undefined; strapiTitle?: string } | undefined {
               if (m.strapiDocumentId) {
                 // If the draft already has a strapiDocumentId, check it still exists in Strapi.
                 const stillExists = strapiMantrasForKhanda.some((sm) => sm.docId === m.strapiDocumentId);
@@ -1144,7 +1147,15 @@ export default function GranthasPage() {
                     matchedDocIds.add(sm.docId);
                     return { docId: sm.docId, strapiTitle: sm.title };
                   }
-                  // Truly deleted with no order match — drop this node (return undefined).
+                  // No order remap available. Keep the node if it has local content that
+                  // has not yet reached Strapi — clearing the stale docId forces a fresh
+                  // POST on the next publish instead of a failing PUT.
+                  const hasLocalDraftContent = !!(m.ShlokaManthraEntry || m.BhashyamForShlokaManthra ||
+                    (Array.isArray(m.Teekas) && m.Teekas.some((t) => t.TeekaEntry)));
+                  if (hasLocalDraftContent) {
+                    return { docId: undefined }; // keep visible, clear stale docId
+                  }
+                  // Pure ghost (no local content) — drop it entirely.
                   return undefined;
                 }
                 matchedDocIds.add(m.strapiDocumentId);

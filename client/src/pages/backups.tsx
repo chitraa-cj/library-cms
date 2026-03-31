@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { queryClient, apiRequest } from "@/lib/queryClient";
 import { Link } from "wouter";
@@ -15,11 +15,38 @@ export default function BackupsPage() {
   const { toast } = useToast();
   const { user } = useAuth();
   const isAdmin = user?.role === "admin";
-  const [creatingId, setCreatingId] = useState<number | null>(null);
+
+  // When a snapshot is kicked off we poll the status + list until it lands.
+  const [polling, setPolling] = useState(false);
+  const [prevCount, setPrevCount] = useState<number | null>(null);
 
   const { data: backups = [], isLoading } = useQuery<GranthaBackupMeta[]>({
     queryKey: ["/api/admin/backups"],
+    refetchInterval: polling ? 5000 : false,
   });
+
+  const { data: statusData } = useQuery<{ inProgress: boolean }>({
+    queryKey: ["/api/admin/backup/status"],
+    refetchInterval: polling ? 5000 : false,
+    enabled: polling,
+  });
+
+  // Stop polling once the server signals done AND the new backup appears in the list.
+  useEffect(() => {
+    if (!polling) return;
+    const serverDone = statusData && !statusData.inProgress;
+    const listGrew = prevCount !== null && backups.length > prevCount;
+    if (serverDone && listGrew) {
+      setPolling(false);
+      const newest = backups[0];
+      toast({
+        title: "Snapshot created",
+        description: newest
+          ? `Backed up ${newest.granthaCount} granthas, ${newest.sectionCount} sections, ${newest.manthraCount} manthras.`
+          : "Snapshot saved successfully.",
+      });
+    }
+  }, [polling, statusData, backups, prevCount]);
 
   const createBackupMutation = useMutation({
     mutationFn: async () => {
@@ -27,13 +54,25 @@ export default function BackupsPage() {
       return res.json();
     },
     onSuccess: (data) => {
-      queryClient.invalidateQueries({ queryKey: ["/api/admin/backups"] });
-      toast({
-        title: "Snapshot created",
-        description: `Backed up ${data.granthaCount} granthas, ${data.sectionCount} sections, ${data.manthraCount} manthras.`,
-      });
+      if (data?.status === "started") {
+        setPrevCount(backups.length);
+        setPolling(true);
+        toast({
+          title: "Snapshot started",
+          description: "Fetching all content from Strapi — this takes 1–3 minutes. The list will refresh automatically.",
+        });
+      } else {
+        queryClient.invalidateQueries({ queryKey: ["/api/admin/backups"] });
+        toast({
+          title: "Snapshot created",
+          description: data?.granthaCount != null
+            ? `Backed up ${data.granthaCount} granthas, ${data.sectionCount} sections, ${data.manthraCount} manthras.`
+            : "Snapshot saved.",
+        });
+      }
     },
     onError: (err: any) => {
+      setPolling(false);
       toast({
         title: "Backup failed",
         description: err.message || "Could not create snapshot.",
@@ -45,6 +84,8 @@ export default function BackupsPage() {
   function handleDownload(backupId: number) {
     window.open(`/api/admin/backups/${backupId}/download`, "_blank");
   }
+
+  const isCreating = createBackupMutation.isPending || polling;
 
   return (
     <div className="max-w-4xl mx-auto p-6 space-y-6">
@@ -62,10 +103,10 @@ export default function BackupsPage() {
         {isAdmin && (
           <Button
             onClick={() => createBackupMutation.mutate()}
-            disabled={createBackupMutation.isPending}
+            disabled={isCreating}
             data-testid="button-create-backup"
           >
-            {createBackupMutation.isPending ? (
+            {isCreating ? (
               <>
                 <Loader2 className="w-4 h-4 mr-2 animate-spin" />
                 Creating…
@@ -80,7 +121,7 @@ export default function BackupsPage() {
         )}
       </div>
 
-      {createBackupMutation.isPending && (
+      {isCreating && (
         <Card className="border-primary/30 bg-primary/5">
           <CardContent className="py-4">
             <div className="flex items-center gap-3">
@@ -88,7 +129,8 @@ export default function BackupsPage() {
               <div>
                 <p className="text-sm font-medium">Creating snapshot…</p>
                 <p className="text-xs text-muted-foreground">
-                  Fetching all granthas, sections, and manthras from Strapi. This may take up to a minute.
+                  Fetching all granthas, sections, and manthras from Strapi. This typically takes 1–3 minutes.
+                  The list will update automatically when done.
                 </p>
               </div>
             </div>

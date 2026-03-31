@@ -1214,72 +1214,83 @@ export async function registerRoutes(
     }
   });
 
-  app.post("/api/admin/backup", requireAuth, requireAdmin, async (_req, res) => {
-    try {
-      console.log("[backup] Starting full Strapi snapshot...");
+  // Track in-progress backup to prevent duplicate requests.
+  let backupInProgress = false;
 
-      const granthaFields =
-        "/api/granthas?" +
-        "populate[BhashyakaraIntroduction][populate][OtherTranslations]=true" +
-        "&populate[GranthaNameTranslations]=true" +
-        "&populate[teekas]=true";
-
-      const sectionFields =
-        "/api/sections?" +
-        "populate[grantha][fields][0]=documentId&populate[grantha][fields][1]=GranthaName" +
-        "&populate[parent][fields][0]=documentId&populate[parent][fields][1]=title" +
-        "&populate[titleTranslations]=true";
-
-      const manthraFields =
-        "/api/manthras?" +
-        "populate[ShlokaManthraEntry][populate][OtherTranslations]=true" +
-        "&populate[BhashyamEntry][populate][OtherTranslations]=true" +
-        "&populate[Teekas][populate][teeka]=true" +
-        "&populate[Teekas][populate][TeekaEntry][populate][OtherTranslations]=true" +
-        "&populate[wordMeanings]=true" +
-        "&populate[Section][populate][grantha][fields][0]=documentId" +
-        "&populate[Section][populate][grantha][fields][1]=GranthaName";
-
-      const [granthas, sections, manthras] = await Promise.all([
-        fetchAllStrapiPages(granthaFields),
-        fetchAllStrapiPages(sectionFields),
-        fetchAllStrapiPagesLarge(manthraFields),
-      ]);
-
-      console.log(`[backup] Fetched: ${granthas.length} granthas, ${sections.length} sections, ${manthras.length} manthras`);
-
-      const label = new Date().toISOString().slice(0, 19).replace("T", " ");
-      const snapshotData = {
-        timestamp: new Date().toISOString(),
-        granthaCount: granthas.length,
-        sectionCount: sections.length,
-        manthraCount: manthras.length,
-        granthas,
-        sections,
-        manthras,
-      };
-
-      const backup = await storage.createBackup(
-        label,
-        snapshotData,
-        granthas.length,
-        sections.length,
-        manthras.length
-      );
-
-      console.log(`[backup] Saved as backup #${backup.id}`);
-      res.json({
-        id: backup.id,
-        label: backup.label,
-        granthaCount: backup.granthaCount,
-        sectionCount: backup.sectionCount,
-        manthraCount: backup.manthraCount,
-        createdAt: backup.createdAt,
-      });
-    } catch (e: any) {
-      console.error("[backup] Failed:", e.message);
-      res.status(500).json({ message: e.message || "Backup failed" });
+  app.post("/api/admin/backup", requireAuth, requireAdmin, (_req, res) => {
+    if (backupInProgress) {
+      return res.status(409).json({ message: "A snapshot is already being created. Please wait." });
     }
+
+    // Respond immediately so the HTTP connection never times out.
+    backupInProgress = true;
+    res.status(202).json({ status: "started" });
+
+    // Run the heavy Strapi fetches in the background.
+    (async () => {
+      try {
+        console.log("[backup] Starting full Strapi snapshot...");
+
+        const granthaFields =
+          "/api/granthas?" +
+          "populate[BhashyakaraIntroduction][populate][OtherTranslations]=true" +
+          "&populate[GranthaNameTranslations]=true" +
+          "&populate[teekas]=true";
+
+        const sectionFields =
+          "/api/sections?" +
+          "populate[grantha][fields][0]=documentId&populate[grantha][fields][1]=GranthaName" +
+          "&populate[parent][fields][0]=documentId&populate[parent][fields][1]=title" +
+          "&populate[titleTranslations]=true";
+
+        const manthraFields =
+          "/api/manthras?" +
+          "populate[ShlokaManthraEntry][populate][OtherTranslations]=true" +
+          "&populate[BhashyamEntry][populate][OtherTranslations]=true" +
+          "&populate[Teekas][populate][teeka]=true" +
+          "&populate[Teekas][populate][TeekaEntry][populate][OtherTranslations]=true" +
+          "&populate[wordMeanings]=true" +
+          "&populate[Section][populate][grantha][fields][0]=documentId" +
+          "&populate[Section][populate][grantha][fields][1]=GranthaName";
+
+        const [granthas, sections, manthras] = await Promise.all([
+          fetchAllStrapiPages(granthaFields),
+          fetchAllStrapiPages(sectionFields),
+          fetchAllStrapiPagesLarge(manthraFields),
+        ]);
+
+        console.log(`[backup] Fetched: ${granthas.length} granthas, ${sections.length} sections, ${manthras.length} manthras`);
+
+        const label = new Date().toISOString().slice(0, 19).replace("T", " ");
+        const snapshotData = {
+          timestamp: new Date().toISOString(),
+          granthaCount: granthas.length,
+          sectionCount: sections.length,
+          manthraCount: manthras.length,
+          granthas,
+          sections,
+          manthras,
+        };
+
+        const backup = await storage.createBackup(
+          label,
+          snapshotData,
+          granthas.length,
+          sections.length,
+          manthras.length
+        );
+
+        console.log(`[backup] Saved as backup #${backup.id}`);
+      } catch (e: any) {
+        console.error("[backup] Failed:", e.message);
+      } finally {
+        backupInProgress = false;
+      }
+    })();
+  });
+
+  app.get("/api/admin/backup/status", requireAuth, (_req, res) => {
+    res.json({ inProgress: backupInProgress });
   });
 
   // Delete user (admin only — cannot delete yourself)

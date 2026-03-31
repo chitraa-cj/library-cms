@@ -591,13 +591,55 @@ export default function GranthasPage() {
   const [editingGranthaSectionsLoading, setEditingGranthaSectionsLoading] = useState(false);
 
   // When the mantra dialog opens for a published mantra (has strapiDocumentId),
-  // fetch the live Strapi content and populate the form fields so users always
-  // see the current CMS version rather than potentially stale local draft data.
+  // fetch the live Strapi content and merge it with any portal-draft edits so
+  // users always see the most complete version.
+  //
+  // MERGE STRATEGY (field-level): Strapi data is used as the BASE, but any
+  // field that the portal draft already has non-empty content for is PRESERVED.
+  // This prevents the draft's English translations (or other edits not yet
+  // published to Strapi) from being silently overwritten by the Strapi fetch.
   useEffect(() => {
     const docId = editingManthra?.strapiDocumentId;
     if (!docId || !editingManthra) return;
     let cancelled = false;
     setManthraLoading(true);
+
+    // Helper: merge two ShlokaManthraEntry-style objects, preferring non-empty
+    // draft content on a per-field basis.
+    function mergeEntry(draft: any | undefined, fromStrapi: any | undefined): any | undefined {
+      if (!fromStrapi && !draft) return undefined;
+      if (!fromStrapi) return draft;
+      if (!draft) return fromStrapi;
+      return {
+        ...fromStrapi,
+        // Prefer draft value when it contains meaningful content
+        ...(hasBlocks(draft.SanskritTextEntry) && { SanskritTextEntry: draft.SanskritTextEntry }),
+        ...(hasBlocks(draft.EnglishTranslationText) && { EnglishTranslationText: draft.EnglishTranslationText }),
+        ...(draft.IASTTransliteration && { IASTTransliteration: draft.IASTTransliteration }),
+        ...(Array.isArray(draft.OtherTranslations) && draft.OtherTranslations.length > 0 && { OtherTranslations: draft.OtherTranslations }),
+      };
+    }
+
+    // Helper: merge Teekas arrays — for each Strapi teeka, prefer draft TeekaEntry
+    // content if it is non-empty, so draft translations are not lost.
+    function mergeTeekas(draftTeekas: ManthraTeekaEntry[] | undefined, strapiTeekas: any[]): ManthraTeekaEntry[] {
+      return strapiTeekas.map((t: any) => {
+        const strapiName = t.teeka?.TeekaName || t.TeekaName || "";
+        const strapiDocId = t.teeka?.documentId;
+        const draft = draftTeekas?.find(
+          (d) => (strapiDocId && d.teekaDocId === strapiDocId) || d.TeekaName === strapiName
+        );
+        const strapiEntry = t.TeekaEntry;
+        const draftEntry = draft?.TeekaEntry;
+        return {
+          TeekaName: strapiName,
+          TeekaAuthor: t.teeka?.TeekaAuthor || t.TeekaAuthor || "",
+          teekaDocId: strapiDocId || undefined,
+          TeekaEntry: mergeEntry(draftEntry, strapiEntry),
+        };
+      });
+    }
+
     fetch(`/api/strapi/manthras/${docId}`, { credentials: "include" })
       .then((r) => r.json())
       .then((res) => {
@@ -622,15 +664,10 @@ export default function GranthasPage() {
                         manthras: p.manthras.map((mn) =>
                           mn.id !== manthraId ? mn : {
                             ...mn,
-                            ShlokaManthraEntry: m.ShlokaManthraEntry || undefined,
-                            BhashyamForShlokaManthra: m.BhashyamEntry || undefined,
+                            ShlokaManthraEntry: mergeEntry(mn.ShlokaManthraEntry, m.ShlokaManthraEntry),
+                            BhashyamForShlokaManthra: mergeEntry(mn.BhashyamForShlokaManthra, m.BhashyamEntry),
                             Teekas: Array.isArray(m.Teekas) && m.Teekas.length > 0
-                              ? m.Teekas.map((t: any) => ({
-                                  TeekaName: t.teeka?.TeekaName || t.TeekaName || "",
-                                  TeekaAuthor: t.teeka?.TeekaAuthor || t.TeekaAuthor || "",
-                                  teekaDocId: t.teeka?.documentId || undefined,
-                                  TeekaEntry: t.TeekaEntry || undefined,
-                                }))
+                              ? mergeTeekas(mn.Teekas, m.Teekas)
                               : mn.Teekas,
                           }
                         ),
@@ -643,15 +680,10 @@ export default function GranthasPage() {
                   manthras: k.manthras.map((mn) =>
                     mn.id !== manthraId ? mn : {
                       ...mn,
-                      ShlokaManthraEntry: m.ShlokaManthraEntry || undefined,
-                      BhashyamForShlokaManthra: m.BhashyamEntry || undefined,
+                      ShlokaManthraEntry: mergeEntry(mn.ShlokaManthraEntry, m.ShlokaManthraEntry),
+                      BhashyamForShlokaManthra: mergeEntry(mn.BhashyamForShlokaManthra, m.BhashyamEntry),
                       Teekas: Array.isArray(m.Teekas) && m.Teekas.length > 0
-                        ? m.Teekas.map((t: any) => ({
-                            TeekaName: t.teeka?.TeekaName || t.TeekaName || "",
-                            TeekaAuthor: t.teeka?.TeekaAuthor || t.TeekaAuthor || "",
-                            teekaDocId: t.teeka?.documentId || undefined,
-                            TeekaEntry: t.TeekaEntry || undefined,
-                          }))
+                        ? mergeTeekas(mn.Teekas, m.Teekas)
                         : mn.Teekas,
                     }
                   ),

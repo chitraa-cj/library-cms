@@ -806,7 +806,9 @@ export default function GranthasPage() {
 
   async function openEdit(item: any) {
     setEditingItem(item);
-    if (item._isDraft) {
+
+    // New drafts with no Strapi link: use draft hierarchy directly and return early.
+    if (item._isDraft && !item._strapiDocId) {
       setEditingDraftId(item._draftId);
       const d = item._draftData as any;
       setFormData({
@@ -838,6 +840,48 @@ export default function GranthasPage() {
       setAdhyayas(rawCfg1?.leafName === "Khanda"
         ? migrateHierarchyLeafName(rawHier1, "Khanda", "Mantra")
         : rawHier1);
+      setStep(1);
+      setView("form");
+      return;
+    }
+
+    // All other cases — Strapi items AND local drafts linked to a Strapi grantha —
+    // need section fetch + hierarchy enrichment. Declare shared variables up front.
+    let rawCfg2: any = null;
+    let rawHierForEnrich: AdhyayaNode[] = [];
+    let hasSavedTeekas = false;
+    let hasInlineTeekas = false;
+
+    if (item._isDraft) {
+      // Local draft that is editing an existing Strapi grantha.
+      setEditingDraftId(item._draftId);
+      const d = item._draftData as any;
+      setFormData({
+        GranthaName: d.GranthaName || "",
+        GranthaType: d.GranthaType || "",
+        BhashyamName: d.BhashyamName || "",
+        BhashyamAuthor: d.BhashyamAuthor || "",
+        IntroductionToTextEnglish: d.IntroductionToTextEnglish || [],
+        BhashyakaraIntroductionSanskrit: d.BhashyakaraIntroduction?.SanskritTextEntry || [],
+        BhashyakaraIntroductionEnglish: d.BhashyakaraIntroduction?.EnglishTranslationText || [],
+        BhashyakaraIntroductionIAST: d.BhashyakaraIntroduction?.IASTTransliteration || [],
+        slug: d.slug || "",
+        order: d.order != null ? String(d.order) : "",
+        introVideoId: d.introVideoId || "",
+        introVideoTitle: d.introVideoTitle || "",
+      });
+      setTeekas(d.teekas || []);
+      setOtherTranslations(
+        (d.otherTranslations || []).map((t: any) => ({
+          ...t,
+          text: t.text || [],
+        }))
+      );
+      setGranthaNameTranslations(d.granthaNameTranslations || []);
+      rawCfg2 = d.structureConfig;
+      rawHierForEnrich = d.hierarchy || [];
+      hasSavedTeekas = true;
+      hasInlineTeekas = false;
     } else {
       // Look up any saved portal draft for this Strapi entry (including already-published ones)
       // to restore structureConfig and hierarchy which aren't stored in Strapi.
@@ -918,42 +962,48 @@ export default function GranthasPage() {
         );
       }
 
-      // Structure config (synchronous)
-      const rawCfg2 = savedData?.structureConfig;
-      const migratedCfg2 = migrateStructureConfig(rawCfg2);
-      setStructureConfig(migratedCfg2);
+      rawCfg2 = savedData?.structureConfig;
+      rawHierForEnrich = savedData?.hierarchy || [];
+      hasSavedTeekas = Array.isArray(savedData?.teekas) && savedData.teekas.length > 0;
+      hasInlineTeekas = Array.isArray(item.teekas) && item.teekas.length > 0;
+      // Set teekas synchronously when available; otherwise they'll be fetched below.
+      if (hasSavedTeekas) {
+        setTeekas(savedData.teekas);
+      } else if (hasInlineTeekas) {
+        setTeekas(
+          item.teekas.map((t: any) => ({
+            id: t.documentId || uid(),
+            TeekaName: t.TeekaName || "",
+            TeekaAuthor: t.TeekaAuthor || "",
+          }))
+        );
+      }
+    }
 
-      // Fetch sections + teekas in parallel.
-      // Teekas: prefer saved draft, then inline item.teekas, then fetch from Strapi.
-      const hasSavedTeekas = Array.isArray(savedData?.teekas) && savedData.teekas.length > 0;
-      const hasInlineTeekas = Array.isArray(item.teekas) && item.teekas.length > 0;
+    // Shared for all cases: Strapi items AND local drafts linked to Strapi.
+    const migratedCfg2 = migrateStructureConfig(rawCfg2);
+    setStructureConfig(migratedCfg2);
+    const effectiveDocId = item._isDraft ? item._strapiDocId : item.documentId;
 
-      setEditingGranthaSectionsLoading(true);
-      let fetchedSections: any[] = [];
-      try {
-        const sectionsFetch = fetch(`/api/strapi/sections/by-grantha/${item.documentId}`, { credentials: "include" });
-        const teekasFetch = (!hasSavedTeekas && !hasInlineTeekas)
-          ? fetch(`/api/strapi/teekas/by-grantha/${item.documentId}`, { credentials: "include" })
-          : Promise.resolve(null as unknown as Response);
+    // Fetch sections + teekas in parallel.
+    // Teekas: prefer saved draft (already set above), then fetch from Strapi.
+    setEditingGranthaSectionsLoading(true);
+    let fetchedSections: any[] = [];
+    try {
+      const sectionsFetch = fetch(`/api/strapi/sections/by-grantha/${effectiveDocId}`, { credentials: "include" });
+      const teekasFetch = (!hasSavedTeekas && !hasInlineTeekas)
+        ? fetch(`/api/strapi/teekas/by-grantha/${effectiveDocId}`, { credentials: "include" })
+        : Promise.resolve(null as unknown as Response);
 
-        const [sectionsRes, teekasRes] = await Promise.all([sectionsFetch, teekasFetch]);
+      const [sectionsRes, teekasRes] = await Promise.all([sectionsFetch, teekasFetch]);
 
-        if (sectionsRes.ok) {
-          const sectionsData = await sectionsRes.json();
-          fetchedSections = sectionsData?.data || [];
-        }
+      if (sectionsRes.ok) {
+        const sectionsData = await sectionsRes.json();
+        fetchedSections = sectionsData?.data || [];
+      }
 
-        if (hasSavedTeekas) {
-          setTeekas(savedData.teekas);
-        } else if (hasInlineTeekas) {
-          setTeekas(
-            item.teekas.map((t: any) => ({
-              id: t.documentId || uid(),
-              TeekaName: t.TeekaName || "",
-              TeekaAuthor: t.TeekaAuthor || "",
-            }))
-          );
-        } else if (teekasRes?.ok) {
+      if (!hasSavedTeekas && !hasInlineTeekas) {
+        if (teekasRes?.ok) {
           const teekasData = await teekasRes.json();
           const strapiTeekas: any[] = teekasData?.data || [];
           setTeekas(
@@ -966,15 +1016,15 @@ export default function GranthasPage() {
         } else {
           setTeekas([]);
         }
-      } catch { setTeekas([]); /* use empty teekas on error */ }
-      setEditingGranthaSectionsLoading(false);
+      }
+    } catch { if (!hasSavedTeekas && !hasInlineTeekas) setTeekas([]); }
+    setEditingGranthaSectionsLoading(false);
 
-      // Hierarchy: prefer portal draft; fall back to reconstructing from Strapi sections.
-      const rawHier2 = savedData?.hierarchy || [];
-      const hierToUse2 =
-        rawHier2.length > 0
-          ? rawHier2
-          : reconstructHierarchyFromStrapi(fetchedSections);
+    // Hierarchy: prefer portal draft (or linked-draft hierarchy); fall back to reconstructing from Strapi sections.
+    const hierToUse2 =
+      rawHierForEnrich.length > 0
+        ? rawHierForEnrich
+        : reconstructHierarchyFromStrapi(fetchedSections);
 
       // Auto-detect flat granthas (no real khanda level).
       // When every adhyaya has exactly one "_default" synthetic khanda, this grantha
@@ -1278,7 +1328,6 @@ export default function GranthasPage() {
         : enrichedHier2;
 
       setAdhyayas(finalHier2);
-    }
     setStep(1);
     setView("form");
   }

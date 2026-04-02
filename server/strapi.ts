@@ -232,7 +232,7 @@ export function createStrapiRouter() {
 
   router.get("/sections", async (req, res) => {
     try {
-      const queryString = new URLSearchParams(req.query as Record<string, string>).toString();
+      const queryString = req.url.includes("?") ? req.url.substring(req.url.indexOf("?") + 1) : "";
       // Passthrough: if caller supplies their own params (e.g. dashboard count query),
       // use those as-is. Otherwise paginate through all sections with the lightweight populate.
       if (queryString) {
@@ -556,9 +556,7 @@ export function createStrapiRouter() {
   for (const ct of contentTypes) {
     router.get(`/${ct.path}`, async (req, res) => {
       try {
-        const queryString = new URLSearchParams(
-          req.query as Record<string, string>
-        ).toString();
+        const queryString = req.url.includes("?") ? req.url.substring(req.url.indexOf("?") + 1) : "";
         const defaultPopulate = DEEP_POPULATE[ct.path] ?? "populate=*&pagination[pageSize]=100";
 
         if (queryString) {

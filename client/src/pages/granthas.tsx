@@ -625,13 +625,20 @@ export default function GranthasPage() {
 
     // Helper: merge Teekas arrays — for each Strapi teeka, prefer draft TeekaEntry
     // content if it is non-empty, so draft translations are not lost.
+    // Draft teekas that have TeekaEntry content but aren't matched to any Strapi teeka
+    // are appended at the end so portal-only content is never lost on re-open.
     function mergeTeekas(draftTeekas: ManthraTeekaEntry[] | undefined, strapiTeekas: any[]): ManthraTeekaEntry[] {
-      return strapiTeekas.map((t: any) => {
+      const matchedDraftIndices = new Set<number>();
+      const result = strapiTeekas.map((t: any) => {
         const strapiName = t.teeka?.TeekaName || t.TeekaName || "";
         const strapiDocId = t.teeka?.documentId;
-        const draft = draftTeekas?.find(
-          (d) => (strapiDocId && d.teekaDocId === strapiDocId) || d.TeekaName === strapiName
-        );
+        const draftIdx = draftTeekas
+          ? draftTeekas.findIndex(
+              (d) => (strapiDocId && d.teekaDocId === strapiDocId) || d.TeekaName === strapiName
+            )
+          : -1;
+        if (draftIdx >= 0) matchedDraftIndices.add(draftIdx);
+        const draft = draftIdx >= 0 ? draftTeekas![draftIdx] : undefined;
         const strapiEntry = t.TeekaEntry;
         const draftEntry = draft?.TeekaEntry;
         return {
@@ -641,6 +648,20 @@ export default function GranthasPage() {
           TeekaEntry: mergeEntry(draftEntry, strapiEntry),
         };
       });
+      // Preserve draft teekas with content that have no matching Strapi entry yet.
+      // This prevents content entered in the portal from disappearing when Strapi
+      // doesn't yet have that teeka linked for this manthra (e.g. unpublished entries).
+      if (draftTeekas) {
+        for (let i = 0; i < draftTeekas.length; i++) {
+          if (!matchedDraftIndices.has(i)) {
+            const d = draftTeekas[i];
+            if (d.TeekaEntry && (hasBlocks(d.TeekaEntry.SanskritTextEntry) || hasBlocks(d.TeekaEntry.EnglishTranslationText))) {
+              result.push({ ...d });
+            }
+          }
+        }
+      }
+      return result;
     }
 
     fetch(`/api/strapi/manthras/${docId}`, { credentials: "include" })
@@ -3344,23 +3365,16 @@ export default function GranthasPage() {
                   </h4>
                   {teekas.map((granthaTeeka, tIdx) => {
                     // Match priority:
-                    // 1. Strapi teeka documentId (most reliable — survives name typos / wrong links)
+                    // 1. Strapi teeka documentId (most reliable — survives name typos)
                     // 2. TeekaName equality
-                    // 3. Positional fallback — when a manthra has exactly one teeka entry but
-                    //    it was linked to the wrong teeka in Strapi admin, the name/id won't
-                    //    match the grantha definition; we still surface the content so it's
-                    //    visible and editable, and re-publishing will correct the relation.
+                    // No positional fallback — it caused wrong content to appear in wrong
+                    // teeka slots when Strapi had duplicate/stale teeka entries.
                     const ts = currentManthra.Teekas ?? [];
                     let existingIdx = ts.findIndex(
                       (t) => t.teekaDocId && granthaTeeka.id && t.teekaDocId === granthaTeeka.id
                     );
                     if (existingIdx < 0) {
                       existingIdx = ts.findIndex((t) => t.TeekaName === granthaTeeka.TeekaName);
-                    }
-                    if (existingIdx < 0 && tIdx < ts.length) {
-                      // Positional fallback: use the tIdx-th manthra teeka when no exact
-                      // match exists.  Re-publishing from the wizard will correct the link.
-                      existingIdx = tIdx;
                     }
                     // Always stamp the grantha's correct teeka documentId so re-publishing
                     // fixes any wrong teeka relation that was set via the Strapi admin.

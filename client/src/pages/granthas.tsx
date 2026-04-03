@@ -1228,12 +1228,19 @@ export default function GranthasPage() {
             let strapiMantrasForKhanda: { title: string; docId: string; order: number }[];
             if (k.title === "_default") {
               // Flat section: the "_default" synthetic khanda maps to the adhyaya itself.
-              // Adhyaya titles are unique at root level, so the title-keyed map is safe here.
-              strapiMantrasForKhanda = strapiMantrasBySecTitle.get(a.title) ?? [];
+              // Prefer docId-based lookup (survives title renames), fall back to title.
+              const kDocId: string | undefined = (a as any).documentId;
+              strapiMantrasForKhanda = (kDocId ? (strapiMantrasBySecDocId.get(kDocId) ?? null) : null)
+                ?? strapiMantrasBySecTitle.get(a.title) ?? [];
             } else if (adhyaDocId) {
-              // Real khanda: find this khanda's specific Strapi section via parent docId + title.
+              // Real khanda: find this khanda's specific Strapi section.
+              // Try documentId first (most reliable — survives title changes in Strapi),
+              // then fall back to title matching under the parent.
               const childSecs = strapiChildSectionsByParentDocId.get(adhyaDocId) ?? [];
-              const matchSec = childSecs.find((c: any) => c.title === k.title);
+              const kDocId: string | undefined = (k as any).documentId;
+              const matchSec =
+                (kDocId ? childSecs.find((c: any) => c.documentId === kDocId) : undefined)
+                ?? childSecs.find((c: any) => c.title === k.title);
               strapiMantrasForKhanda = matchSec?.documentId
                 ? (strapiMantrasBySecDocId.get(matchSec.documentId) ?? [])
                 : [];
@@ -1392,13 +1399,18 @@ export default function GranthasPage() {
           // Skip any section whose Strapi docId was explicitly deleted by the user.
           const deletedDocIdsSet = new Set(localDeletedSectionDocIds);
           const existingKhandaTitles = new Set(enrichedKhandas.map((k) => k.title));
-          const strapiAdhyaya = strapiSectionByTitle.get(a.title);
+          const existingKhandaDocIds = new Set(enrichedKhandas.map((k) => (k as any).documentId).filter(Boolean));
+          const aDraftDocId: string | undefined = (a as any).documentId;
+          const strapiAdhyaya = strapiSectionByTitle.get(a.title)
+            ?? (aDraftDocId ? fetchedSections.find((s: any) => s.documentId === aDraftDocId) : undefined);
           const supplementKhandas: KhandaNode[] = [];
           if (strapiAdhyaya?.documentId) {
             const strapiChildren = (strapiChildSectionsByParentDocId.get(strapiAdhyaya.documentId) ?? [])
               .sort((x: any, y: any) => (x.order ?? 0) - (y.order ?? 0));
             for (const sec of strapiChildren) {
               if (!sec.title || existingKhandaTitles.has(sec.title)) continue;
+              // Also skip if already matched by documentId (handles title renames in Strapi)
+              if (sec.documentId && existingKhandaDocIds.has(sec.documentId)) continue;
               // Skip explicitly deleted sections — do not re-add them from Strapi
               if (sec.documentId && deletedDocIdsSet.has(sec.documentId)) continue;
               // This Strapi khanda is missing from the draft — add it with its manthras.

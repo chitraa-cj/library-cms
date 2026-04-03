@@ -1105,10 +1105,14 @@ export async function registerRoutes(
       const user = req.user as User;
       const id = parseInt(req.params.id);
       if (isNaN(id)) return res.status(400).json({ message: "Invalid draft ID" });
-      const draft = await storage.getDraft(id, user.id);
+      let draft = await storage.getDraft(id, user.id);
       if (!draft) return res.status(404).json({ message: "Draft not found" });
       if (draft.status === "published") {
-        return res.status(400).json({ message: "Draft is already published" });
+        // Allow re-publishing: reset to "draft" so the publish route proceeds.
+        // This handles the race window where the UI still shows the Publish button
+        // after a successful publish (stale cache) and the user clicks again.
+        const reset = await storage.updateDraft(id, user.id, { status: "draft" });
+        if (reset) draft = reset;
       }
 
       if (STRAPI_UNROUTED_TYPES.has(draft.contentType)) {

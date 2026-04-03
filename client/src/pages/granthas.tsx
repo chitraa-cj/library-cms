@@ -117,6 +117,7 @@ interface PadaNode {
   order: number;
   manthras: ManthraNode[];
   expanded: boolean;
+  documentId?: string;
 }
 
 interface KhandaNode {
@@ -201,9 +202,69 @@ function deduplicateManthrasByOrder(manthras: any[]): any[] {
 function reconstructHierarchyFromStrapi(sections: any[]): AdhyayaNode[] {
   if (!sections || sections.length === 0) return [];
 
-  // Separate top-level sections (no parent) from child sections
+  // Build a map of children by parent documentId for O(1) look-up at every level.
+  const childrenByParent = new Map<string, any[]>();
+  for (const s of sections) {
+    const pid = s.parent?.documentId;
+    if (!pid) continue;
+    if (!childrenByParent.has(pid)) childrenByParent.set(pid, []);
+    childrenByParent.get(pid)!.push(s);
+  }
+
+  // Top-level sections = those with no parent.
   const topLevel = sections.filter((s) => !s.parent?.documentId);
-  const children = sections.filter((s) => !!s.parent?.documentId);
+
+  // Shared helper: convert a Strapi manthra to a ManthraNode.
+  const toManthra = (m: any, mi: number): ManthraNode => ({
+    id: uid(),
+    title: m.ShlokaManthraNumber || `Mantra ${mi + 1}`,
+    order: m.order ?? mi + 1,
+    strapiDocumentId: m.documentId || undefined,
+  });
+
+  // Build a KhandaNode from a Strapi section.
+  // If the section has sub-children those become padas (3-level grantha);
+  // otherwise the section's own manthras are placed directly on the khanda (2-level).
+  const toKhanda = (k: any, ki: number): KhandaNode => {
+    const subSections = (childrenByParent.get(k.documentId) ?? [])
+      .sort((a: any, b: any) => (a.order ?? 0) - (b.order ?? 0));
+
+    if (subSections.length > 0) {
+      // 3-level: this khanda has sub-sections → they become padas.
+      const padas: PadaNode[] = subSections.map((p: any, pi: number) => ({
+        id: uid(),
+        title: p.title || `Section ${pi + 1}`,
+        order: p.order ?? pi + 1,
+        expanded: true,
+        documentId: p.documentId || undefined,
+        manthras: deduplicateManthrasByOrder(
+          [...(p.manthras || [])].sort((a: any, b: any) => (a.order ?? 0) - (b.order ?? 0))
+        ).map(toManthra),
+      }));
+      return {
+        id: uid(),
+        title: k.title || `Section ${ki + 1}`,
+        order: k.order ?? ki + 1,
+        expanded: true,
+        padas,
+        manthras: [],
+        documentId: k.documentId || undefined,
+      } as KhandaNode & { documentId?: string };
+    }
+
+    // 2-level: this khanda directly owns its manthras.
+    return {
+      id: uid(),
+      title: k.title || `Section ${ki + 1}`,
+      order: k.order ?? ki + 1,
+      expanded: true,
+      padas: [],
+      manthras: deduplicateManthrasByOrder(
+        [...(k.manthras || [])].sort((a: any, b: any) => (a.order ?? 0) - (b.order ?? 0))
+      ).map(toManthra),
+      documentId: k.documentId || undefined,
+    } as KhandaNode & { documentId?: string };
+  };
 
   // If there are NO top-level sections (e.g. all sections are at one level
   // because the grantha has no adhyaya tier), treat them all as khandas
@@ -216,21 +277,7 @@ function reconstructHierarchyFromStrapi(sections: any[]): AdhyayaNode[] {
         title: sorted[0]?.title || "Adhyaya",
         order: 1,
         expanded: true,
-        khandas: sorted.map((s, i) => ({
-          id: uid(),
-          title: s.title || `Section ${i + 1}`,
-          order: s.order ?? i + 1,
-          expanded: true,
-          padas: [],
-          manthras: deduplicateManthrasByOrder(
-            [...(s.manthras || [])].sort((a, b) => (a.order ?? 0) - (b.order ?? 0))
-          ).map((m: any, mi: number) => ({
-            id: uid(),
-            title: m.ShlokaManthraNumber || `Mantra ${mi + 1}`,
-            order: m.order ?? mi + 1,
-            strapiDocumentId: m.documentId || undefined,
-          })),
-        })),
+        khandas: sorted.map(toKhanda),
       },
     ];
   }
@@ -238,28 +285,13 @@ function reconstructHierarchyFromStrapi(sections: any[]): AdhyayaNode[] {
   return topLevel
     .sort((a, b) => (a.order ?? 0) - (b.order ?? 0))
     .map((adhyaya, ai) => {
-      const khandas = children
-        .filter((c) => c.parent?.documentId === adhyaya.documentId)
-        .sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
+      const khandas = (childrenByParent.get(adhyaya.documentId) ?? [])
+        .sort((a: any, b: any) => (a.order ?? 0) - (b.order ?? 0));
 
-      // If no children found, treat the adhyaya's own manthras as its content
+      // If no children found, treat the adhyaya's own manthras as its content.
       const khandaNodes: KhandaNode[] =
         khandas.length > 0
-          ? khandas.map((k, ki) => ({
-              id: uid(),
-              title: k.title || `Section ${ki + 1}`,
-              order: k.order ?? ki + 1,
-              expanded: true,
-              padas: [],
-              manthras: deduplicateManthrasByOrder(
-                [...(k.manthras || [])].sort((a, b) => (a.order ?? 0) - (b.order ?? 0))
-              ).map((m: any, mi: number) => ({
-                id: uid(),
-                title: m.ShlokaManthraNumber || `Mantra ${mi + 1}`,
-                order: m.order ?? mi + 1,
-                strapiDocumentId: m.documentId || undefined,
-              })),
-            }))
+          ? khandas.map(toKhanda)
           : [
               {
                 id: uid(),
@@ -269,12 +301,7 @@ function reconstructHierarchyFromStrapi(sections: any[]): AdhyayaNode[] {
                 padas: [],
                 manthras: deduplicateManthrasByOrder(
                   [...(adhyaya.manthras || [])].sort((a, b) => (a.order ?? 0) - (b.order ?? 0))
-                ).map((m: any, mi: number) => ({
-                  id: uid(),
-                  title: m.ShlokaManthraNumber || `Mantra ${mi + 1}`,
-                  order: m.order ?? mi + 1,
-                  strapiDocumentId: m.documentId || undefined,
-                })),
+                ).map(toManthra),
               },
             ];
 
@@ -1059,6 +1086,15 @@ export default function GranthasPage() {
         if (isFlat && migratedCfg2.levelTwoEnabled) {
           setStructureConfig((prev) => ({ ...prev, levelTwoEnabled: false }));
         }
+
+        // Auto-detect 3-level granthas (e.g. Brahma Sutra: Adhyaya → Pada → Adhikarana).
+        // When any khanda has non-empty padas, enable levelThree so they render correctly.
+        const hasPadas = hierToUse2.some((a) =>
+          a.khandas.some((k) => (k.padas?.length ?? 0) > 0)
+        );
+        if (hasPadas && !migratedCfg2.levelThreeEnabled) {
+          setStructureConfig((prev) => ({ ...prev, levelThreeEnabled: true }));
+        }
       }
 
       // Build lookup maps from fetched sections so we can enrich hierarchy nodes
@@ -1209,20 +1245,54 @@ export default function GranthasPage() {
               });
               return acc;
             }, []);
+            // Enrich existing padas (3-level granthas: khanda → pada → manthra).
+            // Prefer docId-based lookup for the pada's own section to avoid title collisions.
+            const khandaDocId: string | undefined = (k as any).documentId;
             const enrichedPadas = (k.padas ?? []).map((p) => {
-              const padaStrapi = strapiMantrasBySecTitle.get(p.title) ?? [];
+              const padaDocId: string | undefined = (p as any).documentId;
+              const padaStrapi = padaDocId
+                ? (strapiMantrasBySecDocId.get(padaDocId) ?? [])
+                : (strapiMantrasBySecTitle.get(p.title) ?? []);
               const padaByOrder = new Map<number, { title: string; docId: string; order: number }>();
               for (const sm of padaStrapi) { if (sm.order != null) padaByOrder.set(sm.order, sm); }
-              return {
-                ...p,
-                manthras: p.manthras.map((m) => {
-                  if (m.strapiDocumentId) return m;
-                  if (strapiManthraByShloka.has(m.title)) return { ...m, strapiDocumentId: strapiManthraByShloka.get(m.title) };
-                  if (m.order != null && padaByOrder.has(m.order)) return { ...m, strapiDocumentId: padaByOrder.get(m.order)!.docId };
-                  return m;
-                }),
-              };
+              const padaMatchedDocIds = new Set<string>();
+              const enrichedPadaManthras = p.manthras.map((m) => {
+                if (m.strapiDocumentId) { padaMatchedDocIds.add(m.strapiDocumentId); return m; }
+                if (strapiManthraByShloka.has(m.title)) { const id = strapiManthraByShloka.get(m.title)!; padaMatchedDocIds.add(id); return { ...m, strapiDocumentId: id }; }
+                if (m.order != null && padaByOrder.has(m.order)) { const sm = padaByOrder.get(m.order)!; padaMatchedDocIds.add(sm.docId); return { ...m, strapiDocumentId: sm.docId }; }
+                return m;
+              });
+              // Supplement: Strapi manthras on this pada not yet in the local list.
+              const usedPadaOrders = new Set(enrichedPadaManthras.map((m) => m.order).filter((o): o is number => o != null));
+              const newPadaManthras: ManthraNode[] = [];
+              for (const sm of padaStrapi) {
+                if (!padaMatchedDocIds.has(sm.docId) && !knownShlokas.has(sm.title)) {
+                  if (sm.order != null && usedPadaOrders.has(sm.order)) continue;
+                  newPadaManthras.push({ id: uid(), title: sm.title, order: sm.order, strapiDocumentId: sm.docId });
+                  knownShlokas.add(sm.title);
+                }
+              }
+              const finalPadaManthras = [...enrichedPadaManthras, ...newPadaManthras].sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
+              return { ...p, manthras: finalPadaManthras };
             });
+            // Supplement: Strapi padas missing from the draft (3-level granthas only).
+            const existingPadaTitles = new Set(enrichedPadas.map((p) => p.title));
+            const supplementPadas: PadaNode[] = [];
+            if (khandaDocId) {
+              const strapiPadaSections = (strapiChildSectionsByParentDocId.get(khandaDocId) ?? [])
+                .sort((x: any, y: any) => (x.order ?? 0) - (y.order ?? 0));
+              for (const padaSec of strapiPadaSections) {
+                if (!padaSec.title || existingPadaTitles.has(padaSec.title)) continue;
+                const padaList = padaSec.documentId
+                  ? (strapiMantrasBySecDocId.get(padaSec.documentId) ?? [])
+                  : (strapiMantrasBySecTitle.get(padaSec.title) ?? []);
+                const padaManthras = padaList.sort((x: any, y: any) => (x.order ?? 0) - (y.order ?? 0)).map((sm: any) => ({
+                  id: uid(), title: sm.title, order: sm.order, strapiDocumentId: sm.docId,
+                } as ManthraNode));
+                supplementPadas.push({ id: uid(), title: padaSec.title, order: padaSec.order ?? 0, expanded: true, manthras: padaManthras });
+              }
+            }
+            const finalPadas = [...enrichedPadas, ...supplementPadas].sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
 
             // Supplement: add Strapi mantras that aren't already covered by a local node.
             // Also skip any whose order is already taken by an enriched local node —
@@ -1244,7 +1314,7 @@ export default function GranthasPage() {
             return {
               ...k,
               manthras: finalManthras,
-              padas: enrichedPadas,
+              padas: finalPadas,
             };
           }); // end of enrichedKhandas.map
 

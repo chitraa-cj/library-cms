@@ -1111,6 +1111,55 @@ export default function GranthasPage() {
         if (hasPadas && !migratedCfg2.levelThreeEnabled) {
           setStructureConfig((prev) => ({ ...prev, levelThreeEnabled: true }));
         }
+
+        // Auto-detect L2/L3 display names from section titles when the saved config
+        // still has the defaults ("Khanda" / "Pada"). This handles older drafts that
+        // were saved before the name was chosen, and granthas loaded straight from Strapi.
+        // Strategy: scan every L2 (or L3) title for known Sanskrit section-type words
+        // and use the most frequently occurring one.
+        const L2_KEYWORDS = ["Brahmana", "Valli", "Anuvaka", "Adhikarana", "Adhikaranam", "Varnaka", "Pada", "Sukta", "Kanda"];
+        const L3_KEYWORDS = ["Pada", "Anuvaka", "Varga", "Sukta", "Adhikaranam", "Adhikarana"];
+
+        function detectNameFromTitles(titles: string[], keywords: string[]): string | undefined {
+          const counts = new Map<string, number>();
+          for (const title of titles) {
+            const words = title.split(/[\s\-–—]+/);
+            for (const word of words) {
+              const cap = word.charAt(0).toUpperCase() + word.slice(1).toLowerCase();
+              if (keywords.includes(cap)) counts.set(cap, (counts.get(cap) || 0) + 1);
+            }
+          }
+          if (!counts.size) return undefined;
+          return [...counts.entries()].sort((a, b) => b[1] - a[1])[0][0];
+        }
+
+        // L2 name auto-detect: only when still at default "Khanda"
+        if (migratedCfg2.levelTwoEnabled && migratedCfg2.levelTwoName === "Khanda") {
+          const l2Titles = hierToUse2
+            .flatMap((a: any) => a.khandas || [])
+            .filter((k: any) => k.title && k.title !== "_default")
+            .map((k: any) => k.title as string);
+          const detected = detectNameFromTitles(l2Titles, L2_KEYWORDS);
+          if (detected) {
+            setStructureConfig((prev) => ({ ...prev, levelTwoName: detected }));
+          }
+        }
+
+        // L3 name auto-detect: only when still at default "Pada" and L3 is enabled
+        const hasPadasForName = hierToUse2.some((a: any) =>
+          (a.khandas || []).some((k: any) => (k.padas?.length ?? 0) > 0)
+        );
+        if ((migratedCfg2.levelThreeEnabled || hasPadasForName) && migratedCfg2.levelThreeName === "Pada") {
+          const l3Titles = hierToUse2
+            .flatMap((a: any) => a.khandas || [])
+            .flatMap((k: any) => k.padas || [])
+            .filter((p: any) => p.title)
+            .map((p: any) => p.title as string);
+          const detected = detectNameFromTitles(l3Titles, L3_KEYWORDS);
+          if (detected && detected !== "Pada") {
+            setStructureConfig((prev) => ({ ...prev, levelThreeName: detected }));
+          }
+        }
       }
 
       // Build lookup maps from fetched sections so we can enrich hierarchy nodes

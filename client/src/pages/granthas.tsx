@@ -127,6 +127,7 @@ interface KhandaNode {
   padas: PadaNode[];   // used when levelThreeEnabled
   manthras: ManthraNode[];  // used when levelThreeEnabled is false
   expanded: boolean;
+  documentId?: string;
 }
 
 interface AdhyayaNode {
@@ -135,6 +136,7 @@ interface AdhyayaNode {
   order: number;
   khandas: KhandaNode[];
   expanded: boolean;
+  documentId?: string;
 }
 
 // ---------- Helpers ----------
@@ -608,6 +610,9 @@ export default function GranthasPage() {
 
   // Step 3
   const [adhyayas, setAdhyayas] = useState<AdhyayaNode[]>([]);
+  // Tracks Strapi section documentIds that were explicitly removed by the user.
+  // Used to prevent the supplement logic from re-adding them and to delete them on publish.
+  const [deletedStrapiSectionDocIds, setDeletedStrapiSectionDocIds] = useState<string[]>([]);
 
   // Manthra content dialog
   const [editingManthra, setEditingManthra] = useState<{
@@ -844,6 +849,7 @@ export default function GranthasPage() {
     setEditingDraftId(null);
     setEditingItem(null);
     setViewOnly(false);
+    setDeletedStrapiSectionDocIds([]);
   }
 
   function openAdd() {
@@ -899,6 +905,8 @@ export default function GranthasPage() {
     let rawHierForEnrich: AdhyayaNode[] = [];
     let hasSavedTeekas = false;
     let hasInlineTeekas = false;
+    // Local copy used synchronously by enrichHierarchy (React state updates are async).
+    let localDeletedSectionDocIds: string[] = [];
 
     if (item._isDraft) {
       // Local draft that is editing an existing Strapi grantha.
@@ -928,6 +936,10 @@ export default function GranthasPage() {
       setGranthaNameTranslations(d.granthaNameTranslations || []);
       rawCfg2 = d.structureConfig;
       rawHierForEnrich = d.hierarchy || [];
+      if (Array.isArray(d.deletedStrapiSectionDocIds) && d.deletedStrapiSectionDocIds.length > 0) {
+        localDeletedSectionDocIds = d.deletedStrapiSectionDocIds;
+        setDeletedStrapiSectionDocIds(d.deletedStrapiSectionDocIds);
+      }
       hasSavedTeekas = true;
       hasInlineTeekas = false;
     } else {
@@ -1012,6 +1024,10 @@ export default function GranthasPage() {
 
       rawCfg2 = savedData?.structureConfig;
       rawHierForEnrich = savedData?.hierarchy || [];
+      if (Array.isArray(savedData?.deletedStrapiSectionDocIds) && savedData.deletedStrapiSectionDocIds.length > 0) {
+        localDeletedSectionDocIds = savedData.deletedStrapiSectionDocIds;
+        setDeletedStrapiSectionDocIds(savedData.deletedStrapiSectionDocIds);
+      }
       hasSavedTeekas = Array.isArray(savedData?.teekas) && savedData.teekas.length > 0;
       hasInlineTeekas = Array.isArray(item.teekas) && item.teekas.length > 0;
       // Set teekas synchronously when available; otherwise they'll be fetched below.
@@ -1276,6 +1292,7 @@ export default function GranthasPage() {
               return { ...p, manthras: finalPadaManthras };
             });
             // Supplement: Strapi padas missing from the draft (3-level granthas only).
+            const padaDeletedDocIdsSet = new Set(localDeletedSectionDocIds);
             const existingPadaTitles = new Set(enrichedPadas.map((p) => p.title));
             const supplementPadas: PadaNode[] = [];
             if (khandaDocId) {
@@ -1283,6 +1300,8 @@ export default function GranthasPage() {
                 .sort((x: any, y: any) => (x.order ?? 0) - (y.order ?? 0));
               for (const padaSec of strapiPadaSections) {
                 if (!padaSec.title || existingPadaTitles.has(padaSec.title)) continue;
+                // Skip explicitly deleted sections — do not re-add them from Strapi
+                if (padaSec.documentId && padaDeletedDocIdsSet.has(padaSec.documentId)) continue;
                 const padaList = padaSec.documentId
                   ? (strapiMantrasBySecDocId.get(padaSec.documentId) ?? [])
                   : (strapiMantrasBySecTitle.get(padaSec.title) ?? []);
@@ -1321,6 +1340,8 @@ export default function GranthasPage() {
           // ── Supplement: add Strapi khandas completely absent from the draft ─────────
           // Match this draft adhyaya to its Strapi counterpart by title, then find
           // Strapi child sections (khandas/brahmanas) that were never saved in the draft.
+          // Skip any section whose Strapi docId was explicitly deleted by the user.
+          const deletedDocIdsSet = new Set(localDeletedSectionDocIds);
           const existingKhandaTitles = new Set(enrichedKhandas.map((k) => k.title));
           const strapiAdhyaya = strapiSectionByTitle.get(a.title);
           const supplementKhandas: KhandaNode[] = [];
@@ -1329,6 +1350,8 @@ export default function GranthasPage() {
               .sort((x: any, y: any) => (x.order ?? 0) - (y.order ?? 0));
             for (const sec of strapiChildren) {
               if (!sec.title || existingKhandaTitles.has(sec.title)) continue;
+              // Skip explicitly deleted sections — do not re-add them from Strapi
+              if (sec.documentId && deletedDocIdsSet.has(sec.documentId)) continue;
               // This Strapi khanda is missing from the draft — add it with its manthras.
               // Use the section's own documentId (unique) rather than its title (non-unique)
               // to fetch the correct manthras for THIS specific section.
@@ -1371,6 +1394,7 @@ export default function GranthasPage() {
       // adhyayas*. If the draft itself is missing entire top-level adhyayas (e.g. the
       // user published 3 more khandas in Strapi after saving a portal draft that only
       // had 1), those adhyayas are never shown. Fix: append them here.
+      const topLevelDeletedDocIdsSet = new Set(localDeletedSectionDocIds);
       const existingAdhyayaTitles = new Set(enrichedHier2.map((a) => a.title));
       const topLevelStrapiSections = fetchedSections
         .filter((s: any) => !s.parent?.documentId)
@@ -1378,6 +1402,8 @@ export default function GranthasPage() {
       const missingAdhyayas: AdhyayaNode[] = [];
       for (const sec of topLevelStrapiSections) {
         if (!sec.title || existingAdhyayaTitles.has(sec.title)) continue;
+        // Skip explicitly deleted sections — do not re-add them from Strapi
+        if (sec.documentId && topLevelDeletedDocIdsSet.has(sec.documentId)) continue;
         // Child sections of this Strapi section → become khandas
         const strapiChildren = (strapiChildSectionsByParentDocId.get(sec.documentId) ?? [])
           .sort((x: any, y: any) => (x.order ?? 0) - (y.order ?? 0));
@@ -1501,6 +1527,15 @@ export default function GranthasPage() {
   }
 
   function removeAdhyaya(id: string) {
+    const target = adhyayas.find((a) => a.id === id);
+    if (target?.documentId) {
+      const docIdsToDelete: string[] = [target.documentId];
+      for (const k of target.khandas) {
+        if (k.documentId) docIdsToDelete.push(k.documentId);
+        for (const p of k.padas ?? []) { if (p.documentId) docIdsToDelete.push(p.documentId); }
+      }
+      setDeletedStrapiSectionDocIds((prev) => [...new Set([...prev, ...docIdsToDelete])]);
+    }
     setAdhyayas(adhyayas.filter((a) => a.id !== id));
   }
 
@@ -1538,6 +1573,12 @@ export default function GranthasPage() {
     setAdhyayas(
       adhyayas.map((a) => {
         if (a.id !== adhyayaId) return a;
+        const target = a.khandas.find((k) => k.id === khandaId);
+        if (target?.documentId) {
+          const docIdsToDelete: string[] = [target.documentId];
+          for (const p of target.padas ?? []) { if (p.documentId) docIdsToDelete.push(p.documentId); }
+          setDeletedStrapiSectionDocIds((prev) => [...new Set([...prev, ...docIdsToDelete])]);
+        }
         return { ...a, khandas: a.khandas.filter((k) => k.id !== khandaId) };
       })
     );
@@ -1607,6 +1648,10 @@ export default function GranthasPage() {
           ...a,
           khandas: a.khandas.map((k) => {
             if (k.id !== khandaId) return k;
+            const target = (k.padas ?? []).find((p) => p.id === padaId);
+            if (target?.documentId) {
+              setDeletedStrapiSectionDocIds((prev) => [...new Set([...prev, target.documentId!])]);
+            }
             return { ...k, padas: (k.padas ?? []).filter((p) => p.id !== padaId) };
           }),
         };
@@ -1833,6 +1878,7 @@ export default function GranthasPage() {
       granthaNameTranslations,
       structureConfig,
       hierarchy: adhyayas,
+      deletedStrapiSectionDocIds: deletedStrapiSectionDocIds.length > 0 ? deletedStrapiSectionDocIds : undefined,
     };
 
     if (formData.slug.trim()) payload.slug = formData.slug.trim();

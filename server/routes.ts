@@ -341,6 +341,7 @@ async function publishGranthaWithHierarchy(
     NumberOfTeekas: _NumberOfTeekas,
     otherTranslations: _otherLocal,
     granthaNameTranslations: granthaNameTranslationsLocal,
+    deletedStrapiSectionDocIds,
     ...granthaDataRaw
   } = rawData;
   const granthaPayload = cleanPayloadForStrapi(granthaDataRaw);
@@ -461,6 +462,24 @@ async function publishGranthaWithHierarchy(
     }
   }
   console.log(`[publish] teekaNameToDocId map: ${[...teekaNameToDocId.entries()].map(([k, v]) => `"${k}"→${v}`).join(", ") || "(empty)"}`);
+
+  // 2b. Delete explicitly removed sections from Strapi (best-effort).
+  // The client tracks removed sections in deletedStrapiSectionDocIds.
+  // We delete them here so they don't reappear on the next load.
+  if (Array.isArray(deletedStrapiSectionDocIds) && deletedStrapiSectionDocIds.length > 0) {
+    console.log(`[publish] Deleting ${deletedStrapiSectionDocIds.length} removed sections from Strapi: ${deletedStrapiSectionDocIds.join(", ")}`);
+    for (const sectionDocId of deletedStrapiSectionDocIds) {
+      try {
+        await strapiRequest(`/api/sections/${sectionDocId}`, { method: "DELETE" });
+        console.log(`[publish] Deleted section ${sectionDocId}`);
+      } catch (e: any) {
+        // 404 means already gone — that's fine
+        if (e?.status !== 404) {
+          console.error(`[publish] Failed to delete section ${sectionDocId}:`, e.message);
+        }
+      }
+    }
+  }
 
   // 3. Publish hierarchy as Sections + Manthras (best-effort)
   // Sections → /api/sections (title, type, grantha, parent)

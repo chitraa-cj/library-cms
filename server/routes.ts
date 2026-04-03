@@ -254,6 +254,45 @@ async function findOrCreateSection(
   return newDocId;
 }
 
+// Helper: resolve a section to its Strapi documentId.
+// If the node already has a known Strapi docId (from a previous publish),
+// use it directly (PUT to update order/type) — skipping the expensive dedup
+// API lookup. Falls back to findOrCreateSection when no prior docId is known.
+async function resolveSection(
+  knownDocId: string | undefined,
+  title: string,
+  type: string | undefined,
+  order: number | undefined,
+  granthaDocId: string,
+  parentDocId: string | undefined
+): Promise<string | undefined> {
+  if (knownDocId) {
+    // Fast path: we already know this section's Strapi ID — update it in place
+    try {
+      const payload: Record<string, any> = {};
+      if (type) payload.type = type;
+      if (order != null) payload.order = order;
+      if (Object.keys(payload).length > 0) {
+        await strapiRequest(`/api/sections/${knownDocId}`, {
+          method: "PUT",
+          body: JSON.stringify({ data: payload }),
+        });
+      }
+      console.log(`[publish] Section "${title}" fast-path (known docId ${knownDocId})`);
+      return knownDocId;
+    } catch (e: any) {
+      // 404 means the section was deleted from Strapi since last publish — fall through to recreate
+      if (e?.status === 404) {
+        console.warn(`[publish] Section "${title}" docId ${knownDocId} is 404 in Strapi — recreating`);
+      } else {
+        console.warn(`[publish] Section "${title}" fast-path PUT failed (${e.message}), falling back to dedup`);
+      }
+    }
+  }
+  // Slow path: dedup lookup + create
+  return findOrCreateSection(title, type, order, granthaDocId, parentDocId);
+}
+
 // Helper: update an existing Strapi manthra (PUT).
 // Used when the hierarchy node already has a strapiDocumentId so content
 // changes (e.g. OtherTranslations) are persisted to the existing record.
@@ -566,6 +605,13 @@ async function publishGranthaWithHierarchy(
     }
   }
 
+  // Maps: local node .id → Strapi documentId, collected during traversal.
+  // All three section levels + manthras are tracked so the next publish can
+  // use the fast-path (direct PUT) without any dedup API lookups.
+  const adhyayaIdToDocId: Map<string, string> = new Map();
+  const khandaIdToDocId: Map<string, string> = new Map();
+  const padaIdToDocId: Map<string, string> = new Map();
+
   if (Array.isArray(hierarchy) && granthaDocId) {
     for (const adhyaya of hierarchy) {
       // Guard: skip L1 sections with blank titles — they cannot be deduped and corrupt Strapi
@@ -576,15 +622,15 @@ async function publishGranthaWithHierarchy(
 
       let adhyayaDocId: string | undefined;
       try {
-        adhyayaDocId = await findOrCreateSection(
-          adhyaya.title, L1type, adhyaya.order ?? undefined, granthaDocId, undefined
+        adhyayaDocId = await resolveSection(
+          adhyaya.documentId, adhyaya.title, L1type, adhyaya.order ?? undefined, granthaDocId, undefined
         );
       } catch (e: any) {
         console.error(`[publish] Section L1 "${adhyaya.title}" failed:`, e.message);
         continue;
       }
-      // Skip manthras for this adhyaya if the section couldn't be created/found
       if (!adhyayaDocId) continue;
+      if (adhyaya.id) adhyayaIdToDocId.set(adhyaya.id, adhyayaDocId);
 
       for (const khanda of (adhyaya.khandas ?? [])) {
         const isDefaultKhanda = khanda.title === "_default" || !levelTwoEnabled;
@@ -597,15 +643,15 @@ async function publishGranthaWithHierarchy(
             continue;
           }
           try {
-            khandaDocId = await findOrCreateSection(
-              khanda.title, L2type, khanda.order ?? undefined, granthaDocId, adhyayaDocId
+            khandaDocId = await resolveSection(
+              khanda.documentId, khanda.title, L2type, khanda.order ?? undefined, granthaDocId, adhyayaDocId
             );
           } catch (e: any) {
             console.error(`[publish] Section L2 "${khanda.title}" failed:`, e.message);
             continue;
           }
-          // Skip manthras for this khanda if the section couldn't be created/found
           if (!khandaDocId) continue;
+          if (khanda.id) khandaIdToDocId.set(khanda.id, khandaDocId);
         } else {
           khandaDocId = adhyayaDocId;
         }
@@ -619,14 +665,15 @@ async function publishGranthaWithHierarchy(
             }
             let padaDocId: string | undefined;
             try {
-              padaDocId = await findOrCreateSection(
-                pada.title, L3type, pada.order ?? undefined, granthaDocId, khandaDocId
+              padaDocId = await resolveSection(
+                pada.documentId, pada.title, L3type, pada.order ?? undefined, granthaDocId, khandaDocId
               );
             } catch (e: any) {
               console.warn(`[publish] Pada "${pada.title}" failed:`, e.message);
               continue;
             }
             if (!padaDocId) continue;
+            if (pada.id) padaIdToDocId.set(pada.id, padaDocId);
             for (const manthra of (pada.manthras ?? [])) {
               await publishManthra(manthra, padaDocId);
             }
@@ -640,15 +687,21 @@ async function publishGranthaWithHierarchy(
     }
   }
 
-  // Apply collected Strapi documentIds back to the hierarchy so the next publish
-  // skips dedup API lookups and does direct PUTs for every manthra whose docId is known.
-  const updatedHierarchy: any[] | undefined = manthraIdToDocId.size > 0 && Array.isArray(hierarchy)
+  // Sync ALL Strapi documentIds (sections at every level + manthras) back into the
+  // hierarchy so the next publish uses the fast-path for every known record.
+  // Always generate updatedHierarchy (even when no new IDs were obtained) so the
+  // draft is always a complete, authoritative snapshot of what's in Strapi.
+  const hasSectionIds = adhyayaIdToDocId.size > 0 || khandaIdToDocId.size > 0 || padaIdToDocId.size > 0;
+  const updatedHierarchy: any[] | undefined = Array.isArray(hierarchy)
     ? hierarchy.map((adhyaya: any) => ({
         ...adhyaya,
+        ...(adhyayaIdToDocId.has(adhyaya.id) ? { documentId: adhyayaIdToDocId.get(adhyaya.id) } : {}),
         khandas: (adhyaya.khandas ?? []).map((khanda: any) => ({
           ...khanda,
+          ...(khandaIdToDocId.has(khanda.id) ? { documentId: khandaIdToDocId.get(khanda.id) } : {}),
           padas: (khanda.padas ?? []).map((pada: any) => ({
             ...pada,
+            ...(padaIdToDocId.has(pada.id) ? { documentId: padaIdToDocId.get(pada.id) } : {}),
             manthras: (pada.manthras ?? []).map((m: any) =>
               manthraIdToDocId.has(m.id) ? { ...m, strapiDocumentId: manthraIdToDocId.get(m.id) } : m
             ),
@@ -660,7 +713,10 @@ async function publishGranthaWithHierarchy(
       }))
     : undefined;
 
-  console.log(`[publish] Syncing back ${manthraIdToDocId.size} manthra docId(s) into draft hierarchy`);
+  console.log(
+    `[publish] Syncing back: ${adhyayaIdToDocId.size} adhyaya, ${khandaIdToDocId.size} khanda, ` +
+    `${padaIdToDocId.size} pada, ${manthraIdToDocId.size} manthra docId(s) into draft hierarchy`
+  );
   if (publishFailures.length > 0) {
     console.warn(`[publish] ${publishFailures.length} manthra(s) failed to publish:`,
       publishFailures.map(f => `"${f.manthra}": ${f.error}`).join("; ")

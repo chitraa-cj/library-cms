@@ -1308,7 +1308,7 @@ export default function GranthasPage() {
                 const padaManthras = padaList.sort((x: any, y: any) => (x.order ?? 0) - (y.order ?? 0)).map((sm: any) => ({
                   id: uid(), title: sm.title, order: sm.order, strapiDocumentId: sm.docId,
                 } as ManthraNode));
-                supplementPadas.push({ id: uid(), title: padaSec.title, order: padaSec.order ?? 0, expanded: true, manthras: padaManthras });
+                supplementPadas.push({ id: uid(), title: padaSec.title, order: padaSec.order ?? 0, expanded: true, documentId: padaSec.documentId || undefined, manthras: padaManthras });
               }
             }
             const finalPadas = [...enrichedPadas, ...supplementPadas].sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
@@ -1371,6 +1371,7 @@ export default function GranthasPage() {
                 title: sec.title,
                 order: sec.order ?? 0,
                 expanded: true,
+                documentId: sec.documentId || undefined,
                 padas: [],
                 manthras: secManthras,
               });
@@ -1414,8 +1415,11 @@ export default function GranthasPage() {
             title: child.title,
             order: child.order ?? 0,
             expanded: true,
+            documentId: child.documentId || undefined,
             padas: [],
-            manthras: (strapiMantrasBySecTitle.get(child.title) ?? [])
+            manthras: (child.documentId
+              ? (strapiMantrasBySecDocId.get(child.documentId) ?? strapiMantrasBySecTitle.get(child.title) ?? [])
+              : (strapiMantrasBySecTitle.get(child.title) ?? []))
               .sort((x: any, y: any) => (x.order ?? 0) - (y.order ?? 0))
               .map((sm: any, mi: number) => ({
                 id: uid(),
@@ -1426,7 +1430,9 @@ export default function GranthasPage() {
           } as KhandaNode));
         } else {
           // Flat section — create a synthetic "_default" khanda with this section's manthras
-          const manthrasForSec = (strapiMantrasBySecTitle.get(sec.title) ?? [])
+          const manthrasForSec = (sec.documentId
+            ? (strapiMantrasBySecDocId.get(sec.documentId) ?? strapiMantrasBySecTitle.get(sec.title) ?? [])
+            : (strapiMantrasBySecTitle.get(sec.title) ?? []))
             .sort((x: any, y: any) => (x.order ?? 0) - (y.order ?? 0))
             .map((sm: any, mi: number) => ({
               id: uid(),
@@ -1448,6 +1454,7 @@ export default function GranthasPage() {
           title: sec.title,
           order: sec.order ?? 0,
           expanded: true,
+          documentId: sec.documentId || undefined,
           khandas,
         } as AdhyayaNode);
       }

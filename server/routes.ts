@@ -587,24 +587,39 @@ async function publishGranthaWithHierarchy(
     try {
       const mData = await buildManthraData(manthra, sectionDocId, granthaDocId, teekaNameToDocId);
 
+      // ── Sanitise stored Strapi documentId ────────────────────────────────────
+      // Strapi v5 documentIds are 20+ characters (e.g. "nljnhc539t2q4z7im448nznm").
+      // Portal-generated UIDs (e.g. "k2tz7vh" — 7 chars) are local IDs that were
+      // accidentally stored as strapiDocumentId due to a data-corruption bug.
+      // Reject any stored ID shorter than 10 chars so we never fire a doomed PUT
+      // and never perpetuate the wrong ID in the draft.
+      const storedDocId =
+        manthra.strapiDocumentId && manthra.strapiDocumentId.length >= 10
+          ? manthra.strapiDocumentId
+          : undefined;
+      if (!storedDocId && manthra.strapiDocumentId) {
+        console.warn(
+          `[publish] Manthra "${manthra.ShlokaManthraNumber || manthra.title}" — strapiDocumentId "${manthra.strapiDocumentId}" looks like a local portal UID (too short), ignoring it and using create-or-update`
+        );
+      }
+
       // ── Collaborative-publish guard ──────────────────────────────────────────
-      // If this manthra has a Strapi docId (from a prior publish or from the Strapi
-      // supplement logic) but the cleaned payload has NO content beyond identity/
-      // position fields, it means the current user never edited this manthra locally.
-      // Skip the PUT so we don't silently erase another collaborator's work.
+      // If this manthra has a valid Strapi docId but the cleaned payload has NO
+      // content beyond identity/position fields, the current user never edited it
+      // locally. Skip the PUT so we don't silently erase another collaborator's work.
       // We still record the docId so the next draft open can reference it directly.
       const hasLocalContent = Object.keys(mData).some((k) => !IDENTITY_ONLY_KEYS.has(k));
-      if (manthra.strapiDocumentId && !hasLocalContent) {
+      if (storedDocId && !hasLocalContent) {
         console.log(`[publish] Manthra "${manthra.title}" — Strapi-only node (no local content), skipping PUT, syncing docId`);
-        if (manthra.id) manthraIdToDocId.set(manthra.id, manthra.strapiDocumentId);
+        if (manthra.id) manthraIdToDocId.set(manthra.id, storedDocId);
         return;
       }
 
       console.log(`[publish] Manthra payload:`, JSON.stringify(mData).slice(0, 300));
       let returnedDocId: string | undefined;
-      if (manthra.strapiDocumentId) {
+      if (storedDocId) {
         try {
-          returnedDocId = await updateExistingManthra(manthra.strapiDocumentId, mData, manthra.title);
+          returnedDocId = await updateExistingManthra(storedDocId, mData, manthra.title);
         } catch (putErr: any) {
           const isOrphaned =
             putErr?.status === 404 ||
@@ -613,12 +628,12 @@ async function publishGranthaWithHierarchy(
             // "Document with id \"k2tz7vh\", locale \"null\" not found".
             // Treat these the same as a 404 so the manthra is re-created rather
             // than permanently failing.
-            (putErr?.status === 400 && typeof putErr?.message === "string" && putErr.message.includes("not found"));
+            (putErr?.status === 400 && typeof putErr?.message === "string" && putErr.message.toLowerCase().includes("not found"));
           if (isOrphaned) {
             // The stored Strapi docId is orphaned (manthra was deleted in Strapi).
             // Fall back to create-or-update so the manthra is not silently lost.
             console.warn(
-              `[publish] Manthra "${manthra.ShlokaManthraNumber || manthra.title}" — PUT ${putErr?.status} orphaned (docId ${manthra.strapiDocumentId}), falling back to create`
+              `[publish] Manthra "${manthra.ShlokaManthraNumber || manthra.title}" — PUT ${putErr?.status} orphaned (docId ${storedDocId}), falling back to create`
             );
             returnedDocId = await createOrUpdateManthra(mData, manthra.title);
           } else {

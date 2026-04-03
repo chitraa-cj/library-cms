@@ -1862,12 +1862,7 @@ export default function GranthasPage() {
 
   // ---------- Save / Delete / Publish ----------
 
-  function handleSaveAndExit() {
-    if (!formData.GranthaName.trim()) {
-      toast({ variant: "destructive", title: "Grantha Name is required" });
-      return;
-    }
-
+  function buildSavePayload(): Record<string, any> {
     const payload: Record<string, any> = {
       GranthaName: formData.GranthaName,
       GranthaType: formData.GranthaType || undefined,
@@ -1920,6 +1915,16 @@ export default function GranthasPage() {
       };
     }
 
+    return payload;
+  }
+
+  // "Save" — persist draft and stay on the content entry page
+  function handleSave() {
+    if (!formData.GranthaName.trim()) {
+      toast({ variant: "destructive", title: "Grantha Name is required" });
+      return;
+    }
+    const payload = buildSavePayload();
     const strapiDocId =
       editingItem && !editingItem._isDraft
         ? editingItem.documentId
@@ -1933,10 +1938,46 @@ export default function GranthasPage() {
         draftId: editingDraftId ?? undefined,
       },
       {
-        onSuccess: () => {
-          setView("list");
-          resetForm();
-          toast({ title: "Saved as draft" });
+        onSuccess: (saved: any) => {
+          // Capture the new draft ID so subsequent saves do PUT not POST
+          if (!editingDraftId && saved?.id) {
+            setEditingDraftId(saved.id);
+          }
+        },
+      }
+    );
+  }
+
+  // "Save & Publish" — persist draft then publish to Strapi, stay on page
+  function handleSaveAndPublish() {
+    if (!formData.GranthaName.trim()) {
+      toast({ variant: "destructive", title: "Grantha Name is required" });
+      return;
+    }
+    const payload = buildSavePayload();
+    const strapiDocId =
+      editingItem && !editingItem._isDraft
+        ? editingItem.documentId
+        : editingItem?._strapiDocId || undefined;
+
+    saveDraft.mutate(
+      {
+        title: formData.GranthaName,
+        data: payload,
+        strapiDocumentId: strapiDocId,
+        draftId: editingDraftId ?? undefined,
+      },
+      {
+        onSuccess: (saved: any) => {
+          const resolvedDraftId = editingDraftId ?? saved?.id;
+          if (!editingDraftId && saved?.id) {
+            setEditingDraftId(saved.id);
+          }
+          if (resolvedDraftId) {
+            publishDraft.mutate(resolvedDraftId);
+          } else {
+            toast({ variant: "destructive", title: "Could not resolve draft ID for publish" });
+          }
         },
       }
     );
@@ -3183,9 +3224,22 @@ export default function GranthasPage() {
                   <ArrowLeft className="w-4 h-4 mr-2" />
                   Back
                 </Button>
-                <Button onClick={handleSaveAndExit} disabled={saveDraft.isPending} data-testid="button-save-exit">
-                  {saveDraft.isPending && <Loader2 className="w-4 h-4 mr-2 animate-spin" />}
-                  Save & Exit
+                <Button
+                  variant="outline"
+                  onClick={handleSave}
+                  disabled={saveDraft.isPending || publishDraft.isPending}
+                  data-testid="button-save-draft"
+                >
+                  {saveDraft.isPending && !publishDraft.isPending && <Loader2 className="w-4 h-4 mr-2 animate-spin" />}
+                  Save
+                </Button>
+                <Button
+                  onClick={handleSaveAndPublish}
+                  disabled={saveDraft.isPending || publishDraft.isPending}
+                  data-testid="button-save-and-publish"
+                >
+                  {(saveDraft.isPending || publishDraft.isPending) && <Loader2 className="w-4 h-4 mr-2 animate-spin" />}
+                  Save & Publish
                 </Button>
               </>
             )}

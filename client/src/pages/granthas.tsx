@@ -1974,7 +1974,31 @@ export default function GranthasPage() {
             setEditingDraftId(saved.id);
           }
           if (resolvedDraftId) {
-            publishDraft.mutate(resolvedDraftId);
+            publishDraft.mutate(resolvedDraftId, {
+              onSuccess: (result: any) => {
+                // ── Post-publish sync ──────────────────────────────────────────────
+                // The server enriches the draft hierarchy with Strapi documentIds
+                // during publish (manthras & sections get their IDs back-filled).
+                // Sync those IDs into memory so the next "Save & Publish" does
+                // direct PUT updates instead of re-creating records in Strapi.
+                const updatedHierarchy = result?.draft?.data?.hierarchy;
+                if (Array.isArray(updatedHierarchy)) {
+                  setAdhyayas(updatedHierarchy);
+                }
+
+                // If this was a brand-new grantha (no prior Strapi link), the publish
+                // created a Strapi record. Capture its docId so subsequent saves
+                // correctly store the strapiDocumentId on the draft.
+                const newStrapiDocId = result?.draft?.strapiDocumentId;
+                if (newStrapiDocId && editingItem) {
+                  setEditingItem({ ...editingItem, documentId: newStrapiDocId, _strapiDocId: newStrapiDocId });
+                }
+
+                // Sections that were deleted are now gone from Strapi — clear the list
+                // so a re-publish doesn't attempt to DELETE already-removed sections.
+                setDeletedStrapiSectionDocIds([]);
+              },
+            });
           } else {
             toast({ variant: "destructive", title: "Could not resolve draft ID for publish" });
           }

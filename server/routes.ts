@@ -606,11 +606,19 @@ async function publishGranthaWithHierarchy(
         try {
           returnedDocId = await updateExistingManthra(manthra.strapiDocumentId, mData, manthra.title);
         } catch (putErr: any) {
-          if (putErr?.status === 404) {
+          const isOrphaned =
+            putErr?.status === 404 ||
+            // Strapi v5 returns 400 ValidationError (not 404) for documents that
+            // exist in the DB but whose locale entry is missing — e.g. the message
+            // "Document with id \"k2tz7vh\", locale \"null\" not found".
+            // Treat these the same as a 404 so the manthra is re-created rather
+            // than permanently failing.
+            (putErr?.status === 400 && typeof putErr?.message === "string" && putErr.message.includes("not found"));
+          if (isOrphaned) {
             // The stored Strapi docId is orphaned (manthra was deleted in Strapi).
             // Fall back to create-or-update so the manthra is not silently lost.
             console.warn(
-              `[publish] Manthra "${manthra.ShlokaManthraNumber || manthra.title}" — PUT 404 (orphaned docId ${manthra.strapiDocumentId}), falling back to create`
+              `[publish] Manthra "${manthra.ShlokaManthraNumber || manthra.title}" — PUT ${putErr?.status} orphaned (docId ${manthra.strapiDocumentId}), falling back to create`
             );
             returnedDocId = await createOrUpdateManthra(mData, manthra.title);
           } else {

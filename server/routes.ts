@@ -188,6 +188,15 @@ async function buildManthraData(
   return cleaned;
 }
 
+// Strapi's sections collection only accepts these values for the `type` field.
+// Any portal-side type label that isn't in this set must be mapped to "section"
+// (a safe generic fallback) before being sent to the API — otherwise Strapi
+// returns a 400 ValidationError and the section (and all its manthras) fails silently.
+const VALID_STRAPI_SECTION_TYPES = new Set([
+  "adhyay", "khanda", "valli", "pada", "kanda", "sukta", "varga",
+  "anuvaka", "prakarana", "chapter", "part", "section", "book",
+]);
+
 // Helper: find an existing Strapi section by title+grantha+parent, or create it if missing.
 // This prevents duplicate sections on repeated publishes of the same grantha draft.
 async function findOrCreateSection(
@@ -202,6 +211,17 @@ async function findOrCreateSection(
   if (!title || !title.trim()) {
     console.warn(`[publish] Skipping section with blank title (type=${type}, order=${order}) — not publishing to Strapi`);
     return undefined;
+  }
+
+  // Normalise the section type: if the portal label isn't in Strapi's allowed enum
+  // (e.g. "brahmana", "adhikarana", etc.) use "section" as a safe generic fallback.
+  // This prevents 400 ValidationErrors when creating new sections and also avoids
+  // futile type-correction PUTs that would just fail with the same 400.
+  const effectiveType = type
+    ? (VALID_STRAPI_SECTION_TYPES.has(type) ? type : "section")
+    : undefined;
+  if (type && effectiveType !== type) {
+    console.warn(`[publish] Section type "${type}" is not a valid Strapi type — using "section" instead`);
   }
 
   // Search for an existing section that matches title + grantha + parent.
@@ -221,13 +241,14 @@ async function findOrCreateSection(
     if (existingDocId) {
       // Correct the type whenever it doesn't match — not just when it's missing.
       // This repairs sections that were created with the wrong type in an earlier publish.
-      if (type && existingRecord?.type !== type) {
+      // Only attempt correction when effectiveType is a valid Strapi value.
+      if (effectiveType && existingRecord?.type !== effectiveType) {
         try {
           await strapiRequest(`/api/sections/${existingDocId}`, {
             method: "PUT",
-            body: JSON.stringify({ data: { type } }),
+            body: JSON.stringify({ data: { type: effectiveType } }),
           });
-          console.log(`[publish] Section "${title}" (${existingDocId}) type corrected: ${existingRecord?.type || "(none)"} → ${type}`);
+          console.log(`[publish] Section "${title}" (${existingDocId}) type corrected: ${existingRecord?.type || "(none)"} → ${effectiveType}`);
         } catch (e: any) {
           console.warn(`[publish] Section "${title}" type correction failed: ${e.message}`);
         }
@@ -242,7 +263,7 @@ async function findOrCreateSection(
 
   // Not found — create a new section
   const payload: Record<string, any> = { title: title.trim(), grantha: granthaDocId };
-  if (type) payload.type = type;
+  if (effectiveType) payload.type = effectiveType;
   if (order != null) payload.order = order;
   if (parentDocId) payload.parent = parentDocId;
   const r = await strapiRequest("/api/sections", {
@@ -266,11 +287,16 @@ async function resolveSection(
   granthaDocId: string,
   parentDocId: string | undefined
 ): Promise<string | undefined> {
+  // Normalise type to a valid Strapi enum value (same logic as findOrCreateSection).
+  const effectiveType = type
+    ? (VALID_STRAPI_SECTION_TYPES.has(type) ? type : "section")
+    : undefined;
+
   if (knownDocId) {
     // Fast path: we already know this section's Strapi ID — update it in place
     try {
       const payload: Record<string, any> = {};
-      if (type) payload.type = type;
+      if (effectiveType) payload.type = effectiveType;
       if (order != null) payload.order = order;
       if (Object.keys(payload).length > 0) {
         await strapiRequest(`/api/sections/${knownDocId}`, {
@@ -626,7 +652,9 @@ async function publishGranthaWithHierarchy(
           adhyaya.documentId, adhyaya.title, L1type, adhyaya.order ?? undefined, granthaDocId, undefined
         );
       } catch (e: any) {
-        console.error(`[publish] Section L1 "${adhyaya.title}" failed:`, e.message);
+        const msg = e?.message || String(e);
+        console.error(`[publish] Section L1 "${adhyaya.title}" failed:`, msg);
+        publishFailures.push({ manthra: `[Section] ${adhyaya.title}`, error: msg });
         continue;
       }
       if (!adhyayaDocId) continue;
@@ -647,7 +675,9 @@ async function publishGranthaWithHierarchy(
               khanda.documentId, khanda.title, L2type, khanda.order ?? undefined, granthaDocId, adhyayaDocId
             );
           } catch (e: any) {
-            console.error(`[publish] Section L2 "${khanda.title}" failed:`, e.message);
+            const msg = e?.message || String(e);
+            console.error(`[publish] Section L2 "${khanda.title}" failed:`, msg);
+            publishFailures.push({ manthra: `[Section] ${khanda.title}`, error: msg });
             continue;
           }
           if (!khandaDocId) continue;
@@ -669,7 +699,9 @@ async function publishGranthaWithHierarchy(
                 pada.documentId, pada.title, L3type, pada.order ?? undefined, granthaDocId, khandaDocId
               );
             } catch (e: any) {
-              console.warn(`[publish] Pada "${pada.title}" failed:`, e.message);
+              const msg = e?.message || String(e);
+              console.warn(`[publish] Pada "${pada.title}" failed:`, msg);
+              publishFailures.push({ manthra: `[Section] ${pada.title}`, error: msg });
               continue;
             }
             if (!padaDocId) continue;

@@ -77,7 +77,7 @@ export function useDrafts(contentType: string) {
         toast({
           variant: "destructive",
           title: `Published with ${warnings.length} error${warnings.length === 1 ? "" : "s"}`,
-          description: `The grantha was saved but ${warnings.length} mantra${warnings.length === 1 ? "" : "s"} failed to sync to Strapi:\n${list}`,
+          description: `The grantha was saved but ${warnings.length} item${warnings.length === 1 ? "" : "s"} failed to sync to Strapi:\n${list}`,
         });
       } else {
         toast({

@@ -177,12 +177,20 @@ async function buildManthraData(
   // Resolve Teekas — grantha-wizard manthras store { TeekaName, TeekaAuthor, TeekaEntry }.
   // resolveManthraTeekas looks up each Teeka record in Strapi and converts to the
   // { teeka: documentId, TeekaEntry: {...} } format Strapi's bhashya-entries component expects.
+  //
+  // IMPORTANT: when the manthra has a Teekas array (even if empty or unresolvable),
+  // always include Teekas in the PUT payload — even as [].  Strapi v5 validates ALL
+  // existing relations on every PUT, so if the manthra's stored Teekas relation in
+  // Strapi points to a deleted teeka document, omitting Teekas from the PUT body causes
+  // Strapi to return 400 "Document with id X not found" for that stale relation.
+  // By explicitly sending Teekas: [] we force Strapi to clear the broken relation.
   const rawTeekas = manthra.Teekas;
-  if (Array.isArray(rawTeekas) && rawTeekas.length > 0) {
-    const resolvedTeekas = await resolveManthraTeekas(rawTeekas, granthaDocId, teekaNameToDocId);
-    if (resolvedTeekas.length > 0) {
-      cleaned.Teekas = resolvedTeekas;
-    }
+  if (Array.isArray(rawTeekas)) {
+    const resolvedTeekas = rawTeekas.length > 0
+      ? await resolveManthraTeekas(rawTeekas, granthaDocId, teekaNameToDocId)
+      : [];
+    // Always set — even [] — so Strapi clears stale/broken teeka relations
+    cleaned.Teekas = resolvedTeekas;
   }
 
   return cleaned;

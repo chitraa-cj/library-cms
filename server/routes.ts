@@ -863,15 +863,16 @@ async function resolveManthraTeekas(
     }
 
     // Priority 2: stored teekaDocId — only trust it if it looks like a real Strapi documentId.
-    // Local portal uuids are "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx" (contain hyphens).
-    // Strapi v5 documentIds are alphanumeric strings with no hyphens.
+    // Real Strapi v5 documentIds are 20+ character alphanumeric strings.
+    // Portal-local IDs (nanoid) are typically 7 characters — far too short.
+    // We use a minimum length of 20 chars to distinguish them.
     if (!teekaDocId) {
       const stored = t.teekaDocId || t.teeka?.documentId || undefined;
-      if (stored && !stored.includes("-")) {
+      if (stored && stored.length >= 20) {
         teekaDocId = stored;
         console.log(`[resolveManthraTeekas] Using stored Strapi documentId="${teekaDocId}"`);
       } else if (stored) {
-        console.log(`[resolveManthraTeekas] Ignoring local portal UUID "${stored}" — will use name lookup instead`);
+        console.log(`[resolveManthraTeekas] Ignoring short/local ID "${stored}" (${stored.length} chars) — will use name lookup instead`);
       }
     }
 

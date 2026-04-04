@@ -1327,9 +1327,25 @@ export default function GranthasPage() {
             }, []);
             // Enrich existing padas (3-level granthas: khanda → pada → manthra).
             // Prefer docId-based lookup for the pada's own section to avoid title collisions.
-            const khandaDocId: string | undefined = (k as any).documentId;
+            // FALLBACK: if draft khanda has no stored documentId, look it up from Strapi by title
+            // under the parent adhyaya — needed so the L3 supplement can find missing Adhikaranas.
+            const khandaDocId: string | undefined =
+              (k as any).documentId
+              ?? (adhyaDocId
+                ? (strapiChildSectionsByParentDocId.get(adhyaDocId) ?? []).find(
+                    (s: any) => s.title === k.title
+                  )?.documentId
+                : undefined);
             const enrichedPadas = (k.padas ?? []).map((p) => {
-              const padaDocId: string | undefined = (p as any).documentId;
+              // FALLBACK: if draft pada has no stored documentId, look it up from Strapi by title
+              // under the parent khanda (Pada-level section) — needed for manthra supplement.
+              const padaDocId: string | undefined =
+                (p as any).documentId
+                ?? (khandaDocId
+                  ? (strapiChildSectionsByParentDocId.get(khandaDocId) ?? []).find(
+                      (s: any) => s.title === p.title
+                    )?.documentId
+                  : undefined);
               const padaStrapi = padaDocId
                 ? (strapiMantrasBySecDocId.get(padaDocId) ?? [])
                 : (strapiMantrasBySecTitle.get(p.title) ?? []);

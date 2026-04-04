@@ -327,71 +327,10 @@ async function resolveSection(
   return findOrCreateSection(title, type, order, granthaDocId, parentDocId);
 }
 
-// Cascading payload-reduction strips for 413 PayloadTooLargeError.
-// Each level strips progressively more content to get under Strapi's body limit.
-
-// Level 1: remove OtherTranslations (keep Sanskrit + English + IAST)
-function stripLevel1(mData: Record<string, any>): Record<string, any> {
-  const s = { ...mData };
-  for (const key of ["ShlokaManthraEntry", "BhashyamEntry"]) {
-    if (s[key] && typeof s[key] === "object") {
-      const { OtherTranslations: _, ...rest } = s[key];
-      s[key] = rest;
-    }
-  }
-  if (Array.isArray(s.Teekas)) {
-    s.Teekas = s.Teekas.map((t: any) => {
-      if (t.TeekaEntry && typeof t.TeekaEntry === "object") {
-        const { OtherTranslations: _, ...rest } = t.TeekaEntry;
-        return { ...t, TeekaEntry: rest };
-      }
-      return t;
-    });
-  }
-  return s;
-}
-
-// Level 2: also strip English + IAST (keep Sanskrit text only)
-function stripLevel2(mData: Record<string, any>): Record<string, any> {
-  const s = { ...mData };
-  for (const key of ["ShlokaManthraEntry", "BhashyamEntry"]) {
-    if (s[key] && typeof s[key] === "object") {
-      const { OtherTranslations: _, EnglishTranslationText: _e, IASTTransliteration: _i, ...rest } = s[key];
-      s[key] = rest;
-    }
-  }
-  if (Array.isArray(s.Teekas)) {
-    s.Teekas = s.Teekas.map((t: any) => {
-      if (t.TeekaEntry && typeof t.TeekaEntry === "object") {
-        const { OtherTranslations: _, EnglishTranslationText: _e, ...rest } = t.TeekaEntry;
-        return { ...t, TeekaEntry: rest };
-      }
-      return t;
-    });
-  }
-  return s;
-}
-
-// Level 3: strip BhashyamEntry + all TeekaEntry content entirely (only teeka references remain)
-function stripLevel3(mData: Record<string, any>): Record<string, any> {
-  const { BhashyamEntry: _, ...s } = mData;
-  if (Array.isArray(s.Teekas)) {
-    s.Teekas = s.Teekas.map((t: any) => {
-      const { TeekaEntry: _te, ...ref } = t;
-      return ref;
-    });
-  }
-  return s;
-}
-
-const STRIP_LEVELS: Array<{ fn: (d: Record<string,any>) => Record<string,any>; msg: string }> = [
-  { fn: stripLevel1, msg: "OtherTranslations were too large and were skipped." },
-  { fn: stripLevel2, msg: "OtherTranslations and English translations were too large and were skipped — only Sanskrit text was synced." },
-  { fn: stripLevel3, msg: "Bhashyam and Teeka content were too large and were skipped — only manthra text was synced. Ask admin to increase Strapi body size limit." },
-];
-
-// Run a Strapi manthra PUT/POST with progressive payload stripping on 413.
-// Returns the Strapi documentId and pushes any warnings to the provided array.
+// Send a single Strapi request, splitting payload into chunks when 413.
+// Strapi v5 PUT merges fields — omitted fields are preserved on the record.
+// This lets us split large manthras into: core + BhashyamEntry + Teekas
+// so ALL content is synced even when the combined payload exceeds the body limit.
 async function strapiManthraRequest(
   endpoint: string,
   method: "PUT" | "POST",
@@ -399,33 +338,82 @@ async function strapiManthraRequest(
   label: string,
   warnings?: Array<{ manthra: string; error: string }>
 ): Promise<any> {
-  let lastErr: any;
-  let payload = mData;
-  for (let attempt = 0; attempt <= STRIP_LEVELS.length; attempt++) {
+  // --- Fast path: single request ---
+  try {
+    const res = await strapiRequest(endpoint, { method, body: JSON.stringify({ data: mData }) });
+    console.log(`[publish] Manthra "${label}" ${method === "PUT" ? "updated" : "created"} (single request)`);
+    return res;
+  } catch (e: any) {
+    if (e?.status !== 413) throw e;
+  }
+
+  // --- Split path: payload too large, split into up to 3 smaller requests ---
+  console.warn(`[publish] Manthra "${label}" 413 — splitting into chunked requests to sync all content`);
+
+  const { BhashyamEntry, Teekas, ...coreData } = mData;
+
+  // Chunk 1: identity + ShlokaManthraEntry + teeka REFERENCES (no TeekaEntry bodies yet)
+  const teekasAsRefs = Array.isArray(Teekas)
+    ? Teekas.map((t: any) => { const { TeekaEntry: _te, ...ref } = t; return ref; })
+    : Teekas;
+  const chunk1 = teekasAsRefs !== undefined
+    ? { ...coreData, Teekas: teekasAsRefs }
+    : { ...coreData };
+
+  let putEndpoint = endpoint;
+  let mainRes: any;
+
+  if (method === "POST") {
+    // POST creates the record; subsequent chunks use PUT on the returned docId
+    mainRes = await strapiRequest(endpoint, { method: "POST", body: JSON.stringify({ data: chunk1 }) });
+    const newDocId: string | undefined = mainRes?.data?.documentId;
+    if (!newDocId) throw new Error(`[publish] Manthra "${label}" POST succeeded but returned no documentId`);
+    putEndpoint = `/api/manthras/${newDocId}`;
+  } else {
+    await strapiRequest(endpoint, { method: "PUT", body: JSON.stringify({ data: chunk1 }) });
+    mainRes = { data: { documentId: endpoint.split("/").pop() } };
+  }
+
+  // Chunk 2: BhashyamEntry (separate PUT — Strapi preserves other fields)
+  if (BhashyamEntry && Object.keys(BhashyamEntry).some((k) => BhashyamEntry[k])) {
     try {
-      const res = await strapiRequest(endpoint, { method, body: JSON.stringify({ data: payload }) });
-      if (attempt > 0) {
-        const msg = STRIP_LEVELS[attempt - 1].msg;
-        console.warn(`[publish] Manthra "${label}" synced at strip level ${attempt}: ${msg}`);
-        warnings?.push({ manthra: label, error: `[WARNING] Synced successfully but ${msg}` });
-      } else {
-        console.log(`[publish] Manthra "${label}" ${method === "PUT" ? "updated" : "created"}: ${endpoint}`);
-      }
-      return res;
-    } catch (e: any) {
-      if (e?.status !== 413 || attempt >= STRIP_LEVELS.length) throw e;
-      lastErr = e;
-      console.warn(`[publish] Manthra "${label}" 413 at attempt ${attempt} — stripping to level ${attempt + 1}`);
-      payload = STRIP_LEVELS[attempt].fn(mData);
+      await strapiRequest(putEndpoint, { method: "PUT", body: JSON.stringify({ data: { BhashyamEntry } }) });
+    } catch (e2: any) {
+      if (e2?.status !== 413) throw e2;
+      // BhashyamEntry alone is too large — strip OtherTranslations and retry
+      const { OtherTranslations: _, ...bhashyamCore } = BhashyamEntry;
+      await strapiRequest(putEndpoint, { method: "PUT", body: JSON.stringify({ data: { BhashyamEntry: bhashyamCore } }) });
+      warnings?.push({ manthra: label, error: `[WARNING] BhashyamEntry OtherTranslations could not be synced — too large even as a separate request. All other content was synced.` });
     }
   }
-  throw lastErr;
+
+  // Chunk 3: Teekas with TeekaEntry content (separate PUT)
+  const teekasWithContent = Array.isArray(Teekas) && Teekas.some((t: any) => t.TeekaEntry);
+  if (teekasWithContent) {
+    try {
+      await strapiRequest(putEndpoint, { method: "PUT", body: JSON.stringify({ data: { Teekas } }) });
+    } catch (e3: any) {
+      if (e3?.status !== 413) throw e3;
+      // Teekas too large — strip TeekaEntry OtherTranslations and retry
+      const slimTeekas = (Teekas as any[]).map((t: any) => {
+        if (t.TeekaEntry) {
+          const { OtherTranslations: _, ...te } = t.TeekaEntry;
+          return { ...t, TeekaEntry: te };
+        }
+        return t;
+      });
+      await strapiRequest(putEndpoint, { method: "PUT", body: JSON.stringify({ data: { Teekas: slimTeekas } }) });
+      warnings?.push({ manthra: label, error: `[WARNING] TeekaEntry OtherTranslations could not be synced — too large even as a separate request. All other content was synced.` });
+    }
+  }
+
+  console.log(`[publish] Manthra "${label}" fully synced via chunked requests`);
+  return mainRes;
 }
 
 // Helper: update an existing Strapi manthra (PUT).
-// Used when the hierarchy node already has a strapiDocumentId so content
-// changes (e.g. OtherTranslations) are persisted to the existing record.
-// On 413, cascades through payload-reduction levels before failing.
+// On 413, automatically splits the payload into multiple requests so all
+// content is synced without any data loss.
 async function updateExistingManthra(
   strapiDocumentId: string,
   mData: Record<string, any>,

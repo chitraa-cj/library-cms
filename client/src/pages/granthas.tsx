@@ -663,10 +663,18 @@ export default function GranthasPage() {
       const matchedDraftIndices = new Set<number>();
       const result = strapiTeekas.map((t: any) => {
         const strapiName = t.teeka?.TeekaName || t.TeekaName || "";
+        const strapiAuthor = t.teeka?.TeekaAuthor || t.TeekaAuthor || "";
         const strapiDocId = t.teeka?.documentId;
         const draftIdx = draftTeekas
           ? draftTeekas.findIndex(
-              (d) => (strapiDocId && d.teekaDocId === strapiDocId) || d.TeekaName === strapiName
+              (d, i) =>
+                !matchedDraftIndices.has(i) && (
+                  (strapiDocId && d.teekaDocId === strapiDocId) ||
+                  d.TeekaName === strapiName ||
+                  // Author fallback: when draft teeka has no TeekaName (user only filled author),
+                  // match by author so content from Strapi is associated with the right slot.
+                  (!d.TeekaName && strapiAuthor && d.TeekaAuthor === strapiAuthor)
+                )
             )
           : -1;
         if (draftIdx >= 0) matchedDraftIndices.add(draftIdx);

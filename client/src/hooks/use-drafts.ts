@@ -69,16 +69,30 @@ export function useDrafts(contentType: string) {
       queryClient.invalidateQueries({ queryKey: ["/api/drafts", contentType] });
       queryClient.invalidateQueries({ queryKey: ["/api/strapi"] });
 
-      const warnings: Array<{ manthra: string; error: string }> | undefined = data?.warnings;
-      if (warnings && warnings.length > 0) {
-        const list = warnings
-          .map((w) => `• ${w.manthra}: ${w.error}`)
-          .join("\n");
-        toast({
-          variant: "destructive",
-          title: `Published with ${warnings.length} error${warnings.length === 1 ? "" : "s"}`,
-          description: `The grantha was saved but ${warnings.length} item${warnings.length === 1 ? "" : "s"} failed to sync to Strapi:\n${list}`,
-        });
+      const allWarnings: Array<{ manthra: string; error: string }> | undefined = data?.warnings;
+      if (allWarnings && allWarnings.length > 0) {
+        const warnings = allWarnings.filter((w) => !w.error.startsWith("[WARNING]"));
+        const notices = allWarnings.filter((w) => w.error.startsWith("[WARNING]"));
+        if (warnings.length > 0) {
+          const list = warnings.map((w) => `• ${w.manthra}: ${w.error}`).join("\n");
+          toast({
+            variant: "destructive",
+            title: `Published with ${warnings.length} error${warnings.length === 1 ? "" : "s"}`,
+            description: `The grantha was saved but ${warnings.length} item${warnings.length === 1 ? "" : "s"} failed to sync to Strapi:\n${list}`,
+          });
+        } else {
+          toast({
+            title: "Published",
+            description: "Content has been published to the CMS.",
+          });
+        }
+        if (notices.length > 0) {
+          const list = notices.map((w) => `• ${w.manthra}: ${w.error.replace(/^\[WARNING\]\s*/, "")}`).join("\n");
+          toast({
+            title: `${notices.length} item${notices.length === 1 ? "" : "s"} synced with reduced content`,
+            description: list,
+          });
+        }
       } else {
         toast({
           title: "Published",

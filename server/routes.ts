@@ -327,20 +327,61 @@ async function resolveSection(
   return findOrCreateSection(title, type, order, granthaDocId, parentDocId);
 }
 
+// Strip OtherTranslations from a manthra payload to reduce size.
+// Used as a fallback when Strapi returns 413 PayloadTooLargeError.
+function stripOtherTranslations(mData: Record<string, any>): Record<string, any> {
+  const stripped = { ...mData };
+  for (const key of ["ShlokaManthraEntry", "BhashyamEntry"]) {
+    if (stripped[key] && typeof stripped[key] === "object") {
+      const { OtherTranslations: _removed, ...rest } = stripped[key];
+      stripped[key] = rest;
+    }
+  }
+  if (Array.isArray(stripped.Teekas)) {
+    stripped.Teekas = stripped.Teekas.map((t: any) => {
+      if (t.TeekaEntry && typeof t.TeekaEntry === "object") {
+        const { OtherTranslations: _removed, ...rest } = t.TeekaEntry;
+        return { ...t, TeekaEntry: rest };
+      }
+      return t;
+    });
+  }
+  return stripped;
+}
+
 // Helper: update an existing Strapi manthra (PUT).
 // Used when the hierarchy node already has a strapiDocumentId so content
 // changes (e.g. OtherTranslations) are persisted to the existing record.
+// On 413 (payload too large), retries once with OtherTranslations stripped
+// and records a warning in the optional warnings array.
 async function updateExistingManthra(
   strapiDocumentId: string,
   mData: Record<string, any>,
-  label: string
+  label: string,
+  warnings?: Array<{ manthra: string; error: string }>
 ): Promise<string> {
-  await strapiRequest(`/api/manthras/${strapiDocumentId}`, {
-    method: "PUT",
-    body: JSON.stringify({ data: mData }),
-  });
-  console.log(`[publish] Manthra "${label}" updated: ${strapiDocumentId}`);
-  return strapiDocumentId;
+  try {
+    await strapiRequest(`/api/manthras/${strapiDocumentId}`, {
+      method: "PUT",
+      body: JSON.stringify({ data: mData }),
+    });
+    console.log(`[publish] Manthra "${label}" updated: ${strapiDocumentId}`);
+    return strapiDocumentId;
+  } catch (e: any) {
+    if (e?.status === 413) {
+      console.warn(`[publish] Manthra "${label}" 413 PayloadTooLarge — retrying without OtherTranslations`);
+      const slim = stripOtherTranslations(mData);
+      await strapiRequest(`/api/manthras/${strapiDocumentId}`, {
+        method: "PUT",
+        body: JSON.stringify({ data: slim }),
+      });
+      const warnMsg = "Synced successfully but OtherTranslations were too large for Strapi and were skipped. Please reduce content length or ask admin to increase Strapi body limit.";
+      console.warn(`[publish] Manthra "${label}": ${warnMsg}`);
+      warnings?.push({ manthra: label, error: `[WARNING] ${warnMsg}` });
+      return strapiDocumentId;
+    }
+    throw e;
+  }
 }
 
 // Helper: create a manthra in Strapi if one with the same ShlokaManthraNumber+Section doesn't exist.
@@ -352,7 +393,8 @@ async function updateExistingManthra(
 // so callers can sync it back into the portal draft hierarchy.
 async function createOrUpdateManthra(
   mData: Record<string, any>,
-  label: string
+  label: string,
+  warnings?: Array<{ manthra: string; error: string }>
 ): Promise<string | undefined> {
   const sectionDocId: string | undefined = mData.Section;
   const number: string | undefined = mData.ShlokaManthraNumber;
@@ -371,7 +413,7 @@ async function createOrUpdateManthra(
         const existingDocId: string | undefined = existing?.data?.[0]?.documentId;
         if (existingDocId) {
           console.log(`[publish] Manthra "${label}" already exists (by name) — updating instead of skipping`);
-          return await updateExistingManthra(existingDocId, mData, label + " [auto-update]");
+          return await updateExistingManthra(existingDocId, mData, label + " [auto-update]", warnings);
         }
       } catch { /* ignore lookup failure — fall through to create */ }
     }
@@ -386,16 +428,33 @@ async function createOrUpdateManthra(
         const existingDocId: string | undefined = existingByOrder?.data?.[0]?.documentId;
         if (existingDocId) {
           console.log(`[publish] Manthra "${label}" already exists (by order=${mData.order}) — updating instead of skipping`);
-          return await updateExistingManthra(existingDocId, mData, label + " [auto-update by order]");
+          return await updateExistingManthra(existingDocId, mData, label + " [auto-update by order]", warnings);
         }
       } catch { /* ignore */ }
     }
   }
 
-  const mr = await strapiRequest("/api/manthras", {
-    method: "POST",
-    body: JSON.stringify({ data: mData }),
-  });
+  let mr: any;
+  try {
+    mr = await strapiRequest("/api/manthras", {
+      method: "POST",
+      body: JSON.stringify({ data: mData }),
+    });
+  } catch (e: any) {
+    if (e?.status === 413) {
+      console.warn(`[publish] Manthra "${label}" POST 413 PayloadTooLarge — retrying without OtherTranslations`);
+      const slim = stripOtherTranslations(mData);
+      mr = await strapiRequest("/api/manthras", {
+        method: "POST",
+        body: JSON.stringify({ data: slim }),
+      });
+      const warnMsg = "Synced successfully but OtherTranslations were too large for Strapi and were skipped. Please reduce content length or ask admin to increase Strapi body limit.";
+      console.warn(`[publish] Manthra "${label}": ${warnMsg}`);
+      warnings?.push({ manthra: label, error: `[WARNING] ${warnMsg}` });
+    } else {
+      throw e;
+    }
+  }
   const createdDocId: string | undefined = mr?.data?.documentId;
   console.log(`[publish] Manthra "${label}" created: ${createdDocId}`);
   return createdDocId;
@@ -627,7 +686,7 @@ async function publishGranthaWithHierarchy(
       let returnedDocId: string | undefined;
       if (storedDocId) {
         try {
-          returnedDocId = await updateExistingManthra(storedDocId, mData, manthra.title);
+          returnedDocId = await updateExistingManthra(storedDocId, mData, manthra.title, publishFailures);
         } catch (putErr: any) {
           const isOrphaned =
             putErr?.status === 404 ||
@@ -643,13 +702,13 @@ async function publishGranthaWithHierarchy(
             console.warn(
               `[publish] Manthra "${manthra.ShlokaManthraNumber || manthra.title}" — PUT ${putErr?.status} orphaned (docId ${storedDocId}), falling back to create`
             );
-            returnedDocId = await createOrUpdateManthra(mData, manthra.title);
+            returnedDocId = await createOrUpdateManthra(mData, manthra.title, publishFailures);
           } else {
             throw putErr;
           }
         }
       } else {
-        returnedDocId = await createOrUpdateManthra(mData, manthra.title);
+        returnedDocId = await createOrUpdateManthra(mData, manthra.title, publishFailures);
       }
       if (returnedDocId && manthra.id) {
         manthraIdToDocId.set(manthra.id, returnedDocId);

@@ -948,7 +948,9 @@ export default function GranthasPage() {
         localDeletedSectionDocIds = d.deletedStrapiSectionDocIds;
         setDeletedStrapiSectionDocIds(d.deletedStrapiSectionDocIds);
       }
-      hasSavedTeekas = true;
+      // Only block the Strapi fetch when the draft actually has teekas configured.
+      // An empty array means teekas were never set in this draft — fall through to fetch.
+      hasSavedTeekas = Array.isArray(d.teekas) && d.teekas.length > 0;
       hasInlineTeekas = false;
     } else {
       // Look up any saved portal draft for this Strapi entry (including already-published ones)
@@ -3650,24 +3652,31 @@ export default function GranthasPage() {
                     <span className="text-xs text-muted-foreground font-normal">(Teekas)</span>
                   </h4>
                   {teekas.map((granthaTeeka, tIdx) => {
+                    const ts = currentManthra.Teekas ?? [];
                     // Match priority:
                     // 1. Strapi teeka documentId (most reliable — survives name typos)
                     // 2. TeekaName equality
-                    // No positional fallback — it caused wrong content to appear in wrong
-                    // teeka slots when Strapi had duplicate/stale teeka entries.
-                    const ts = currentManthra.Teekas ?? [];
-                    let existingIdx = ts.findIndex(
-                      (t) => t.teekaDocId && granthaTeeka.id && t.teekaDocId === granthaTeeka.id
-                    );
-                    if (existingIdx < 0) {
+                    // 3. TeekaAuthor equality (for cases where TeekaName is blank but Author is set)
+                    // granthaTeeka.id is a Strapi documentId when loaded from Strapi (≥20 chars)
+                    // or a local nanoid when loaded from an old draft (<20 chars).
+                    const granthaTeekaStrapiId = granthaTeeka.id && granthaTeeka.id.length >= 20 ? granthaTeeka.id : undefined;
+                    let existingIdx = granthaTeekaStrapiId
+                      ? ts.findIndex((t) => t.teekaDocId === granthaTeekaStrapiId)
+                      : -1;
+                    if (existingIdx < 0 && granthaTeeka.TeekaName) {
                       existingIdx = ts.findIndex((t) => t.TeekaName === granthaTeeka.TeekaName);
                     }
-                    // Always stamp the grantha's correct teeka documentId so re-publishing
-                    // fixes any wrong teeka relation that was set via the Strapi admin.
+                    if (existingIdx < 0 && granthaTeeka.TeekaAuthor) {
+                      existingIdx = ts.findIndex((t) => t.TeekaAuthor === granthaTeeka.TeekaAuthor);
+                    }
+                    // Only stamp the Strapi teeka documentId when we actually have a real one.
+                    // If granthaTeeka.id is a short local nanoid, preserve the existing teekaDocId.
+                    const resolvedTeekaDocId = granthaTeekaStrapiId
+                      ?? (existingIdx >= 0 ? ts[existingIdx].teekaDocId : undefined);
                     const teeka: ManthraTeekaEntry =
                       existingIdx >= 0
-                        ? { ...ts[existingIdx], teekaDocId: granthaTeeka.id }
-                        : { TeekaName: granthaTeeka.TeekaName, TeekaAuthor: granthaTeeka.TeekaAuthor, teekaDocId: granthaTeeka.id };
+                        ? { ...ts[existingIdx], teekaDocId: resolvedTeekaDocId }
+                        : { TeekaName: granthaTeeka.TeekaName, TeekaAuthor: granthaTeeka.TeekaAuthor, teekaDocId: resolvedTeekaDocId };
 
                     // Rebuild the full Teekas array with the updated entry merged in
                     function buildUpdated(updated: ManthraTeekaEntry): ManthraTeekaEntry[] {

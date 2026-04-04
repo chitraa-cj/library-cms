@@ -350,60 +350,92 @@ async function strapiManthraRequest(
   // --- Split path: payload too large, split into up to 3 smaller requests ---
   console.warn(`[publish] Manthra "${label}" 413 — splitting into chunked requests to sync all content`);
 
+  // Separate the three large sections — each will be PUT independently.
+  // Teekas are sent ONCE in their own chunk (never partial) to prevent duplicates,
+  // because Teekas is a repeatable component: sending it twice would create doubles.
   const { BhashyamEntry, Teekas, ...coreData } = mData;
-
-  // Chunk 1: identity + ShlokaManthraEntry + teeka REFERENCES (no TeekaEntry bodies yet)
-  const teekasAsRefs = Array.isArray(Teekas)
-    ? Teekas.map((t: any) => { const { TeekaEntry: _te, ...ref } = t; return ref; })
-    : Teekas;
-  const chunk1 = teekasAsRefs !== undefined
-    ? { ...coreData, Teekas: teekasAsRefs }
-    : { ...coreData };
 
   let putEndpoint = endpoint;
   let mainRes: any;
 
+  // Chunk 1: identity + ShlokaManthraEntry only (no BhashyamEntry, no Teekas)
   if (method === "POST") {
     // POST creates the record; subsequent chunks use PUT on the returned docId
-    mainRes = await strapiRequest(endpoint, { method: "POST", body: JSON.stringify({ data: chunk1 }) });
+    mainRes = await strapiRequest(endpoint, { method: "POST", body: JSON.stringify({ data: coreData }) });
     const newDocId: string | undefined = mainRes?.data?.documentId;
     if (!newDocId) throw new Error(`[publish] Manthra "${label}" POST succeeded but returned no documentId`);
     putEndpoint = `/api/manthras/${newDocId}`;
   } else {
-    await strapiRequest(endpoint, { method: "PUT", body: JSON.stringify({ data: chunk1 }) });
+    await strapiRequest(endpoint, { method: "PUT", body: JSON.stringify({ data: coreData }) });
     mainRes = { data: { documentId: endpoint.split("/").pop() } };
   }
 
-  // Chunk 2: BhashyamEntry (separate PUT — Strapi preserves other fields)
+  // Chunk 2: BhashyamEntry (separate PUT — Strapi preserves other fields when omitted)
   if (BhashyamEntry && Object.keys(BhashyamEntry).some((k) => BhashyamEntry[k])) {
     try {
       await strapiRequest(putEndpoint, { method: "PUT", body: JSON.stringify({ data: { BhashyamEntry } }) });
     } catch (e2: any) {
       if (e2?.status !== 413) throw e2;
-      // BhashyamEntry alone is too large — strip OtherTranslations and retry
-      const { OtherTranslations: _, ...bhashyamCore } = BhashyamEntry;
+      // BhashyamEntry itself is too large — split it further: Sanskrit first, then OtherTranslations
+      const { OtherTranslations: bhashyamOtherTr, ...bhashyamCore } = BhashyamEntry;
       await strapiRequest(putEndpoint, { method: "PUT", body: JSON.stringify({ data: { BhashyamEntry: bhashyamCore } }) });
-      warnings?.push({ manthra: label, error: `[WARNING] BhashyamEntry OtherTranslations could not be synced — too large even as a separate request. All other content was synced.` });
+      // Now try to sync just the OtherTranslations by merging into BhashyamEntry
+      if (bhashyamOtherTr) {
+        try {
+          await strapiRequest(putEndpoint, { method: "PUT", body: JSON.stringify({ data: { BhashyamEntry: { ...bhashyamCore, OtherTranslations: bhashyamOtherTr } } }) });
+        } catch (e2b: any) {
+          if (e2b?.status !== 413) throw e2b;
+          warnings?.push({ manthra: label, error: `[WARNING] BhashyamEntry OtherTranslations could not be synced — too large even as a separate request. All other BhashyamEntry content was synced.` });
+        }
+      }
     }
   }
 
-  // Chunk 3: Teekas with TeekaEntry content (separate PUT)
-  const teekasWithContent = Array.isArray(Teekas) && Teekas.some((t: any) => t.TeekaEntry);
-  if (teekasWithContent) {
+  // Chunk 3: Full Teekas array sent once — includes all TeekaEntry content
+  if (Array.isArray(Teekas) && Teekas.length > 0) {
     try {
       await strapiRequest(putEndpoint, { method: "PUT", body: JSON.stringify({ data: { Teekas } }) });
     } catch (e3: any) {
       if (e3?.status !== 413) throw e3;
-      // Teekas too large — strip TeekaEntry OtherTranslations and retry
-      const slimTeekas = (Teekas as any[]).map((t: any) => {
-        if (t.TeekaEntry) {
-          const { OtherTranslations: _, ...te } = t.TeekaEntry;
-          return { ...t, TeekaEntry: te };
+      // Teekas combined are too large — send each teeka individually
+      // Fetch the current teekas so we can merge (avoids losing existing teeka IDs)
+      let currentTeekas: any[] = [];
+      try {
+        const existing = await strapiRequest(`${putEndpoint}?populate[Teekas][populate]=*`, { method: "GET" });
+        currentTeekas = existing?.data?.Teekas ?? [];
+      } catch { /* if fetch fails, start fresh */ }
+
+      let warnedTeekaOtherTr = false;
+      for (let i = 0; i < (Teekas as any[]).length; i++) {
+        const teeka = (Teekas as any[])[i];
+        // Build a Teekas array: existing teekas up to this point + this teeka + remaining without TeekaEntry
+        const updatedTeekas = [
+          ...currentTeekas.slice(0, i),
+          teeka,
+          ...(Teekas as any[]).slice(i + 1).map((t: any) => { const { TeekaEntry: _te, ...ref } = t; return ref; }),
+        ];
+        try {
+          await strapiRequest(putEndpoint, { method: "PUT", body: JSON.stringify({ data: { Teekas: updatedTeekas } }) });
+          currentTeekas = updatedTeekas;
+        } catch (e3b: any) {
+          if (e3b?.status !== 413) throw e3b;
+          // This individual teeka is too large — strip its OtherTranslations
+          const { TeekaEntry, ...teekaRef } = teeka;
+          const { OtherTranslations: _to, ...teEntryCore } = TeekaEntry ?? {};
+          const slimTeeka = TeekaEntry ? { ...teekaRef, TeekaEntry: teEntryCore } : teekaRef;
+          const updatedSlim = [
+            ...currentTeekas.slice(0, i),
+            slimTeeka,
+            ...(Teekas as any[]).slice(i + 1).map((t: any) => { const { TeekaEntry: _te, ...ref } = t; return ref; }),
+          ];
+          await strapiRequest(putEndpoint, { method: "PUT", body: JSON.stringify({ data: { Teekas: updatedSlim } }) });
+          currentTeekas = updatedSlim;
+          if (!warnedTeekaOtherTr) {
+            warnings?.push({ manthra: label, error: `[WARNING] One or more TeekaEntry OtherTranslations could not be synced — too large even as individual requests. All other Teeka content was synced.` });
+            warnedTeekaOtherTr = true;
+          }
         }
-        return t;
-      });
-      await strapiRequest(putEndpoint, { method: "PUT", body: JSON.stringify({ data: { Teekas: slimTeekas } }) });
-      warnings?.push({ manthra: label, error: `[WARNING] TeekaEntry OtherTranslations could not be synced — too large even as a separate request. All other content was synced.` });
+      }
     }
   }
 

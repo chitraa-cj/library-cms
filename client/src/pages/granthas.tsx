@@ -811,15 +811,13 @@ export default function GranthasPage() {
     onSuccess: (data: any, params) => {
       if (data.strapiDocumentId) {
         updateManthraContent(params.adhyayaId, params.khandaId, params.manthraId, { strapiDocumentId: data.strapiDocumentId }, params.padaId);
-        if (editingManthra) {
-          setEditingManthra({ ...editingManthra, strapiDocumentId: data.strapiDocumentId });
-        }
       }
       const warnCount = data.warnings?.length ?? 0;
       toast({
         title: "Mantra published to CMS",
         description: warnCount > 0 ? `${warnCount} warning(s) — some content may need review` : "Content is now live on the library website.",
       });
+      setEditingManthra(null);
     },
     onError: (err: any) => {
       toast({ variant: "destructive", title: "Publish failed", description: err.message });

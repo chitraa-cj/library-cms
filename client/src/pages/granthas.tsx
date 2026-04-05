@@ -793,6 +793,39 @@ export default function GranthasPage() {
     },
   });
 
+  // Per-manthra publish mutation
+  const publishMantraMutation = useMutation({
+    mutationFn: async (params: { draftId: number; adhyayaId: string; khandaId: string; padaId?: string; manthraId: string }) => {
+      const res = await apiRequest("POST", `/api/drafts/${params.draftId}/publish-manthra`, {
+        adhyayaId: params.adhyayaId,
+        khandaId: params.khandaId,
+        padaId: params.padaId,
+        manthraId: params.manthraId,
+      });
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        throw new Error(body.message || "Failed to publish mantra");
+      }
+      return res.json();
+    },
+    onSuccess: (data: any, params) => {
+      if (data.strapiDocumentId) {
+        updateManthraContent(params.adhyayaId, params.khandaId, params.manthraId, { strapiDocumentId: data.strapiDocumentId }, params.padaId);
+        if (editingManthra) {
+          setEditingManthra({ ...editingManthra, strapiDocumentId: data.strapiDocumentId });
+        }
+      }
+      const warnCount = data.warnings?.length ?? 0;
+      toast({
+        title: "Mantra published to CMS",
+        description: warnCount > 0 ? `${warnCount} warning(s) — some content may need review` : "Content is now live on the library website.",
+      });
+    },
+    onError: (err: any) => {
+      toast({ variant: "destructive", title: "Publish failed", description: err.message });
+    },
+  });
+
   // ---------- Helpers ----------
 
   const EMPTY_FORM = {
@@ -2096,6 +2129,63 @@ export default function GranthasPage() {
           } else {
             toast({ variant: "destructive", title: "Could not resolve draft ID for publish" });
           }
+        },
+      }
+    );
+  }
+
+  // Save the full grantha draft from inside the manthra modal (prevents data loss on session timeout)
+  function handleSaveManthra(onDone?: () => void) {
+    if (!formData.GranthaName.trim()) {
+      toast({ variant: "destructive", title: "Grantha Name is required" });
+      return;
+    }
+    const payload = buildSavePayload();
+    const strapiDocId =
+      editingItem && !editingItem._isDraft
+        ? editingItem.documentId
+        : editingItem?._strapiDocId || undefined;
+    saveDraft.mutate(
+      { title: formData.GranthaName, data: payload, strapiDocumentId: strapiDocId, draftId: editingDraftId ?? undefined },
+      {
+        onSuccess: (saved: any) => {
+          if (!editingDraftId && saved?.id) setEditingDraftId(saved.id);
+          toast({ title: "Draft saved", description: "Content saved to database." });
+          onDone?.();
+        },
+      }
+    );
+  }
+
+  // Save the draft then publish just the currently open manthra to Strapi
+  function handleSaveAndPublishManthra() {
+    if (!editingManthra) return;
+    if (!formData.GranthaName.trim()) {
+      toast({ variant: "destructive", title: "Grantha Name is required" });
+      return;
+    }
+    const payload = buildSavePayload();
+    const strapiDocId =
+      editingItem && !editingItem._isDraft
+        ? editingItem.documentId
+        : editingItem?._strapiDocId || undefined;
+    saveDraft.mutate(
+      { title: formData.GranthaName, data: payload, strapiDocumentId: strapiDocId, draftId: editingDraftId ?? undefined },
+      {
+        onSuccess: (saved: any) => {
+          const resolvedDraftId = editingDraftId ?? saved?.id;
+          if (!editingDraftId && saved?.id) setEditingDraftId(saved.id);
+          if (!resolvedDraftId) {
+            toast({ variant: "destructive", title: "Could not determine draft ID" });
+            return;
+          }
+          publishMantraMutation.mutate({
+            draftId: resolvedDraftId,
+            adhyayaId: editingManthra.adhyayaId,
+            khandaId: editingManthra.khandaId,
+            padaId: editingManthra.padaId,
+            manthraId: editingManthra.manthraId,
+          });
         },
       }
     );
@@ -3731,11 +3821,35 @@ export default function GranthasPage() {
                 </section>
               )}
 
-              <div className="flex justify-end pt-2">
-                <Button onClick={() => setEditingManthra(null)} data-testid="button-manthra-done">
-                  <Check className="w-4 h-4 mr-2" />
-                  Done
+              <div className="flex items-center justify-between pt-2 gap-2 border-t mt-2">
+                <Button
+                  variant="outline"
+                  onClick={() => setEditingManthra(null)}
+                  data-testid="button-manthra-close"
+                  disabled={saveDraft.isPending || publishMantraMutation.isPending}
+                >
+                  Close
                 </Button>
+                <div className="flex gap-2">
+                  <Button
+                    variant="secondary"
+                    onClick={() => handleSaveManthra()}
+                    disabled={saveDraft.isPending || publishMantraMutation.isPending}
+                    data-testid="button-manthra-save"
+                  >
+                    {saveDraft.isPending && !publishMantraMutation.isPending && <Loader2 className="w-4 h-4 mr-2 animate-spin" />}
+                    Save
+                  </Button>
+                  <Button
+                    onClick={handleSaveAndPublishManthra}
+                    disabled={saveDraft.isPending || publishMantraMutation.isPending}
+                    data-testid="button-manthra-save-publish"
+                  >
+                    {publishMantraMutation.isPending && <Loader2 className="w-4 h-4 mr-2 animate-spin" />}
+                    <Send className="w-4 h-4 mr-2" />
+                    Save & Publish
+                  </Button>
+                </div>
               </div>
             </div>
           )}

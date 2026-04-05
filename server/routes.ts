@@ -1243,6 +1243,198 @@ export async function registerRoutes(
     }
   });
 
+  // ── Per-manthra publish ─────────────────────────────────────────────────────
+  // Publishes (or updates) a single manthra from a grantha draft to Strapi.
+  // Requires the grantha itself to already have a strapiDocumentId.
+  // Body: { adhyayaId, khandaId, padaId?, manthraId }
+  app.post("/api/drafts/:id/publish-manthra", requireAuth, async (req, res) => {
+    try {
+      const user = req.user as User;
+      const id = parseInt(req.params.id);
+      if (isNaN(id)) return res.status(400).json({ message: "Invalid draft ID" });
+
+      const { adhyayaId, khandaId, padaId, manthraId } = req.body;
+      if (!adhyayaId || !khandaId || !manthraId) {
+        return res.status(400).json({ message: "adhyayaId, khandaId, and manthraId are required" });
+      }
+
+      const draft = await storage.getDraft(id, user.id);
+      if (!draft) return res.status(404).json({ message: "Draft not found" });
+
+      const granthaDocId: string | undefined = draft.strapiDocumentId;
+      if (!granthaDocId) {
+        return res.status(400).json({ message: "The grantha must be published to Strapi first before publishing individual mantras. Use 'Save & Publish' on the grantha to publish it, then try again." });
+      }
+
+      const data = draft.data as any;
+      const hierarchy: any[] = data?.hierarchy || [];
+      const structureConfig = data?.structureConfig || {};
+      const teekaDefinitions: any[] = data?.teekas || [];
+
+      // Locate the manthra node in the hierarchy
+      const adhyaya = hierarchy.find((a: any) => a.id === adhyayaId);
+      if (!adhyaya) return res.status(404).json({ message: "Adhyaya not found in draft" });
+      const khanda = (adhyaya.khandas || []).find((k: any) => k.id === khandaId);
+      if (!khanda) return res.status(404).json({ message: "Khanda not found in draft" });
+
+      let manthraNode: any;
+      let padaNode: any;
+      if (padaId) {
+        padaNode = (khanda.padas || []).find((p: any) => p.id === padaId);
+        if (!padaNode) return res.status(404).json({ message: "Pada not found in draft" });
+        manthraNode = (padaNode.manthras || []).find((m: any) => m.id === manthraId);
+      } else {
+        manthraNode = (khanda.manthras || []).find((m: any) => m.id === manthraId);
+      }
+      if (!manthraNode) return res.status(404).json({ message: "Manthra not found in draft" });
+
+      // Build teekaNameToDocId by querying Strapi for existing teekas on this grantha
+      const teekaNameToDocId: Map<string, string> = new Map();
+      for (const teeka of teekaDefinitions) {
+        const validAuthor = teeka.TeekaAuthor && STRAPI_TEEKA_AUTHORS.has(teeka.TeekaAuthor)
+          ? teeka.TeekaAuthor : undefined;
+        const effectiveName = (teeka.TeekaName || "").trim() || (validAuthor ? `${validAuthor} Teeka` : "");
+        if (!effectiveName) continue;
+        // Use stored teeka documentId if available
+        if (teeka.documentId && teeka.documentId.length >= 10) {
+          teekaNameToDocId.set(effectiveName.toLowerCase(), teeka.documentId);
+          continue;
+        }
+        try {
+          const tName = encodeURIComponent(effectiveName);
+          const tGrantha = encodeURIComponent(granthaDocId);
+          const existing = await strapiRequest(
+            `/api/teekas?filters[TeekaName][$eqi]=${tName}&filters[grantha][documentId][$eq]=${tGrantha}&fields[0]=documentId`
+          );
+          const existingDocId: string | undefined = existing?.data?.[0]?.documentId;
+          if (existingDocId) teekaNameToDocId.set(effectiveName.toLowerCase(), existingDocId);
+        } catch (e: any) {
+          console.warn(`[publish-manthra] Teeka "${effectiveName}" lookup failed:`, e.message);
+        }
+      }
+
+      // Resolve section hierarchy in Strapi
+      const L1name: string = structureConfig?.levelOneName || "Adhyaya";
+      const L2name: string = structureConfig?.levelTwoName || "Khanda";
+      const L3name: string = structureConfig?.levelThreeName || "Pada";
+      const levelTwoEnabled: boolean = structureConfig?.levelTwoEnabled !== false;
+      const levelThreeEnabled: boolean = !!structureConfig?.levelThreeEnabled;
+      const L1type = mapSectionType(L1name);
+      const L2type = mapSectionType(L2name);
+      const L3type = mapSectionType(L3name);
+
+      // L1: Adhyaya
+      const adhyayaDocId = await resolveSection(
+        adhyaya.documentId, adhyaya.title, L1type, adhyaya.order ?? undefined, granthaDocId, undefined
+      );
+      if (!adhyayaDocId) {
+        return res.status(500).json({ message: `Could not resolve section "${adhyaya.title}" in Strapi` });
+      }
+
+      // L2: Khanda
+      const isDefaultKhanda = khanda.title === "_default" || !levelTwoEnabled;
+      let khandaDocId: string | undefined;
+      if (isDefaultKhanda) {
+        khandaDocId = adhyayaDocId;
+      } else {
+        khandaDocId = await resolveSection(
+          khanda.documentId, khanda.title, L2type, khanda.order ?? undefined, granthaDocId, adhyayaDocId
+        );
+        if (!khandaDocId) {
+          return res.status(500).json({ message: `Could not resolve section "${khanda.title}" in Strapi` });
+        }
+      }
+
+      // L3: Pada (if applicable)
+      let sectionDocId = khandaDocId;
+      if (levelThreeEnabled && padaId && padaNode) {
+        sectionDocId = await resolveSection(
+          padaNode.documentId, padaNode.title, L3type, padaNode.order ?? undefined, granthaDocId, khandaDocId
+        );
+        if (!sectionDocId) {
+          return res.status(500).json({ message: `Could not resolve section "${padaNode.title}" in Strapi` });
+        }
+      }
+
+      // Build and publish the single manthra
+      const publishFailures: Array<{ manthra: string; error: string }> = [];
+      const mData = await buildManthraData(manthraNode, sectionDocId, granthaDocId, teekaNameToDocId);
+
+      const storedDocId = manthraNode.strapiDocumentId && manthraNode.strapiDocumentId.length >= 10
+        ? manthraNode.strapiDocumentId : undefined;
+
+      let returnedDocId: string | undefined;
+      if (storedDocId) {
+        try {
+          returnedDocId = await updateExistingManthra(storedDocId, mData, manthraNode.title, publishFailures);
+        } catch (putErr: any) {
+          const isOrphaned =
+            putErr?.status === 404 ||
+            (putErr?.status === 400 && typeof putErr?.message === "string" && putErr.message.toLowerCase().includes("not found"));
+          if (isOrphaned) {
+            console.warn(`[publish-manthra] PUT ${putErr?.status} — orphaned docId ${storedDocId}, recreating`);
+            returnedDocId = await createOrUpdateManthra(mData, manthraNode.title, publishFailures);
+          } else {
+            throw putErr;
+          }
+        }
+      } else {
+        returnedDocId = await createOrUpdateManthra(mData, manthraNode.title, publishFailures);
+      }
+
+      // Update the draft hierarchy with the new strapiDocumentId so the next save persists it
+      if (returnedDocId && manthraNode.id) {
+        try {
+          const updatedHierarchy = hierarchy.map((a: any) => {
+            if (a.id !== adhyayaId) return a;
+            return {
+              ...a,
+              khandas: (a.khandas || []).map((k: any) => {
+                if (k.id !== khandaId) return k;
+                if (padaId) {
+                  return {
+                    ...k,
+                    padas: (k.padas || []).map((p: any) => {
+                      if (p.id !== padaId) return p;
+                      return {
+                        ...p,
+                        manthras: (p.manthras || []).map((m: any) =>
+                          m.id === manthraId ? { ...m, strapiDocumentId: returnedDocId } : m
+                        ),
+                      };
+                    }),
+                  };
+                }
+                return {
+                  ...k,
+                  manthras: (k.manthras || []).map((m: any) =>
+                    m.id === manthraId ? { ...m, strapiDocumentId: returnedDocId } : m
+                  ),
+                };
+              }),
+            };
+          });
+          await storage.updateDraft(id, user.id, { data: { ...data, hierarchy: updatedHierarchy } });
+        } catch (saveErr: any) {
+          console.warn(`[publish-manthra] Could not save updated docId back to draft:`, saveErr.message);
+        }
+      }
+
+      const errors = publishFailures.filter(f => !f.error.startsWith("[WARNING]"));
+      if (errors.length > 0) {
+        return res.status(500).json({ message: errors[0].error, publishFailures });
+      }
+
+      res.json({
+        strapiDocumentId: returnedDocId,
+        warnings: publishFailures.filter(f => f.error.startsWith("[WARNING]")),
+      });
+    } catch (error: any) {
+      console.error("[publish-manthra]", error);
+      res.status(500).json({ message: error.message || "Failed to publish mantra" });
+    }
+  });
+
   app.post("/api/drafts/:id/publish", requireAuth, async (req, res) => {
     try {
       const user = req.user as User;

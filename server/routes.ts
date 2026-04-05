@@ -48,6 +48,7 @@ const STRAPI_TEEKA_AUTHORS = new Set([
   "Prakasatman", "Govindananda", "Ramananda Saraswati", "Madhusudana Saraswati",
   "Dhanapati Suri", "Amalananda", "Appayya Dikshita", "Shankarananda",
   "Shriharsha", "Chitsukha", "Vidyaranya", "Achyutakrishnananda Tirtha",
+  "Sadhaanandha", "Dhanapathi", "Raagavendra",
 ]);
 
 function cleanPayloadForStrapi(data: Record<string, any>): Record<string, any> {

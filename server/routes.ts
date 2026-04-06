@@ -894,6 +894,7 @@ async function publishGranthaWithHierarchy(
     otherTranslations: _otherLocal,
     granthaNameTranslations: granthaNameTranslationsLocal,
     deletedStrapiSectionDocIds,
+    deletedStrapiManthraDocIds: _deletedStrapiManthraDocIds,
     ...granthaDataRaw
   } = rawData;
   const granthaPayload = cleanPayloadForStrapi(granthaDataRaw);

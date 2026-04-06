@@ -7,10 +7,12 @@ export function initPostHog() {
   if (!key) return;
   posthog.init(key, {
     api_host: host,
-    person_profiles: "identified_only",
     capture_pageview: true,
     capture_pageleave: true,
     autocapture: false,
+    loaded: (ph) => {
+      (window as any).posthog = ph;
+    },
   });
 }
 

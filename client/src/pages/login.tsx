@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { useAuth } from "@/hooks/use-auth";
+import { track } from "@/lib/posthog";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { loginSchema, type LoginData } from "@shared/schema";
@@ -46,11 +47,13 @@ export default function LoginPage() {
   async function onLogin(data: LoginData) {
     try {
       await login.mutateAsync(data);
+      track("user_logged_in", { username: data.username });
       toast({
         title: "Welcome back",
         description: "You have been logged in successfully.",
       });
     } catch (error: any) {
+      track("login_failed", { username: data.username });
       toast({
         variant: "destructive",
         title: "Login failed",

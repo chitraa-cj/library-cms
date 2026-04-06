@@ -1,4 +1,5 @@
 import { useState, useEffect } from "react";
+import { track } from "@/lib/posthog";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { queryClient, apiRequest } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
@@ -816,6 +817,10 @@ export default function GranthasPage() {
         updateManthraContent(params.adhyayaId, params.khandaId, params.manthraId, { strapiDocumentId: data.strapiDocumentId }, params.padaId);
       }
       const warnCount = data.warnings?.length ?? 0;
+      track("manthra_published", {
+        grantha_name: formData.GranthaName,
+        warnings: warnCount,
+      });
       toast({
         title: "Mantra published to CMS",
         description: warnCount > 0 ? `${warnCount} warning(s) — some content may need review` : "Content is now live on the library website.",
@@ -823,6 +828,7 @@ export default function GranthasPage() {
       setEditingManthra(null);
     },
     onError: (err: any) => {
+      track("manthra_publish_failed", { grantha_name: formData.GranthaName, error: err.message });
       toast({ variant: "destructive", title: "Publish failed", description: err.message });
     },
   });
@@ -902,6 +908,12 @@ export default function GranthasPage() {
   }
 
   async function openEdit(item: any) {
+    track("grantha_editor_opened", {
+      grantha_name: item.GranthaName || item._draftData?.GranthaName || item.title || "(unknown)",
+      grantha_type: item.GranthaType || item._draftData?.GranthaType || "",
+      is_draft: !!item._isDraft,
+      has_strapi_link: !!(item.documentId || item._strapiDocId),
+    });
     setEditingItem(item);
 
     // New drafts with no Strapi link: use draft hierarchy directly and return early.
@@ -1633,6 +1645,7 @@ export default function GranthasPage() {
   // ---------- Teeka handlers ----------
 
   function addTeeka() {
+    track("teeka_added", { grantha_name: formData.GranthaName });
     setTeekas([...teekas, { id: uid(), TeekaName: "", TeekaAuthor: "" }]);
   }
 
@@ -1641,6 +1654,8 @@ export default function GranthasPage() {
   }
 
   function removeTeeka(id: string) {
+    const removed = teekas.find((t) => t.id === id);
+    track("teeka_removed", { grantha_name: formData.GranthaName, teeka_name: removed?.TeekaName || "" });
     setTeekas(teekas.filter((t) => t.id !== id));
   }
 
@@ -1845,6 +1860,8 @@ export default function GranthasPage() {
 
   // ── Manthra functions (handle L2 and L3 paths) ──
   function addManthra(adhyayaId: string, khandaId: string, padaId?: string) {
+    const adhyayaTitle = adhyayas.find((a) => a.id === adhyayaId)?.title || "";
+    track("manthra_added", { grantha_name: formData.GranthaName, adhyaya: adhyayaTitle });
     // Use the adhyaya's 1-indexed position in the sorted array as its section number.
     const aIdx = adhyayas.findIndex((x) => x.id === adhyayaId) + 1;
     const leaf = structureConfig.leafName;
@@ -1925,6 +1942,7 @@ export default function GranthasPage() {
     } else {
       target = k?.manthras.find((x) => x.id === manthraId);
     }
+    track("manthra_removed", { grantha_name: formData.GranthaName, manthra_label: target?.title || "" });
     if (target?.strapiDocumentId) {
       setDeletedStrapiManthraDocIds((prev) => [...new Set([...prev, target!.strapiDocumentId!])]);
     }
@@ -2117,6 +2135,12 @@ export default function GranthasPage() {
       },
       {
         onSuccess: (saved: any) => {
+          track("draft_saved", {
+            grantha_name: formData.GranthaName,
+            grantha_type: formData.GranthaType,
+            has_strapi_link: !!strapiDocId,
+            teeka_count: teekas.length,
+          });
           // Capture the new draft ID so subsequent saves do PUT not POST
           if (!editingDraftId && saved?.id) {
             setEditingDraftId(saved.id);
@@ -2154,6 +2178,11 @@ export default function GranthasPage() {
           if (resolvedDraftId) {
             publishDraft.mutate(resolvedDraftId, {
               onSuccess: (result: any) => {
+                track("grantha_published", {
+                  grantha_name: formData.GranthaName,
+                  grantha_type: formData.GranthaType,
+                  teeka_count: teekas.length,
+                });
                 // ── Post-publish sync ──────────────────────────────────────────────
                 // The server enriches the draft hierarchy with Strapi documentIds
                 // during publish (manthras & sections get their IDs back-filled).
@@ -2175,6 +2204,12 @@ export default function GranthasPage() {
                 // Sections that were deleted are now gone from Strapi — clear the list
                 // so a re-publish doesn't attempt to DELETE already-removed sections.
                 setDeletedStrapiSectionDocIds([]);
+              },
+              onError: (err: any) => {
+                track("publish_failed", {
+                  grantha_name: formData.GranthaName,
+                  error: err?.message || "unknown",
+                });
               },
             });
           } else {

@@ -1,4 +1,5 @@
 import { useAuth } from "@/hooks/use-auth";
+import { track } from "@/lib/posthog";
 import { Link, useLocation } from "wouter";
 import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
@@ -243,7 +244,7 @@ export default function DashboardLayout({
             variant="ghost"
             size="sm"
             className="w-full justify-start text-muted-foreground hover:text-destructive"
-            onClick={() => logout.mutate()}
+            onClick={() => { track("user_logged_out", { username: user?.username }); logout.mutate(); }}
             disabled={logout.isPending}
             data-testid="button-logout"
           >

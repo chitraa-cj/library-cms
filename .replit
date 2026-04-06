@@ -42,3 +42,5 @@ waitForPort = 5000
 
 [userenv.shared]
 STRAPI_URL = "http://13.53.121.15:1337"
+VITE_POSTHOG_KEY = "phc_BR8MQRHngUgRcwHjvaKp2iTR7CSVMiHEY9djeVgcmUVc"
+VITE_POSTHOG_HOST = "https://app.posthog.com"

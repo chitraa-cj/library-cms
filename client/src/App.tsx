@@ -1,9 +1,11 @@
 import { Switch, Route } from "wouter";
+import { useEffect } from "react";
 import { queryClient } from "./lib/queryClient";
 import { QueryClientProvider } from "@tanstack/react-query";
 import { Toaster } from "@/components/ui/toaster";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { useAuth } from "@/hooks/use-auth";
+import { identifyUser, resetUser } from "@/lib/posthog";
 import DashboardLayout from "@/components/dashboard-layout";
 import LoginPage from "@/pages/login";
 import DashboardPage from "@/pages/dashboard";
@@ -21,6 +23,21 @@ import BackupsPage from "@/pages/backups";
 import BackupDetailPage from "@/pages/backup-detail";
 import NotFound from "@/pages/not-found";
 import { Loader2 } from "lucide-react";
+
+function PostHogIdentifier() {
+  const { user, isAuthenticated } = useAuth();
+  useEffect(() => {
+    if (isAuthenticated && user) {
+      identifyUser(user.username, {
+        display_name: user.displayName ?? user.username,
+        role: user.role,
+      });
+    } else if (!isAuthenticated) {
+      resetUser();
+    }
+  }, [isAuthenticated, user]);
+  return null;
+}
 
 function AuthenticatedRoutes() {
   return (
@@ -71,6 +88,7 @@ function App() {
   return (
     <QueryClientProvider client={queryClient}>
       <TooltipProvider>
+        <PostHogIdentifier />
         <Toaster />
         <AppRouter />
       </TooltipProvider>

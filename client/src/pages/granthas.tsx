@@ -613,6 +613,9 @@ export default function GranthasPage() {
   // Tracks Strapi section documentIds that were explicitly removed by the user.
   // Used to prevent the supplement logic from re-adding them and to delete them on publish.
   const [deletedStrapiSectionDocIds, setDeletedStrapiSectionDocIds] = useState<string[]>([]);
+  // Tracks Strapi manthra documentIds that were explicitly removed from the hierarchy.
+  // Used to prevent enrichHierarchy from re-adding them from Strapi on every reload.
+  const [deletedStrapiManthraDocIds, setDeletedStrapiManthraDocIds] = useState<string[]>([]);
 
   // Manthra content dialog
   const [editingManthra, setEditingManthra] = useState<{
@@ -889,6 +892,7 @@ export default function GranthasPage() {
     setEditingItem(null);
     setViewOnly(false);
     setDeletedStrapiSectionDocIds([]);
+    setDeletedStrapiManthraDocIds([]);
   }
 
   function openAdd() {
@@ -946,6 +950,8 @@ export default function GranthasPage() {
     let hasInlineTeekas = false;
     // Local copy used synchronously by enrichHierarchy (React state updates are async).
     let localDeletedSectionDocIds: string[] = [];
+    // Local copy of deleted manthra docIds — used synchronously inside enrichHierarchy.
+    let localDeletedManthraDocIds: string[] = [];
 
     if (item._isDraft) {
       // Local draft that is editing an existing Strapi grantha.
@@ -978,6 +984,10 @@ export default function GranthasPage() {
       if (Array.isArray(d.deletedStrapiSectionDocIds) && d.deletedStrapiSectionDocIds.length > 0) {
         localDeletedSectionDocIds = d.deletedStrapiSectionDocIds;
         setDeletedStrapiSectionDocIds(d.deletedStrapiSectionDocIds);
+      }
+      if (Array.isArray(d.deletedStrapiManthraDocIds) && d.deletedStrapiManthraDocIds.length > 0) {
+        localDeletedManthraDocIds = d.deletedStrapiManthraDocIds;
+        setDeletedStrapiManthraDocIds(d.deletedStrapiManthraDocIds);
       }
       // Only block the Strapi fetch when the draft actually has teekas configured.
       // An empty array means teekas were never set in this draft — fall through to fetch.
@@ -1068,6 +1078,10 @@ export default function GranthasPage() {
       if (Array.isArray(savedData?.deletedStrapiSectionDocIds) && savedData.deletedStrapiSectionDocIds.length > 0) {
         localDeletedSectionDocIds = savedData.deletedStrapiSectionDocIds;
         setDeletedStrapiSectionDocIds(savedData.deletedStrapiSectionDocIds);
+      }
+      if (Array.isArray(savedData?.deletedStrapiManthraDocIds) && savedData.deletedStrapiManthraDocIds.length > 0) {
+        localDeletedManthraDocIds = savedData.deletedStrapiManthraDocIds;
+        setDeletedStrapiManthraDocIds(savedData.deletedStrapiManthraDocIds);
       }
       hasSavedTeekas = Array.isArray(savedData?.teekas) && savedData.teekas.length > 0;
       hasInlineTeekas = Array.isArray(item.teekas) && item.teekas.length > 0;
@@ -1253,6 +1267,8 @@ export default function GranthasPage() {
 
       function enrichHierarchy(hier: AdhyayaNode[]): AdhyayaNode[] {
         const knownShlokas = collectKnownShlokas(hier);
+        // Build once at function scope so it's available in all supplement blocks.
+        const deletedManthraDocIdsSet = new Set(localDeletedManthraDocIds);
         return hier.map((a) => {
           // ── Enrich existing khandas ──────────────────────────────────────────────────
           // Resolve this adhyaya's Strapi documentId once (used for child-section lookup below).
@@ -1395,7 +1411,7 @@ export default function GranthasPage() {
               const usedPadaOrders = new Set(enrichedPadaManthras.map((m) => m.order).filter((o): o is number => o != null));
               const newPadaManthras: ManthraNode[] = [];
               for (const sm of padaStrapi) {
-                if (!padaMatchedDocIds.has(sm.docId) && !knownShlokas.has(sm.title)) {
+                if (!padaMatchedDocIds.has(sm.docId) && !knownShlokas.has(sm.title) && !deletedManthraDocIdsSet.has(sm.docId)) {
                   if (sm.order != null && usedPadaOrders.has(sm.order)) continue;
                   newPadaManthras.push({ id: uid(), title: sm.title, order: sm.order, strapiDocumentId: sm.docId });
                   knownShlokas.add(sm.title);
@@ -1435,7 +1451,7 @@ export default function GranthasPage() {
             );
             const newManthras: ManthraNode[] = [];
             for (const sm of strapiMantrasForKhanda) {
-              if (!matchedDocIds.has(sm.docId) && !knownShlokas.has(sm.title)) {
+              if (!matchedDocIds.has(sm.docId) && !knownShlokas.has(sm.title) && !deletedManthraDocIdsSet.has(sm.docId)) {
                 if (sm.order != null && usedOrders.has(sm.order)) continue;
                 newManthras.push({ id: uid(), title: sm.title, order: sm.order, strapiDocumentId: sm.docId });
                 knownShlokas.add(sm.title);
@@ -1478,6 +1494,7 @@ export default function GranthasPage() {
                 : (strapiMantrasBySecTitle.get(sec.title) ?? []);
               const secManthras = secList
                 .sort((x, y) => (x.order ?? 0) - (y.order ?? 0))
+                .filter((sm) => !deletedManthraDocIdsSet.has(sm.docId))
                 .map((sm) => ({
                   id: uid(),
                   title: sm.title,
@@ -1514,6 +1531,7 @@ export default function GranthasPage() {
       // user published 3 more khandas in Strapi after saving a portal draft that only
       // had 1), those adhyayas are never shown. Fix: append them here.
       const topLevelDeletedDocIdsSet = new Set(localDeletedSectionDocIds);
+      const topLevelDeletedManthraDocIdsSet = new Set(localDeletedManthraDocIds);
       const existingAdhyayaTitles = new Set(enrichedHier2.map((a) => a.title));
       const topLevelStrapiSections = fetchedSections
         .filter((s: any) => !s.parent?.documentId)
@@ -1539,6 +1557,7 @@ export default function GranthasPage() {
               ? (strapiMantrasBySecDocId.get(child.documentId) ?? strapiMantrasBySecTitle.get(child.title) ?? [])
               : (strapiMantrasBySecTitle.get(child.title) ?? []))
               .sort((x: any, y: any) => (x.order ?? 0) - (y.order ?? 0))
+              .filter((sm: any) => !topLevelDeletedManthraDocIdsSet.has(sm.docId))
               .map((sm: any, mi: number) => ({
                 id: uid(),
                 title: sm.title,
@@ -1552,6 +1571,7 @@ export default function GranthasPage() {
             ? (strapiMantrasBySecDocId.get(sec.documentId) ?? strapiMantrasBySecTitle.get(sec.title) ?? [])
             : (strapiMantrasBySecTitle.get(sec.title) ?? []))
             .sort((x: any, y: any) => (x.order ?? 0) - (y.order ?? 0))
+            .filter((sm: any) => !topLevelDeletedManthraDocIdsSet.has(sm.docId))
             .map((sm: any, mi: number) => ({
               id: uid(),
               title: sm.title,
@@ -1876,6 +1896,19 @@ export default function GranthasPage() {
   }
 
   function removeManthra(adhyayaId: string, khandaId: string, manthraId: string, padaId?: string) {
+    // Track the deleted manthra's Strapi documentId so enrichHierarchy won't re-add it.
+    const a = adhyayas.find((x) => x.id === adhyayaId);
+    const k = a?.khandas.find((x) => x.id === khandaId);
+    let target: ManthraNode | undefined;
+    if (padaId) {
+      const p = k?.padas?.find((x) => x.id === padaId);
+      target = p?.manthras.find((x) => x.id === manthraId);
+    } else {
+      target = k?.manthras.find((x) => x.id === manthraId);
+    }
+    if (target?.strapiDocumentId) {
+      setDeletedStrapiManthraDocIds((prev) => [...new Set([...prev, target!.strapiDocumentId!])]);
+    }
     setAdhyayas(
       adhyayas.map((a) => {
         if (a.id !== adhyayaId) return a;
@@ -1999,6 +2032,7 @@ export default function GranthasPage() {
       structureConfig,
       hierarchy: adhyayas,
       deletedStrapiSectionDocIds: deletedStrapiSectionDocIds.length > 0 ? deletedStrapiSectionDocIds : undefined,
+      deletedStrapiManthraDocIds: deletedStrapiManthraDocIds.length > 0 ? deletedStrapiManthraDocIds : undefined,
     };
 
     if (formData.slug.trim()) payload.slug = formData.slug.trim();

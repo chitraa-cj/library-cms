@@ -1,0 +1,2673 @@
+
+Ekatmadham
+Content Manager
+
+
+Dashboard
+Collection Types
+
+Granthas
+Sections
+Manthras
+Teekas
+Articles
+Authors
+Categories
+Single Types
+
+About
+Global Settings
+Snapshots
+
+Snapshots
+Administration
+
+User Management
+C
+Chitra Jain
+
+admin
+
+Sign Out
+
+
+Granthas
+Configuration
+Book Structure
+3
+Build Content
+Srimad Bhagavad Gita — Content
+Adhyaya → Mantra — click any Mantra to enter its text content
+
+Arjuna Viṣāda Yoga
+Mantras in this Adhyaya
+
+Shloka 1.1
+
+
+Shloka 1.2
+
+
+Shloka 1.3
+
+
+Shloka 1.4
+
+
+Shloka 1.5
+
+
+Shloka 1.6
+
+
+Shloka 1.7
+
+
+Shloka 1.8
+
+
+Shloka 1.9
+
+
+Shloka 1.10
+
+
+Shloka 1.11
+
+
+Shloka 1.12
+
+
+Shloka 1.13
+
+
+Shloka 1.14
+
+
+Shloka 1.15
+
+
+Shloka 1.16
+
+
+Shloka 1.17
+
+
+Shloka 1.18
+
+
+Shloka 1.19
+
+
+Shloka 1.20
+
+
+Shloka 1.21
+
+
+Shloka 1.22
+
+
+Shloka 1.23
+
+
+Shloka 1.24
+
+
+Shloka 1.25
+
+
+Shloka 1.26
+
+
+Shloka 1.27
+
+
+Shloka 1.28
+
+
+Shloka 1.29
+
+
+Shloka 1.30
+
+
+Shloka 1.31
+
+
+Shloka 1.32
+
+
+Shloka 1.33
+
+
+Shloka 1.34
+
+
+Shloka 1.35
+
+
+Shloka 1.36
+
+
+Shloka 1.37
+
+
+Shloka 1.38
+
+
+Shloka 1.39
+
+
+Shloka 1.40
+
+
+Shloka 1.41
+
+
+Shloka 1.42
+
+
+Shloka 1.43
+
+
+Shloka 1.44
+
+
+Shloka 1.45
+
+
+Shloka 1.46
+
+
+Shloka 1.47
+
+
+Add Mantra
+Sāṅkhya Yoga
+Mantras in this Adhyaya
+
+Shloka 2.1
+
+
+Shloka 2.2
+
+
+Shloka 2.3
+
+
+Shloka 2.4
+
+
+Shloka 2.5
+
+
+Shloka 2.6
+
+
+Shloka 2.7
+
+
+Shloka 2.8
+
+
+Shloka 2.9
+
+
+Shloka 2.10
+
+
+Shloka 2.11
+
+
+Shloka 2.12
+
+
+Shloka 2.13
+
+
+Shloka 2.14
+
+
+Shloka 2.15
+
+
+Shloka 2.16
+
+
+Shloka 2.17
+
+
+Shloka 2.18
+
+
+Shloka 2.19
+
+
+Shloka 2.20
+
+
+Shloka 2.21
+
+
+Shloka 2.22
+
+
+Shloka 2.23
+
+
+Shloka 2.24
+
+
+Shloka 2.25
+
+
+Shloka 2.26
+
+
+Shloka 2.27
+
+
+Shloka 2.28
+
+
+Shloka 2.29
+
+
+Shloka 2.30
+
+
+Shloka 2.31
+
+
+Shloka 2.32
+
+
+Shloka 2.33
+
+
+Shloka 2.34
+
+
+Shloka 2.35
+
+
+Shloka 2.36
+
+
+Shloka 2.37
+
+
+Shloka 2.38
+
+
+Shloka 2.39
+
+
+Shloka 2.40
+
+
+Shloka 2.41
+
+
+Shloka 2.42
+
+
+Shloka 2.43
+
+
+Shloka 2.44
+
+
+Shloka 2.45
+
+
+Shloka 2.46
+
+
+Shloka 2.47
+
+
+Shloka 2.48
+
+
+Shloka 2.49
+
+
+Shloka 2.50
+
+
+Shloka 2.51
+
+
+Shloka 2.52
+
+
+Shloka 2.53
+
+
+Shloka 2.54
+
+
+Shloka 2.55
+
+
+Shloka 2.56
+
+
+Shloka 2.57
+
+
+Shloka 2.58
+
+
+Shloka 2.59
+
+
+Shloka 2.60
+
+
+Shloka 2.61
+
+
+Shloka 2.62
+
+
+Shloka 2.63
+
+
+Shloka 2.64
+
+
+Shloka 2.65
+
+
+Shloka 2.66
+
+
+Shloka 2.67
+
+
+Shloka 2.68
+
+
+Shloka 2.69
+
+
+Shloka 2.70
+
+
+Shloka 2.71
+
+
+Shloka 2.72
+
+
+Add Mantra
+Karma Yoga
+Mantras in this Adhyaya
+
+Shloka 3.1
+
+
+Shloka 3.2
+
+
+Shloka 3.3
+
+
+Shloka 3.4
+
+
+Shloka 3.5
+
+
+Shloka 3.6
+
+
+Shloka 3.7
+
+
+Shloka 3.8
+
+
+Shloka 3.9
+
+
+Shloka 3.10
+
+
+Shloka 3.11
+
+
+Shloka 3.12
+
+
+Shloka 3.13
+
+
+Shloka 3.14
+
+
+Shloka 3.15
+
+
+Shloka 3.16
+
+
+Shloka 3.17
+
+
+Shloka 3.18
+
+
+Shloka 3.19
+
+
+Shloka 3.20
+
+
+Shloka 3.21
+
+
+Shloka 3.22
+
+
+Shloka 3.23
+
+
+Shloka 3.24
+
+
+Shloka 3.25
+
+
+Shloka 3.26
+
+
+Shloka 3.27
+
+
+Shloka 3.28
+
+
+Shloka 3.29
+
+
+Shloka 3.30
+
+
+Shloka 3.31
+
+
+Shloka 3.32
+
+
+Shloka 3.33
+
+
+Shloka 3.34
+
+
+Shloka 3.35
+
+
+Shloka 3.36
+
+
+Shloka 3.37
+
+
+Shloka 3.38
+
+
+Shloka 3.39
+
+
+Shloka 3.40
+
+
+Shloka 3.41
+
+
+Shloka 3.42
+
+
+Shloka 3.43
+
+
+Add Mantra
+Jñāna Karma Sanyāsa Yoga
+Mantras in this Adhyaya
+
+Shloka 4.1
+
+
+Shloka 4.2
+
+
+Shloka 4.3
+
+
+Shloka 4.4
+
+
+Shloka 4.5
+
+
+Shloka 4.6
+
+
+Shloka 4.7
+
+
+Shloka 4.8
+
+
+Shloka 4.9
+
+
+Shloka 4.10
+
+
+Shloka 4.11
+
+
+Shloka 4.12
+
+
+Shloka 4.13
+
+
+Shloka 4.14
+
+
+Shloka 4.15
+
+
+Shloka 4.16
+
+
+Shloka 4.17
+
+
+Shloka 4.18
+
+
+Shloka 4.19
+
+
+Shloka 4.20
+
+
+Shloka 4.21
+
+
+Shloka 4.22
+
+
+Shloka 4.23
+
+
+Shloka 4.24
+
+
+Shloka 4.25
+
+
+Shloka 4.26
+
+
+Shloka 4.27
+
+
+Shloka 4.28
+
+
+Shloka 4.29
+
+
+Shloka 4.30
+
+
+Shloka 4.31
+
+
+Shloka 4.32
+
+
+Shloka 4.33
+
+
+Shloka 4.34
+
+
+Shloka 4.35
+
+
+Shloka 4.36
+
+
+Shloka 4.37
+
+
+Shloka 4.38
+
+
+Shloka 4.39
+
+
+Shloka 4.40
+
+
+Shloka 4.41
+
+
+Shloka 4.42
+
+
+Add Mantra
+Karma Sanyāsa Yoga
+Mantras in this Adhyaya
+
+Shloka 5.1
+
+
+Shloka 5.2
+
+
+Shloka 5.3
+
+
+Shloka 5.4
+
+
+Shloka 5.5
+
+
+Shloka 5.6
+
+
+Shloka 5.7
+
+
+Shloka 5.8
+
+
+Shloka 5.9
+
+
+Shloka 5.10
+
+
+Shloka 5.11
+
+
+Shloka 5.12
+
+
+Shloka 5.13
+
+
+Shloka 5.14
+
+
+Shloka 5.15
+
+
+Shloka 5.16
+
+
+Shloka 5.17
+
+
+Shloka 5.18
+
+
+Shloka 5.19
+
+
+Shloka 5.20
+
+
+Shloka 5.21
+
+
+Shloka 5.22
+
+
+Shloka 5.23
+
+
+Shloka 5.24
+
+
+Shloka 5.25
+
+
+Shloka 5.26
+
+
+Shloka 5.27
+
+
+Shloka 5.28
+
+
+Shloka 5.29
+
+
+Add Mantra
+Ātma Saṃyama Yoga
+Mantras in this Adhyaya
+
+Shloka 6.1
+
+
+Shloka 6.2
+
+
+Shloka 6.3
+
+
+Shloka 6.4
+
+
+Shloka 6.5
+
+
+Shloka 6.6
+
+
+Shloka 6.7
+
+
+Shloka 6.8
+
+
+Shloka 6.9
+
+
+Shloka 6.10
+
+
+Shloka 6.11
+
+
+Shloka 6.12
+
+
+Shloka 6.13
+
+
+Shloka 6.14
+
+
+Shloka 6.15
+
+
+Shloka 6.16
+
+
+Shloka 6.17
+
+
+Shloka 6.18
+
+
+Shloka 6.19
+
+
+Shloka 6.20
+
+
+Shloka 6.21
+
+
+Shloka 6.22
+
+
+Shloka 6.23
+
+
+Shloka 6.24
+
+
+Shloka 6.25
+
+
+Shloka 6.26
+
+
+Shloka 6.27
+
+
+Shloka 6.28
+
+
+Shloka 6.29
+
+
+Shloka 6.30
+
+
+Shloka 6.31
+
+
+Shloka 6.32
+
+
+Shloka 6.33
+
+
+Shloka 6.34
+
+
+Shloka 6.35
+
+
+Shloka 6.36
+
+
+Shloka 6.37
+
+
+Shloka 6.38
+
+
+Shloka 6.39
+
+
+Shloka 6.40
+
+
+Shloka 6.41
+
+
+Shloka 6.42
+
+
+Shloka 6.43
+
+
+Shloka 6.44
+
+
+Shloka 6.45
+
+
+Shloka 6.46
+
+
+Shloka 6.47
+
+
+Add Mantra
+Jñāna Vijñāna Yoga
+Mantras in this Adhyaya
+
+Shloka 7.1
+
+
+Shloka 7.2
+
+
+Shloka 7.3
+
+
+Shloka 7.4
+
+
+Shloka 7.5
+
+
+Shloka 7.6
+
+
+Shloka 7.7
+
+
+Shloka 7.8
+
+
+Shloka 7.9
+
+
+Shloka 7.10
+
+
+Shloka 7.11
+
+
+Shloka 7.12
+
+
+Shloka 7.13
+
+
+Shloka 7.14
+
+
+Shloka 7.15
+
+
+Shloka 7.16
+
+
+Shloka 7.17
+
+
+Shloka 7.18
+
+
+Shloka 7.19
+
+
+Shloka 7.20
+
+
+Shloka 7.21
+
+
+Shloka 7.22
+
+
+Shloka 7.23
+
+
+Shloka 7.24
+
+
+Shloka 7.25
+
+
+Shloka 7.26
+
+
+Shloka 7.27
+
+
+Shloka 7.28
+
+
+Shloka 7.29
+
+
+Shloka 7.30
+
+
+Add Mantra
+Akṣara Brahma Yoga
+Mantras in this Adhyaya
+
+Shloka 8.1
+
+
+Shloka 8.2
+
+
+Shloka 8.3
+
+
+Shloka 8.4
+
+
+Shloka 8.5
+
+
+Shloka 8.6
+
+
+Shloka 8.7
+
+
+Shloka 8.8
+
+
+Shloka 8.9
+
+
+Shloka 8.10
+
+
+Shloka 8.11
+
+
+Shloka 8.12
+
+
+Shloka 8.13
+
+
+Shloka 8.14
+
+
+Shloka 8.15
+
+
+Shloka 8.16
+
+
+Shloka 8.17
+
+
+Shloka 8.18
+
+
+Shloka 8.19
+
+
+Shloka 8.20
+
+
+Shloka 8.21
+
+
+Shloka 8.22
+
+
+Shloka 8.23
+
+
+Shloka 8.24
+
+
+Shloka 8.25
+
+
+Shloka 8.26
+
+
+Shloka 8.27
+
+
+Shloka 8.28
+
+
+Add Mantra
+Rāja Vidyā Rāja Guhya Yoga
+Mantras in this Adhyaya
+
+Shloka 9.1
+
+
+Shloka 9.2
+
+
+Shloka 9.3
+
+
+Shloka 9.4
+
+
+Shloka 9.5
+
+
+Shloka 9.6
+
+
+Shloka 9.7
+
+
+Shloka 9.8
+
+
+Shloka 9.9
+
+
+Shloka 9.10
+
+
+Shloka 9.11
+
+
+Shloka 9.12
+
+
+Shloka 9.13
+
+
+Shloka 9.14
+
+
+Shloka 9.15
+
+
+Shloka 9.16
+
+
+Shloka 9.17
+
+
+Shloka 9.18
+
+
+Shloka 9.19
+
+
+Shloka 9.20
+
+
+Shloka 9.21
+
+
+Shloka 9.22
+
+
+Shloka 9.23
+
+
+Shloka 9.24
+
+
+Shloka 9.25
+
+
+Shloka 9.26
+
+
+Shloka 9.27
+
+
+Shloka 9.28
+
+
+Shloka 9.29
+
+
+Shloka 9.30
+
+
+Shloka 9.31
+
+
+Shloka 9.32
+
+
+Shloka 9.33
+
+
+Shloka 9.34
+
+
+Add Mantra
+Vibhūti Yoga
+Mantras in this Adhyaya
+
+Shloka 10.1
+
+
+Shloka 10.2
+
+
+Shloka 10.3
+
+
+Shloka 10.4
+
+
+Shloka 10.5
+
+
+Shloka 10.6
+
+
+Shloka 10.7
+
+
+Shloka 10.8
+
+
+Shloka 10.9
+
+
+Shloka 10.10
+
+
+Shloka 10.11
+
+
+Shloka 10.12
+
+
+Shloka 10.13
+
+
+Shloka 10.14
+
+
+Shloka 10.15
+
+
+Shloka 10.16
+
+
+Shloka 10.17
+
+
+Shloka 10.18
+
+
+Shloka 10.19
+
+
+Shloka 10.20
+
+
+Shloka 10.21
+
+
+Shloka 10.22
+
+
+Shloka 10.23
+
+
+Shloka 10.24
+
+
+Shloka 10.25
+
+
+Shloka 10.26
+
+
+Shloka 10.27
+
+
+Shloka 10.28
+
+
+Shloka 10.29
+
+
+Shloka 10.30
+
+
+Shloka 10.31
+
+
+Shloka 10.32
+
+
+Shloka 10.33
+
+
+Shloka 10.34
+
+
+Shloka 10.35
+
+
+Shloka 10.36
+
+
+Shloka 10.37
+
+
+Shloka 10.38
+
+
+Shloka 10.39
+
+
+Shloka 10.40
+
+
+Shloka 10.41
+
+
+Shloka 10.42
+
+
+Add Mantra
+Viśvarūpa Darśana Yoga
+Mantras in this Adhyaya
+
+Shloka 11.1
+
+
+Shloka 11.2
+
+
+Shloka 11.3
+
+
+Shloka 11.4
+
+
+Shloka 11.5
+
+
+Shloka 11.6
+
+
+Shloka 11.7
+
+
+Shloka 11.8
+
+
+Shloka 11.9
+
+
+Shloka 11.10
+
+
+Shloka 11.11
+
+
+Shloka 11.12
+
+
+Shloka 11.13
+
+
+Shloka 11.14
+
+
+Shloka 11.15
+
+
+Shloka 11.16
+
+
+Shloka 11.17
+
+
+Shloka 11.18
+
+
+Shloka 11.19
+
+
+Shloka 11.20
+
+
+Shloka 11.21
+
+
+Shloka 11.22
+
+
+Shloka 11.23
+
+
+Shloka 11.24
+
+
+Shloka 11.25
+
+
+Shloka 11.26
+
+
+Shloka 11.27
+
+
+Shloka 11.28
+
+
+Shloka 11.29
+
+
+Shloka 11.30
+
+
+Shloka 11.31
+
+
+Shloka 11.32
+
+
+Shloka 11.33
+
+
+Shloka 11.34
+
+
+Shloka 11.35
+
+
+Shloka 11.36
+
+
+Shloka 11.37
+
+
+Shloka 11.38
+
+
+Shloka 11.39
+
+
+Shloka 11.40
+
+
+Shloka 11.41
+
+
+Shloka 11.42
+
+
+Shloka 11.43
+
+
+Shloka 11.44
+
+
+Shloka 11.45
+
+
+Shloka 11.46
+
+
+Shloka 11.47
+
+
+Shloka 11.48
+
+
+Shloka 11.49
+
+
+Shloka 11.50
+
+
+Shloka 11.51
+
+
+Shloka 11.52
+
+
+Shloka 11.53
+
+
+Shloka 11.54
+
+
+Shloka 11.55
+
+
+Add Mantra
+Bhakti Yoga
+Mantras in this Adhyaya
+
+Shloka 12.1
+
+
+Shloka 12.2
+
+
+Shloka 12.3
+
+
+Shloka 12.4
+
+
+Shloka 12.5
+
+
+Shloka 12.6
+
+
+Shloka 12.7
+
+
+Shloka 12.8
+
+
+Shloka 12.9
+
+
+Shloka 12.10
+
+
+Shloka 12.11
+
+
+Shloka 12.12
+
+
+Shloka 12.13
+
+
+Shloka 12.14
+
+
+Shloka 12.15
+
+
+Shloka 12.16
+
+
+Shloka 12.17
+
+
+Shloka 12.18
+
+
+Shloka 12.19
+
+
+Shloka 12.20
+
+
+Add Mantra
+Kṣetra Kṣetrajña Vibhāga Yoga
+Mantras in this Adhyaya
+
+Shloka 13.1
+
+
+Shloka 13.2
+
+
+Shloka 13.3
+
+
+Shloka 13.4
+
+
+Shloka 13.5
+
+
+Shloka 13.6
+
+
+Shloka 13.7
+
+
+Shloka 13.8
+
+
+Shloka 13.9
+
+
+Shloka 13.10
+
+
+Shloka 13.11
+
+
+Shloka 13.12
+
+
+Shloka 13.13
+
+
+Shloka 13.14
+
+
+Shloka 13.15
+
+
+Shloka 13.16
+
+
+Shloka 13.17
+
+
+Shloka 13.18
+
+
+Shloka 13.19
+
+
+Shloka 13.20
+
+
+Shloka 13.21
+
+
+Shloka 13.22
+
+
+Shloka 13.23
+
+
+Shloka 13.24
+
+
+Shloka 13.25
+
+
+Shloka 13.26
+
+
+Shloka 13.27
+
+
+Shloka 13.28
+
+
+Shloka 13.29
+
+
+Shloka 13.30
+
+
+Shloka 13.31
+
+
+Shloka 13.32
+
+
+Shloka 13.33
+
+
+Shloka 13.34
+
+
+Add Mantra
+Guṇa-traya Vibhāga Yoga
+Mantras in this Adhyaya
+
+Shloka 14.1
+
+
+Shloka 14.2
+
+
+Shloka 14.3
+
+
+Shloka 14.4
+
+
+Shloka 14.5
+
+
+Shloka 14.6
+
+
+Shloka 14.7
+
+
+Shloka 14.8
+
+
+Shloka 14.9
+
+
+Shloka 14.10
+
+
+Shloka 14.11
+
+
+Shloka 14.12
+
+
+Shloka 14.13
+
+
+Shloka 14.14
+
+
+Shloka 14.15
+
+
+Shloka 14.16
+
+
+Shloka 14.17
+
+
+Shloka 14.18
+
+
+Shloka 14.19
+
+
+Shloka 14.20
+
+
+Shloka 14.21
+
+
+Shloka 14.22
+
+
+Shloka 14.23
+
+
+Shloka 14.24
+
+
+Shloka 14.25
+
+
+Shloka 14.26
+
+
+Shloka 14.27
+
+
+Add Mantra
+Puruṣottama Yoga
+Mantras in this Adhyaya
+
+Shloka 15.1
+
+
+Shloka 15.2
+
+
+Shloka 15.3
+
+
+Shloka 15.4
+
+
+Shloka 15.5
+
+
+Shloka 15.6
+
+
+Shloka 15.7
+
+
+Shloka 15.8
+
+
+Shloka 15.9
+
+
+Shloka 15.10
+
+
+Shloka 15.11
+
+
+Shloka 15.12
+
+
+Shloka 15.13
+
+
+Shloka 15.14
+
+
+Shloka 15.15
+
+
+Shloka 15.16
+
+
+Shloka 15.17
+
+
+Shloka 15.18
+
+
+Shloka 15.19
+
+
+Shloka 15.20
+
+
+Add Mantra
+Daivāsura Sampad Vibhāga Yoga
+Mantras in this Adhyaya
+
+Shloka 16.1
+
+
+Shloka 16.2
+
+
+Shloka 16.3
+
+
+Shloka 16.4
+
+
+Shloka 16.5
+
+
+Shloka 16.6
+
+
+Shloka 16.7
+
+
+Shloka 16.8
+
+
+Shloka 16.9
+
+
+Shloka 16.10
+
+
+Shloka 16.11
+
+
+Shloka 16.12
+
+
+Shloka 16.13
+
+
+Shloka 16.14
+
+
+Shloka 16.15
+
+
+Shloka 16.16
+
+
+Shloka 16.17
+
+
+Shloka 16.18
+
+
+Shloka 16.19
+
+
+Shloka 16.20
+
+
+Shloka 16.21
+
+
+Shloka 16.22
+
+
+Shloka 16.23
+
+
+Shloka 16.24
+
+
+Add Mantra
+Śraddhā-traya Vibhāga Yoga
+Mantras in this Adhyaya
+
+Shloka 17.1
+
+
+Shloka 17.2
+
+
+Shloka 17.3
+
+
+Shloka 17.4
+
+
+Shloka 17.5
+
+
+Shloka 17.6
+
+
+Shloka 17.7
+
+
+Shloka 17.8
+
+
+Shloka 17.9
+
+
+Shloka 17.10
+
+
+Shloka 17.11
+
+
+Shloka 17.12
+
+
+Shloka 17.13
+
+
+Shloka 17.14
+
+
+Shloka 17.15
+
+
+Shloka 17.16
+
+
+Shloka 17.17
+
+
+Shloka 17.18
+
+
+Shloka 17.19
+
+
+Shloka 17.20
+
+
+Shloka 17.21
+
+
+Shloka 17.22
+
+
+Shloka 17.23
+
+
+Shloka 17.24
+
+
+Shloka 17.25
+
+
+Shloka 17.26
+
+
+Shloka 17.27
+
+
+Shloka 17.28
+
+
+Add Mantra
+Mokṣa Sanyāsa Yoga
+Mantras in this Adhyaya
+
+Shloka 18.1
+
+
+Shloka 18.2
+
+
+Shloka 18.3
+
+
+Shloka 18.4
+
+
+Shloka 18.5
+
+
+Shloka 18.6
+
+
+Shloka 18.7
+
+
+Shloka 18.8
+
+
+Shloka 18.9
+
+
+Shloka 18.10
+
+
+Shloka 18.11
+
+
+Shloka 18.12
+
+
+Shloka 18.13
+
+
+Shloka 18.14
+
+
+Shloka 18.15
+
+
+Shloka 18.16
+
+
+Shloka 18.17
+
+
+Shloka 18.18
+
+
+Shloka 18.19
+
+
+Shloka 18.20
+
+
+Shloka 18.21
+
+
+Shloka 18.22
+
+
+Shloka 18.23
+
+
+Shloka 18.24
+
+
+Shloka 18.25
+
+
+Shloka 18.26
+
+
+Shloka 18.27
+
+
+Shloka 18.28
+
+
+Shloka 18.29
+
+
+Shloka 18.30
+
+
+Shloka 18.31
+
+
+Shloka 18.32
+
+
+Shloka 18.33
+
+
+Shloka 18.34
+
+
+Shloka 18.35
+
+
+Shloka 18.36
+
+
+Shloka 18.37
+
+
+Shloka 18.38
+
+
+Shloka 18.39
+
+
+Shloka 18.40
+
+
+Shloka 18.41
+
+
+Shloka 18.42
+
+
+Shloka 18.43
+
+
+Shloka 18.44
+
+
+Shloka 18.45
+
+
+Shloka 18.46
+
+
+Shloka 18.47
+
+
+Shloka 18.48
+
+
+Shloka 18.49
+
+
+Shloka 18.50
+
+
+Shloka 18.51
+
+
+Shloka 18.52
+
+
+Shloka 18.53
+
+
+Shloka 18.54
+
+
+Shloka 18.55
+
+
+Shloka 18.56
+
+
+Shloka 18.57
+
+
+Shloka 18.58
+
+
+Shloka 18.59
+
+
+Shloka 18.60
+
+
+Shloka 18.61
+
+
+Shloka 18.62
+
+
+Shloka 18.63
+
+
+Shloka 18.64
+
+
+Shloka 18.65
+
+
+Shloka 18.66
+
+
+Shloka 18.67
+
+
+Shloka 18.68
+
+
+Shloka 18.69
+
+
+Shloka 18.70
+
+
+Shloka 18.71
+
+
+Shloka 18.72
+
+
+Shloka 18.73
+
+
+Shloka 18.74
+
+
+Shloka 18.75
+
+
+Shloka 18.76
+
+
+Shloka 18.77
+
+
+Shloka 18.78
+
+
+Add Mantra
+New Adhyaya
+Back
+Save
+Save & Publish
+Shloka 7.1
+Showing live content from the CMS. Edit here and click Done to update.
+
+Shloka / Manthra Text
+(ShlokaManthraEntry)
+Sanskrit (Devanagari)
+
+
+
+
+
+
+
+
+श्रीभगवानुवाच —
+
+मय्यासक्तमनाः पार्थ योगं युञ्जन्मदाश्रयः । 
+असंशयं समग्रं मां यथा ज्ञास्यसि तच्छृणु ॥ १ ॥
+
+English Translation
+
+
+
+
+
+
+
+
+Shri Hari said:
+
+O Partha, hear how you, having the mind fixed on Me, practising the Yoga of Meditation and taking refuge in Me, will know Me with certainty and in fullness.
+
+Other Language Translations
+Add Language
+
+Kannada
+
+
+
+
+
+
+
+
+
+ಪಾರ್ಥನೆ, ನನ್ನಲ್ಲಿಯೇ ಆಸಕ್ತವಾದ ಮನಸ್ಸಿನಿಂದ ನನ್ನನ್ನೇ ಆಶ್ರಯಿಸಿದವನಾಗಿ ಯೋಗವನ್ನು ಮಾಡುತ್ತಾ ಸಂಶಯವಿಲ್ಲದಂತೆ ಸಮಗ್ರ ವಾಗಿ ನನ್ನನ್ನು ನೀನು ಹೇಗೆ ತಿಳಿದುಕೊಳ್ಳಬಹುದೋ ಅದನ್ನು ಕೇಳು.
+
+Bhashyam for this Manthra
+(BhashyamForShlokaManthra)
+Sanskrit Commentary
+
+
+
+
+
+
+
+
+‘योगिनामपि सर्वेषां मद्गतेनान्तरात्मना । श्रद्धावान्भजते यो मां स मे युक्ततमो मतः’ (भ. गी. ६ । ४७) इति प्रश्नबीजम् उपन्यस्य, स्वयमेव ‘ईदृशं मदीयं तत्त्वम् , एवं मद्गतान्तरात्मा स्यात्’ इत्येतत् विवक्षुः श्रीभगवानुवाच —
+
+मयि वक्ष्यमाणविशेषणे परमेश्वरे आसक्तं मनः यस्य सः मय्यासक्तमनाः, हे पार्थ योगं युञ्जन् मनःसमाधानं कुर्वन् , मदाश्रयः अहमेव परमेश्वरः आश्रयो यस्य सः मदाश्रयः । यो हि कश्चित् पुरुषार्थेन केनचित् अर्थी भवति स तत्साधनं कर्म अग्निहोत्रादि तपः दानं वा किञ्चित् आश्रयं प्रतिपद्यते, अयं तु योगी मामेव आश्रयं प्रतिपद्यते, हित्वा अन्यत् साधनान्तरं मय्येव आसक्तमनाः भवति । यः त्वं एवंभूतः सन् असंशयं समग्रं समस्तं विभूतिबलशक्त्यैश्वर्यादिगुणसम्पन्नं मां यथा येन प्रकारेण ज्ञास्यसि संशयमन्तरेण ‘एवमेव भगवान्’ इति, तत् शृणु उच्यमानं मया ॥ १ ॥
+
+English Translation
+
+
+
+
+
+
+
+
+O Partha, mayi asaktamanah, having the mind fixed on Me- one whose mind (manah) is fixed (asakta) on Me (mayi) who am the supreme God possessed on the qualification going to be spoken of-. Yogam yunjan, practising the Yoga of Meditation, concentrating the mind-. Madasrayah, taking refuge in Me-one to whom I Myself, the supreme Lord, am the refuge (asraya) is madasrayah-. Anyone who hankers after some human objective resorts to some rite such as the Agnihotra etc., austerity or charity, which is the means to its attainment. This yogi, however, accepts only Me as his refuge; rejecting any other means, he keeps his mind fixed on Me alone. Srnu, hear; tat, that, which is being spoken of by Me; as to yatha, how, the process by which; you who, having become thus, jnasyasi, will know; mam, Me; asamsayam, with certainty, without doubt, that the Lord is such indeed; and samagram, in fullness, possessed of such qualities as greatness, strength, power, majesty, etc. [Strength-physical; power-mental; etc. refers to  omniscience and will.] in their fullness.
+
+Other Language Translations
+Add Language
+
+Kannada
+
+
+
+
+
+
+
+
+
+""ಯೋಗಿಗಳಲ್ಲೆಲ್ಲ ನನ್ನಲ್ಲಿಯೇ ಅಂತರಾತ್ಮವನ್ನಿಟ್ಟು ಶ್ರದ್ಧೆಯಿಂದ ಯಾವಾತನು ಭಜಿಸುತ್ತಿರುವನೋ ಅವನೇ ಹೆಚ್ಚಿನ ಯೋಗಿಯೆಂದು ನನ್ನ ಮತವು'' (೬-೪೭) ಎಂದು ಪ್ರಶ್ನೆಗೆ ಅವಕಾಶವನ್ನು (ಕಲ್ಪಿಸಿಕೊಟ್ಟು “ನನ್ನ ತತ್ತ್ವವೆಂದರೆ ಇಂಥದ್ದು, ನನ್ನಲ್ಲಿಯೇ ಅಂತರಾತ್ಮವನ್ನಿಟ್ಟವನಾಗುವದು ಹೀಗೆ'' ಎಂಬುದನ್ನು ತಿಳಿಸಬೇಕೆಂದು ಭಗವಂತನು ತಾನೇ ಇಂತೆಂದನು :-
+
+ನನ್ನಲ್ಲಿಯೇ ಎಂದರೆ ಮುಂದೆ ಹೇಳುವ ವಿಶೇಷಣಗಳಿಂದ ಕೂಡಿದ" ಪರಮೇಶ್ವರನಲ್ಲಿಯೇ ಆಸಕ್ತಿಯುಳ್ಳ ಮನಸ್ಸಿನಿಂದ ಕೂಡಿದವನಾಗಿರುವವನು "ಮಯ್ಯಾಸಕ್ತಮನನು' (ಅಂಥವನಾಗಿ) ; ಎಲೈ ಪಾರ್ಥನೆ, ಮದಾಶ್ರಯನಾಗಿ ಪರಮೇಶ್ವರನಾದ ನಾನೇ ಯಾವನಿಗೆ ಆಶ್ರಯವೋ ಅವನು ಮದಾಶ್ರಯನು. ಯಾವನೊಬ್ಬನು ಯಾವದಾದರೊಂದು ಪುರುಷಾರ್ಥವನ್ನು ಬಯಸುವವನಾಗಿರು ವನೋ ಅವನು ಅದಕ್ಕೆ ಸಾಧನವಾದ ಅಗ್ನಿಹೋತ್ರವೇ ಮುಂತಾದ ಕರ್ಮವನ್ನೋ ತಪಸ್ಸನ್ನೋ ದಾನವನ್ನೋ ಯಾವದಾದರೊಂದನ್ನು ಆಶ್ರಯವನ್ನಾಗಿ ಹೊಂದಿರು ತ್ತಾನೆ ; ಆದರೆ ಈ ಯೋಗಿಯು ನನ್ನನ್ನೇ ಅಂಥ ಆಶ್ರಯವೆಂದು ಹೊಂದಿರು ತ್ತಾನೆ" ; ಬೇರೊಂದು ಸಾಧನವನ್ನು ಒಲ್ಲದೆ ನನ್ನಲ್ಲಿಯೇ ಆಸಕ್ತಿಯಿಟ್ಟ ಮನಸ್ಸಿನವನಾಗಿರುತ್ತಾನೆ. (ಅರ್ಜುನನೆ), ಈ ನೀನು ಇಂಥವನಾಗಿ - ಯೋಗವನ್ನು ಮಾಡುತ್ತಾ ಮನಸ್ಸನ್ನು ಸಮಾಧಾನಗೊಳಿಸುತ್ತಾ ಸಂಶಯವಿಲ್ಲದೆ ನನ್ನನ್ನು ಸಮಗ್ರ ವಾಗಿ ಎಂದರೆ ವಿಭೂತಿ, ಬಲ, ಶಕ್ತಿ, ಐಶ್ವರ್ಯ - ಮುಂತಾದ ಗುಣಸಂಪತ್ತಿ ಯುಳ್ಳ ನನ್ನನ್ನು ಪೂರ್ಣವಾಗಿ," ಹೇಗೆ ಎಂದರೆ ಯಾವ ಪ್ರಕಾರದಿಂದ, “ಭಗವಂತನು ಹೀಗೆಯೇ ಇರುವನು' ಎಂದು (ಯಾವ) ಸಂಶಯವೂ ಇಲ್ಲದೆ ತಿಳಿದುಕೊಳ್ಳು ವೆಯೋ ಅದನ್ನು ನಾನು ಹೇಳುವೆನು ಕೇಳು.
+
+Teeka Entries
+(Teekas)
+Nyaya Nirnaya— Anandagiri
+
+Sanskrit Commentary
+
+
+
+
+
+
+
+
+
+
+English Translation
+
+
+
+
+
+
+
+
+
+
+Tattva Prakashika— Anandagiri
+
+Sanskrit Commentary
+
+
+
+
+
+
+
+
+परमेश्वरस्य वक्ष्यमाणविशेषणत्वं सकलजगदायतनत्वादिनानाविधविभूतिभागित्वम् , तत्र आसक्तिः - मनसः विषयान्तरपरिहारेण तन्निष्ठत्वम् । मनसः भगवत्येव आसक्तौ हेतुमाह - योगमिति ।
+
+विषयान्तरपरिहारे हि गोचरम् आलोच्यमाने भगवत्येव प्रतिष्ठितं भवति इत्यर्थः ।
+
+तथापि स्वाश्रये पुरुषः मनः स्थापयति, नान्यत्र, इत्याशङ्क्य, अाह - मदाश्रय इति ।
+
+योगिनः यद् ईश्वराश्रयत्वेन तस्मिन्नेव आसक्तमनसस्त्वम् उपन्यस्तम् , तद् उपपादयति - यो हीति ।
+
+ईश्वराख्याश्रयस्य प्रतिपत्तिमेव प्रकटयति - हित्वेति ।
+
+अस्तु योगिनः त्वदाश्रयप्रतिपत्त्या मनसः त्वय्येव आसक्तिः, तथापि मम किमायातम् ? इत्याशङ्क्य, द्वितीयार्धं व्याचष्टे - यस्त्वमेवमिति ।
+
+एवंभूतः - यथोक्तध्याननिष्ठपुरुषवदेव मय्यासक्तमनाः यः त्वं, स त्वं तथाविधस्सन् , असंशयम् - अविद्यमानः संशयः यत्र ज्ञाने तद् यथा स्यात् , तथा, मां समग्रं ज्ञास्यसि इति सम्बन्धः ।
+
+समग्रं इत्यस्य अर्थमाह - समस्तमिति ।
+
+विभूतिः - नानाविधैश्वर्योपायसम्पत्तिः, बलं - शरीरगतं सामर्थ्यम् , शक्तिः - मनोगतं प्रागल्भ्यं, ऐश्वर्यम् - ईशितव्यविषयम् ईशनसामर्थ्यम् , आदिशब्देन ज्ञानेच्छादयः गृह्यन्ते ।
+
+असंशयमिति पदस्य क्रियाविशेषणत्वं विशदयन् क्रियापदेन सम्बन्धं कथयति - संशयमिति ।
+
+विना संशयं भगवत्तत्त्वपरिज्ञानमेव स्फोरयति - एवमेवेति ।
+
+भगवत्तत्त्वे ज्ञातव्ये, कथं मम ज्ञानमुदेष्यति? न हि त्वामृते तदुपदेष्टा कश्चिदस्ति, इत्याशङक्य, आह - तच्छृण्विति
+
+॥ १ ॥
+
+English Translation
+
+
+
+
+
+
+
+
+
+
+Gudhartha Dipika— Madhusudana Saraswati
+
+Sanskrit Commentary
+
+
+
+
+
+
+
+
+
+
+English Translation
+
+
+
+
+
+
+
+
+
+
+Bhashyotkarsha Deepika— Dhanapati Suri
+
+Sanskrit Commentary
+
+
+
+
+
+
+
+
+
+
+English Translation
+
+
+
+
+
+
+
+
+
+
+Gita Tatparya Bodhini— Shankarananda
+
+Sanskrit Commentary
+
+
+
+
+
+
+
+
+
+
+English Translation
+
+
+
+
+
+
+
+
+
+
+Subodhini
+
+Sanskrit Commentary
+
+
+
+
+
+
+
+
+
+
+English Translation
+
+
+
+
+
+
+
+
+
+
+Brahmanandagiri
+
+Sanskrit Commentary
+
+
+
+
+
+
+
+
+
+
+English Translation
+
+
+
+
+
+
+
+
+
+
+Paramartha Prapa
+
+Sanskrit Commentary
+
+
+
+
+
+
+
+
+
+
+English Translation
+
+
+
+
+
+
+
+
+
+
+Amrita Tarangini
+
+Sanskrit Commentary
+
+
+
+
+
+
+
+
+
+
+English Translation
+
+
+
+
+
+
+
+
+
+
+Nyaya Nirnaya— Anandagiri
+
+Sanskrit Commentary
+
+
+
+
+
+
+
+
+
+
+English Translation
+
+
+
+
+
+
+
+
+
+
+Subodhini - Shreedharaswami
+
+Sanskrit Commentary
+
+
+
+
+
+
+
+
+
+
+English Translation
+
+
+
+
+
+
+
+
+
+
+Paramartha Prapa - Srimad Devagnya Pandiya
+
+Sanskrit Commentary
+
+
+
+
+
+
+
+
+
+
+English Translation
+
+
+
+
+
+
+
+
+
+
+Bhaavaprakasha -Sadhaanandi Teeka - Sadanandha
+
+Sanskrit Commentary
+
+
+
+
+
+
+
+
+
+
+English Translation
+
+
+
+
+
+
+
+
+
+
+Arthasangraha Teeka - Raagavendra
+
+Sanskrit Commentary
+
+
+
+
+
+
+
+
+
+
+English Translation
+
+
+
+
+
+
+
+
+
+
+Close
+Save
+Save & Publish
+Close

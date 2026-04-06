@@ -1105,26 +1105,26 @@ export default function GranthasPage() {
     const effectiveDocId = item._isDraft ? item._strapiDocId : item.documentId;
 
     // Fetch sections + teekas in parallel.
-    // Teekas: prefer saved draft (already set above), then fetch from Strapi.
+    // Always fetch teekas from Strapi so new ones added after the last draft save are picked up.
     setEditingGranthaSectionsLoading(true);
     let fetchedSections: any[] = [];
     try {
-      const sectionsFetch = fetch(`/api/strapi/sections/by-grantha/${effectiveDocId}`, { credentials: "include" });
-      const teekasFetch = (!hasSavedTeekas && !hasInlineTeekas)
-        ? fetch(`/api/strapi/teekas/by-grantha/${effectiveDocId}`, { credentials: "include" })
-        : Promise.resolve(null as unknown as Response);
-
-      const [sectionsRes, teekasRes] = await Promise.all([sectionsFetch, teekasFetch]);
+      const [sectionsRes, teekasRes] = await Promise.all([
+        fetch(`/api/strapi/sections/by-grantha/${effectiveDocId}`, { credentials: "include" }),
+        fetch(`/api/strapi/teekas/by-grantha/${effectiveDocId}`, { credentials: "include" }),
+      ]);
 
       if (sectionsRes.ok) {
         const sectionsData = await sectionsRes.json();
         fetchedSections = sectionsData?.data || [];
       }
 
-      if (!hasSavedTeekas && !hasInlineTeekas) {
-        if (teekasRes?.ok) {
-          const teekasData = await teekasRes.json();
-          const strapiTeekas: any[] = teekasData?.data || [];
+      if (teekasRes?.ok) {
+        const teekasData = await teekasRes.json();
+        const strapiTeekas: any[] = teekasData?.data || [];
+
+        if (!hasSavedTeekas && !hasInlineTeekas) {
+          // No draft teekas at all — use Strapi list directly.
           setTeekas(
             strapiTeekas.map((t: any) => ({
               id: t.documentId || uid(),
@@ -1133,8 +1133,27 @@ export default function GranthasPage() {
             }))
           );
         } else {
-          setTeekas([]);
+          // Draft already has teekas — supplement with any new ones added to Strapi since last save.
+          // Preserve draft teeka order/data; append only teekas not already present (match by TeekaName or documentId).
+          setTeekas((prev) => {
+            const existingNames = new Set(prev.map((t) => (t.TeekaName || "").trim().toLowerCase()));
+            const existingDocIds = new Set(prev.map((t) => t.id));
+            const newTeekas = strapiTeekas
+              .filter((t: any) => {
+                const name = (t.TeekaName || "").trim().toLowerCase();
+                const docId = t.documentId || "";
+                return !existingDocIds.has(docId) && !existingNames.has(name);
+              })
+              .map((t: any) => ({
+                id: t.documentId || uid(),
+                TeekaName: t.TeekaName || "",
+                TeekaAuthor: t.TeekaAuthor || "",
+              }));
+            return newTeekas.length > 0 ? [...prev, ...newTeekas] : prev;
+          });
         }
+      } else if (!hasSavedTeekas && !hasInlineTeekas) {
+        setTeekas([]);
       }
     } catch { if (!hasSavedTeekas && !hasInlineTeekas) setTeekas([]); }
     setEditingGranthaSectionsLoading(false);

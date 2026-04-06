@@ -8,7 +8,7 @@ import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/com
 import { Skeleton } from "@/components/ui/skeleton";
 import { useToast } from "@/hooks/use-toast";
 import { useAuth } from "@/hooks/use-auth";
-import { Download, DatabaseBackup, BookOpen, ScrollText, Hash, Loader2, ShieldCheck, Eye, Upload } from "lucide-react";
+import { Download, DatabaseBackup, BookOpen, ScrollText, Hash, Loader2, ShieldCheck, Eye, Upload, Database } from "lucide-react";
 import type { GranthaBackupMeta } from "@shared/schema";
 
 export default function BackupsPage() {
@@ -130,6 +130,10 @@ export default function BackupsPage() {
 
   function handleDownload(backupId: number) {
     window.open(`/api/admin/backups/${backupId}/download`, "_blank");
+  }
+
+  function handleDownloadSqlite(backupId: number) {
+    window.open(`/api/admin/backups/${backupId}/export-sqlite`, "_blank");
   }
 
   const isCreating = createBackupMutation.isPending || polling;
@@ -262,7 +266,17 @@ export default function BackupsPage() {
                       data-testid={`button-download-backup-${backup.id}`}
                     >
                       <Download className="w-3.5 h-3.5 mr-1.5" />
-                      Download
+                      JSON
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      onClick={() => handleDownloadSqlite(backup.id)}
+                      data-testid={`button-download-sqlite-${backup.id}`}
+                      title="Download as SQLite database — open in TablePlus, DBeaver, or DB Browser for SQLite"
+                    >
+                      <Database className="w-3.5 h-3.5 mr-1.5" />
+                      SQLite
                     </Button>
                   </div>
                 </div>

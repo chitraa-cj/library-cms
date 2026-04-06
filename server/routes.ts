@@ -3,9 +3,272 @@ import { type Server } from "http";
 import { setupAuth, requireAuth, requireAdmin, hashPassword } from "./auth";
 import { createStrapiRouter, strapiRequest, strapiRequestLarge } from "./strapi";
 import { storage } from "./storage";
+import Database from "better-sqlite3";
 import type { User } from "@shared/schema";
 
 const STRAPI_INTERNAL_KEYS = new Set(["id", "_id", "__component", "createdAt", "updatedAt", "publishedAt", "documentId", "locale"]);
+
+// ─── SQLite export helpers ────────────────────────────────────────────────────
+
+/** Extract plain text from a Strapi blocks (rich-text) field */
+function blocksToText(blocks: any): string {
+  if (!blocks || !Array.isArray(blocks)) return "";
+  return blocks
+    .map((block: any) => {
+      if (!block?.children) return "";
+      return block.children
+        .map((child: any) => (typeof child?.text === "string" ? child.text : ""))
+        .join("");
+    })
+    .join("\n")
+    .trim();
+}
+
+/** Build an in-memory SQLite database from a backup snapshot and return its buffer. */
+function buildSqliteFromBackup(data: any): Buffer {
+  const db = new Database(":memory:");
+  db.pragma("journal_mode = WAL");
+  // Keep FK references defined for schema clarity but defer enforcement;
+  // some backup manthras may reference sections not included in the backup.
+  db.pragma("foreign_keys = OFF");
+
+  // ── Schema ──────────────────────────────────────────────────────────────────
+  db.exec(`
+    CREATE TABLE granthas (
+      id INTEGER PRIMARY KEY,
+      document_id TEXT UNIQUE,
+      grantha_name TEXT,
+      slug TEXT,
+      order_num INTEGER,
+      number_of_teekas INTEGER,
+      bhashyakara_name TEXT,
+      bhashyakara_intro_sanskrit TEXT,
+      created_at TEXT,
+      updated_at TEXT,
+      published_at TEXT
+    );
+
+    CREATE TABLE teekas (
+      id INTEGER PRIMARY KEY,
+      document_id TEXT UNIQUE,
+      grantha_document_id TEXT,
+      teeka_name TEXT,
+      teeka_author TEXT,
+      created_at TEXT,
+      updated_at TEXT,
+      published_at TEXT,
+      FOREIGN KEY (grantha_document_id) REFERENCES granthas(document_id)
+    );
+
+    CREATE TABLE sections (
+      id INTEGER PRIMARY KEY,
+      document_id TEXT UNIQUE,
+      grantha_document_id TEXT,
+      parent_document_id TEXT,
+      title TEXT,
+      type TEXT,
+      order_num INTEGER,
+      created_at TEXT,
+      updated_at TEXT,
+      published_at TEXT,
+      FOREIGN KEY (grantha_document_id) REFERENCES granthas(document_id)
+    );
+
+    CREATE TABLE manthras (
+      id INTEGER PRIMARY KEY,
+      document_id TEXT UNIQUE,
+      section_document_id TEXT,
+      grantha_document_id TEXT,
+      shloka_manthra_number TEXT,
+      order_num INTEGER,
+      sanskrit_text TEXT,
+      sanskrit_text_other_translations TEXT,
+      bhashyam_text TEXT,
+      bhashyam_text_other_translations TEXT,
+      created_at TEXT,
+      updated_at TEXT,
+      published_at TEXT,
+      FOREIGN KEY (section_document_id) REFERENCES sections(document_id)
+    );
+
+    CREATE TABLE manthra_teekas (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      manthra_document_id TEXT,
+      teeka_document_id TEXT,
+      teeka_name TEXT,
+      teeka_entry_text TEXT,
+      FOREIGN KEY (manthra_document_id) REFERENCES manthras(document_id),
+      FOREIGN KEY (teeka_document_id) REFERENCES teekas(document_id)
+    );
+
+    CREATE TABLE word_meanings (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      manthra_document_id TEXT,
+      word TEXT,
+      meaning TEXT,
+      meaning_language TEXT,
+      FOREIGN KEY (manthra_document_id) REFERENCES manthras(document_id)
+    );
+
+    CREATE INDEX idx_sections_grantha ON sections(grantha_document_id);
+    CREATE INDEX idx_manthras_section ON manthras(section_document_id);
+    CREATE INDEX idx_manthras_grantha ON manthras(grantha_document_id);
+    CREATE INDEX idx_teekas_grantha ON teekas(grantha_document_id);
+    CREATE INDEX idx_manthra_teekas_manthra ON manthra_teekas(manthra_document_id);
+  `);
+
+  // ── Prepared statements ────────────────────────────────────────────────────
+  const insGrantha = db.prepare(`
+    INSERT OR REPLACE INTO granthas
+      (id, document_id, grantha_name, slug, order_num, number_of_teekas,
+       bhashyakara_name, bhashyakara_intro_sanskrit, created_at, updated_at, published_at)
+    VALUES (@id, @document_id, @grantha_name, @slug, @order_num, @number_of_teekas,
+            @bhashyakara_name, @bhashyakara_intro_sanskrit, @created_at, @updated_at, @published_at)
+  `);
+
+  const insTeeka = db.prepare(`
+    INSERT OR REPLACE INTO teekas
+      (id, document_id, grantha_document_id, teeka_name, teeka_author, created_at, updated_at, published_at)
+    VALUES (@id, @document_id, @grantha_document_id, @teeka_name, @teeka_author,
+            @created_at, @updated_at, @published_at)
+  `);
+
+  const insSection = db.prepare(`
+    INSERT OR REPLACE INTO sections
+      (id, document_id, grantha_document_id, parent_document_id, title, type, order_num, created_at, updated_at, published_at)
+    VALUES (@id, @document_id, @grantha_document_id, @parent_document_id, @title, @type,
+            @order_num, @created_at, @updated_at, @published_at)
+  `);
+
+  const insManthra = db.prepare(`
+    INSERT OR REPLACE INTO manthras
+      (id, document_id, section_document_id, grantha_document_id, shloka_manthra_number, order_num,
+       sanskrit_text, sanskrit_text_other_translations, bhashyam_text, bhashyam_text_other_translations,
+       created_at, updated_at, published_at)
+    VALUES (@id, @document_id, @section_document_id, @grantha_document_id, @shloka_manthra_number, @order_num,
+            @sanskrit_text, @sanskrit_text_other_translations, @bhashyam_text, @bhashyam_text_other_translations,
+            @created_at, @updated_at, @published_at)
+  `);
+
+  const insTeekaManthra = db.prepare(`
+    INSERT INTO manthra_teekas (manthra_document_id, teeka_document_id, teeka_name, teeka_entry_text)
+    VALUES (@manthra_document_id, @teeka_document_id, @teeka_name, @teeka_entry_text)
+  `);
+
+  const insWord = db.prepare(`
+    INSERT INTO word_meanings (manthra_document_id, word, meaning, meaning_language)
+    VALUES (@manthra_document_id, @word, @meaning, @meaning_language)
+  `);
+
+  // ── Insert granthas ────────────────────────────────────────────────────────
+  const insertAll = db.transaction(() => {
+    for (const g of (data.granthas ?? [])) {
+      insGrantha.run({
+        id: g.id ?? null,
+        document_id: g.documentId ?? null,
+        grantha_name: g.GranthaName ?? null,
+        slug: g.slug ?? null,
+        order_num: g.order ?? null,
+        number_of_teekas: g.NumberOfTeekas ?? null,
+        bhashyakara_name: g.BhashyakaraName ?? null,
+        bhashyakara_intro_sanskrit: blocksToText(g.BhashyakaraIntroduction?.SanskritTextEntry),
+        created_at: g.createdAt ?? null,
+        updated_at: g.updatedAt ?? null,
+        published_at: g.publishedAt ?? null,
+      });
+
+      // Embedded teekas inside grantha objects
+      for (const t of (g.teekas ?? [])) {
+        insTeeka.run({
+          id: t.id ?? null,
+          document_id: t.documentId ?? null,
+          grantha_document_id: g.documentId ?? null,
+          teeka_name: t.TeekaName ?? null,
+          teeka_author: t.TeekaAuthor ?? null,
+          created_at: t.createdAt ?? null,
+          updated_at: t.updatedAt ?? null,
+          published_at: t.publishedAt ?? null,
+        });
+      }
+    }
+
+    // ── Insert sections ──────────────────────────────────────────────────────
+    for (const s of (data.sections ?? [])) {
+      insSection.run({
+        id: s.id ?? null,
+        document_id: s.documentId ?? null,
+        grantha_document_id: s.grantha?.documentId ?? null,
+        parent_document_id: s.parent?.documentId ?? null,
+        title: s.title ?? null,
+        type: s.type ?? null,
+        order_num: s.order ?? null,
+        created_at: s.createdAt ?? null,
+        updated_at: s.updatedAt ?? null,
+        published_at: s.publishedAt ?? null,
+      });
+    }
+
+    // ── Insert manthras ──────────────────────────────────────────────────────
+    for (const m of (data.manthras ?? [])) {
+      const shloka = m.ShlokaManthraEntry;
+      const bhashyam = m.BhashyamEntry;
+
+      const shlokaSanskrit = blocksToText(shloka?.SanskritTextEntry);
+      const shlokOtherTr = (shloka?.OtherTranslations ?? [])
+        .map((t: any) => `[${t.LanguageOfTranslation ?? ""}] ${blocksToText(t.TranslationText)}`)
+        .join(" | ");
+
+      const bhashyamText = blocksToText(bhashyam?.SanskritTextEntry);
+      const bhashyamOtherTr = (bhashyam?.OtherTranslations ?? [])
+        .map((t: any) => `[${t.LanguageOfTranslation ?? ""}] ${blocksToText(t.TranslationText)}`)
+        .join(" | ");
+
+      insManthra.run({
+        id: m.id ?? null,
+        document_id: m.documentId ?? null,
+        section_document_id: m.Section?.documentId ?? null,
+        grantha_document_id: m.Section?.grantha?.documentId ?? null,
+        shloka_manthra_number: m.ShlokaManthraNumber ?? null,
+        order_num: m.order ?? null,
+        sanskrit_text: shlokaSanskrit || null,
+        sanskrit_text_other_translations: shlokOtherTr || null,
+        bhashyam_text: bhashyamText || null,
+        bhashyam_text_other_translations: bhashyamOtherTr || null,
+        created_at: m.createdAt ?? null,
+        updated_at: m.updatedAt ?? null,
+        published_at: m.publishedAt ?? null,
+      });
+
+      // Manthra-Teeka junction
+      for (const mt of (m.Teekas ?? [])) {
+        const teekaDocId = mt.teeka?.documentId ?? mt.documentId ?? null;
+        const teekaName = mt.teeka?.TeekaName ?? mt.TeekaName ?? null;
+        const entryText = blocksToText(mt.TeekaEntry?.SanskritTextEntry);
+        insTeekaManthra.run({
+          manthra_document_id: m.documentId ?? null,
+          teeka_document_id: teekaDocId,
+          teeka_name: teekaName,
+          teeka_entry_text: entryText || null,
+        });
+      }
+
+      // Word meanings
+      for (const wm of (m.wordMeanings ?? [])) {
+        insWord.run({
+          manthra_document_id: m.documentId ?? null,
+          word: wm.word ?? wm.Word ?? null,
+          meaning: wm.meaning ?? wm.Meaning ?? null,
+          meaning_language: wm.language ?? wm.Language ?? null,
+        });
+      }
+    }
+  });
+
+  insertAll();
+  const buf = db.serialize();
+  db.close();
+  return buf;
+}
 
 // Strapi section.type enum — exact values the API accepts
 const STRAPI_SECTION_TYPES = new Set([
@@ -1733,6 +1996,25 @@ export async function registerRoutes(
       res.json(backup.data);
     } catch (e: any) {
       res.status(500).json({ message: e.message || "Failed to download backup" });
+    }
+  });
+
+  // Download backup as a SQLite database file — fully normalized tables, queryable in any DB browser.
+  app.get("/api/admin/backups/:id/export-sqlite", requireAuth, async (req, res) => {
+    try {
+      const id = parseInt(req.params.id);
+      if (isNaN(id)) return res.status(400).json({ message: "Invalid backup ID" });
+      const backup = await storage.getBackup(id);
+      if (!backup) return res.status(404).json({ message: "Backup not found" });
+      const label = (backup.label as string).replace(/[^a-z0-9_\-]/gi, "_");
+      const sqliteBuf = buildSqliteFromBackup(backup.data);
+      res.setHeader("Content-Type", "application/x-sqlite3");
+      res.setHeader("Content-Disposition", `attachment; filename="ekatmadham-${label}-${backup.id}.sqlite"`);
+      res.setHeader("Content-Length", sqliteBuf.length);
+      res.end(sqliteBuf);
+    } catch (e: any) {
+      console.error("[sqlite-export] failed:", e.message);
+      res.status(500).json({ message: e.message || "Failed to export SQLite" });
     }
   });
 

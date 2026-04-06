@@ -46,11 +46,19 @@ function buildSqliteFromBackup(data: any): Buffer {
       id INTEGER PRIMARY KEY,
       document_id TEXT UNIQUE,
       grantha_name TEXT,
+      grantha_type TEXT,
       slug TEXT,
       order_num INTEGER,
       number_of_teekas INTEGER,
+      bhashyam_name TEXT,
+      bhashyam_author TEXT,
       bhashyakara_name TEXT,
       bhashyakara_intro_sanskrit TEXT,
+      bhashyakara_intro_iast TEXT,
+      bhashyakara_intro_english TEXT,
+      intro_to_text_english TEXT,
+      intro_video_id TEXT,
+      intro_video_title TEXT,
       created_at TEXT,
       updated_at TEXT,
       published_at TEXT
@@ -144,10 +152,16 @@ function buildSqliteFromBackup(data: any): Buffer {
   // ── Prepared statements ────────────────────────────────────────────────────
   const insGrantha = db.prepare(`
     INSERT OR REPLACE INTO granthas
-      (id, document_id, grantha_name, slug, order_num, number_of_teekas,
-       bhashyakara_name, bhashyakara_intro_sanskrit, created_at, updated_at, published_at)
-    VALUES (@id, @document_id, @grantha_name, @slug, @order_num, @number_of_teekas,
-            @bhashyakara_name, @bhashyakara_intro_sanskrit, @created_at, @updated_at, @published_at)
+      (id, document_id, grantha_name, grantha_type, slug, order_num, number_of_teekas,
+       bhashyam_name, bhashyam_author, bhashyakara_name,
+       bhashyakara_intro_sanskrit, bhashyakara_intro_iast, bhashyakara_intro_english,
+       intro_to_text_english, intro_video_id, intro_video_title,
+       created_at, updated_at, published_at)
+    VALUES (@id, @document_id, @grantha_name, @grantha_type, @slug, @order_num, @number_of_teekas,
+            @bhashyam_name, @bhashyam_author, @bhashyakara_name,
+            @bhashyakara_intro_sanskrit, @bhashyakara_intro_iast, @bhashyakara_intro_english,
+            @intro_to_text_english, @intro_video_id, @intro_video_title,
+            @created_at, @updated_at, @published_at)
   `);
 
   const insTeeka = db.prepare(`
@@ -208,29 +222,38 @@ function buildSqliteFromBackup(data: any): Buffer {
     // 1. Granthas + their embedded teekas + grantha name translations
     for (const g of (data.granthas ?? [])) {
       const gDocId = g.documentId ?? null;
+      const bhIntr = g.BhashyakaraIntroduction;
       insGrantha.run({
         id: g.id ?? null,
         document_id: gDocId,
         grantha_name: g.GranthaName ?? null,
+        grantha_type: g.GranthaType ?? null,
         slug: g.slug ?? null,
         order_num: g.order ?? null,
         number_of_teekas: g.NumberOfTeekas ?? null,
+        bhashyam_name: g.BhashyamName ?? null,
+        bhashyam_author: g.BhashyamAuthor ?? null,
         bhashyakara_name: g.BhashyakaraName ?? null,
-        bhashyakara_intro_sanskrit: blocksToText(g.BhashyakaraIntroduction?.SanskritTextEntry) || null,
+        bhashyakara_intro_sanskrit: blocksToText(bhIntr?.SanskritTextEntry) || null,
+        bhashyakara_intro_iast: blocksToText(bhIntr?.IASTTransliteration) || null,
+        bhashyakara_intro_english: blocksToText(bhIntr?.EnglishTranslationText) || null,
+        intro_to_text_english: blocksToText(g.IntroductionToTextEnglish) || null,
+        intro_video_id: g.introVideoId ?? null,
+        intro_video_title: g.introVideoTitle ?? null,
         created_at: g.createdAt ?? null,
         updated_at: g.updatedAt ?? null,
         published_at: g.publishedAt ?? null,
       });
 
-      // Grantha name translations (e.g. Tamil name of the text)
       if (gDocId) {
+        // Grantha name translations (Tamil, Kannada, etc.)
         for (const nt of (g.GranthaNameTranslations ?? [])) {
           const lang = nt.LanguageOfTranslation ?? nt.language ?? "";
-          const text = blocksToText(nt.TranslationText) || nt.TranslationText || "";
-          if (lang && text) {
-            insTr.run({ entity_type: "grantha_name", entity_document_id: gDocId, language: lang, text });
-          }
+          const text = blocksToText(nt.TranslationText) || (typeof nt.TranslationText === "string" ? nt.TranslationText : "") || "";
+          if (lang && text) insTr.run({ entity_type: "grantha_name", entity_document_id: gDocId, language: lang, text });
         }
+        // BhashyakaraIntroduction other language translations
+        insertTranslations("bhashyakara_intro", gDocId, bhIntr?.OtherTranslations);
       }
 
       // Embedded teekas
@@ -248,11 +271,12 @@ function buildSqliteFromBackup(data: any): Buffer {
       }
     }
 
-    // 2. Sections
+    // 2. Sections + title translations
     for (const s of (data.sections ?? [])) {
+      const sDocId = s.documentId ?? null;
       insSection.run({
         id: s.id ?? null,
-        document_id: s.documentId ?? null,
+        document_id: sDocId,
         grantha_document_id: s.grantha?.documentId ?? null,
         parent_document_id: s.parent?.documentId ?? null,
         title: s.title ?? null,
@@ -262,6 +286,14 @@ function buildSqliteFromBackup(data: any): Buffer {
         updated_at: s.updatedAt ?? null,
         published_at: s.publishedAt ?? null,
       });
+      // Section title translations
+      if (sDocId) {
+        for (const tr of (s.titleTranslations ?? [])) {
+          const lang = tr.LanguageOfTranslation ?? tr.language ?? "";
+          const text = blocksToText(tr.TranslationText) || (typeof tr.TranslationText === "string" ? tr.TranslationText : "") || "";
+          if (lang && text) insTr.run({ entity_type: "section_title", entity_document_id: sDocId, language: lang, text });
+        }
+      }
     }
 
     // 3. Manthras + translations + teekas + word meanings

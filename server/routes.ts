@@ -24,12 +24,20 @@ function blocksToText(blocks: any): string {
     .trim();
 }
 
-/** Build an in-memory SQLite database from a backup snapshot and return its buffer. */
+/** Build an in-memory SQLite database from a backup snapshot and return its buffer.
+ *  Tables:
+ *   granthas          — one row per grantha
+ *   teekas            — one row per commentary
+ *   sections          — one row per section (L1/L2/L3)
+ *   manthras          — one row per verse (main Sanskrit + Bhashyam plain text)
+ *   manthra_teekas    — verse × teeka junction (Sanskrit teeka text per verse)
+ *   word_meanings     — word-by-word meanings
+ *   translations      — ALL language translations (grantha names, manthra Sanskrit,
+ *                       Bhashyam, teeka entries) — one row per language per field
+ */
 function buildSqliteFromBackup(data: any): Buffer {
   const db = new Database(":memory:");
   db.pragma("journal_mode = WAL");
-  // Keep FK references defined for schema clarity but defer enforcement;
-  // some backup manthras may reference sections not included in the backup.
   db.pragma("foreign_keys = OFF");
 
   // ── Schema ──────────────────────────────────────────────────────────────────
@@ -56,8 +64,7 @@ function buildSqliteFromBackup(data: any): Buffer {
       teeka_author TEXT,
       created_at TEXT,
       updated_at TEXT,
-      published_at TEXT,
-      FOREIGN KEY (grantha_document_id) REFERENCES granthas(document_id)
+      published_at TEXT
     );
 
     CREATE TABLE sections (
@@ -70,8 +77,7 @@ function buildSqliteFromBackup(data: any): Buffer {
       order_num INTEGER,
       created_at TEXT,
       updated_at TEXT,
-      published_at TEXT,
-      FOREIGN KEY (grantha_document_id) REFERENCES granthas(document_id)
+      published_at TEXT
     );
 
     CREATE TABLE manthras (
@@ -82,23 +88,21 @@ function buildSqliteFromBackup(data: any): Buffer {
       shloka_manthra_number TEXT,
       order_num INTEGER,
       sanskrit_text TEXT,
-      sanskrit_text_other_translations TEXT,
       bhashyam_text TEXT,
-      bhashyam_text_other_translations TEXT,
       created_at TEXT,
       updated_at TEXT,
-      published_at TEXT,
-      FOREIGN KEY (section_document_id) REFERENCES sections(document_id)
+      published_at TEXT
     );
 
+    -- Verse × teeka junction: one row per (manthra, teeka) pair.
+    -- Sanskrit teeka text for this verse stored here.
+    -- Translations of the teeka entry are in the translations table.
     CREATE TABLE manthra_teekas (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       manthra_document_id TEXT,
       teeka_document_id TEXT,
       teeka_name TEXT,
-      teeka_entry_text TEXT,
-      FOREIGN KEY (manthra_document_id) REFERENCES manthras(document_id),
-      FOREIGN KEY (teeka_document_id) REFERENCES teekas(document_id)
+      teeka_entry_sanskrit TEXT
     );
 
     CREATE TABLE word_meanings (
@@ -106,15 +110,30 @@ function buildSqliteFromBackup(data: any): Buffer {
       manthra_document_id TEXT,
       word TEXT,
       meaning TEXT,
-      meaning_language TEXT,
-      FOREIGN KEY (manthra_document_id) REFERENCES manthras(document_id)
+      meaning_language TEXT
+    );
+
+    -- Unified translations table — captures every language-specific text.
+    -- entity_type values:
+    --   'grantha_name'       entity_document_id = granthas.document_id
+    --   'manthra_sanskrit'   entity_document_id = manthras.document_id
+    --   'manthra_bhashyam'   entity_document_id = manthras.document_id
+    --   'teeka_entry'        entity_document_id = manthra_teekas.id (as text)
+    CREATE TABLE translations (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      entity_type TEXT,
+      entity_document_id TEXT,
+      language TEXT,
+      text TEXT
     );
 
     CREATE INDEX idx_sections_grantha ON sections(grantha_document_id);
     CREATE INDEX idx_manthras_section ON manthras(section_document_id);
     CREATE INDEX idx_manthras_grantha ON manthras(grantha_document_id);
     CREATE INDEX idx_teekas_grantha ON teekas(grantha_document_id);
-    CREATE INDEX idx_manthra_teekas_manthra ON manthra_teekas(manthra_document_id);
+    CREATE INDEX idx_mt_manthra ON manthra_teekas(manthra_document_id);
+    CREATE INDEX idx_tr_entity ON translations(entity_type, entity_document_id);
+    CREATE INDEX idx_tr_language ON translations(language);
   `);
 
   // ── Prepared statements ────────────────────────────────────────────────────
@@ -143,16 +162,14 @@ function buildSqliteFromBackup(data: any): Buffer {
   const insManthra = db.prepare(`
     INSERT OR REPLACE INTO manthras
       (id, document_id, section_document_id, grantha_document_id, shloka_manthra_number, order_num,
-       sanskrit_text, sanskrit_text_other_translations, bhashyam_text, bhashyam_text_other_translations,
-       created_at, updated_at, published_at)
+       sanskrit_text, bhashyam_text, created_at, updated_at, published_at)
     VALUES (@id, @document_id, @section_document_id, @grantha_document_id, @shloka_manthra_number, @order_num,
-            @sanskrit_text, @sanskrit_text_other_translations, @bhashyam_text, @bhashyam_text_other_translations,
-            @created_at, @updated_at, @published_at)
+            @sanskrit_text, @bhashyam_text, @created_at, @updated_at, @published_at)
   `);
 
   const insTeekaManthra = db.prepare(`
-    INSERT INTO manthra_teekas (manthra_document_id, teeka_document_id, teeka_name, teeka_entry_text)
-    VALUES (@manthra_document_id, @teeka_document_id, @teeka_name, @teeka_entry_text)
+    INSERT INTO manthra_teekas (manthra_document_id, teeka_document_id, teeka_name, teeka_entry_sanskrit)
+    VALUES (@manthra_document_id, @teeka_document_id, @teeka_name, @teeka_entry_sanskrit)
   `);
 
   const insWord = db.prepare(`
@@ -160,29 +177,59 @@ function buildSqliteFromBackup(data: any): Buffer {
     VALUES (@manthra_document_id, @word, @meaning, @meaning_language)
   `);
 
-  // ── Insert granthas ────────────────────────────────────────────────────────
+  const insTr = db.prepare(`
+    INSERT INTO translations (entity_type, entity_document_id, language, text)
+    VALUES (@entity_type, @entity_document_id, @language, @text)
+  `);
+
+  // Helper: insert all OtherTranslations for a given entity
+  function insertTranslations(entityType: string, entityDocId: string, otherTranslations: any[]) {
+    for (const t of (otherTranslations ?? [])) {
+      const lang = t.LanguageOfTranslation ?? t.language ?? "";
+      const text = blocksToText(t.TranslationText) || "";
+      if (lang && text) {
+        insTr.run({ entity_type: entityType, entity_document_id: entityDocId, language: lang, text });
+      }
+    }
+  }
+
+  // ── Insert all data in a single transaction ────────────────────────────────
   const insertAll = db.transaction(() => {
+
+    // 1. Granthas + their embedded teekas + grantha name translations
     for (const g of (data.granthas ?? [])) {
+      const gDocId = g.documentId ?? null;
       insGrantha.run({
         id: g.id ?? null,
-        document_id: g.documentId ?? null,
+        document_id: gDocId,
         grantha_name: g.GranthaName ?? null,
         slug: g.slug ?? null,
         order_num: g.order ?? null,
         number_of_teekas: g.NumberOfTeekas ?? null,
         bhashyakara_name: g.BhashyakaraName ?? null,
-        bhashyakara_intro_sanskrit: blocksToText(g.BhashyakaraIntroduction?.SanskritTextEntry),
+        bhashyakara_intro_sanskrit: blocksToText(g.BhashyakaraIntroduction?.SanskritTextEntry) || null,
         created_at: g.createdAt ?? null,
         updated_at: g.updatedAt ?? null,
         published_at: g.publishedAt ?? null,
       });
 
-      // Embedded teekas inside grantha objects
+      // Grantha name translations (e.g. Tamil name of the text)
+      if (gDocId) {
+        for (const nt of (g.GranthaNameTranslations ?? [])) {
+          const lang = nt.LanguageOfTranslation ?? nt.language ?? "";
+          const text = blocksToText(nt.TranslationText) || nt.TranslationText || "";
+          if (lang && text) {
+            insTr.run({ entity_type: "grantha_name", entity_document_id: gDocId, language: lang, text });
+          }
+        }
+      }
+
+      // Embedded teekas
       for (const t of (g.teekas ?? [])) {
         insTeeka.run({
           id: t.id ?? null,
           document_id: t.documentId ?? null,
-          grantha_document_id: g.documentId ?? null,
+          grantha_document_id: gDocId,
           teeka_name: t.TeekaName ?? null,
           teeka_author: t.TeekaAuthor ?? null,
           created_at: t.createdAt ?? null,
@@ -192,7 +239,7 @@ function buildSqliteFromBackup(data: any): Buffer {
       }
     }
 
-    // ── Insert sections ──────────────────────────────────────────────────────
+    // 2. Sections
     for (const s of (data.sections ?? [])) {
       insSection.run({
         id: s.id ?? null,
@@ -208,54 +255,55 @@ function buildSqliteFromBackup(data: any): Buffer {
       });
     }
 
-    // ── Insert manthras ──────────────────────────────────────────────────────
+    // 3. Manthras + translations + teekas + word meanings
     for (const m of (data.manthras ?? [])) {
+      const mDocId = m.documentId ?? null;
       const shloka = m.ShlokaManthraEntry;
       const bhashyam = m.BhashyamEntry;
 
-      const shlokaSanskrit = blocksToText(shloka?.SanskritTextEntry);
-      const shlokOtherTr = (shloka?.OtherTranslations ?? [])
-        .map((t: any) => `[${t.LanguageOfTranslation ?? ""}] ${blocksToText(t.TranslationText)}`)
-        .join(" | ");
-
-      const bhashyamText = blocksToText(bhashyam?.SanskritTextEntry);
-      const bhashyamOtherTr = (bhashyam?.OtherTranslations ?? [])
-        .map((t: any) => `[${t.LanguageOfTranslation ?? ""}] ${blocksToText(t.TranslationText)}`)
-        .join(" | ");
-
       insManthra.run({
         id: m.id ?? null,
-        document_id: m.documentId ?? null,
+        document_id: mDocId,
         section_document_id: m.Section?.documentId ?? null,
         grantha_document_id: m.Section?.grantha?.documentId ?? null,
         shloka_manthra_number: m.ShlokaManthraNumber ?? null,
         order_num: m.order ?? null,
-        sanskrit_text: shlokaSanskrit || null,
-        sanskrit_text_other_translations: shlokOtherTr || null,
-        bhashyam_text: bhashyamText || null,
-        bhashyam_text_other_translations: bhashyamOtherTr || null,
+        sanskrit_text: blocksToText(shloka?.SanskritTextEntry) || null,
+        bhashyam_text: blocksToText(bhashyam?.SanskritTextEntry) || null,
         created_at: m.createdAt ?? null,
         updated_at: m.updatedAt ?? null,
         published_at: m.publishedAt ?? null,
       });
 
+      if (mDocId) {
+        // Manthra Sanskrit translations (Hindi, Kannada, Tamil, etc.)
+        insertTranslations("manthra_sanskrit", mDocId, shloka?.OtherTranslations);
+        // Bhashyam translations
+        insertTranslations("manthra_bhashyam", mDocId, bhashyam?.OtherTranslations);
+      }
+
       // Manthra-Teeka junction
       for (const mt of (m.Teekas ?? [])) {
         const teekaDocId = mt.teeka?.documentId ?? mt.documentId ?? null;
         const teekaName = mt.teeka?.TeekaName ?? mt.TeekaName ?? null;
-        const entryText = blocksToText(mt.TeekaEntry?.SanskritTextEntry);
-        insTeekaManthra.run({
-          manthra_document_id: m.documentId ?? null,
+        const entryText = blocksToText(mt.TeekaEntry?.SanskritTextEntry) || null;
+
+        const result = insTeekaManthra.run({
+          manthra_document_id: mDocId,
           teeka_document_id: teekaDocId,
           teeka_name: teekaName,
-          teeka_entry_text: entryText || null,
+          teeka_entry_sanskrit: entryText,
         });
+
+        // Teeka entry language translations (e.g. Tamil translation of the teeka commentary)
+        const mtId = String(result.lastInsertRowid);
+        insertTranslations("teeka_entry", mtId, mt.TeekaEntry?.OtherTranslations);
       }
 
       // Word meanings
       for (const wm of (m.wordMeanings ?? [])) {
         insWord.run({
-          manthra_document_id: m.documentId ?? null,
+          manthra_document_id: mDocId,
           word: wm.word ?? wm.Word ?? null,
           meaning: wm.meaning ?? wm.Meaning ?? null,
           meaning_language: wm.language ?? wm.Language ?? null,

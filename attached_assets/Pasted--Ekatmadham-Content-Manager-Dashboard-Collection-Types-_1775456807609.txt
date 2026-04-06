@@ -1,0 +1,2707 @@
+
+Ekatmadham
+Content Manager
+
+Dashboard
+Collection Types
+
+Granthas
+Sections
+Manthras
+Teekas
+Articles
+Authors
+Categories
+Single Types
+
+About
+Global Settings
+Snapshots
+
+Snapshots
+Administration
+
+User Management
+C
+Chitra Jain
+
+admin
+
+Sign Out
+
+Granthas
+Configuration
+Book Structure
+3
+Build Content
+Brahma Sutra — Content
+Adhyaya → Pada → Adhikaranam → Mantra — click any Mantra to enter its text content
+
+Prathama Adhyaya
+Prathama Pada
+Jignasa Adhikaranam
+Sutra 1.1.1.1
+
+
+Add Mantra
+Janmadya Adhikaranam
+Sutra 1.1.2.1
+
+
+Sutra 1.1.2.2
+
+
+Add Mantra
+Shastra yonitva Adhikaranam
+Sutra 1.1.3.1
+
+
+Add Mantra
+Samanvaya Adhikaranam
+Sutra 1.1.4.1
+
+
+Add Mantra
+Ikshad Adhikaranam
+Sutra 1.1.5.1
+
+
+Sutra 1.1.5.2
+
+
+Sutra 1.1.5.3
+
+
+Sutra 1.1.5.4
+
+
+Sutra 1.1.5.5
+
+
+Sutra 1.1.5.6
+
+
+Sutra 1.1.5.7
+
+
+Add Mantra
+Anandamaya Adhikaranam
+Sutra 1.1.6.1
+
+
+Sutra 1.1.6.2
+
+
+Sutra 1.1.6.3
+
+
+Sutra 1.1.6.4
+
+
+Sutra 1.1.6.5
+
+
+Sutra 1.1.6.6
+
+
+Sutra 1.1.6.7
+
+
+Sutra 1.1.6.8
+
+
+Add Mantra
+Anthara Adhikaranam
+Sutra 1.1.7.1
+
+
+Sutra 1.1.7.2
+
+
+Add Mantra
+Akasha Adhikaranam
+Sutra 1.1.8.1
+
+
+Add Mantra
+Prana Adhikaranam
+Sutra 1.1.9.1
+
+
+Add Mantra
+Jyothi Charana Adhikaranam
+Sutra 1.1.10.1
+
+
+Sutra 1.1.10.2
+
+
+Sutra 1.1.10.3
+
+
+Sutra 1.1.10.4
+
+
+Add Mantra
+Pratardana Adhikaranam
+Sutra 1.1.11.1
+
+
+Sutra 1.1.11.2
+
+
+Sutra 1.1.11.3
+
+
+Sutra 1.1.11.4
+
+
+Add Mantra
+Add New Adhikaranam
+Introduction
+Introduction
+Sutra 1.2.1.1
+
+
+Sutra 1.2.1.2
+
+
+Mantra 1.2.1.3
+
+
+Add Mantra
+Prathama Adhikaranam
+Sutra 1.2.1.1
+
+
+Add Mantra
+Add New Adhikaranam
+Dvidiya Pada
+Shastra Prasiddha  Adhikaranam
+Sutra 1.3.1.1
+
+
+Sutra 1.3.1.2
+
+
+Sutra 1.3.1.3
+
+
+Sutra 1.3.1.4
+
+
+Sutra 1.3.1.5
+
+
+Sutra 1.3.1.6
+
+
+Sutra 1.3.1.7
+
+
+Sutra 1.3.1.8
+
+
+Add Mantra
+Athru Adhikaranam
+Sutra 1.3.2.1
+
+
+Sutra 1.3.2.2
+
+
+Add Mantra
+Guha Pravishtha Adhikaranam
+Sutra 1.3.3.1
+
+
+Sutra 1.3.3.2
+
+
+Add Mantra
+Antara Adhikaranam
+Sutra 1.3.4.1
+
+
+Sutra 1.3.4.2
+
+
+Sutra 1.3.4.3
+
+
+Sutra 1.3.4.4
+
+
+Sutra 1.3.4.5
+
+
+Add Mantra
+Antaryami Adhikaranam
+Sutra 1.3.5.1
+
+
+Sutra 1.3.5.2
+
+
+Sutra 1.3.5.3
+
+
+Add Mantra
+Adrishyatva Adhikaranam
+Sutra 1.3.6.1
+
+
+Add Mantra
+Add New Adhikaranam
+Add New Pada
+New Adhyaya
+Back
+Save
+Save & Publish
+Sutra 1.1.2.1
+Showing live content from the CMS. Edit here and click Done to update.
+
+Shloka / Manthra Text
+(ShlokaManthraEntry)
+Sanskrit (Devanagari)
+
+
+
+
+
+
+
+
+ब्रह्म जिज्ञासितव्यमित्युक्तम् । किंलक्षणकं पुनस्तद्ब्रह्मेत्यत आह भगवान्सूत्रकारः —
+
+जन्माद्यस्य यतः ॥ २ ॥
+
+English Translation
+
+
+
+
+
+
+
+
+
+
+This is the second verse (Sutra) of the Brahma Sutras, one of the foundational texts of Hindu philosophy (Vedanta).
+
+Translation
+
+"From whom [proceeds] the origin, etc. (sustenance and dissolution) of this [universe]."
+
+Breakdown of the Sanskrit
+
+Janmādi (जन्मादि): A compound word consisting of Janma (birth/origin) and ādi (and the rest). In this context, "and the rest" refers to the preservation and destruction of the world.
+
+Asya (अस्य): Of this (referring to the manifest universe).
+
+Yataḥ (यतः): From whom (referring to Brahman, the Ultimate Reality).
+
+Context and Meaning
+
+Following the first sutra, which calls for the "inquiry into Brahman," this verse defines what Brahman is. It establishes that Brahman is the singular, intelligent source from which the entire universe is born, by which it is maintained, and into which it eventually returns.
+
+In simpler terms: Brahman is the Cause of everything
+
+Other Language Translations
+Add Language
+No other language translations added yet
+
+Bhashyam for this Manthra
+(BhashyamForShlokaManthra)
+Sanskrit Commentary
+
+
+
+
+
+
+
+
+अवतारिका
+
+ब्रह्म जिज्ञासितव्यमित्युक्तम् । किंलक्षणकं पुनस्तद्ब्रह्मेत्यत आह भगवान्सूत्रकारः —
+
+
+
+प्रथमो भागः
+
+जन्म उत्पत्तिः आदिः अस्य — इति तद्गुणसंविज्ञानो बहुव्रीहिः । जन्मस्थितिभङ्गं समासार्थः । जन्मनश्चादित्वं श्रुतिनिर्देशापेक्षं वस्तुवृत्तापेक्षं च । श्रुतिनिर्देशस्तावत् — ‘यतो वा इमानि भूतानि जायन्ते’ (तै. उ. ३ । १ । १) इति, अस्मिन्वाक्ये जन्मस्थितिप्रलयानां क्रमदर्शनात् । वस्तुवृत्तमपि — जन्मना लब्धसत्ताकस्य धर्मिणः स्थितिप्रलयसम्भवात् । अस्येति प्रत्यक्षादिसन्निधापितस्य धर्मिण इदमा निर्देशः । षष्ठी जन्मादिधर्मसम्बन्धार्था । यत इति कारणनिर्देशः । अस्य जगतो नामरूपाभ्यां व्याकृतस्य अनेककर्तृभोक्तृसंयुक्तस्य प्रतिनियतदेशकालनिमित्तक्रियाफलाश्रयस्य मनसाप्यचिन्त्यरचनारूपस्य जन्मस्थितिभङ्गं यतः सर्वज्ञात्सर्वशक्तेः कारणाद्भवति, तद्ब्रह्मेति वाक्यशेषः । अन्येषामपि भावविकाराणां त्रिष्वेवान्तर्भाव इति जन्मस्थितिनाशानामिह ग्रहणम् । यास्कपरिपठितानां तु ‘जायतेऽस्ति’ इत्यादीनां ग्रहणे तेषां जगतः स्थितिकाले सम्भाव्यमानत्वान्मूलकारणादुत्पत्तिस्थितिनाशा जगतो न गृहीताः स्युरित्याशङ्क्येत । तन्मा शङ्कि; इति या उत्पत्तिर्ब्रह्मणः, तत्रैव स्थितिः प्रलयश्च, त एव गृह्यन्ते । न यथोक्तविशेषणस्य जगतो यथोक्तविशेषणमीश्वरं मुक्त्वा, अन्यतः प्रधानादचेतनात् अणुभ्यः अभावात् संसारिणो वा उत्पत्त्यादि सम्भावयितुं शक्यम् । न च स्वभावतः, विशिष्टदेशकालनिमित्तानामिहोपादानात् । एतदेवानुमानं संसारिव्यतिरिक्तेश्वरास्तित्वादिसाधनं मन्यन्ते ईश्वरकारणवादिनः ॥
+
+
+
+द्वितीयो भागः
+
+नन्विहापि तदेवोपन्यस्तं जन्मादिसूत्रे । न; वेदान्तवाक्यकुसुमग्रथनार्थत्वात्सूत्राणाम् । वेदान्तवाक्यानि हि सूत्रैरुदाहृत्य विचार्यन्ते । वाक्यार्थविचारणाध्यवसाननिर्वृत्ता हि ब्रह्मावगतिः, नानुमानादिप्रमाणान्तरनिर्वृत्ता । सत्सु तु वेदान्तवाक्येषु जगतो जन्मादिकारणवादिषु, तदर्थग्रहणदार्ढ्याय अनुमानमपि वेदान्तवाक्याविरोधि प्रमाणं भवत् , न निवार्यते, श्रुत्यैव च सहायत्वेन तर्कस्याभ्युपेतत्वात् । तथा हि — ‘श्रोतव्यो मन्तव्यः’ (बृ. उ. २ । ४ । ५) इति श्रुतिः ‘पण्डितो मेधावी गन्धारानेवोपसम्पद्येतैवमेवेहाचार्यवान्पुरुषो वेद’ (छा. उ. ६ । १४ । २) इति च पुरुषबुद्धिसाहाय्यमात्मनो दर्शयति । न धर्मजिज्ञासायामिव श्रुत्यादय एव प्रमाणं ब्रह्मजिज्ञासायाम् । किन्तु श्रुत्यादयोऽनुभवादयश्च यथासम्भवमिह प्रमाणम् , अनुभवावसानत्वाद्भूतवस्तुविषयत्वाच्च ब्रह्मज्ञानस्य । कर्तव्ये हि विषये नानुभवापेक्षास्तीति श्रुत्यादीनामेव प्रामाण्यं स्यात् , पुरुषाधीनात्मलाभत्वाच्च कर्तव्यस्य । कर्तुमकर्तुमन्यथा वा कर्तुं शक्यं लौकिकं वैदिकं च कर्म; यथा अश्वेन गच्छति, पद्भ्याम् , अन्यथा वा, न वा गच्छतीति । तथा ‘अतिरात्रे षोडशिनं गृह्णाति, नातिरात्रे षोडशिनं गृह्णाति’ ‘उदिते जुहोति, अनुदिते जुहोति’ इति विधिप्रतिषेधाश्च अत्र अर्थवन्तः स्युः, विकल्पोत्सर्गापवादाश्च । न तु वस्तु ‘एवम् , नैवम्’ ‘अस्ति, नास्ति’ इति वा विकल्प्यते । विकल्पनास्तु पुरुषबुद्ध्यपेक्षाः । न वस्तुयाथात्म्यज्ञानं पुरुषबुद्ध्यपेक्षम् । किं तर्हि ? वस्तुतन्त्रमेव तत् । न हि स्थाणावेकस्मिन् ‘स्थाणुर्वा, पुरुषोऽन्यो वा’ इति तत्त्वज्ञानं भवति । तत्र ‘पुरुषोऽन्यो वा’ इति मिथ्याज्ञानम् । ‘स्थाणुरेव’ इति तत्त्वज्ञानम् , वस्तुतन्त्रत्वात् । एवं भूतवस्तुविषयाणां प्रामाण्यं वस्तुतन्त्रम् । तत्रैवं सति ब्रह्मज्ञानमपि वस्तुतन्त्रमेव, भूतवस्तुविषयत्वात् । ननु भूतवस्तुत्वे ब्रह्मणः प्रमाणान्तरविषयत्वमेवेति वेदान्तवाक्यविचारणा अनर्थिकैव प्राप्ता । न; इन्द्रियाविषयत्वेन सम्बन्धाग्रहणात् । स्वभावतो विषयविषयाणीन्द्रियाणि, न ब्रह्मविषयाणि । सति हीन्द्रियविषयत्वे ब्रह्मणः इदं ब्रह्मणा सम्बद्धं कार्यमिति गृह्येत । कार्यमात्रमेव तु गृह्यमाणम् — किं ब्रह्मणा सम्बद्धम् ? किमन्येन केनचिद्वा सम्बद्धम् ? — इति न शक्यं निश्चेतुम् । तस्माज्जन्मादिसूत्रं नानुमानोपन्यासार्थम् । किं तर्हि ? वेदान्तवाक्यप्रदर्शनार्थम् । किं पुनस्तद्वेदान्तवाक्यं यत् सूत्रेणेह लिलक्षयिषितम् ? ‘भृगुर्वै वारुणिः । वरुणं पितरमुपससार । अधीहि भगवो ब्रह्मेति’ (तै. उ. ३ । १ । १) इत्युपक्रम्याह — ‘यतो वा इमानि भूतानि जायन्ते । येन जातानि जीवन्ति । यत्प्रयन्त्यभिसंविशन्ति । तद्विजिज्ञासस्व । तद्ब्रह्मेति । ’ (तै. उ. ३ । १ । १) तस्य च निर्णयवाक्यम् — ‘आनन्दाद्ध्येव खल्विमानि भूतानि जायन्ते । आनन्देन जातानि जीवन्ति । आनन्दं प्रयन्त्यभिसंविशन्ति’ (तै. उ. ३ । ६ । १) इति । अन्यान्यप्येवंजातीयकानि वाक्यानि नित्यशुद्धबुद्धमुक्तस्वभावसर्वज्ञस्वरूपकारणविषयाणि उदाहर्तव्यानि ॥ २ ॥
+
+English Translation
+
+
+
+
+
+
+
+
+Introduction
+
+This text is a foundational excerpt from Shankaracharya’s Commentary (Bhashya) on the Brahma Sutras (specifically Sutra 1.1.2: Janmādyasya yataḥ). It discusses the definition of Brahman as the cause of the universe and explores the relationship between scripture (Shruti) and logic (Anumana).
+
+Translation: Brahma Sutra Bhashya 1.1.2
+
+First Portion
+
+The Definition of the Compound
+
+"Birth (origin) is the first of this"—thus, the word Janmādi is a Tad-guna-samvijñāna Bahuvrihi compound (a compound where the primary members are included in the meaning). The meaning of the compound is: birth, sustenance, and dissolution. The priority given to "birth" is based both on scriptural injunction and the nature of things.
+
+Scripture: The Taittiriya Upanishad (3.1.1) states, "That from which these beings are born," showing the sequence of birth, sustenance, and death.
+
+Nature of things: Sustenance and dissolution can only happen to an entity that has first acquired existence through birth.
+
+The Subject and the Cause
+
+The word "of this" (asya) refers to the world (the object) presented to us through perception and other means. The genitive case indicates the relationship between the world and its attributes (birth, etc.). The word "from which" (yataḥ) indicates the cause.
+
+The remaining part of the sentence is: "That is Brahman." That is, from which proceed the birth, sustenance, and dissolution of this world—a world characterized by:
+
+Being manifested through name and form.
+
+Containing many actors and enjoyers.
+
+Being the abode of results of actions determined by specific space, time, and causation.
+
+Having a structure so complex it is inconceivable even to the mind.
+
+This cause must be an all-knowing and all-powerful source.
+
+Why limit it to Birth, Sustenance, and Death?
+
+Other "modifications of being" (as listed by Yaska, like "growth" or "decay") are included within these three. If we used Yaska’s six-fold list (is born, exists, grows...), one might doubt whether the origin, sustenance, and dissolution of the world from its Root Cause were being discussed, as those six occur after the world already exists. To prevent this doubt, we take only the birth from Brahman, and its sustenance and dissolution therein.
+
+Refuting Other Causes
+
+It is impossible to conceive that a world with the attributes described above could arise from anything other than an Ishvara (Lord) who possesses the described qualities—not from non-intelligent Pradhana (Nature), not from atoms, not from Non-existence, and not from a transmigrating soul. Nor can it be by spontaneity (chance), for we see specific materials, places, and times required for effects to arise.
+
+
+
+Second Portion
+
+The Role of Logic vs. Scripture
+
+Objection: If logic can prove the existence of God, then this Sutra is merely presenting an inference (Anumana). Response: No. These Sutras are intended to string together the flowers of Vedantic passages. The Sutras cite and deliberate upon Upanishadic texts. The realization of Brahman is achieved through the deliberation on the meaning of scriptural texts, not through inference or other means of proof.
+
+However, when Vedantic texts speak of the cause of the world, inference is not excluded as long as it supports the scripture and does not contradict it. Scripture itself accepts the help of reasoning:
+
+"He is to be heard and reflected upon" (Brihadaranyaka Upanishad).
+
+"A man who is well-informed and intelligent... reaches Gandhara... so one who has a teacher knows" (Chandogya Upanishad).
+
+Brahman is an Existing Reality (Vastu-tantra)
+
+Knowledge of Brahman is not like knowledge of Dharma (duty/action).
+
+Dharma depends on human performance (Purusha-tantra). An action can be done, not done, or done differently (e.g., traveling by horse, on foot, or not at all). Scriptural injunctions regarding rituals depend on human choice.
+
+Brahman is an already existing reality (Bhuta-vastu). Knowledge of a real object depends entirely on the object itself (Vastu-tantra).
+
+Therefore, Brahman-knowledge depends on the Reality itself.
+
+Why is Scripture necessary if Brahman is a "Reality"?
+
+Objection: If Brahman is an existing thing, it should be perceivable by other means (like the senses), making the study of the Upanishads useless. Response: No. Brahman is not an object of the senses. The senses naturally look outward and cannot grasp Brahman. Without scripture, even if we see the world (the effect), we could never certain whether it is connected to Brahman or something else.
+
+Conclusion
+
+The Sutra is not there to provide a logical syllogism, but to point to the Vedantic texts. Specifically:
+
+"Bhrigu, the son of Varuna, approached his father Varuna... [who said]: 'That from which these beings are born, by which they live, and into which they enter—seek to know That. That is Brahman.'" (Taittiriya Upanishad 3.1)
+
+The definitive conclusion of that passage is: "From Bliss (Ananda) indeed these beings are born..." Other similar passages describing the Eternal, Pure, Conscious, and Free nature of the All-knowing Cause should also be considered here
+
+
+
+Other Language Translations
+Add Language
+No other language translations added yet
+
+Teeka Entries
+(Teekas)
+Bhashya Rathna Prabha Vyakhya— Ramananda Saraswati
+
+Sanskrit Commentary
+
+
+
+
+
+
+
+
+अवतारिका
+
+प्रथमसूत्रेण शास्त्रारम्भमुपपाद्य शास्त्रमारभमाणः पूर्वोत्तराधिकरणयोः सङ्गतिं वक्तुं वृत्तं कीर्तयति -
+
+ब्रह्मेति ।
+
+मुमुक्षुणा ब्रह्मज्ञानाय वेदान्तविचारः कर्तव्य इत्युक्तम् । ब्रह्मणो विचार्यत्वोक्त्या अर्थात्प्रमाणादि विचाराणां प्रतिज्ञातत्वेऽपि ब्रह्मप्रमाणं विना कर्तुमशक्यत्वात् , तत्स्वरूपज्ञानायादौ लक्षणं वक्तव्यम् , तन्न सम्भवतीत्याक्षिप्य सूत्रकृतं पूजयन्नेव लक्षणसूत्रमवधारयति -
+
+किं लक्षणकमिति ।
+
+किमाक्षेपे । नास्त्येव लक्षणमित्यर्थः । आक्षेपेणास्योत्थानादाक्षेपसङ्गतिः । लक्षणद्योतिवेदान्तानां स्पष्टब्रह्मलिङ्गानां लक्ष्ये ब्रह्मणि समन्वयोक्तेः श्रुतिशास्त्राध्यायपादसङ्गतयः । तथा हि ‘यतो वा इमानि भूतानि जायन्ते’ इत्यादिवाक्यं विषयः । तत्किं ब्रह्मणो लक्षणं न वेति सन्देहः । तत्र पूर्वपक्षे ब्रह्मस्वरूपसिद्ध्या मुक्त्यसिद्धिः फलम् , सिद्धान्ते तत्सिद्धिरिति भेदः । यद्यप्याक्षेपसङ्गतौ पूर्वाधिकरणफलमेव फलमिति कृत्वा पृथङ्न वक्तव्यम् । तदुक्तम् -
+‘आक्षेपे चापवादे च प्राप्त्यां लक्षणकर्मणि ।
+प्रयोजनं न वक्तव्यं यच्च कृत्वा प्रवर्तते’ इति । तथापि स्पष्टार्थमुक्तमिति मन्तव्यम् । यत्र पूर्वाधिकरणसिद्धान्तेन पूर्वपक्षः तत्रापवादिकी सङ्गतिः प्राप्तिस्तदर्था चिन्ता । तत्र नेति प्राप्तम् , जन्मादेर्जगद्धर्मत्वेन ब्रह्मलक्षणत्वायोगात् । न च जगदुपादानत्वे सति कर्तृत्वं लक्षणमिति वाच्यम् , कर्तुरुपादानत्वे दृष्टान्ताभावेनानुमानाप्रवृत्तेः । न च श्रौतस्य ब्रह्मणः श्रुत्यैव लक्षणसिद्धेः किमनुमानेनेति वाच्यम् , अनुमानस्य श्रुत्यनुग्राहकत्वेन तदभावे तद्विरोधे वा श्रुत्यर्थासिद्धेः । -
+
+
+
+प्रथमो भागः
+
+न च जगत्कर्तृत्वमुपादानत्वं वा प्रत्येकं लक्षणमस्त्विति वाच्यम् , कर्तृमात्रस्योपादानाद्भिन्नस्य ब्रह्मत्वायोगात् , वस्तुतः परिच्छेदादिति प्राप्ते पुरुषाभ्यूहमात्रस्यानुमानस्याप्रतिष्ठितस्यातीन्द्रियार्थे स्वातन्त्र्यायोगात् , अपौरुषेयतया निर्दोषश्रुत्युक्तोभयकारणत्वस्य सुखादिदृष्टान्तेन सम्भावयितुं शक्यत्वात् , तदेव लक्षणमिति सिद्धान्तयति -
+
+जन्माद्यस्य यतः इति ।
+
+अत्र यद्यपि जगज्जन्मस्थितिलयकारणत्वं लक्षणं प्रतिपाद्यते तथाप्यग्रे ‘प्रकृतिश्च’ इत्यधिकरणे तत्कारणत्वं न कर्तृत्वमात्रं किन्तु कर्तृत्वोपादानत्वोभयरूपत्वमिति वक्ष्यमाणं सिद्धवत्कृत्योभयकारणत्वं लक्षणमित्युच्यत इति न पौनरुक्त्यम् । ननु जिज्ञास्यनिर्गुणब्रह्मणः कारणत्वं कथं लक्षणमिति चेत् , उच्यते - यथा रजतं शुक्तेर्लक्षणं यद्रजतं सा शुक्तिरिति, तथा यज्जगत्कारणं तद्ब्रह्मेति कल्पितं कारणत्वं तटस्थं सदेव ब्रह्मणो लक्षणमित्यनवद्यम् ॥
+
+सूत्रं व्याचष्टे -
+
+जन्मेत्यादिना ।
+
+बहुव्रीहौ पदार्थाः सर्वे वाक्यार्थस्यान्यपदार्थस्य विशेषणानि । यथा चित्रगोर्देवदत्तस्य चित्रा गावः तद्वदत्रापि जन्मादीति नपुंसकैकवचनद्योतितस्य समाहारस्य जन्मस्थितिभङ्गस्य जन्म विशेषणम् , तथा च जन्मनः समासार्थैकदेशस्य गुणत्वेन संविज्ञानं यस्मिन् बहुव्रीहौ स तद्गुणसंविज्ञान इत्यर्थः । तत्र यज्जन्मकारणं तद्ब्रह्मेति ब्रह्मत्वविधानमयुक्तम् , स्थितिलयकारणाद्भिन्नत्वेन ज्ञाते ब्रह्मत्वस्य ज्ञातुमशक्यत्वात् । अतो जन्मस्थितिभङ्गैर्निरूपितानि त्रीणि कारणत्वानि मिलितान्येव लक्षणमिति मत्वा सूत्रे समाहारो द्योतित इति ध्येयम् ।
+
+नन्वादित्वं जन्मनः कथं ज्ञातव्यम् , संसारस्यानादित्वादित्यत आह -
+
+जन्मनश्चेति ।
+
+मूलश्रुत्या वस्तुगत्या चादित्वं ज्ञात्वा तदपेक्ष्य सूत्रकृता जन्मन आदित्वमुक्तमित्यर्थः ।
+
+इदमः प्रत्यक्षार्थमात्रवाचित्वमाशङ्क्योपस्थितसर्वकार्यवाचित्वमाह -
+
+अस्येतीति ।
+
+वियदादिजगतो नित्यत्वात् न जन्मादिसम्बन्ध इत्यत आह -
+
+षष्ठीति ।
+
+विषयादिमहाभूतानां जन्मादिसम्बन्धो वक्ष्यत इति भावः ।
+
+ननु जगतो जन्मादेर्वा ब्रह्मसम्बन्धाभावान्न लक्षणत्वमित्याशङ्क्य तत्कारणत्वं लक्षणमिति पञ्चम्यर्थमाह -
+
+यत इतीति ।
+
+यच्छब्देन सत्यं ज्ञानमनन्तमानन्दरूपं वस्तूच्यते ‘आनन्दाद्ध्येव’ इति निर्णीतत्वात् । तथा च स्वरूपलक्षणसिद्धिरिति मन्तव्यम् ।
+
+पदार्थमुक्त्वा पूर्वसूत्रस्थब्रह्मपदानुषङ्गेण तच्छब्दाध्याहारेण च सूत्रवाक्यार्थमाह -
+
+अस्येत्यादिना ।
+
+कारणस्य सर्वज्ञत्वादिसम्भावनार्थानि जगतो विशेषणानि । यथा कुम्भकारः प्रथमं कुम्भशब्दाभेदेन विकल्पितं पृथुबुध्नोदराकारस्वरूपं बुद्धावालिख्य तदात्मना कुम्भं व्याकरोति - बहिः प्रकटयति, तथा परमकारणमपि स्वेप्सितनामरूपात्मना व्याकरोतीत्यनुमीयत इति मत्वाह -
+
+नामरूपाभ्यामिति ।
+
+इत्थम्भावे तृतीया । आद्यकार्यं चेतनजन्यम् , कार्यत्वात् , कुम्भवदिति प्रधानशून्ययोर्निरासः ।
+
+हिरण्यगर्भादिजीवजन्यत्वं निरस्यति -
+
+अनेकेति ।
+
+श्राद्धवैश्वानरेष्ट्यादौ पितापुत्रयोः कर्तृभोक्त्रोर्भेदात्पृथगुक्तिः । ‘यो ब्रह्माणं विदधाति पूर्वं सर्व एत आत्मनो व्युच्चरन्ति’ इति श्रुत्या स्थूलसूक्ष्मदेहोपाधिद्वारा जीवानां कार्यत्वेन जगन्मध्यपातित्वान्न जगत्कारणत्वमित्यर्थः ।
+
+कारणस्य सर्वज्ञत्वं सम्भावयति -
+
+प्रतिनियतेति ।
+
+प्रतिनियतानि व्यवस्थितानि देशकालनिमित्तानि येषां क्रियाफलानां तदाश्रयस्येत्यर्थः । स्वर्गस्य क्रियाफलस्य मेरुपृष्ठं देशः । देहपातादूर्ध्वं काल उत्तरायणमरणादिनिमित्तं च प्रतिनियतम् । एवं राजसेवाफले ग्रामादेर्देशादिव्यवस्था ज्ञेया । तथा च यथा सेवाफलं देशाद्यभिज्ञदातृकं तथा कर्मफलम् , फलत्वादिति सर्वज्ञत्वसिद्धिरिति भावः ।
+
+सर्वशक्तित्वं सम्भावयति -
+
+मनसापीति ।
+
+नन्वन्येऽपि वृद्धिपरिणामादयो भावविकाराः सन्तीति किमिति जन्मादीत्यादिपदेन न गृह्यन्ते तत्राह -
+
+अन्येषामिति ।
+
+वृद्धिपरिणामयोर्जन्मनि अपक्षयस्य नाशेऽन्तर्भावः इति भावः ।
+
+ननु देहो ‘जायते, अस्ति, वर्धते, विपरिणमते, अपक्षीयते, विनश्यति’ इति यास्कमुनिवाक्यमेतत्सूत्रमूलं किं न स्यादत आह -
+
+यास्केति ।
+
+यास्कमुनिः किल महाभूतानामुत्पन्नानां स्थितिकाले भौतिकेषु प्रत्यक्षेण जन्मादिषट्कमुपलभ्य निरुक्तवाक्यं चकार । तन्मूलीकृत्य जन्मादिषट्ककारणत्वं लक्षणं सूत्रार्थ इति ग्रहणे सूत्रकृता ब्रह्मलक्षणं न सङ्गृहीतं किन्तु महाभूतानां लक्षणमुक्तमिति शङ्का स्यात्सा मा भूदिति ये श्रुत्युक्ता जन्मादयस्त एव गृह्यन्त इत्यर्थः । यदि निरुक्तस्यापि श्रुतिर्मूलमिति महाभूतजन्मादिकमर्थस्तर्हि सा श्रुतिरेव सूत्रस्य मूलमस्तु, किमन्तर्गडुना निरुक्तेनेति भावः । यदि जगतो ब्रह्मातिरिक्तं कारणं स्यात्तदा ब्रह्मलक्षणस्य तत्रातिव्याप्त्यादिदोषः स्यात् , अतस्तन्निरासाय लक्षणसूत्रेण ब्रह्म विना जगज्जन्मादिकं न सम्भवति, कारणान्तरासम्भवादिति युक्तिः सूत्रिता । सा तर्कपादे विस्तरेण वक्ष्यते ।
+
+अधुना सङ्क्षेपेण तां दर्शयति -
+
+न यथोक्तेत्यादिना ।
+
+नामरूपाभ्यां व्याकृतस्येत्यादीनां च चतुर्णां जगद्विशेषणानां व्याख्यानावसरे प्रधानशून्ययोः संसारिणश्च निरासो दर्शितः । परमाणूनामचेतनानां स्वतः प्रवृत्त्ययोगात् , जीवान्यस्य ज्ञानशून्यत्वनियमेनानुमानात्सर्वज्ञेश्वरासिद्धौ तेषां प्रेरकाभावात् , जगदारम्भकत्वासम्भव इति भावः ।
+
+स्वभावादेव विचित्रं जगदिति लोकायतस्तं प्रत्याह -
+
+न चेति ।
+
+जगत उत्पत्त्यादि सम्भावयितुं न शक्यमित्यन्वयः ।
+
+किं स्वयमेव स्वस्य हेतुरिति स्वभाव उत कारणानपेक्षत्वम् । नाद्यः, आत्माश्रयात् । न द्वितीय इत्याह -
+
+विशिष्टेति ।
+
+विशिष्टान्यसाधारणानि देशकालनिमित्तानि । तेषां कार्यार्थिभिरुपादीयमानत्वात्कार्यस्य कारणानपेक्षत्वं न युक्तमित्यर्थः । अनेपेक्षत्वे धान्यार्थिनां भूविशेषे वर्षादिकाले बीजादिनिमित्ते च प्रवृत्तिर्न स्यादिति भावः ।
+
+पूर्वोक्तसर्वज्ञत्वादिविशेषणकमीश्वरं मुक्त्वा जगत उत्पत्यादिकं न सम्भवतीति भाष्येण कर्तारं विना कार्यं नास्तीति व्यतिरेक उक्तः । तेन यत्कार्यं तत्सकर्तृकमिति व्याप्तिर्ज्ञायते । एतदेव व्याप्तिज्ञानं जगति पक्षे कर्तारं साधयत्सर्वज्ञेश्वरं साधयति किं श्रुत्येति तार्किकाणां भ्रान्तिमुपन्यस्यति -
+
+एतदेवेति ।
+
+एतदेवानुमानमेव साधनं न श्रुतिरिति मन्यन्त इति योजना । अथवा एतद्व्याप्तिज्ञानमेव श्रुत्यनुग्राहकयुक्तिमात्रत्वेनास्मत्सम्मतं सदनुमानं स्वतन्त्रमिति मन्यन्त इत्यर्थः । सर्वज्ञत्वमादिशब्दार्थः । यद्वा व्याप्तिज्ञानसहकृतमेतल्लक्षणमेवानुमानं स्वतन्त्रं मन्यन्त इत्यर्थः । तत्रायं विभागः व्याप्तिज्ञानात् जगतः कर्तास्तीत्यस्तित्वसिद्धिः । पश्चात्स कर्ता, सर्वज्ञः, जगत्कारणत्वात् , व्यतिरेकेण कुलालादिवदिति सर्वज्ञत्वसिद्धिर्लक्षणादिति । अत्र मन्यन्त इत्यनुमानस्याभासत्वं सूचितम् । तथाहि - अङ्कुरादौ तावज्जीवः कर्ता न भवति जीवाद्भिन्नस्य घटवदचेतनत्वनियमादन्यः कर्ता नास्त्येवेति व्यतिरेकनिश्चयात् , यत्कार्यं तत्सकर्तृकमिति व्याप्तिज्ञानासिद्धिः । लक्षणलिङ्गकानुमाने तु बाधः अशरीरस्य जन्मज्ञानायोगात् , यज्ज्ञानं तन्मनोजन्यमिति व्याप्तिविरोधेन नित्यज्ञानासिद्धेर्ज्ञानाभावनिश्चयात् , तस्मादतीन्द्रियार्थे श्रुतिरेव शरणम् । श्रुत्यर्थसम्भावनार्थत्वेनानुमानं युक्तिमात्रं न स्वतन्त्रमिति भावः ।
+
+
+
+
+
+द्वितीयो भागः
+
+नन्विदमयुक्तम् , श्रुतेरनुमानान्तर्भावमभिप्रेत्य भवदीयसूत्रकृतानुमानस्यैवोपन्यस्यत्वादिति वैशेषिकः शङ्कते -
+
+नन्विति ।
+
+अतो मन्यन्ते इत्यनुमानस्याभासोक्तिरयुक्तेति भावः ।
+
+यदि श्रुतीनां स्वतन्त्रमानत्वं न स्यात्तर्हि ‘तत्तु समन्वयात्’ इत्यादिना तासां तात्पर्यं सूत्रकृन्न विचारयेत् , तस्मादुत्तरसूत्राणां श्रुतिविचारार्थत्वात् जन्मादिसूत्रेऽपि श्रुतिरेव स्वातन्त्र्येण विचार्यते नानुमानमिति परिहरति -
+
+नेति ।
+
+किं च मुमुक्षोर्ब्रह्मावगतिरभीष्टा यदर्थमस्य शास्त्रस्यारम्भः, सा च नानुमानात् , ‘तं त्वौपनिषदम्’ इति श्रुतेः । अतो नानुमानं विचार्यमित्याह -
+
+वाक्यार्थेति ।
+
+वाक्यस्य तदर्थस्य च विचाराद्यध्यवसानं तात्पर्यनिश्चयः प्रमेयसम्भवनिश्चयश्च तेन जाता ब्रह्मावगतिर्मुक्तये भवतीत्यर्थः । सम्भवो बाधाभावः ।
+
+ननु किमनुमानमुपेक्षितमेव नेत्याह -
+
+सत्सु त्विति ।
+
+विमतमभिन्ननिमित्तोपादानकम् , कार्यत्वादूर्णनाभ्यारब्धतन्त्वादिवत् , विमतं चेतनप्रकृतिकम् , कार्यत्वात् , सुखादिवदित्यनुमानं श्रुत्यर्थदार्ढ्याय अपेक्षितमित्यर्थः । दार्ढ्यं संशयविपर्यासनिवृत्तिः । ‘मन्तव्यः’ इति श्रुतार्थस्तर्केण सम्भावनीय इत्यर्थः । यथा कश्चित् गान्धारदेशेभ्यश्चोरैरन्यत्रारण्ये बद्धनेत्र एव त्यक्तः केनचिन्मुक्तबन्धस्तदुक्तमार्गग्रहणसमर्थः पण्डितः स्वयं तर्ककुशलो मेधावी स्वदेशानेव प्राप्नुयात् एवमेवेहाविद्याकामादिभिः स्वरूपानन्दात् प्रच्याव्यस्मिन्नरण्ये संसारे क्षिप्तः केनचिद्दयापरवशेनाचार्येण नासि त्वं संसारी किन्तु ‘तत्त्वमसि’ इत्युपदिष्टस्वरूपः स्वयं तर्ककुशलश्चेत्स्वरूपं जानीयान्नान्यथेति ।
+
+श्रुतिः स्वस्याः पुरुषमतिरूपतर्कापेक्षां दर्शयतीत्याह -
+
+पण्डित इति ।
+
+आत्मनः श्रुतेरित्यर्थः ।
+
+ननु ब्रह्मणो मननाद्यपेक्षा न युक्ता, वेदार्थत्वात् , धर्मवत् । किन्तु श्रुतिलिङ्गवाक्यादय एवापेक्षिता इत्यत आह -
+
+नेति ।
+
+जिज्ञास्ये धर्म इव जिज्ञास्ये ब्रह्मणीति व्याख्येयम् । अनुभवो ब्रह्मसाक्षात्काराख्यो विद्वदनुभवः । आदिपदान्मनननिदिध्यासनयोर्ग्रहः ।
+
+तत्र हेतुमाह -
+
+अनुभवेति ।
+
+मुक्त्यर्थं ब्रह्मज्ञानस्य शाब्दस्य साक्षात्कारावसानत्वापेक्षणात्प्रत्यग्भूतसिद्धब्रह्मगोचरत्वेन साक्षात्कारफलकत्वसम्भवात् , तदर्थं मननाद्यपेक्षा युक्ता । धर्मे तु नित्यपरोक्षे साध्ये साक्षात्कारस्यानपेक्षितत्वादसम्भवाच्च श्रुत्या निर्णयमात्रमनुष्ठानायापेक्षितम् । लिङ्गादयस्तु श्रुत्यन्तर्भूता एव श्रुतिद्वारा निर्णयोपयोगित्वेनापेक्ष्यन्ते न मननादयः अनुपयोगादित्यर्थः । निरपेक्षः शब्दः श्रुतिः । शब्दस्यार्थप्रकाशनसामर्थ्यं लिङ्गम् । पदं योग्येतरपदाकाङ्क्षं वाक्यम् । अङ्गवाक्यसापेक्षं प्रधानवाक्यं प्रकरणम् । क्रमपठितानामर्थानां क्रमपठितैर्यथाक्रमं सम्बन्धः स्थानम् । यथा ऐन्द्राग्न्यादय इष्टयो दश क्रमेण पठिताः दशमन्त्राश्च ‘इन्द्राग्नी रोचना दिवि’ इत्याद्याः तत्र प्रथमेष्टौ प्रथममन्त्रस्य विनियोग इत्याद्यूहनीयम् । संज्ञासाम्यं समाख्या । यथाध्वर्यवसंज्ञकानां मन्त्राणामाध्वर्यवसंज्ञके कर्मणि विनियोग इति विवेकः । एवं तावद्ब्रह्म मननाद्यपेक्षम् , वेदार्थत्वात् , धर्मवत् , इत्यनुमाने साध्यत्वेन धर्मस्यानुभवायोग्यत्वम् , अनपेक्षितानुभवत्वं चोपाधिरित्युक्तम् । उपाधिव्यतिरेकाद्ब्रह्मणि मननाद्यपेक्षत्वं चोक्तम् । तत्र यदि वेदार्थत्वमात्रेण ब्रह्मणो धर्मेण साम्यं त्वयोच्येत तर्हि कृतिसाध्यत्वं विधिनिषेधविकल्पोत्सर्गापवादाश्च ब्रह्मणि धर्मवत् स्युरिति ।
+
+विपक्षे बाधकमाह -
+
+पुरुषेत्यादिना ।
+
+पुरुषकृत्यधीना आत्मलाभ उत्पत्तिर्यस्य तद्भावाच्च धर्मे श्रुत्यादीनामेव प्रामाण्यमित्यन्वयः ।
+
+धर्मस्य साध्यत्वं लौकिककर्मदृष्टान्तेन स्फुटयति -
+
+कर्तुमिति ।
+
+लौकिकवदित्यर्थः ।
+
+दृष्टान्तं स्फुटयति -
+
+यथेति ।
+
+दार्ष्टान्तिकमाह -
+
+तथेति ।
+
+तद्वद्धर्मस्य कर्तुमकर्तुं शक्यत्वमुक्त्वा अन्यथाकर्तुं शक्यत्वमाह -
+
+उदित इति ।
+
+धर्मस्य साध्यत्वमुपपाद्य तत्र विध्यादियोग्यतामाह -
+
+विधीति ।
+
+विधिप्रतिषेधाश्च विकल्पादयश्च धर्मे साध्ये येऽर्थवन्तः सावकाशा भवन्ति ते ब्रह्मण्यपि स्युरित्यर्थः ।
+
+‘यजेत’ ‘न सुरां पिबेत्’ इत्यादयो विधिनिषेधाः । व्रीहिभिर्यवैर्या यजेतेति सम्भावितो विकल्पः ग्रहणाग्रहणयोरैच्छिकः । उदितानुदितहोमयोर्व्यवस्थितविकल्पः । ‘न हिंस्यात्’ इत्युत्सर्गः, ‘अग्नीषोमीयं पशुमालभेत’ इत्यपवादः । तथा ‘आहवनीये जुहोति’ इत्युत्सर्गः, ‘अश्वस्य पदे पदे जुहोति’ इत्यपवाद इति विवेकः । एते ब्रह्मणि स्युरित्यत्रेष्टापत्तिं वारयति -
+
+न इत्यादिना भूतवस्तुविषयत्वात् इत्यन्तेन ।
+
+इदं वस्तु, एवम् , नैवम् , घटः पटो वेति प्रकारविकल्पः । अस्ति नास्ति वेति सत्तास्वरूपविकल्पः ।
+
+ननु वस्तुन्यपि आत्मादौ वादिनामस्ति नास्तीत्यादिविकल्पा दृश्यन्ते तत्राह -
+
+विकल्पनास्त्विति ।
+
+अस्तित्वादिकोटिस्मरणं पुरुषबुद्धिस्तन्मूला मनःस्पन्दितमात्राः संशयविपर्ययविकल्पा न प्रमारूपा इत्यक्षरार्थः । अयं भावः धर्मो हि यथा यथा ज्ञायते तथा तथा कर्तुं शक्यते इति यथाशास्त्रं पुरुषबुद्ध्यपेक्षा विकल्पाः सर्वे प्रमारूपा एव भवन्ति, तत्साम्येन ब्रह्मण्यपि सर्वे विकल्पा यथार्थाः स्युरिति ।
+
+तत्राप्येवमिति वदन्तं प्रत्याह -
+
+नेति ।
+
+यदि सिद्धवस्तुज्ञानमपि साध्यज्ञानवत्पुरुषबुद्धिमपेक्ष्य जायेत तदा सिद्धे विकल्पा यथार्थाः स्युः, न सिद्धवस्तुज्ञानं पौरुषं किं तर्हि प्रमाणवस्तुजन्यम् , तथा च वस्तुन एकरूपत्वादेकमेव ज्ञानं प्रमा, अन्ये विकल्पा अयथार्था एवेत्यर्थः ।
+
+अत्र दृष्टान्तमाह -
+
+नहि स्थाणाविति ।
+
+स्थाणुरेवेत्यवधारणे सिद्धे सर्वे विकल्पा यथार्था न भवन्तीत्यर्थः ।
+
+तत्र यद्वस्तुतन्त्रं ज्ञानं तद्यथार्थम् , यत्पुरुषतन्त्रं तन्मिथ्येति विभजते -
+
+तत्रेति ।
+
+स्थाणावित्यर्थः ।
+
+स्थाणावुक्तन्यायं घटादिष्वतिदिशति -
+
+एवमिति ।
+
+प्रकृतमाह -
+
+तत्रैवं सतीति ।
+
+सिद्धेऽर्थे ज्ञानप्रमात्वस्य वस्त्वधीनत्वे सति ब्रह्मज्ञानमपि वस्तुजन्यमेव यथार्थं न पुरुषतन्त्रं भूतार्थविषत्वात् , स्थाणुज्ञानवदित्यर्थः । अतः साध्येऽर्थे सर्वे विकल्पाः पुन्तन्त्रा न सिद्धेऽर्थे इति वैलक्षण्यात् न धर्मसाम्यं ब्राह्मण इति मननाद्यपेक्षा सिद्धेति भावः ।
+
+ननु तर्हि ब्रह्म प्रत्यक्षादिगोचरम् , धर्मविलक्षणत्वात् , घटादिवत् । तथा च जन्मादिसूत्रे जगत्कारणानुमानं विचार्यम् , सिद्धार्थे तस्य मानत्वात् , न श्रुतिः, सिद्धार्थे तस्या अमानत्वेन तद्विचारस्य निष्फलत्वादिति शङ्कते -
+
+नन्विति ।
+
+प्रमाणान्तरविषयत्वमेव प्राप्तमिति कृत्वा प्रमाणान्तरस्यैव विचारप्राप्ताविति शेषः ।
+
+अत्र पूर्वपक्षी प्रष्टव्यः, किं यत्कार्यं तद्ब्रह्मजमित्यनुमानं ब्रह्मसाधकं किं वा यत्कार्यं तत्सकारणमिति । नाद्यः, व्याप्त्यसिद्धेरित्याह -
+
+नेति ।
+
+ब्रह्मण इन्द्रियाग्राह्यत्वात्प्रत्यक्षेण व्याप्तिग्रहायोगान्न प्रमाणान्तरविषयत्वमित्यर्थः ।
+
+इन्द्रियाग्राह्यत्वं कुत इत्यत आह -
+
+स्वभावत इति ।
+
+‘पराञ्चि खानि व्यतृणत्स्वयम्भूः’ इति श्रुतेः, ब्रह्मणो रूपादिहीनत्वाच्चेत्यर्थः ।
+
+इन्द्रियाग्राह्यत्वेऽपि व्याप्तिग्रहः किं न स्यादत आह -
+
+सति हीति ।
+
+तन्नास्तीति शेषः । इदं कार्यं ब्रह्मजमिति व्याप्तिप्रत्यक्षं ब्रह्मणोऽतीन्द्रियत्वान्न सम्भवतीत्यर्थः ।
+
+द्वितीये कारणसिद्धावपि कारणस्य ब्रह्मत्वं श्रुतिं विना ज्ञातुमशक्यमित्याह -
+
+कार्यमात्रमिति ।
+
+सम्बद्धं कृतं यस्मात् श्रुतिमन्तरेण जगत्कारणं ब्रह्मेति निश्चयालाभस्तस्मात्तल्लाभाय श्रुतिरेव प्राधान्येन विचारणीया, अनुमानं तूपादानत्वादिसामान्यद्वारा मृदादिवत् ब्रह्मणः स्वकार्यात्मकत्वादिश्रौतार्थसम्भावनार्थं गुणतया विचार्यमित्युपसंहरति -
+
+तस्मादिति ।
+
+एतत्सूत्रस्य विषयवाक्यं पृच्छति -
+
+किं पुनरिति ।
+
+इह ब्रह्मणि लक्षणार्थत्वेन विचारयितुमिष्टं वाक्यं किमित्यर्थः ।
+
+अत्र हि प्रथमसूत्रे विशिष्टाधिकारिणो ब्रह्मविचारं प्रतिज्ञाय ब्रह्मज्ञातुकामस्य द्वितीयसूत्रे लक्षणमुच्यते । तथैव श्रुतावपि मुमुक्षोर्ब्रह्मज्ञातुकामस्य जगत्कारणत्वोपलक्षणानुवादेन ब्रह्म ज्ञाप्यत इति श्रौतार्थक्रमानुसारित्वं सूत्रस्य दर्शयितुं सोपक्रमं वाक्यं पठति -
+
+भृगुरिति ।
+
+अधीहि स्मारय उपदिशेत्यर्थः । अत्र येनेत्येकत्वं विवक्षितम् , नानात्वे ब्रह्मत्वविधानायोगात् । यज्जगत्कारणं तदेकमित्यवान्तरवाक्यम् । यदेकं कारणं तद्ब्रह्मेति वा यत्कारणं तदेकं बह्मेति वा महावाक्यमिति भेदः ।
+
+किं तर्हि स्वरूपलक्षणमित्याशङ्क्य वाक्यशेषान्निर्णितो यतःशब्दार्थः सत्यज्ञानानन्द इत्याह -
+
+तस्य चेति ।
+
+‘यः सर्वज्ञः’ ‘तस्मादेतद्ब्रह्म नाम रूपमन्नं च जायते’ ‘विज्ञानमानन्दं ब्रह्म’ इत्यादि शाखान्तरीयवाक्यान्यप्यस्य विषय इत्याह -
+
+अन्यान्यपीति ।
+
+एवं जातीयकत्वमेवाह -
+
+नित्येति ।
+
+तदेवं सर्वासु शाखासु लक्षणद्वयवाक्यानि जिज्ञास्ये ब्रह्मणि समन्वितानि, तद्धिया मुक्तिरिति सिद्धम् ॥ २ ॥
+
+English Translation
+
+
+
+
+
+
+
+
+Introduction
+
+Having established the commencement of the scripture with the first sutra, and now beginning the formal treatise, the author mentions the previous context to state the connection (sangati) between the preceding and subsequent sections: "Brahma," etc. It was stated [in the first sutra] that an inquiry into Vedanta should be undertaken by one desiring liberation (mumukshu) for the sake of attaining knowledge of Brahman.
+
+By stating that Brahman is the object of inquiry, it is implied that an investigation into its proofs (pramana) and other aspects is also promised. However, since such an inquiry is impossible without knowing the definition of Brahman, a definition must first be stated to understand its nature. Challenging the possibility of such a definition—while simultaneously honoring the author of the Sutras—the commentator establishes the "Definition Sutra" (Lakshana Sutra) by asking: "What is its definition?" The word "What" is used here in the sense of an objection (akshepa), meaning: "There is no definition at all." Since this section arises from an objection, the connection is one of Objection-Link (Akshepa-sangati).
+
+Because the Vedanta texts, which reveal the definitions and possess clear indicators (linga) of Brahman, are shown to harmonize (samanvaya) with the goal (Brahman), there is a consistency among the Scripture, the Chapter, and the Section. Specifically, the subject matter is the Upanishadic passage: "From which indeed these beings are born..." (Taittiriya Upanishad).
+
+The Doubt: Does this sentence constitute a definition of Brahman or not?
+
+The Prima Facie View (Purvapaksha): If it is not a definition, the nature of Brahman is not established, and consequently, liberation (mukti) cannot be achieved.
+
+The Established Conclusion (Siddhanta): The nature of Brahman is established, leading to the attainment of liberation.
+
+Although in an "Objection-Link" the result of the previous section is usually considered the result here (and thus need not be stated separately), as it is said:
+
+"In cases of objection, exception, attainment, or the act of defining, a separate purpose need not be stated, nor that which one acts upon having assumed it," nevertheless, it is stated here for the sake of clarity.
+
+Where the Purvapaksha (objection) arises from the conclusion of a previous section, that is called an Exceptional Connection (Apavadiki-sangati). In that context, the Purvapaksha argues: "No, [this is not a definition]," because birth, etc., are attributes of the universe and therefore cannot serve as a definition of Brahman.
+
+One cannot argue that "being the creator while also being the material cause" is the definition, because there is no observed example of a creator also being the material cause; thus, inference (anumana) cannot function. Nor should it be argued, "Since Brahman is known through Revelation (Shruti), why do we need inference?" because inference serves as a supplement to Revelation; in its absence or in the event of a contradiction with it, the true meaning of Revelation cannot be established.
+
+Key Concepts in the Text
+
+Akshepa-sangati: A logical connection where the next topic is introduced by raising an objection to the previous one.
+
+Lakshana: A definition. In Vedanta, a definition must distinguish the object from everything else.
+
+Samanvaya: The "harmonization" or "reconciliation" of all Upanishadic statements to point toward one non-dual Brahman.
+
+Birth, etc. (Janmadi): Refers to the creation, sustenance, and dissolution of the universe, which the second sutra (Janmadyasya yatah) uses to define Brahman.
+
+
+
+First Portion
+
+This is a translation and summary of the Sanskrit commentary  on Shankara’s commentary of the Brahma Sutra 1.1.2: “Janmadyasya yatah” (From which the origin, etc., of this world proceed).
+
+Translation of the Commentary
+
+The Definition of Brahman (Lakshana)
+
+It should not be argued whether being the efficient cause (creator-ship) or the material cause should be considered individual definitions. If the creator were distinct from the material cause, Brahman would be limited (finite), which contradicts its nature. Since independent human reasoning is unstable regarding supersensible matters, we rely on the Apaurusheya (authoritative/divine) Shruti. The Shruti declares Brahman to be both the efficient and material cause, which is logically possible (just as a person is the cause of their own dreams or happiness). Thus, the Sutra establishes the definition: "From which the birth, etc., of this."
+
+Avoiding Redundancy
+
+Although this sutra defines Brahman as the cause of birth, sustenance, and dissolution, a later section (Prakritishcha) specifically establishes Brahman as the material cause. By stating both here, the author is not being redundant but is presupposing the integrated nature of Brahman as the "comprehensive cause" (both maker and material).
+
+How can the Attributeless (Nirguna) have a Definition?
+
+Objection: How can "being a cause" define the Nirguna (attribute-less) Brahman?
+Answer: Just as "silver" serves as a temporary definition (indicator) for a piece of mother-of-pearl (e.g., "That which appeared as silver is this shell"), the "causality of the universe" is a Tatastha Lakshana (accidental/extrinsic attribute). It is a superimposed characteristic used to point toward the true nature of Brahman.
+
+Breakdown of the Sutra Terms
+
+1. "Janmadi" (Birth, etc.)
+
+This is a Bahuvrihi compound. It refers to the triad: Birth (Janma), Sustenance (Sthiti), and Dissolution (Bhanga).
+
+Why start with Birth? Even though the universe is beginningless (anadi) in a cyclic sense, the Sutra follows the order of the Vedas and the logical progression of manifestation.
+
+The Triad: Brahman is not defined by birth alone, but by being the simultaneous cause of all three states. This distinguishes Brahman from any temporary cause.
+
+2. "Asya" (Of This)
+
+This refers to the world we perceive.
+
+Scope: It includes the entire universe of names and forms, which is structured and differentiated.
+
+The Elements: Even "eternal" things like space (Akasha) are included here because the Shruti later explains their origin.
+
+3. "Yatah" (From Which)
+
+This indicates the cause. The word "Yat" (That) refers to the entity described as Truth, Knowledge, and Infinite (Satyam Jnanam Anantam). Since the Taittiriya Upanishad says "From Bliss (Ananda) indeed these beings are born," Brahman's essential nature is Bliss.
+
+Refutation of Rival Theories
+
+The commentary uses the complexity of the world to prove an Omniscient Creator:
+
+Against Pradhana (Sankhya) and Shunyata (Buddhism): The world is "differentiated by names and forms" (like a potter conceiving a pot before making it). An unconscious "Nature" (Pradhana) or "Void" (Shunya) cannot conceive or design.
+
+Against Jivas (Individual Souls): Individual souls (like Hiranyagarbha or humans) are themselves part of the "created" world and are limited in knowledge. They cannot be the cause of the entire cosmos.
+
+Proof of Omniscience: The universe follows strict laws of time, place, and causation (e.g., the fruits of a sacrifice or the timing of seasons). Only an omniscient being could coordinate the results of infinite actions (Karma) across such vast scales.
+
+Against Naturalism (Svabhava-vada): The Lokayata (materialist) view that the world exists by "nature" without a cause is rejected. If things happened without specific causes, there would be no reason for farmers to seek specific soil or seeds to get a harvest.
+
+The Role of Logic vs. Scripture
+
+The commentary concludes by addressing the Logicians (Tarkikas):
+
+The Logicians' Error: They believe they can prove God exists through pure inference (Anumana) alone (i.e., "The world is an effect, therefore it has a maker").
+
+The Vedantic View: Logic is a "helper" to scripture, not an independent authority for the Divine. Pure logic can be countered (e.g., "A creator must have a body to act").
+
+Conclusion: In matters beyond the senses (Atindriya), Shruti (Scripture) is the final authority. Logic is used only to show that what the Shruti says is "possible" and "reasonable," but it cannot replace the revelation of Brahman.
+
+
+
+Second Portion
+
+The discussion centers on whether Brahman is known through Inference (Anumāna) or Scripture (Śruti), and how Brahman-knowledge differs from the knowledge of Religious Duty (Dharma).
+
+Translation of the Commentary
+
+The Objection from the Vaisheshika School
+
+The Vaisheshika philosopher raises an objection: "This is improper. Since your own author of the Sutras (Vyasa) presented an inference—intending to include Scripture within the category of inference—the phrase 'Now then...' is used. Therefore, saying that inference is a mere fallacy is incorrect."
+
+The Refutation: Scripture as the Primary Means
+
+(The author) refutes this: "No." If Scriptures did not possess independent authority as a means of knowledge, then the Author of the Sutras would not investigate their true purport in subsequent verses like "But that (Brahman is known from Scripture) because It is the main purport [of all Vedanta texts]" (Brahmasutra 1.1.4). Therefore, because the subsequent sutras are intended for the investigation of Scripture, in this "Birth-origin" sutra as well, it is Scripture alone that is being investigated independently, not inference.
+
+Why Inference is Insufficient for Liberation
+
+Furthermore, the realization of Brahman is desired by the seeker of liberation, for which this scripture was commenced. That realization does not come from inference, because of the Vedic text: "I ask of that Person (Purusha) known only through the Upanishads." Therefore, the author says: "Sentence-meaning..." By the investigation of the Vedic sentence and its meaning, one achieves a firm conviction of its purport and the possibility of the object of knowledge (Brahman). The realization of Brahman born from that leads to liberation. "Possibility" here means the absence of contradiction.
+
+The Role of "Supportive Reasoning" (Tarka)
+
+Does this mean inference is entirely ignored? He says: "But when they exist..." An inference such as: "The world has a single material and efficient cause because it is an effect, like the threads produced by a spider," or "The world has a conscious nature because it is an effect, like pleasure/pain," is required to strengthen the meaning of Scripture. "Strengthening" means the removal of doubt and misconception. The Vedic command "He is to be reflected upon" means the heard truth should be made probable through logic.
+
+The Analogy of the Traveler: Just as a man from the Gandhara region, left in a forest with eyes bound by thieves, is released by someone; if he is wise, capable of taking the told path, and skilled in logic himself, he would reach his own country. Similarly, one who has been displaced from his natural bliss by ignorance and desire and cast into this forest of Samsara (worldly existence), if instructed by a compassionate Teacher that "You are not a worldly being, but That Thou Art," he can know his own nature if he is skilled in logic—not otherwise.
+
+Brahman vs. Dharma (Duty)
+
+An objection is raised: "Reflection (Manana) should not be required for Brahman because it is a Vedic subject, just like Dharma (duty). Only Vedic signs and sentences should be required." He replies: "No." In the case of Brahman (the object of inquiry), just as in the case of Dharma, "Experience" (Anubhava) refers to the direct realization of the Wise. The word "etc." includes reflection and meditation.
+
+The Reason: For the sake of liberation, knowledge of Brahman derived from words must culminate in direct realization. Since it concerns an already existing (Siddha) Brahman that is one's innermost Self, it is possible for it to result in direct realization; thus, the need for reflection is justified. In the case of Dharma, however, which is a result to be achieved (Sādhya) and is forever beyond the senses, direct realization is neither expected nor possible. Only a decision via Scripture is required for the sake of performance.
+
+Definition of Hermeneutic Tools
+
+Scripture utilizes several tools for determination (but not reflection for realization):
+
+Śruti: The independent Word.
+
+Linga: The suggestive power of a word to reveal meaning.
+
+Vākya: A sentence where words require other compatible words.
+
+Prakaraṇa: The primary context requiring subordinate sentences.
+
+Sthāna: Order/Position (e.g., the relationship between rituals and mantras read in the same sequence).
+
+Samākhyā: Conventional name (e.g., relating certain mantras to the Adhvaryu priest).
+
+The Objective Nature of Brahman-Knowledge
+
+If you claim Brahman is like Dharma because both are Vedic subjects, then Brahman would be subject to human effort, injunctions, prohibitions, and options—just like Dharma. The author shows the flaw in this: Dharma depends on human action for its birth (origination). He clarifies this with the example of worldly actions: just as one can do, not do, or do an action differently (like performing a ritual at sunrise vs. not at sunrise), these options apply to Dharma because it is "to be accomplished."
+
+However, Brahman is an existing entity (Bhūta-vastu).
+
+In an existing object, there are no "options." You cannot say "This is a post, or it is not, or it is a man" as a matter of truth.
+
+Options/doubts regarding an object (like "Is that a post or a person?") are products of human intellect/imagination; they are not valid knowledge (Pramā).
+
+Valid knowledge depends on the object itself, not on the person. If a post is a post, the only valid knowledge is "This is a post."
+
+Why Brahman is not known by Perception
+
+The opponent asks: "Then Brahman must be accessible to Perception (Pratyaksha), as it is an existing entity like a pot." The reply: "No." Brahman is not grasped by the senses. The Scripture says: "The Self-Existent pierced the senses outward," and Brahman lacks color/form. Without a perceptible "concomitance" (Vyāpti), inference cannot function independently to prove Brahman.
+
+Conclusion
+
+Therefore, one cannot determine that the cause of the universe is "Brahman" without Scripture. Inference is treated as a subordinate tool to show the possibility of the Scriptural meaning (like the example of clay). The subject text for this investigation is from the Taittiriya Upanishad (The story of Bhrigu and Varuna): "Seek to know that from which these beings are born..." This points to the definition of Brahman as Truth, Knowledge, and Bliss. Thus, it is settled that the definitions found in all Vedic branches relate to the Brahman to be inquired into, and realization of that leads to liberation
+
+
+
+Bhashya Rathna Prabha Vyakhya— Ramananda Saraswati
+
+Sanskrit Commentary
+
+
+
+
+
+
+
+
+अवतारिका
+
+प्रथमसूत्रेण शास्त्रारम्भमुपपाद्य शास्त्रमारभमाणः पूर्वोत्तराधिकरणयोः सङ्गतिं वक्तुं वृत्तं कीर्तयति -
+
+ब्रह्मेति ।
+
+मुमुक्षुणा ब्रह्मज्ञानाय वेदान्तविचारः कर्तव्य इत्युक्तम् । ब्रह्मणो विचार्यत्वोक्त्या अर्थात्प्रमाणादि विचाराणां प्रतिज्ञातत्वेऽपि ब्रह्मप्रमाणं विना कर्तुमशक्यत्वात् , तत्स्वरूपज्ञानायादौ लक्षणं वक्तव्यम् , तन्न सम्भवतीत्याक्षिप्य सूत्रकृतं पूजयन्नेव लक्षणसूत्रमवधारयति -
+
+किं लक्षणकमिति ।
+
+किमाक्षेपे । नास्त्येव लक्षणमित्यर्थः । आक्षेपेणास्योत्थानादाक्षेपसङ्गतिः । लक्षणद्योतिवेदान्तानां स्पष्टब्रह्मलिङ्गानां लक्ष्ये ब्रह्मणि समन्वयोक्तेः श्रुतिशास्त्राध्यायपादसङ्गतयः । तथा हि ‘यतो वा इमानि भूतानि जायन्ते’ इत्यादिवाक्यं विषयः । तत्किं ब्रह्मणो लक्षणं न वेति सन्देहः । तत्र पूर्वपक्षे ब्रह्मस्वरूपसिद्ध्या मुक्त्यसिद्धिः फलम् , सिद्धान्ते तत्सिद्धिरिति भेदः । यद्यप्याक्षेपसङ्गतौ पूर्वाधिकरणफलमेव फलमिति कृत्वा पृथङ्न वक्तव्यम् । तदुक्तम् -
+‘आक्षेपे चापवादे च प्राप्त्यां लक्षणकर्मणि ।
+प्रयोजनं न वक्तव्यं यच्च कृत्वा प्रवर्तते’ इति । तथापि स्पष्टार्थमुक्तमिति मन्तव्यम् । यत्र पूर्वाधिकरणसिद्धान्तेन पूर्वपक्षः तत्रापवादिकी सङ्गतिः प्राप्तिस्तदर्था चिन्ता । तत्र नेति प्राप्तम् , जन्मादेर्जगद्धर्मत्वेन ब्रह्मलक्षणत्वायोगात् । न च जगदुपादानत्वे सति कर्तृत्वं लक्षणमिति वाच्यम् , कर्तुरुपादानत्वे दृष्टान्ताभावेनानुमानाप्रवृत्तेः । न च श्रौतस्य ब्रह्मणः श्रुत्यैव लक्षणसिद्धेः किमनुमानेनेति वाच्यम् , अनुमानस्य श्रुत्यनुग्राहकत्वेन तदभावे तद्विरोधे वा श्रुत्यर्थासिद्धेः । -
+
+
+
+प्रथमो भागः
+
+न च जगत्कर्तृत्वमुपादानत्वं वा प्रत्येकं लक्षणमस्त्विति वाच्यम् , कर्तृमात्रस्योपादानाद्भिन्नस्य ब्रह्मत्वायोगात् , वस्तुतः परिच्छेदादिति प्राप्ते पुरुषाभ्यूहमात्रस्यानुमानस्याप्रतिष्ठितस्यातीन्द्रियार्थे स्वातन्त्र्यायोगात् , अपौरुषेयतया निर्दोषश्रुत्युक्तोभयकारणत्वस्य सुखादिदृष्टान्तेन सम्भावयितुं शक्यत्वात् , तदेव लक्षणमिति सिद्धान्तयति -
+
+जन्माद्यस्य यतः इति ।
+
+अत्र यद्यपि जगज्जन्मस्थितिलयकारणत्वं लक्षणं प्रतिपाद्यते तथाप्यग्रे ‘प्रकृतिश्च’ इत्यधिकरणे तत्कारणत्वं न कर्तृत्वमात्रं किन्तु कर्तृत्वोपादानत्वोभयरूपत्वमिति वक्ष्यमाणं सिद्धवत्कृत्योभयकारणत्वं लक्षणमित्युच्यत इति न पौनरुक्त्यम् । ननु जिज्ञास्यनिर्गुणब्रह्मणः कारणत्वं कथं लक्षणमिति चेत् , उच्यते - यथा रजतं शुक्तेर्लक्षणं यद्रजतं सा शुक्तिरिति, तथा यज्जगत्कारणं तद्ब्रह्मेति कल्पितं कारणत्वं तटस्थं सदेव ब्रह्मणो लक्षणमित्यनवद्यम् ॥
+
+सूत्रं व्याचष्टे -
+
+जन्मेत्यादिना ।
+
+बहुव्रीहौ पदार्थाः सर्वे वाक्यार्थस्यान्यपदार्थस्य विशेषणानि । यथा चित्रगोर्देवदत्तस्य चित्रा गावः तद्वदत्रापि जन्मादीति नपुंसकैकवचनद्योतितस्य समाहारस्य जन्मस्थितिभङ्गस्य जन्म विशेषणम् , तथा च जन्मनः समासार्थैकदेशस्य गुणत्वेन संविज्ञानं यस्मिन् बहुव्रीहौ स तद्गुणसंविज्ञान इत्यर्थः । तत्र यज्जन्मकारणं तद्ब्रह्मेति ब्रह्मत्वविधानमयुक्तम् , स्थितिलयकारणाद्भिन्नत्वेन ज्ञाते ब्रह्मत्वस्य ज्ञातुमशक्यत्वात् । अतो जन्मस्थितिभङ्गैर्निरूपितानि त्रीणि कारणत्वानि मिलितान्येव लक्षणमिति मत्वा सूत्रे समाहारो द्योतित इति ध्येयम् ।
+
+नन्वादित्वं जन्मनः कथं ज्ञातव्यम् , संसारस्यानादित्वादित्यत आह -
+
+जन्मनश्चेति ।
+
+मूलश्रुत्या वस्तुगत्या चादित्वं ज्ञात्वा तदपेक्ष्य सूत्रकृता जन्मन आदित्वमुक्तमित्यर्थः ।
+
+इदमः प्रत्यक्षार्थमात्रवाचित्वमाशङ्क्योपस्थितसर्वकार्यवाचित्वमाह -
+
+अस्येतीति ।
+
+वियदादिजगतो नित्यत्वात् न जन्मादिसम्बन्ध इत्यत आह -
+
+षष्ठीति ।
+
+विषयादिमहाभूतानां जन्मादिसम्बन्धो वक्ष्यत इति भावः ।
+
+ननु जगतो जन्मादेर्वा ब्रह्मसम्बन्धाभावान्न लक्षणत्वमित्याशङ्क्य तत्कारणत्वं लक्षणमिति पञ्चम्यर्थमाह -
+
+यत इतीति ।
+
+यच्छब्देन सत्यं ज्ञानमनन्तमानन्दरूपं वस्तूच्यते ‘आनन्दाद्ध्येव’ इति निर्णीतत्वात् । तथा च स्वरूपलक्षणसिद्धिरिति मन्तव्यम् ।
+
+पदार्थमुक्त्वा पूर्वसूत्रस्थब्रह्मपदानुषङ्गेण तच्छब्दाध्याहारेण च सूत्रवाक्यार्थमाह -
+
+अस्येत्यादिना ।
+
+कारणस्य सर्वज्ञत्वादिसम्भावनार्थानि जगतो विशेषणानि । यथा कुम्भकारः प्रथमं कुम्भशब्दाभेदेन विकल्पितं पृथुबुध्नोदराकारस्वरूपं बुद्धावालिख्य तदात्मना कुम्भं व्याकरोति - बहिः प्रकटयति, तथा परमकारणमपि स्वेप्सितनामरूपात्मना व्याकरोतीत्यनुमीयत इति मत्वाह -
+
+नामरूपाभ्यामिति ।
+
+इत्थम्भावे तृतीया । आद्यकार्यं चेतनजन्यम् , कार्यत्वात् , कुम्भवदिति प्रधानशून्ययोर्निरासः ।
+
+हिरण्यगर्भादिजीवजन्यत्वं निरस्यति -
+
+अनेकेति ।
+
+श्राद्धवैश्वानरेष्ट्यादौ पितापुत्रयोः कर्तृभोक्त्रोर्भेदात्पृथगुक्तिः । ‘यो ब्रह्माणं विदधाति पूर्वं सर्व एत आत्मनो व्युच्चरन्ति’ इति श्रुत्या स्थूलसूक्ष्मदेहोपाधिद्वारा जीवानां कार्यत्वेन जगन्मध्यपातित्वान्न जगत्कारणत्वमित्यर्थः ।
+
+कारणस्य सर्वज्ञत्वं सम्भावयति -
+
+प्रतिनियतेति ।
+
+प्रतिनियतानि व्यवस्थितानि देशकालनिमित्तानि येषां क्रियाफलानां तदाश्रयस्येत्यर्थः । स्वर्गस्य क्रियाफलस्य मेरुपृष्ठं देशः । देहपातादूर्ध्वं काल उत्तरायणमरणादिनिमित्तं च प्रतिनियतम् । एवं राजसेवाफले ग्रामादेर्देशादिव्यवस्था ज्ञेया । तथा च यथा सेवाफलं देशाद्यभिज्ञदातृकं तथा कर्मफलम् , फलत्वादिति सर्वज्ञत्वसिद्धिरिति भावः ।
+
+सर्वशक्तित्वं सम्भावयति -
+
+मनसापीति ।
+
+नन्वन्येऽपि वृद्धिपरिणामादयो भावविकाराः सन्तीति किमिति जन्मादीत्यादिपदेन न गृह्यन्ते तत्राह -
+
+अन्येषामिति ।
+
+वृद्धिपरिणामयोर्जन्मनि अपक्षयस्य नाशेऽन्तर्भावः इति भावः ।
+
+ननु देहो ‘जायते, अस्ति, वर्धते, विपरिणमते, अपक्षीयते, विनश्यति’ इति यास्कमुनिवाक्यमेतत्सूत्रमूलं किं न स्यादत आह -
+
+यास्केति ।
+
+यास्कमुनिः किल महाभूतानामुत्पन्नानां स्थितिकाले भौतिकेषु प्रत्यक्षेण जन्मादिषट्कमुपलभ्य निरुक्तवाक्यं चकार । तन्मूलीकृत्य जन्मादिषट्ककारणत्वं लक्षणं सूत्रार्थ इति ग्रहणे सूत्रकृता ब्रह्मलक्षणं न सङ्गृहीतं किन्तु महाभूतानां लक्षणमुक्तमिति शङ्का स्यात्सा मा भूदिति ये श्रुत्युक्ता जन्मादयस्त एव गृह्यन्त इत्यर्थः । यदि निरुक्तस्यापि श्रुतिर्मूलमिति महाभूतजन्मादिकमर्थस्तर्हि सा श्रुतिरेव सूत्रस्य मूलमस्तु, किमन्तर्गडुना निरुक्तेनेति भावः । यदि जगतो ब्रह्मातिरिक्तं कारणं स्यात्तदा ब्रह्मलक्षणस्य तत्रातिव्याप्त्यादिदोषः स्यात् , अतस्तन्निरासाय लक्षणसूत्रेण ब्रह्म विना जगज्जन्मादिकं न सम्भवति, कारणान्तरासम्भवादिति युक्तिः सूत्रिता । सा तर्कपादे विस्तरेण वक्ष्यते ।
+
+अधुना सङ्क्षेपेण तां दर्शयति -
+
+न यथोक्तेत्यादिना ।
+
+नामरूपाभ्यां व्याकृतस्येत्यादीनां च चतुर्णां जगद्विशेषणानां व्याख्यानावसरे प्रधानशून्ययोः संसारिणश्च निरासो दर्शितः । परमाणूनामचेतनानां स्वतः प्रवृत्त्ययोगात् , जीवान्यस्य ज्ञानशून्यत्वनियमेनानुमानात्सर्वज्ञेश्वरासिद्धौ तेषां प्रेरकाभावात् , जगदारम्भकत्वासम्भव इति भावः ।
+
+स्वभावादेव विचित्रं जगदिति लोकायतस्तं प्रत्याह -
+
+न चेति ।
+
+जगत उत्पत्त्यादि सम्भावयितुं न शक्यमित्यन्वयः ।
+
+किं स्वयमेव स्वस्य हेतुरिति स्वभाव उत कारणानपेक्षत्वम् । नाद्यः, आत्माश्रयात् । न द्वितीय इत्याह -
+
+विशिष्टेति ।
+
+विशिष्टान्यसाधारणानि देशकालनिमित्तानि । तेषां कार्यार्थिभिरुपादीयमानत्वात्कार्यस्य कारणानपेक्षत्वं न युक्तमित्यर्थः । अनेपेक्षत्वे धान्यार्थिनां भूविशेषे वर्षादिकाले बीजादिनिमित्ते च प्रवृत्तिर्न स्यादिति भावः ।
+
+पूर्वोक्तसर्वज्ञत्वादिविशेषणकमीश्वरं मुक्त्वा जगत उत्पत्यादिकं न सम्भवतीति भाष्येण कर्तारं विना कार्यं नास्तीति व्यतिरेक उक्तः । तेन यत्कार्यं तत्सकर्तृकमिति व्याप्तिर्ज्ञायते । एतदेव व्याप्तिज्ञानं जगति पक्षे कर्तारं साधयत्सर्वज्ञेश्वरं साधयति किं श्रुत्येति तार्किकाणां भ्रान्तिमुपन्यस्यति -
+
+एतदेवेति ।
+
+एतदेवानुमानमेव साधनं न श्रुतिरिति मन्यन्त इति योजना । अथवा एतद्व्याप्तिज्ञानमेव श्रुत्यनुग्राहकयुक्तिमात्रत्वेनास्मत्सम्मतं सदनुमानं स्वतन्त्रमिति मन्यन्त इत्यर्थः । सर्वज्ञत्वमादिशब्दार्थः । यद्वा व्याप्तिज्ञानसहकृतमेतल्लक्षणमेवानुमानं स्वतन्त्रं मन्यन्त इत्यर्थः । तत्रायं विभागः व्याप्तिज्ञानात् जगतः कर्तास्तीत्यस्तित्वसिद्धिः । पश्चात्स कर्ता, सर्वज्ञः, जगत्कारणत्वात् , व्यतिरेकेण कुलालादिवदिति सर्वज्ञत्वसिद्धिर्लक्षणादिति । अत्र मन्यन्त इत्यनुमानस्याभासत्वं सूचितम् । तथाहि - अङ्कुरादौ तावज्जीवः कर्ता न भवति जीवाद्भिन्नस्य घटवदचेतनत्वनियमादन्यः कर्ता नास्त्येवेति व्यतिरेकनिश्चयात् , यत्कार्यं तत्सकर्तृकमिति व्याप्तिज्ञानासिद्धिः । लक्षणलिङ्गकानुमाने तु बाधः अशरीरस्य जन्मज्ञानायोगात् , यज्ज्ञानं तन्मनोजन्यमिति व्याप्तिविरोधेन नित्यज्ञानासिद्धेर्ज्ञानाभावनिश्चयात् , तस्मादतीन्द्रियार्थे श्रुतिरेव शरणम् । श्रुत्यर्थसम्भावनार्थत्वेनानुमानं युक्तिमात्रं न स्वतन्त्रमिति भावः ।
+
+
+
+
+
+द्वितीयो भागः
+
+नन्विदमयुक्तम् , श्रुतेरनुमानान्तर्भावमभिप्रेत्य भवदीयसूत्रकृतानुमानस्यैवोपन्यस्यत्वादिति वैशेषिकः शङ्कते -
+
+नन्विति ।
+
+अतो मन्यन्ते इत्यनुमानस्याभासोक्तिरयुक्तेति भावः ।
+
+यदि श्रुतीनां स्वतन्त्रमानत्वं न स्यात्तर्हि ‘तत्तु समन्वयात्’ इत्यादिना तासां तात्पर्यं सूत्रकृन्न विचारयेत् , तस्मादुत्तरसूत्राणां श्रुतिविचारार्थत्वात् जन्मादिसूत्रेऽपि श्रुतिरेव स्वातन्त्र्येण विचार्यते नानुमानमिति परिहरति -
+
+नेति ।
+
+किं च मुमुक्षोर्ब्रह्मावगतिरभीष्टा यदर्थमस्य शास्त्रस्यारम्भः, सा च नानुमानात् , ‘तं त्वौपनिषदम्’ इति श्रुतेः । अतो नानुमानं विचार्यमित्याह -
+
+वाक्यार्थेति ।
+
+वाक्यस्य तदर्थस्य च विचाराद्यध्यवसानं तात्पर्यनिश्चयः प्रमेयसम्भवनिश्चयश्च तेन जाता ब्रह्मावगतिर्मुक्तये भवतीत्यर्थः । सम्भवो बाधाभावः ।
+
+ननु किमनुमानमुपेक्षितमेव नेत्याह -
+
+सत्सु त्विति ।
+
+विमतमभिन्ननिमित्तोपादानकम् , कार्यत्वादूर्णनाभ्यारब्धतन्त्वादिवत् , विमतं चेतनप्रकृतिकम् , कार्यत्वात् , सुखादिवदित्यनुमानं श्रुत्यर्थदार्ढ्याय अपेक्षितमित्यर्थः । दार्ढ्यं संशयविपर्यासनिवृत्तिः । ‘मन्तव्यः’ इति श्रुतार्थस्तर्केण सम्भावनीय इत्यर्थः । यथा कश्चित् गान्धारदेशेभ्यश्चोरैरन्यत्रारण्ये बद्धनेत्र एव त्यक्तः केनचिन्मुक्तबन्धस्तदुक्तमार्गग्रहणसमर्थः पण्डितः स्वयं तर्ककुशलो मेधावी स्वदेशानेव प्राप्नुयात् एवमेवेहाविद्याकामादिभिः स्वरूपानन्दात् प्रच्याव्यस्मिन्नरण्ये संसारे क्षिप्तः केनचिद्दयापरवशेनाचार्येण नासि त्वं संसारी किन्तु ‘तत्त्वमसि’ इत्युपदिष्टस्वरूपः स्वयं तर्ककुशलश्चेत्स्वरूपं जानीयान्नान्यथेति ।
+
+श्रुतिः स्वस्याः पुरुषमतिरूपतर्कापेक्षां दर्शयतीत्याह -
+
+पण्डित इति ।
+
+आत्मनः श्रुतेरित्यर्थः ।
+
+ननु ब्रह्मणो मननाद्यपेक्षा न युक्ता, वेदार्थत्वात् , धर्मवत् । किन्तु श्रुतिलिङ्गवाक्यादय एवापेक्षिता इत्यत आह -
+
+नेति ।
+
+जिज्ञास्ये धर्म इव जिज्ञास्ये ब्रह्मणीति व्याख्येयम् । अनुभवो ब्रह्मसाक्षात्काराख्यो विद्वदनुभवः । आदिपदान्मनननिदिध्यासनयोर्ग्रहः ।
+
+तत्र हेतुमाह -
+
+अनुभवेति ।
+
+मुक्त्यर्थं ब्रह्मज्ञानस्य शाब्दस्य साक्षात्कारावसानत्वापेक्षणात्प्रत्यग्भूतसिद्धब्रह्मगोचरत्वेन साक्षात्कारफलकत्वसम्भवात् , तदर्थं मननाद्यपेक्षा युक्ता । धर्मे तु नित्यपरोक्षे साध्ये साक्षात्कारस्यानपेक्षितत्वादसम्भवाच्च श्रुत्या निर्णयमात्रमनुष्ठानायापेक्षितम् । लिङ्गादयस्तु श्रुत्यन्तर्भूता एव श्रुतिद्वारा निर्णयोपयोगित्वेनापेक्ष्यन्ते न मननादयः अनुपयोगादित्यर्थः । निरपेक्षः शब्दः श्रुतिः । शब्दस्यार्थप्रकाशनसामर्थ्यं लिङ्गम् । पदं योग्येतरपदाकाङ्क्षं वाक्यम् । अङ्गवाक्यसापेक्षं प्रधानवाक्यं प्रकरणम् । क्रमपठितानामर्थानां क्रमपठितैर्यथाक्रमं सम्बन्धः स्थानम् । यथा ऐन्द्राग्न्यादय इष्टयो दश क्रमेण पठिताः दशमन्त्राश्च ‘इन्द्राग्नी रोचना दिवि’ इत्याद्याः तत्र प्रथमेष्टौ प्रथममन्त्रस्य विनियोग इत्याद्यूहनीयम् । संज्ञासाम्यं समाख्या । यथाध्वर्यवसंज्ञकानां मन्त्राणामाध्वर्यवसंज्ञके कर्मणि विनियोग इति विवेकः । एवं तावद्ब्रह्म मननाद्यपेक्षम् , वेदार्थत्वात् , धर्मवत् , इत्यनुमाने साध्यत्वेन धर्मस्यानुभवायोग्यत्वम् , अनपेक्षितानुभवत्वं चोपाधिरित्युक्तम् । उपाधिव्यतिरेकाद्ब्रह्मणि मननाद्यपेक्षत्वं चोक्तम् । तत्र यदि वेदार्थत्वमात्रेण ब्रह्मणो धर्मेण साम्यं त्वयोच्येत तर्हि कृतिसाध्यत्वं विधिनिषेधविकल्पोत्सर्गापवादाश्च ब्रह्मणि धर्मवत् स्युरिति ।
+
+विपक्षे बाधकमाह -
+
+पुरुषेत्यादिना ।
+
+पुरुषकृत्यधीना आत्मलाभ उत्पत्तिर्यस्य तद्भावाच्च धर्मे श्रुत्यादीनामेव प्रामाण्यमित्यन्वयः ।
+
+धर्मस्य साध्यत्वं लौकिककर्मदृष्टान्तेन स्फुटयति -
+
+कर्तुमिति ।
+
+लौकिकवदित्यर्थः ।
+
+दृष्टान्तं स्फुटयति -
+
+यथेति ।
+
+दार्ष्टान्तिकमाह -
+
+तथेति ।
+
+तद्वद्धर्मस्य कर्तुमकर्तुं शक्यत्वमुक्त्वा अन्यथाकर्तुं शक्यत्वमाह -
+
+उदित इति ।
+
+धर्मस्य साध्यत्वमुपपाद्य तत्र विध्यादियोग्यतामाह -
+
+विधीति ।
+
+विधिप्रतिषेधाश्च विकल्पादयश्च धर्मे साध्ये येऽर्थवन्तः सावकाशा भवन्ति ते ब्रह्मण्यपि स्युरित्यर्थः ।
+
+‘यजेत’ ‘न सुरां पिबेत्’ इत्यादयो विधिनिषेधाः । व्रीहिभिर्यवैर्या यजेतेति सम्भावितो विकल्पः ग्रहणाग्रहणयोरैच्छिकः । उदितानुदितहोमयोर्व्यवस्थितविकल्पः । ‘न हिंस्यात्’ इत्युत्सर्गः, ‘अग्नीषोमीयं पशुमालभेत’ इत्यपवादः । तथा ‘आहवनीये जुहोति’ इत्युत्सर्गः, ‘अश्वस्य पदे पदे जुहोति’ इत्यपवाद इति विवेकः । एते ब्रह्मणि स्युरित्यत्रेष्टापत्तिं वारयति -
+
+न इत्यादिना भूतवस्तुविषयत्वात् इत्यन्तेन ।
+
+इदं वस्तु, एवम् , नैवम् , घटः पटो वेति प्रकारविकल्पः । अस्ति नास्ति वेति सत्तास्वरूपविकल्पः ।
+
+ननु वस्तुन्यपि आत्मादौ वादिनामस्ति नास्तीत्यादिविकल्पा दृश्यन्ते तत्राह -
+
+विकल्पनास्त्विति ।
+
+अस्तित्वादिकोटिस्मरणं पुरुषबुद्धिस्तन्मूला मनःस्पन्दितमात्राः संशयविपर्ययविकल्पा न प्रमारूपा इत्यक्षरार्थः । अयं भावः धर्मो हि यथा यथा ज्ञायते तथा तथा कर्तुं शक्यते इति यथाशास्त्रं पुरुषबुद्ध्यपेक्षा विकल्पाः सर्वे प्रमारूपा एव भवन्ति, तत्साम्येन ब्रह्मण्यपि सर्वे विकल्पा यथार्थाः स्युरिति ।
+
+तत्राप्येवमिति वदन्तं प्रत्याह -
+
+नेति ।
+
+यदि सिद्धवस्तुज्ञानमपि साध्यज्ञानवत्पुरुषबुद्धिमपेक्ष्य जायेत तदा सिद्धे विकल्पा यथार्थाः स्युः, न सिद्धवस्तुज्ञानं पौरुषं किं तर्हि प्रमाणवस्तुजन्यम् , तथा च वस्तुन एकरूपत्वादेकमेव ज्ञानं प्रमा, अन्ये विकल्पा अयथार्था एवेत्यर्थः ।
+
+अत्र दृष्टान्तमाह -
+
+नहि स्थाणाविति ।
+
+स्थाणुरेवेत्यवधारणे सिद्धे सर्वे विकल्पा यथार्था न भवन्तीत्यर्थः ।
+
+तत्र यद्वस्तुतन्त्रं ज्ञानं तद्यथार्थम् , यत्पुरुषतन्त्रं तन्मिथ्येति विभजते -
+
+तत्रेति ।
+
+स्थाणावित्यर्थः ।
+
+स्थाणावुक्तन्यायं घटादिष्वतिदिशति -
+
+एवमिति ।
+
+प्रकृतमाह -
+
+तत्रैवं सतीति ।
+
+सिद्धेऽर्थे ज्ञानप्रमात्वस्य वस्त्वधीनत्वे सति ब्रह्मज्ञानमपि वस्तुजन्यमेव यथार्थं न पुरुषतन्त्रं भूतार्थविषत्वात् , स्थाणुज्ञानवदित्यर्थः । अतः साध्येऽर्थे सर्वे विकल्पाः पुन्तन्त्रा न सिद्धेऽर्थे इति वैलक्षण्यात् न धर्मसाम्यं ब्राह्मण इति मननाद्यपेक्षा सिद्धेति भावः ।
+
+ननु तर्हि ब्रह्म प्रत्यक्षादिगोचरम् , धर्मविलक्षणत्वात् , घटादिवत् । तथा च जन्मादिसूत्रे जगत्कारणानुमानं विचार्यम् , सिद्धार्थे तस्य मानत्वात् , न श्रुतिः, सिद्धार्थे तस्या अमानत्वेन तद्विचारस्य निष्फलत्वादिति शङ्कते -
+
+नन्विति ।
+
+प्रमाणान्तरविषयत्वमेव प्राप्तमिति कृत्वा प्रमाणान्तरस्यैव विचारप्राप्ताविति शेषः ।
+
+अत्र पूर्वपक्षी प्रष्टव्यः, किं यत्कार्यं तद्ब्रह्मजमित्यनुमानं ब्रह्मसाधकं किं वा यत्कार्यं तत्सकारणमिति । नाद्यः, व्याप्त्यसिद्धेरित्याह -
+
+नेति ।
+
+ब्रह्मण इन्द्रियाग्राह्यत्वात्प्रत्यक्षेण व्याप्तिग्रहायोगान्न प्रमाणान्तरविषयत्वमित्यर्थः ।
+
+इन्द्रियाग्राह्यत्वं कुत इत्यत आह -
+
+स्वभावत इति ।
+
+‘पराञ्चि खानि व्यतृणत्स्वयम्भूः’ इति श्रुतेः, ब्रह्मणो रूपादिहीनत्वाच्चेत्यर्थः ।
+
+इन्द्रियाग्राह्यत्वेऽपि व्याप्तिग्रहः किं न स्यादत आह -
+
+सति हीति ।
+
+तन्नास्तीति शेषः । इदं कार्यं ब्रह्मजमिति व्याप्तिप्रत्यक्षं ब्रह्मणोऽतीन्द्रियत्वान्न सम्भवतीत्यर्थः ।
+
+द्वितीये कारणसिद्धावपि कारणस्य ब्रह्मत्वं श्रुतिं विना ज्ञातुमशक्यमित्याह -
+
+कार्यमात्रमिति ।
+
+सम्बद्धं कृतं यस्मात् श्रुतिमन्तरेण जगत्कारणं ब्रह्मेति निश्चयालाभस्तस्मात्तल्लाभाय श्रुतिरेव प्राधान्येन विचारणीया, अनुमानं तूपादानत्वादिसामान्यद्वारा मृदादिवत् ब्रह्मणः स्वकार्यात्मकत्वादिश्रौतार्थसम्भावनार्थं गुणतया विचार्यमित्युपसंहरति -
+
+तस्मादिति ।
+
+एतत्सूत्रस्य विषयवाक्यं पृच्छति -
+
+किं पुनरिति ।
+
+इह ब्रह्मणि लक्षणार्थत्वेन विचारयितुमिष्टं वाक्यं किमित्यर्थः ।
+
+अत्र हि प्रथमसूत्रे विशिष्टाधिकारिणो ब्रह्मविचारं प्रतिज्ञाय ब्रह्मज्ञातुकामस्य द्वितीयसूत्रे लक्षणमुच्यते । तथैव श्रुतावपि मुमुक्षोर्ब्रह्मज्ञातुकामस्य जगत्कारणत्वोपलक्षणानुवादेन ब्रह्म ज्ञाप्यत इति श्रौतार्थक्रमानुसारित्वं सूत्रस्य दर्शयितुं सोपक्रमं वाक्यं पठति -
+
+भृगुरिति ।
+
+अधीहि स्मारय उपदिशेत्यर्थः । अत्र येनेत्येकत्वं विवक्षितम् , नानात्वे ब्रह्मत्वविधानायोगात् । यज्जगत्कारणं तदेकमित्यवान्तरवाक्यम् । यदेकं कारणं तद्ब्रह्मेति वा यत्कारणं तदेकं बह्मेति वा महावाक्यमिति भेदः ।
+
+किं तर्हि स्वरूपलक्षणमित्याशङ्क्य वाक्यशेषान्निर्णितो यतःशब्दार्थः सत्यज्ञानानन्द इत्याह -
+
+तस्य चेति ।
+
+‘यः सर्वज्ञः’ ‘तस्मादेतद्ब्रह्म नाम रूपमन्नं च जायते’ ‘विज्ञानमानन्दं ब्रह्म’ इत्यादि शाखान्तरीयवाक्यान्यप्यस्य विषय इत्याह -
+
+अन्यान्यपीति ।
+
+एवं जातीयकत्वमेवाह -
+
+नित्येति ।
+
+तदेवं सर्वासु शाखासु लक्षणद्वयवाक्यानि जिज्ञास्ये ब्रह्मणि समन्वितानि, तद्धिया मुक्तिरिति सिद्धम् ॥ २ ॥
+
+English Translation
+
+
+
+
+
+
+
+
+Introduction
+
+Having established the commencement of the scripture with the first sutra, and now beginning the formal treatise, the author mentions the previous context to state the connection (sangati) between the preceding and subsequent sections: "Brahma," etc. It was stated [in the first sutra] that an inquiry into Vedanta should be undertaken by one desiring liberation (mumukshu) for the sake of attaining knowledge of Brahman.
+
+By stating that Brahman is the object of inquiry, it is implied that an investigation into its proofs (pramana) and other aspects is also promised. However, since such an inquiry is impossible without knowing the definition of Brahman, a definition must first be stated to understand its nature. Challenging the possibility of such a definition—while simultaneously honoring the author of the Sutras—the commentator establishes the "Definition Sutra" (Lakshana Sutra) by asking: "What is its definition?" The word "What" is used here in the sense of an objection (akshepa), meaning: "There is no definition at all." Since this section arises from an objection, the connection is one of Objection-Link (Akshepa-sangati).
+
+Because the Vedanta texts, which reveal the definitions and possess clear indicators (linga) of Brahman, are shown to harmonize (samanvaya) with the goal (Brahman), there is a consistency among the Scripture, the Chapter, and the Section. Specifically, the subject matter is the Upanishadic passage: "From which indeed these beings are born..." (Taittiriya Upanishad).
+
+The Doubt: Does this sentence constitute a definition of Brahman or not?
+
+The Prima Facie View (Purvapaksha): If it is not a definition, the nature of Brahman is not established, and consequently, liberation (mukti) cannot be achieved.
+
+The Established Conclusion (Siddhanta): The nature of Brahman is established, leading to the attainment of liberation.
+
+Although in an "Objection-Link" the result of the previous section is usually considered the result here (and thus need not be stated separately), as it is said:
+
+"In cases of objection, exception, attainment, or the act of defining, a separate purpose need not be stated, nor that which one acts upon having assumed it," nevertheless, it is stated here for the sake of clarity.
+
+Where the Purvapaksha (objection) arises from the conclusion of a previous section, that is called an Exceptional Connection (Apavadiki-sangati). In that context, the Purvapaksha argues: "No, [this is not a definition]," because birth, etc., are attributes of the universe and therefore cannot serve as a definition of Brahman.
+
+One cannot argue that "being the creator while also being the material cause" is the definition, because there is no observed example of a creator also being the material cause; thus, inference (anumana) cannot function. Nor should it be argued, "Since Brahman is known through Revelation (Shruti), why do we need inference?" because inference serves as a supplement to Revelation; in its absence or in the event of a contradiction with it, the true meaning of Revelation cannot be established.
+
+Key Concepts in the Text
+
+Akshepa-sangati: A logical connection where the next topic is introduced by raising an objection to the previous one.
+
+Lakshana: A definition. In Vedanta, a definition must distinguish the object from everything else.
+
+Samanvaya: The "harmonization" or "reconciliation" of all Upanishadic statements to point toward one non-dual Brahman.
+
+Birth, etc. (Janmadi): Refers to the creation, sustenance, and dissolution of the universe, which the second sutra (Janmadyasya yatah) uses to define Brahman.
+
+
+
+First Portion
+
+This is a translation and summary of the Sanskrit commentary  on Shankara’s commentary of the Brahma Sutra 1.1.2: “Janmadyasya yatah” (From which the origin, etc., of this world proceed).
+
+Translation of the Commentary
+
+The Definition of Brahman (Lakshana)
+
+It should not be argued whether being the efficient cause (creator-ship) or the material cause should be considered individual definitions. If the creator were distinct from the material cause, Brahman would be limited (finite), which contradicts its nature. Since independent human reasoning is unstable regarding supersensible matters, we rely on the Apaurusheya (authoritative/divine) Shruti. The Shruti declares Brahman to be both the efficient and material cause, which is logically possible (just as a person is the cause of their own dreams or happiness). Thus, the Sutra establishes the definition: "From which the birth, etc., of this."
+
+Avoiding Redundancy
+
+Although this sutra defines Brahman as the cause of birth, sustenance, and dissolution, a later section (Prakritishcha) specifically establishes Brahman as the material cause. By stating both here, the author is not being redundant but is presupposing the integrated nature of Brahman as the "comprehensive cause" (both maker and material).
+
+How can the Attributeless (Nirguna) have a Definition?
+
+Objection: How can "being a cause" define the Nirguna (attribute-less) Brahman?
+Answer: Just as "silver" serves as a temporary definition (indicator) for a piece of mother-of-pearl (e.g., "That which appeared as silver is this shell"), the "causality of the universe" is a Tatastha Lakshana (accidental/extrinsic attribute). It is a superimposed characteristic used to point toward the true nature of Brahman.
+
+Breakdown of the Sutra Terms
+
+1. "Janmadi" (Birth, etc.)
+
+This is a Bahuvrihi compound. It refers to the triad: Birth (Janma), Sustenance (Sthiti), and Dissolution (Bhanga).
+
+Why start with Birth? Even though the universe is beginningless (anadi) in a cyclic sense, the Sutra follows the order of the Vedas and the logical progression of manifestation.
+
+The Triad: Brahman is not defined by birth alone, but by being the simultaneous cause of all three states. This distinguishes Brahman from any temporary cause.
+
+2. "Asya" (Of This)
+
+This refers to the world we perceive.
+
+Scope: It includes the entire universe of names and forms, which is structured and differentiated.
+
+The Elements: Even "eternal" things like space (Akasha) are included here because the Shruti later explains their origin.
+
+3. "Yatah" (From Which)
+
+This indicates the cause. The word "Yat" (That) refers to the entity described as Truth, Knowledge, and Infinite (Satyam Jnanam Anantam). Since the Taittiriya Upanishad says "From Bliss (Ananda) indeed these beings are born," Brahman's essential nature is Bliss.
+
+Refutation of Rival Theories
+
+The commentary uses the complexity of the world to prove an Omniscient Creator:
+
+Against Pradhana (Sankhya) and Shunyata (Buddhism): The world is "differentiated by names and forms" (like a potter conceiving a pot before making it). An unconscious "Nature" (Pradhana) or "Void" (Shunya) cannot conceive or design.
+
+Against Jivas (Individual Souls): Individual souls (like Hiranyagarbha or humans) are themselves part of the "created" world and are limited in knowledge. They cannot be the cause of the entire cosmos.
+
+Proof of Omniscience: The universe follows strict laws of time, place, and causation (e.g., the fruits of a sacrifice or the timing of seasons). Only an omniscient being could coordinate the results of infinite actions (Karma) across such vast scales.
+
+Against Naturalism (Svabhava-vada): The Lokayata (materialist) view that the world exists by "nature" without a cause is rejected. If things happened without specific causes, there would be no reason for farmers to seek specific soil or seeds to get a harvest.
+
+The Role of Logic vs. Scripture
+
+The commentary concludes by addressing the Logicians (Tarkikas):
+
+The Logicians' Error: They believe they can prove God exists through pure inference (Anumana) alone (i.e., "The world is an effect, therefore it has a maker").
+
+The Vedantic View: Logic is a "helper" to scripture, not an independent authority for the Divine. Pure logic can be countered (e.g., "A creator must have a body to act").
+
+Conclusion: In matters beyond the senses (Atindriya), Shruti (Scripture) is the final authority. Logic is used only to show that what the Shruti says is "possible" and "reasonable," but it cannot replace the revelation of Brahman.
+
+
+
+Second Portion
+
+The discussion centers on whether Brahman is known through Inference (Anumāna) or Scripture (Śruti), and how Brahman-knowledge differs from the knowledge of Religious Duty (Dharma).
+
+Translation of the Commentary
+
+The Objection from the Vaisheshika School
+
+The Vaisheshika philosopher raises an objection: "This is improper. Since your own author of the Sutras (Vyasa) presented an inference—intending to include Scripture within the category of inference—the phrase 'Now then...' is used. Therefore, saying that inference is a mere fallacy is incorrect."
+
+The Refutation: Scripture as the Primary Means
+
+(The author) refutes this: "No." If Scriptures did not possess independent authority as a means of knowledge, then the Author of the Sutras would not investigate their true purport in subsequent verses like "But that (Brahman is known from Scripture) because It is the main purport [of all Vedanta texts]" (Brahmasutra 1.1.4). Therefore, because the subsequent sutras are intended for the investigation of Scripture, in this "Birth-origin" sutra as well, it is Scripture alone that is being investigated independently, not inference.
+
+Why Inference is Insufficient for Liberation
+
+Furthermore, the realization of Brahman is desired by the seeker of liberation, for which this scripture was commenced. That realization does not come from inference, because of the Vedic text: "I ask of that Person (Purusha) known only through the Upanishads." Therefore, the author says: "Sentence-meaning..." By the investigation of the Vedic sentence and its meaning, one achieves a firm conviction of its purport and the possibility of the object of knowledge (Brahman). The realization of Brahman born from that leads to liberation. "Possibility" here means the absence of contradiction.
+
+The Role of "Supportive Reasoning" (Tarka)
+
+Does this mean inference is entirely ignored? He says: "But when they exist..." An inference such as: "The world has a single material and efficient cause because it is an effect, like the threads produced by a spider," or "The world has a conscious nature because it is an effect, like pleasure/pain," is required to strengthen the meaning of Scripture. "Strengthening" means the removal of doubt and misconception. The Vedic command "He is to be reflected upon" means the heard truth should be made probable through logic.
+
+The Analogy of the Traveler: Just as a man from the Gandhara region, left in a forest with eyes bound by thieves, is released by someone; if he is wise, capable of taking the told path, and skilled in logic himself, he would reach his own country. Similarly, one who has been displaced from his natural bliss by ignorance and desire and cast into this forest of Samsara (worldly existence), if instructed by a compassionate Teacher that "You are not a worldly being, but That Thou Art," he can know his own nature if he is skilled in logic—not otherwise.
+
+Brahman vs. Dharma (Duty)
+
+An objection is raised: "Reflection (Manana) should not be required for Brahman because it is a Vedic subject, just like Dharma (duty). Only Vedic signs and sentences should be required." He replies: "No." In the case of Brahman (the object of inquiry), just as in the case of Dharma, "Experience" (Anubhava) refers to the direct realization of the Wise. The word "etc." includes reflection and meditation.
+
+The Reason: For the sake of liberation, knowledge of Brahman derived from words must culminate in direct realization. Since it concerns an already existing (Siddha) Brahman that is one's innermost Self, it is possible for it to result in direct realization; thus, the need for reflection is justified. In the case of Dharma, however, which is a result to be achieved (Sādhya) and is forever beyond the senses, direct realization is neither expected nor possible. Only a decision via Scripture is required for the sake of performance.
+
+Definition of Hermeneutic Tools
+
+Scripture utilizes several tools for determination (but not reflection for realization):
+
+Śruti: The independent Word.
+
+Linga: The suggestive power of a word to reveal meaning.
+
+Vākya: A sentence where words require other compatible words.
+
+Prakaraṇa: The primary context requiring subordinate sentences.
+
+Sthāna: Order/Position (e.g., the relationship between rituals and mantras read in the same sequence).
+
+Samākhyā: Conventional name (e.g., relating certain mantras to the Adhvaryu priest).
+
+The Objective Nature of Brahman-Knowledge
+
+If you claim Brahman is like Dharma because both are Vedic subjects, then Brahman would be subject to human effort, injunctions, prohibitions, and options—just like Dharma. The author shows the flaw in this: Dharma depends on human action for its birth (origination). He clarifies this with the example of worldly actions: just as one can do, not do, or do an action differently (like performing a ritual at sunrise vs. not at sunrise), these options apply to Dharma because it is "to be accomplished."
+
+However, Brahman is an existing entity (Bhūta-vastu).
+
+In an existing object, there are no "options." You cannot say "This is a post, or it is not, or it is a man" as a matter of truth.
+
+Options/doubts regarding an object (like "Is that a post or a person?") are products of human intellect/imagination; they are not valid knowledge (Pramā).
+
+Valid knowledge depends on the object itself, not on the person. If a post is a post, the only valid knowledge is "This is a post."
+
+Why Brahman is not known by Perception
+
+The opponent asks: "Then Brahman must be accessible to Perception (Pratyaksha), as it is an existing entity like a pot." The reply: "No." Brahman is not grasped by the senses. The Scripture says: "The Self-Existent pierced the senses outward," and Brahman lacks color/form. Without a perceptible "concomitance" (Vyāpti), inference cannot function independently to prove Brahman.
+
+Conclusion
+
+Therefore, one cannot determine that the cause of the universe is "Brahman" without Scripture. Inference is treated as a subordinate tool to show the possibility of the Scriptural meaning (like the example of clay). The subject text for this investigation is from the Taittiriya Upanishad (The story of Bhrigu and Varuna): "Seek to know that from which these beings are born..." This points to the definition of Brahman as Truth, Knowledge, and Bliss. Thus, it is settled that the definitions found in all Vedic branches relate to the Brahman to be inquired into, and realization of that leads to liberation
+
+
+
+Pancha padika— Padmapada
+
+Sanskrit Commentary
+
+
+
+
+
+
+
+
+Part 1
+
+युक्तिरपि लक्षणनिर्णयेऽर्थात् सूत्रितैव ।
+
+जन्म उत्पत्तिः आदिरस्येति तद्गुणसंविज्ञानो बहुव्रीहिरिति
+
+पदच्छेदः पदार्थः पदविग्रह इत्येतत् त्रितयमपि व्याख्यानाङ्गं सम्पादयति । तद्गुणसंविज्ञाने प्रयोजनमाह —
+
+जन्मस्थितिभङ्गं समासार्थ इति ॥
+
+तृतीयलिङ्गनिर्देशात् संहतिप्रधानं समासार्थः ।
+
+ननु आदिः पूर्वकालकोटिमतो भवति, तदभावे प्रपञ्चस्य को नामाऽऽदिः ? इत्याशङ्क्याह —
+
+जन्मनश्चादित्वं श्रुतिनिर्देशापेक्षं वस्तुवृत्तापेक्षं चेति ॥
+
+यदनेन सूत्रेण लक्षितं ब्रह्म, तत्स्वरूपकथनपरं वाक्यम् । तत्रादौ जन्म निर्दिष्टमिति तस्यादित्वम् । वस्तुस्वभावापेक्षमपि । न हि वस्तु प्रलीय तिष्ठति । स्थित्वा वा जायते । नापि जनित्वैव प्रलीयते ; क्षणिकत्वनिराकरणात् । अतो जनित्वा स्थित्वा प्रलीयते । एवमनादिरयं प्रपञ्चः ।
+
+‘अस्य’ इति भाष्येण पदभागस्येदमः प्रकृतिमात्रस्यार्थनिर्देशः । तथाहि सर्वत्र सर्वनामप्रक्रमादिकारणान्तरबलेन कतिपयाभिधेयपरं, तदभावे स्वमहिम्ना प्रमाणविषयमात्राभिधायकं, तेनाह —
+
+प्रत्यक्षादिसन्निधापितस्य धर्मिण इदमा निर्देश इति ॥
+
+षष्ठी जन्मादिधर्मसम्बन्धार्थेति ।
+
+सर्व एवेह सम्बन्धः सम्भवति, न तद्विशेष आदरणीय इति कथयति । यत इति कारणनिर्देश इति प्रकृतित्वनिबन्धना हि पञ्चमी, नान्यनिबन्धनेति दर्शयति ॥
+
+अस्य जगतः
+
+इत्यादिना भाष्येण लक्ष्यस्य ब्रह्मणः स्वरूपलक्षणं कथयितुमुपक्रमते ।
+
+द्विविधं हि लक्षणम् उपलक्षणं विशेषलक्षणं च । तत्रेदं लक्षणं प्रपञ्चधर्मत्वात् पृथग्भूतमेव कारणमुपलक्षयति न विशेषणत्वेन । अतः पृथक् स्वलक्षणकथनम् ।
+
+नामरूपाभ्यां व्याकृतस्येति ॥
+
+कार्यप्रपञ्चं केचित् स्वप्रक्रियानुसारेण विभजन्ति, तद्व्युदासाय प्रसिद्धार्थानुवादश्रुतिबलेन द्वैराश्यं कृत्वाऽऽह —
+
+नामरूपाभ्यामिति ॥
+
+इत्थम्भावे तृतीया ॥
+
+व्याक्रियमाणं हि वस्त्वभिधेयरूपं स्वनामगर्भं विकल्पपूर्वमेव व्याक्रियत इति स्वसंवेद्यमेतत् ।
+
+अनेककर्तृभोक्तृसंयुक्तस्येति ॥
+
+कर्तृत्वभोक्तृत्वमपि नामरूपात्मकत्वात्प्रपञ्चानुयायीति दर्शयति —
+
+प्रतिनियतदेशकालनिमित्तक्रियाफलाश्रयस्येति ॥
+
+प्रतिकर्मफलोपभोगे नियतो देशः स्वर्गफलस्य मेरुपृष्ठं, ग्रामादिफलस्य भूमण्डलम् । कालोऽपि स्वर्गफलस्य देहपातादूर्ध्वं, पुत्रफलस्य बालभावात् । निमित्तमपि उत्तरायणादिमरणस्य ।
+
+मनसाऽप्यचिन्त्यरचनारूपस्येति ॥
+
+न ह्यर्वाग्दर्शी क्वचिद्बहिर्लोकसन्निवेशप्रकारमध्यात्मं च प्रतिनियतार्थक्रियासमर्थावयवशिराजालसन्निवेशं निरूपयितुमपि समर्थः, किं पुनर्विरचयितुम् ॥
+
+जन्मस्थितिभङ्गं यतः सर्वज्ञात् सर्वशक्तेः कारणाद् भवति, तद् ब्रह्मेति वाक्यशेष इति
+
+साकाङ्क्षस्य सूत्रवाक्यस्याकाङ्क्षितपदपूरणम् , उपलक्षितब्रह्मस्वरूपं लक्षणं च दर्शयति ॥
+
+ननु अन्येऽपि परिणामादयो भावविकाराः सन्ति, ते किमिति न सङ्गृह्यन्ते ? इत्याशङ्क्याह —
+
+अन्येषामपीति ॥
+
+न क्वचिद्वस्तुनो ह्यवस्थाविशेषो विनाशरहितः, नाप्यनिर्वृत्तजन्मनोऽस्थित स्वभावस्य विनाशः । अतस्त्रिष्वेवान्तर्भावान्न पृथगुपन्यासस्तेषाम् ।
+
+ननु षड् भावविकारा इति नैरुक्ताः । तेषां ग्रहणेऽन्तर्भावोक्तिप्रयासोऽपि परिहृतः स्यादित्याशङ्क्याह —
+
+यास्कपरिपठितानां तु जायतेऽस्तीत्यादीनामिति ॥
+
+पृथिव्यप्तेजःसु जगद्रचनारूपस्थितेषु तन्मयानामेव ते सम्भाव्यन्ते । ततस्तद्ग्रहणे तेषामेव ब्रह्मत्वेन लक्षितत्वाशङ्का स्यात् , न च तद्युक्तम् ; अतः सूत्रार्थवत्त्वाय श्रुतिनिर्दिष्टा एवोत्पत्त्यादयो गृह्यन्ते ; तदर्थनिर्णयार्थत्वात्सूत्राणाम् । अतो यदवष्टम्भो विश्वो विवर्तते प्रपञ्चः, तदेव मूलकारणं ब्रह्मेति सूत्रार्थः ॥
+
+ननु श्रुतिनिर्दिष्टग्रहणे सूत्रमर्थशून्यं स्यात् ; न हीमां पृथिवीं जायमानां पश्यामः, नापो न तेजः, कथं सिद्धवल्लक्षणत्वोनोपादीयेतेति ? उच्यते, तेजसस्तावदरणिनिर्मथनादिषु दृश्यते जन्म, इन्धनापाये विनाशः । अपामपि चन्द्रकान्तादिषु जन्म, क्रमेण च शोषः । पृथिव्या अप्यवयवसंयोगविभागदर्शनात् तन्निमित्तौ जन्मविनाशावनुमीयेते । दृश्येत चाद्याऽप्यवयवसंयोगविभागकृतौ पृथिव्येकदेशस्य जन्मविनाशौ । वाय्वाकाशकालदिशामपि ‘यावद्विकारं तु विभागो लोकवदि’ति वक्ष्यमाणेन न्यायेन स्त एव जन्मविनाशौ ।
+
+न यथोक्तविशेषणस्येत्यादिना
+
+भाष्येण युक्तिरपि ब्रह्मस्वरूपनिर्णयायानेनैव सूत्रेण तन्त्रेणावृत्त्या वा जन्माद्यस्य यतः सम्भवतीति सूत्रितेति दर्शयति ।
+
+अस्य जगतो नामरूपाभ्यां व्याकृतस्येत्याद्यभिहितविशेषणचतुष्टयस्य,
+
+यथोक्तविशेषणमीश्वरं मुक्त्वेति
+
+सर्वज्ञं सर्वशक्तिं विहाय
+
+नान्यतः
+
+परपरिकल्पितात्
+
+प्रधानादेरचेतनात् ,
+
+चेतनादपि परिच्छिन्नज्ञानक्रियाशक्तेः
+
+संसारिणो
+
+हिरण्यगर्भात्
+
+उत्पत्त्यादि सम्भावयितुमपि शक्यम् ॥
+
+अचेतनात्तावदचेतनत्वादेवानुपपन्नम् । चेतनादपि ; परिच्छिन्नज्ञानक्रियाशक्तित्वात् । अभावात् पुनर्नाचेतनत्वादेव केवलादनुपपत्तिः, अपि तु निरुपाख्यत्वादतीतकल्पसंस्काराभावात् , पूर्वकल्पैकरूपो वर्तमानोऽपि कल्प इति प्रमाणाभावात् , सर्व एव व्यवहारो यादृच्छिक इति न क्वचित् कश्चिन्नियमोऽभविष्यत् ।
+
+न च स्वभावतः विशिष्टदेशकालनिमित्तोपादानादिति ॥
+
+स्वभावो नामान्यानपेक्षः । तेनापेक्षैवानुपपन्ना, कुतो नियमसम्भवः ? अतो युक्त्याऽपि वस्त्वन्तरस्य कारणत्वसम्भावनानिराकरणेन पारिशेष्यात्पूर्वोक्तविशेषण ईश्वर एव कारणमिति सिद्धम् ॥
+
+एतदेवानुमानमिति ॥
+
+येयं युक्तिरभिहिता यथोक्तविशेषणमीश्वरं मुक्त्वा नान्यतो जगतो जन्मादि सम्भवतीति, एतदेव स्वतन्त्रमनुमानमीश्वरसिद्धौ सर्वज्ञत्वसर्वशक्तित्वसिद्धौ च तस्य प्रमाणम् , किं वेदवाक्यैः ? इतीश्वरकारणिनः कणादप्रभृतयो मन्यन्ते ।
+
+
+
+Part 2
+
+जन्मादिसूत्रलक्षितान्यपि वाक्यानि ‘यतो वा इमानि भूतानि जायन्ते’ (तै. उ. ३-१-१) इत्यादीनि परार्थानुमानवाक्यसमानि दृश्यन्त इति वदन्तः ।
+
+नन्विहापि तदेवोपन्यस्तमिति ॥
+
+यथा धूमविशेषस्यागरुसम्भवत्वं, तथा प्रपञ्चसन्निवेशविशेषस्य सर्वज्ञत्वादिगुणकारणकत्वमिति ।
+
+न वेदान्तवाक्यकुसुमग्रथनार्थत्वात् सूत्राणामिति ॥
+
+सत्यं तदेवोपन्यस्तमुपकरणत्वेन, न तत्र तात्पर्यं, तात्पर्यन्तु वेदवाक्यग्रथने ।
+
+तदेव प्रपञ्चयति —
+
+वेदान्तवाक्यानीति ॥
+
+समन्वयसूत्रप्रमुखोपात्तैः शब्दशक्त्यनुसारिभिर्न्यायैर्वाक्यानां ब्रह्मणि तात्पर्याध्यवसाननिर्वृत्ता ब्रह्मावगतिः ।
+
+नानुमानादिप्रमाणान्तरनिर्वृत्ता । सत्सु तु वेदान्तवाक्येषु तदविरोध्यनुमानमपि प्रमाणं भवन्न निवार्यते ; श्रुत्यैव सहायत्वेन तर्कस्याप्यभ्युपेतत्वात् ॥ तथा हि ‘श्रोतव्यो मन्तव्यः’ इति ।
+
+श्रुत्या यथा श्रवणं ब्रह्मावगतिहेतुरनूद्यते, तथा मननस्यापि सिद्धवदनूद्यमानत्वात् । तथाऽपरा श्रुतिः ‘पण्डितो मेधावी’त्यादिः ‘आचार्यवान् पुरुषो वेदे’ति पुरुषबुद्धिसाहाय्यमात्मनो दर्शयति । यदाचार्येण श्रुत्यनुसारिणा स्फटिकादिनिदर्शनेन शिष्येभ्यः प्रत्ययदार्ढ्यापादनं, तदाचार्यवान् पुरुषो वेदेत्यनूद्यते ।
+
+न धर्मजिज्ञासायामिवेत्यादिना
+
+युक्तिसाहाय्यापेक्षणे कारणमाह ।
+
+श्रुत्यादय इति ॥
+
+श्रुतिः पदान्तरनिरपेक्षः शब्दः । आदिशब्देन लिङ्गवाक्यादयः शब्दप्रकारा गृह्यन्ते ।
+
+न त एव ब्रह्मणि प्रमाणं, किन्त्वनुभवादयोऽपि । तत्र हेतुमाह —
+
+अनुभवावसानत्वाद् भूतवस्तुविषयत्वाच्च ब्रह्मज्ञानस्येति ॥
+
+सिद्धे वस्तुनि सम्भवत्यनुभवः, तदवसाना आकाङ्क्षा निवृत्तिर्यतः ।
+
+ननु धर्मजिज्ञासायां विनाऽप्यनुभवेन शब्दशक्त्यनुसरणमात्रेणैव निराकाङ्क्षं फलपर्यन्तं ज्ञानं भवति, न तर्कगन्धमप्यपेक्षते, तथेहापि स्यात् ; प्रमाणत्वाविशेषाद्वेदान्तवाक्यानाम् , इत्याशङ्क्य विशेषमाह —
+
+कर्तव्ये हि विषय इत्यादिना ब्रह्मज्ञानमपि वस्तुतन्त्रमेव भूतवस्तुविषयत्वादित्यन्तेन भाष्येण ॥
+
+कथम् ? कर्तव्यं हि कर्तव्यत्वादेवासिद्धस्वभावं नानुभवितुं शक्यमिति न तदाकाङ्क्षा, इह तु सिद्धस्य साक्षाद्रूपेण विपर्यासगृहीतस्य सम्यग्ज्ञानेन साक्षात्करणमन्तरेण न मिथ्याज्ञानोदयनिवृत्तिः ; द्विचन्द्रादिषु तथा दर्शनात् । न हि कर्तव्यसिद्धार्थनिष्ठयोः प्रमाणत्वसाम्यादवबोधनप्रकारेऽपि साम्यम् । यदि स्यात् , पुरुषेच्छावशनिष्पाद्यमपि स्यात् । ततो विधिप्रतिषेधविकल्पसमुच्चयोत्सर्गापवादबाधाभ्युच्चयव्यवस्थितविकल्पादयोऽपि प्रसज्येरन् । न वस्तुनि युक्तमेतत् ; निःस्वभावत्वप्रसङ्गात् । तथा चैकस्मिन् वस्तुनि स्थाणुः पुरुषो वेति विकल्पः, न वैकल्पिकद्रव्यत्यागवद् सम्यग्ज्ञानं भवति स्थाणुरेवेति निश्चितैकार्थता परमार्थे । यतो वस्तुस्वभावपरतन्त्रं सिद्धवस्तुज्ञानं, न ज्ञानपरतन्त्रं वस्तु । यदि स्यात् , शुक्तिरजतमपि तथा स्यात् । कर्तव्यज्ञानं पुनर्वैपरीत्येऽपि सम्यगेव ; ‘योषा वाव गौतम अग्निरि’त्यादिषु दर्शनात् ।
+
+तत्रेवं सति ब्रह्मज्ञानमपि वस्तुतन्त्रमेव भूतवस्तुविषयत्वात् ।
+
+अतो युक्तो युक्तेरनुप्रवेशः, अनुभवापेक्षा च नेतरत्र ॥
+
+अपरः परिचोदयति —
+
+ननु भूतवस्तुविषयत्व इत्यादिना ॥
+
+अयमभिप्रायः — भूतत्वात् युक्तेरपि चेदनुप्रवेशः, तथा सति किं वेदवाक्यैर्विचारितैः ? यथाहुरीश्वरकारणिनः, तथा भवतु पूर्वसूत्रेण प्रतिज्ञानिर्देशोऽनेन च हेत्वभिधानमिति ।
+
+उत्तरमाह —
+
+नेन्द्रियादिविषयत्वेन सम्बन्धग्रहणादित्यादिना ॥
+
+इन्द्रियाणि प्रपञ्चमात्रं गृह्णन्ति, न तत्कारणम् । यदि तद्ग्रहणमपि स्यात् , नानुमानोपन्यासेन कृत्यमस्ति । सामान्यतोदृष्टमपि न प्रमाणमतीन्द्रिये ब्रह्मणि,
+
+अत उपसंहरति —
+
+तस्माज्जन्मादिसूत्रं नानुमानोपन्यासार्थं, किं तर्हि ? वेदान्तवाक्यप्रदर्शनार्थमिति ॥
+
+युक्तिमपि तदुपकरणां तदर्थानुभवप्रयोजनां सूचयतीत्युक्तम् ॥
+
+नन्वेवं सति कथं युक्तिरब्रह्मविषया सती तद्विषयाणां वाक्यानामुपकरणं भवति ? उच्यते, ब्रह्मपरेषु मृदादिदृष्टान्तेर्युक्तस्य उपन्यस्यन्ते । ताश्च विधिप्रतिषेधवाक्ययोः प्रवर्तकत्वनिवर्तकत्वाकाङ्क्षितस्तुतिनिन्दार्थवादवत् स्वरूपवाक्यस्य फलपर्यन्तापेक्षितसम्भावनार्थवादतां प्रतिपद्यमानास्तत्र श्रुतिसाहाय्ये वर्तन्त इत्युच्यते ।
+
+किम्पुनस्तद् वेदवाक्यं यत् सूत्रेणेह लिलक्षयिषितमिति ॥
+
+सर्वत्र वेदान्तवाक्ये ब्रह्मपदस्याप्रसिद्धत्वान्न स्वार्थं विशेष्यत्वेन विशेषणत्वेन वा वाक्यार्थे समर्पयितुमलमित्याक्षिपति । येषां वेदान्तवाक्यानां येन सन्निवेशक्रमेण ब्रह्मप्रतिपादने समन्वयः स्वाध्यायपदे स्थितः, तल्लक्षणार्थं सूत्रद्वयमिति ।
+
+तथैवोदाहणमाह —
+
+भृगुर्वै वारुणिरिति ।
+
+अथशब्दोपात्तन्यायेन प्रथमसूत्रस्योदाहरणं — ‘यतो वा इमानि भूतानी’ति जन्मादिसूत्रस्य । कथम् ? पूर्वोक्तेन न्यायेन पृथिव्यादीनां जन्मादिदर्शनात् तत्कारण एकत्वनानात्वयोरन्यतरावगमे प्रमाणाभावाद् बुद्धिमत्कारणपूर्वतामात्रे प्रतिपन्ने ‘यतो वा इमानी’ति कारणस्यैकवचननिर्देशात्तदर्थमात्रस्यैव विधित्सितत्वादर्थात्सर्वज्ञं सर्वशक्तिजगत्कारणमिति कारणविशेषो वाक्यादवगम्यते । पुनस्तद्विजिज्ञासस्वेत्यनूद्य तद् ब्रह्मेति तत्र ब्रह्मशब्दप्रयोगाद् बृहत्यर्थान्वयेन सर्वतोऽनवच्छिन्नस्वभावं जगत्कारणं ब्रह्मपदार्थ इति गम्यते । तस्य च निर्णयवाक्यमानन्दाद्ध्येव खल्विति ॥
+
+प्रसिद्धावद्योतकेन हिशब्देन संयुक्तमानन्दावद्योतकमुपपद्यते । अनानन्दात्मके हि जगत्कारणे ब्रह्मशब्दप्रयोगो न युज्यते । न हि तस्योपेक्षणीये विषये स्वार्थप्रक्षेपेण वृत्तिः समञ्जसा । तस्माद् ब्रह्मपरे वाक्ये जन्मादिधर्मजातस्योपलक्षणत्वाद् ब्रह्मसंस्पर्शाभावात् सर्वज्ञं सर्वशक्तिसमन्वितं परमानन्दं ब्रह्मेति जन्मादिसूत्रेण ब्रह्मस्वरूपं लक्षितमिति सिद्धम् ॥
+
+इति परमहंसपरिव्राजकादि - श्रीशङ्करभगवत्पादान्तेवासिवर - श्रीपद्मपादाचार्यकृतौ पञ्चपादिकायां जन्माद्यधिकरणं नाम पञ्चमवर्णकं समाप्तम् ॥
+
+English Translation
+
+
+
+
+
+
+
+
+Part 1
+
+Reasoning is also implied within the definition. The definition is formulated through the analysis of the word Janmādi (birth, etc.). It is a Bahuvrīhi compound of the "associated-attribute" type (tadguṇa-saṃvijñāna), meaning "that of which birth is the beginning." This involves three aspects of commentary: word-splitting (padaccheda), word-meaning (padārtha), and grammatical analysis (vigraha).
+
+The purpose of using this specific compound is stated: the meaning of the compound is the collection of birth, sustenance, and dissolution. Because it is used in the neuter singular (as a collective), the emphasis is on the totality of these states.
+
+The Question of the "Beginning" One might ask: "A 'beginning' belongs to something that has a prior limit in time; since the universe is beginningless, what can truly be called its 'beginning'?" To this, it is said: The "beginningness" of birth is considered both in terms of Scriptural injunction and the nature of reality.
+
+Scripture: In the Vedic passages describing Brahman (the definition of which is the goal of this Sutra), birth is mentioned first; hence it is the "beginning."
+
+Nature of Reality: A thing does not exist after dissolving, nor is it born after it already exists. Furthermore, it does not dissolve immediately upon being born, as the theory of "momentariness" (kṣaṇikatva) is rejected. Therefore, the sequence is: it is born, it stays, and then it dissolves. Thus, this phenomenal world is beginningless in its cycle.
+
+Analysis of "Asya" (Of This) The word asya in the Bhashya points to the object of the pronoun idam (this). Generally, a pronoun refers to a specific context, but in the absence of a specific limit, it refers—by its own power—to the entire range of objects known through valid means of knowledge. Thus, it refers to the manifest universe brought to mind through perception and other means.
+
+The Relation and Cause The genitive case (ṣaṣṭhī) denotes the relationship between the universe and the attributes of birth, etc. Every possible relationship is included here; no specific sub-type needs to be distinguished. The word yataḥ (from which) indicates the cause. The ablative suffix (pañcamī) denotes the material/inherent cause (prakṛti), not any other kind of cause.
+
+The Nature of the Universe (The Defined) With the phrase "Of this world...", the Bhashya begins to describe the essential definition of Brahman. Definitions are of two types: accidental/indirect (upalakṣaṇa) and essential/inherent (viśeṣa-lakṣaṇa). This definition (being the cause) acts as an indirect mark because the cause is distinct from the attributes of the effect (the world).
+
+The world is described as "differentiated by name and form." To refute those who classify the world according to their own arbitrary systems, the Bhashya relies on the authority of the Vedas to categorize it into name and form. The third case (instrumental) denotes the manner of existence. It is self-evident that any object capable of being named is differentiated only after conceptual thought.
+
+The Complexity of the Universe The universe is:
+
+Associated with countless agents and enjoyers.
+
+The substratum of specific places, times, causes, actions, and fruits. (For example, Heaven is the place for the fruit of sacrifice; the surface of the earth is the place for the fruit of farming. Time for heaven is after death; time for a son is after childhood).
+
+Of a design that cannot even be conceived by the mind. (If a modern observer cannot even map the internal network of veins and organs capable of specific functions, how could they possibly create them?)
+
+Conclusion of the Sutra The sentence completes as: "That omniscient, omnipotent cause from which proceed birth, sustenance, and dissolution—That is Brahman."
+
+Why only three states? If asked why other modifications (like growth or decay) are not included, it is said: No state exists without birth or without eventual destruction. Since they are included within these three, they are not mentioned separately. Why not use the six modifications listed by Yāska (birth, existence, growth, etc.)? If those were used, one might mistake the physical elements (Earth, Water, Fire) for Brahman, as those modifications are seen in them. To ensure the Sutra serves its purpose, only the states mentioned in the Upanishads (birth, etc.) are taken. Thus, the meaning is: Brahman is the root cause upon which the entire universe pivots.
+
+Reasoning against other causes The Bhashya demonstrates through logic that this universe—with the four characteristics mentioned—could not possibly arise from anything other than the aforementioned Ishvara (God).
+
+It cannot come from Pradhāna (insentient matter) because it is unconscious.
+
+It cannot come from a Samsari (individual soul) like Hiranyagarbha, because their knowledge and power are limited.
+
+It cannot come from Non-existence (Sunya), because non-existence lacks capacity and has no "impressions" from previous cycles to maintain the consistency of the world.
+
+If the world were purely accidental (svabhāva), there would be no regularity of time, place, or cause. Therefore, by the process of elimination (pāriśeṣya), only Ishvara is the cause.
+
+The View of the Logicians Followers of Kaṇāda (the Vaiśeṣikas) and others believe that this reasoning—that the world must have a creator because of its complex design—is an independent inference (anumāna) sufficient to prove God's existence and omniscience, without needing the authority of the Vedas.
+
+
+
+Part 2
+
+The Role of Inference vs. Revelation
+
+Some argue that even the sentences indicated by the Janmādi-sūtra, such as "From whence these beings are born..." (Taittirīya Upaniṣad 3.1.1), appear similar to sentences used in syllogistic inference for others (parārthānumāna). They ask: "Is not the same thing presented here?" Just as a specific type of smoke indicates the presence of agarwood as its source, the specific arrangement of the universe indicates a cause possessing qualities like omniscience.
+
+The Answer: No, because the Sūtras are intended to string together the flowers of the Vedānta passages. It is true that [inference] is presented as a helpful tool (upakaraṇa), but the ultimate intent (tātparya) is not in inference; rather, the intent lies in stringing together the Vedic sentences.
+
+He (Śaṅkara) elaborates on this: Knowledge of Brahman is accomplished through the determination of the intent of the [Vedic] sentences, using logic that follows the power of the words (semantics) as set forth in the Samanvaya-sūtra (the first Sūtra) and others. It is not accomplished through other means of knowledge like inference alone. However, when Vedānta passages exist, even inference—provided it does not contradict them—is not barred from being a valid means of knowledge; for even Scripture accepts logic as an aid.
+
+The Necessity of Inquiry and Reasoning
+
+As it is said: "He is to be heard, he is to be reflected upon" (Bṛhadāraṇyaka Upaniṣad). Just as Scripture enjoins "hearing" (śravaṇa) as a cause for knowing Brahman, "reflection" (manana) is likewise mentioned as an established fact. Similarly, other scriptures like "The man who is learned and wise..." and "The man who has a teacher knows," show the assistance rendered by human intellect. When a teacher, following the Scripture, uses examples like crystal to bring firm conviction to the disciples, the statement "The man who has a teacher knows" is reiterated.
+
+By stating "Unlike the inquiry into Dharma," the author gives the reason for requiring the aid of logic. Regarding the phrase "Scripture, etc.": Śruti (Scripture) refers to words independent of other words. The word "etc." includes other linguistic modes like Liṅga (indicative mark) and Vākya (sentence context). These alone are not the only proofs for Brahman, but direct experience (anubhava) and others are as well.
+
+He gives the reason for this: "Because the knowledge of Brahman culminates in direct experience and concerns an existing entity." ### Reality-Dependent Knowledge vs. Action-Dependent Knowledge Direct experience is possible regarding an established entity (siddha-vastu); from this, the cessation of desire/inquiry occurs. One might object: "In the inquiry into Dharma (duty/ritual), knowledge that is free from further desire and leads to a result is gained merely by following the power of words without direct experience or a scent of logic. Why should it not be the same here, since Vedānta passages are equally valid means of knowledge?"
+
+To address this distinction, the Bhāṣya (commentary) says: "In the case of a thing to be done (duty)..." up to "Knowledge of Brahman is dependent on the reality itself because it concerns an existing entity."
+
+How so? An action to be performed (kartavya), by its very nature of being "to be done," is not yet established; thus it cannot be "experienced" [before it is done], and there is no expectation for such. But here (in Brahman), regarding an established reality that is perceived wrongly (due to ignorance), the cessation of the rise of false knowledge is impossible without a direct realization (sākṣātkāra) through right knowledge. We see this in the case of seeing "two moons" (an optical illusion).
+
+Even if both (Action and Brahman) are equal in being valid means of knowledge, they are not equal in the manner of their comprehension. If they were the same, knowledge of Brahman would be subject to human will. Consequently, there would be room for injunctions, prohibitions, options (vikalpa), combinations, general rules, exceptions, sublation, and so on. But this is not possible regarding a [fixed] reality, for that would lead to the reality having no inherent nature at all.
+
+For example, in a single object, the doubt "is it a post or a man?" is not right knowledge. Right knowledge of the truth is the certain, singular determination that "it is a post," unlike the optional choice of using different materials in a ritual. Therefore, knowledge of an established entity is dependent on the nature of the object; the object is not dependent on the knowledge. If it were, then the "silver" seen in a conch-shell would be real. On the other hand, knowledge of "what is to be done" is valid even if it contradicts physical reality, as seen in the "Meditation on Woman as Fire" (Chāndogya Upaniṣad).
+
+Thus, knowledge of Brahman is reality-dependent (vastu-tantra) because it concerns an existing entity. Therefore, the inclusion of logic and the requirement for direct experience are justified here, whereas they are not in the other (Dharma).
+
+The Inadequacy of Pure Inference
+
+Another raises an objection: "If it concerns an existing entity and thus allows for logic, then what is the use of inquiring into Vedic sentences? Let it be as the Theists (Īśvara-kāraṇins) say: the previous Sūtra is the proposition, and this Sūtra is the statement of the logical reason."
+
+The answer is: "Because Brahman is not an object of the senses..." The senses perceive only the world (the effect), not its cause. If the cause were also perceivable, there would be no need for presenting an inference. Even "inference from general observation" (sāmānyato-dṛṣṭa) is not a proof for the supersensuous Brahman.
+
+Therefore, he concludes: The Janmādi-sūtra is not for the purpose of presenting an inference. What then? It is for the purpose of exhibiting the Vedānta passages. It was already stated that it also indicates logic as a helpful tool for the purpose of experiencing the meaning of those passages.
+
+The Determining Scripture
+
+One may ask: "How can logic, which does not have Brahman as its primary object, be a tool for sentences that do?" It is said: In passages devoted to Brahman, logic is presented through examples like "clay," etc. Just as in sentences of injunction/prohibition, "Arthavāda" (explanatory/praising passages) fulfill the need for praise or blame, here, logic serves as the "Arthavāda of possibility," providing the necessary plausibility for the sentences describing the nature of Brahman to reach their fruition (realization). Thus, it is said that logic acts as an aid to Scripture.
+
+Which Vedic passage is intended to be defined by this Sūtra? The objection is raised that the word "Brahman" is not well-known in all Vedānta passages and cannot easily convey its meaning as a subject or predicate. These two Sūtras (1 & 2) are for defining those Vedānta passages that are consistent in teaching Brahman.
+
+He gives the example: "Bhrigu, the son of Varuṇa..." and the example for the Janmādi-sūtra via the logic of the word Atha: "From whence these beings..." How? By the aforementioned logic, seeing the birth etc. of the earth and other elements, and having no other proof to determine whether the cause is one or many, one arrives merely at the idea of an "intelligent cause." Then, because the passage "From whence these..." uses the singular for "Cause," and that is what is intended to be taught, it follows that the specific cause is an Omniscient, Omnipotent cause of the world. Furthermore, having reiterated "Desire to know that," the use of the word Brahman in "That is Brahman" connects it with the root meaning of Bṛhat (vastness/greatness). Thus, it is understood that the cause of the world—unconditioned in every way—is the meaning of the word Brahman. The final deciding sentence is: "From Bliss (Ānanda) indeed, these beings are born." The word "indeed" (hi) highlights a well-known fact: the word Brahman is appropriate when connected to Bliss. The word Brahman cannot be properly applied to a cause of the world that is not of the nature of Bliss. Therefore, in the sentence devoted to Brahman, since the attributes of "birth, etc." are merely indicative marks (upalakṣaṇa) and do not [limit/touch] the essential nature of Brahman, it is established that the Janmādi-sūtra defines the nature of Brahman as Omniscient, Omnipotent, and Supreme Bliss.
+
+Thus ends the Fifth Vernacular (Varṇaka) called Janmādyadhikaraṇam in the Pañcapādikā, composed by Śrī Padmapādācārya, the foremost disciple of Śrī Śaṅkara Bhagavatpāda.
+
+Bhamati— Vachaspati Mishra
+
+Sanskrit Commentary
+
+
+
+
+
+
+
+
+Vyakhya to the introductory of the suthra
+
+एतस्य सूत्रस्य पातनिकामाह भाष्यकारः -
+
+ब्रह्म जिज्ञासितव्यमित्युक्तम् ।
+
+किंलक्षणं पुनस्तद्ब्रह्म ।
+
+यत्र यद्यपि ब्रह्मस्वरूपज्ञानस्य प्रधानस्य प्रतिज्ञया तदङ्गान्यपि प्रमाणादीनि प्रतिज्ञातानि, तथापि स्वरूपस्य प्राधान्यात्तदेवाक्षिप्य प्रथमं समर्थ्यते । तत्र यद्यावदनुभूयते तत्सर्वं परिमितमविशुद्धमबुद्धं विध्वंसि, न तेनोपलब्धेन तद्विरुद्धस्य नित्यशुद्धबुद्धमुक्तस्वभावस्य ब्रह्मणः स्वरूपं शक्यं लक्षयितुम् , न हि जातु कश्चित्कृतकत्वेन नित्यं लक्षयति । न च तद्धर्मेण नित्यत्वादिना तल्लक्ष्यते, तस्यानुपलब्धचरत्वात् । प्रसिद्धं हि लक्षणं भवति, नात्यन्ताप्रसिद्धम् । एवं च न शब्दोऽप्यत्र प्रक्रमते, अत्यन्ताप्रसिद्धतया ब्रह्मणोऽपदार्थस्यावाक्यार्थत्वात् । तस्माल्लक्षणाभावात् , न ब्रह्म जिज्ञासितव्यमित्यात्याक्षेपाभिप्रायः । तमिममाक्षेपं भगवान् सूत्रकारः परिहरति - “जन्माद्यस्य यतः” (ब्र. सू. १ । १ । २) इति । मा भूदनुभूयमानं जगत्तद्धर्मतया तादात्म्येन वा ब्रह्मणो लक्षणम् , तदुत्पत्त्या तु भविष्यति । देशान्तरप्राप्तिरिव सवितुर्व्रज्याया इति तात्पर्यार्थः ।
+
+
+
+Part 1
+
+तदेवं प्रथमसूत्रेण मीमांसारम्भमुपपाद्य ब्रह्ममीमांसामारभते -
+
+जन्माद्यस्य यतः ।
+
+सूत्रावयवान् विभजते -
+
+जन्मोत्पत्तिरादिरस्येति ।
+
+लाघवाय सूत्रकृता जन्मादीति नपुंसकप्रयोगः कृतस्तदुपपादनाय समाहारमाह -
+
+जन्मस्थितिभङ्गमिति ।
+
+जन्मनश्च इत्यादिः
+
+कारणनिर्देशः
+
+इत्यन्तः सन्दर्भो निगदव्याख्यातः ।
+
+स्यादेतत् । प्रधानकालग्रहलोकपालक्रियायदृच्छास्वभावाभावेषूपप्लवमानेषु सत्सु सर्वज्ञं सर्वशक्तिस्वभावं ब्रह्म जगज्जन्मादिकारणमिति कुतः सम्भावनेत्यत आह -
+
+अस्य जगत इति ।
+
+अत्र
+
+नामरूपाभ्यां व्याकृतस्य इति
+
+चेतनभावकर्तृकत्वसम्भावनया प्रधानाद्यचेतनकर्तृकत्वं निरुपाख्यकर्तृकत्वं च व्यासेधति । यत्खलु नाम्ना रूपेण च व्याक्रियते तच्चेतनकर्तृकं दृष्टम् , यथा घटादि । विवादाध्यासितं च जगन्नामरूपाभ्यां व्याकृतं तस्माच्चेतनकर्तृकं सम्भाव्यते । चेतनो हि बुद्धावालिख्य नामरूपे घट इति नाम्ना, रूपेण च कम्बुग्रीवादिना बाह्यं घटं निष्पादयति । अत एव घटस्य निर्वर्त्यस्याप्यन्तः सङ्कल्पात्मना सिद्धस्य कर्मकारकभावो घटं करोतीति । यथाहुः - “बुद्धिसिद्धं तु न तदसत्”(न्या.सू. ४ । १ । ५०) इति । तथा चाचेतनो बुद्धावनालिखितं करोतीति न शक्यं सम्भावयितुमिति भावः ।
+
+स्यादेतत् । चेतना ग्रहा लोकपाला वा नामरूपे बुद्धावालिख्य जगज्जनयिष्यन्ति, कृतमुक्तस्वभावेन ब्रह्मणेत्यत आह -
+
+अनेककर्तृभोक्तृसंयुक्तस्येति ।
+
+केचित्कर्तारो भवन्ति, यथा सूदर्त्विगादयः, न भोक्तारः । केचित्तु भोक्तारः, यथा श्राद्धवैश्वानरीयेष्ट्यादिषु पितापुत्रादयः, न कर्तारः । तस्मादुभयग्रहणम् । देशकालनिमित्तक्रियाफलानि इतीतरेतरद्वन्द्वः । देशादीनि च तानि प्रतिनियतानि चेति विग्रहः । तदाश्रयो जगत्तस्य । केचित्खलु प्रतिनियतदेशोत्पादाः, यथा कृष्णमृगादयः । केचित्प्रतिनियतकालोत्पादाः, यथा कोकिलालापादयो वसन्ते । केचित्प्रतिनियतनिमित्ताः, यथा नवाम्बुदध्वानादिनिमित्ता बलाकागर्भादयः । केचित्प्रतिनियतक्रियाः, यथा ब्राह्मणानां याजनादयो नेतरेषाम् । एवं प्रतिनियतफलाः, यथा केचित्सुखिनः, केचिद्दुःखिनः, एवं य एव सुखिनस्त एव कदाचिद्दुःखिनः । सर्वमेतदाकस्मिकापरनाम्नि यादृच्छिकत्वे वा स्वाभाविकत्वे वा सर्वज्ञासर्वशक्तिकर्तृकत्वे च न घटते, परिमितज्ञानशक्तिभिर्ग्रहलोकपालादिभिर्ज्ञातुं कर्तुं चाशक्यत्वात् ।
+
+तदिदमुक्तम् -
+
+मनसाप्यचिन्त्यरचनारूपस्येति ।
+
+एकस्या अपि हि शरीररचनाया रूपं मनसा न शक्यं चिन्तयितुं कदाचित् , प्रागेव जगद्रचनायाः, किमङ्ग पुनः कर्तुमित्यर्थः ।
+
+सूत्रवाक्यं पूरयति -
+
+तद्ब्रह्मेति वाक्यशेषः ।
+
+स्यादेतत् । कस्मात्पुनर्जन्मस्थितिभङ्गमात्रमिहादिग्रहणेन गृह्यते, न तु वृद्धिपरिणामापक्षया अपीत्यत आह -
+
+अन्येषामपि भावविकाराणां -
+
+वृद्ध्यादीनां
+
+त्रिष्वेवान्तर्भाव इति ।
+
+वृद्धिस्तावदवयवोपचयः । तेनाल्पावयवादवयविनो द्वितन्तुकादेरन्य एव महान्पटो जायत इति जन्मैव वृद्धिः । परिणामोऽपि त्रिविधो धर्मलक्षणावस्थालक्षणः उत्पत्तिरेव । धर्मिणो हि हाटकादेर्धर्मलक्षणः परिणामः कटकमुकुटादिस्तस्योत्पत्तिः, एवं कटकादेरपि प्रत्युत्पन्नत्वादिलक्षणः परिणाम उत्पत्तिः । एवमवस्थापरिणामो नवपुराणत्वादिरुत्पत्तिः । अपक्षयस्त्ववयवह्रासो नाश एव । तस्माज्जन्मादिषु यथास्वमन्तर्भावाद्वृद्ध्यादयः पृथङ्नोक्ता इत्यर्थः ।
+
+अथैते वृद्ध्यादयो न जन्मादिष्वन्तर्भवन्ति, तथाप्युत्पत्तिस्थितिभङ्गमेवोपादातव्यम् । तथा सति हि तत्प्रतिपादके “यतो वा इमानि भूतानि” (तै.उ. ३-१-१) इति वेदवाक्ये बुद्धिस्थीकृते जगन्मूलकारणं ब्रह्म लक्षितं भवति । अन्यथा तु जायतेऽस्ति वर्धते इत्यादीनां ग्रहणे तत्प्रतिपादकं नैरुक्तवाक्यं बुद्धौ भवेत् , तच्च न मूलकारणप्रतिपादनपरम् , महासर्गादूर्ध्वं स्थितिकालेऽपि तद्वाक्योदितानां जन्मादीनां भावविकाराणामुपपत्तेः, इति शङ्कानिराकरणार्थं वेदोक्तोत्पत्तिस्थितिभङ्गग्रहणमित्याह -
+
+यास्कपरिपठितानां त्विति ।
+
+नन्वेवमप्युत्पत्तिमात्रं सूच्यताम् , तन्नान्तरीयकतया तु स्थितिभङ्गं गम्यत इत्यत आह -
+
+योत्पत्तिर्ब्रह्मणः
+
+कारणादिति । त्रिभिरस्योपादानत्वं सूच्यते । उत्पत्तिमात्रं तु निमित्तकारणसाधारणमिति नोपादानं सूचयेत् ।
+
+तदिदमुक्तम् -
+
+तत्रैवेति ।
+
+पूर्वोक्तानां कार्यकारणविशेषणानां प्रयोजनमाह -
+
+न यथोक्तेति ।
+
+तदनेन प्रबन्धेन प्रतिज्ञाविषयस्य ब्रह्मस्वरूपस्य लक्षणद्वारेण सम्भावनोक्ता । तत्र प्रमाणं वक्तव्यम् । यथाहुर्नैयायिकाः - “सम्भावितः प्रतिज्ञायां पक्षः साध्येत हेतुना । न तस्य हेतुभिस्त्राणमुत्पतन्नेव यो हतः” ॥
+
+यथा च वन्ध्या जननी” इत्यादिरिति । इत्थं नाम जन्मादि सम्भावनाहेतुः, यदन्ये वैशेषिककादय इत एवानुमानादीश्वरविनिश्चयमिच्छन्तीति सम्भावनाहेतुतां द्रढयितुमाह -
+
+एतदेवेति ।
+
+
+
+Part 2
+
+चोदयति -
+
+नन्विहापीति ।
+
+एतावतैवाधिकरणार्थे समाप्ते वक्ष्यमाणाधिकरणार्थमनुवदन् सुहृद्भावेन परिहरति -
+
+न वेदान्तेति ।
+
+वेदान्तवाक्यकुसुमग्रथनार्थतामेव दर्शयति -
+
+वेदान्तेति ।
+
+विचारस्याध्यवसानं सवासनाविद्याद्वयोच्छेदः । ततो हि ब्रह्मावगतेर्निवृत्तिराविर्भावः । तत्किं ब्रह्मणि शब्दादृते न मानान्तरमनुसरणीयम् ।
+
+तथा च कुतो मननम् , कुतश्च तदनुभवः साक्षात्कार इत्यत आह -
+
+सत्सु तु वेदान्तवाक्येष्विति ।
+
+अनुमानं वेदान्ताविरोधि तदुपजीवि चेत्यपि द्रष्टव्यम् । शब्दाविरोधिन्या तदुपजीविन्या च युक्त्या विवेचनं मननम् । युक्तिश्च अर्थापत्तिरनुमानं वा ।
+
+स्यादेतत् । यथा धर्मे न पुरुषबुद्धिसाहाय्यम् , एवं ब्रह्मण्यपि कस्मान्न भवतीत्यत आह -
+
+न धर्मजिज्ञासायामिवेति ।
+
+श्रुत्यादय इति ।
+
+श्रुतीतिहासपुराणस्मृतयः प्रमाणम् । अनुभवोऽन्तःकरणवृत्तिभेदो ब्रह्मसाक्षात्कारस्तस्याविद्यानिवृत्तिद्वारेण ब्रह्मस्वरूपाविर्भावः प्रमाणफलम् । तच्च फलमिव फलमिति गमयितव्यम् ।
+
+यद्यपि धर्मजिज्ञासायामपि सामग्र्यां प्रत्यक्षादीनां व्यापारस्तथापि साक्षान्नास्ति । ब्रह्मजिज्ञासायां तु साक्षादनुभवादीनां सम्भवोऽनुभवार्था च ब्रह्मजिज्ञासेत्याह -
+
+अनुभवावसानत्वात् ।
+
+ब्रह्मानुभवो ब्रह्मसाक्षात्कारः परः पुरुषार्थः, निर्मृष्टनिखिलदुःखपरमानन्दरूपत्वादिति ।
+
+ननु भवतु ब्रह्मानुभवार्था जिज्ञासा, तदनुभव एव त्वशक्यः, ब्रह्मणस्तद्विषयत्वायोग्यत्वादित्यत आह -
+
+भूतवस्तुविषयत्वाच्च ब्रह्मविज्ञानस्य ।
+
+व्यतिरेकसाक्षात्कारस्य विकल्परूपो विषयविषयिभावः ।
+
+नत्वेवं धर्मज्ञानमनुभवावसानम् , तदनुभवस्य स्वयमपुरुषार्थत्वात् , तदनुष्ठानसाध्यत्वात्पुरुषार्थस्य, अनुष्ठानस्य च विनाप्यनुभवं शाब्दज्ञानमात्रादेव सिद्धेरित्याह -
+
+कर्तव्ये हीत्यादिना ।
+
+न चायं साक्षात्कारविषयतायोग्योऽप्यवर्तमानत्वात् , अवर्तमानश्चानवस्थितत्वादित्याह -
+
+पुरुषाधीनेति ।
+
+पुरुषाधीनत्वमेव लौकिकवैदिककार्याणामाह -
+
+कर्तुमकर्तुमिति ।
+
+लौकिकं कार्यमनवस्थितमुदाहरति -
+
+यथाश्वेनेति ।
+
+लौकिकेनोदाहरणेन सह वैदिकमुदाहरणं समुच्चिनोति -
+
+तथातिरात्र इति ।
+
+कर्तुमकर्तुमित्यस्येदमुदाहरणमुक्तम् । कर्तुमन्यथा वा कर्तुमित्यस्योदाहरणमाह -
+
+उदित इति ।
+
+स्यादेतत् । पुरुषस्वातन्त्र्यात्कर्तव्ये विधिप्रतिषेधानामानर्थक्यम् , अतदधीनत्वात्पुरुषप्रवृत्तिनिवृत्त्योरित्यत आह -
+
+विधिप्रतिषेधाश्चात्रार्थवन्तः स्युः ।
+
+गृह्णातीति विधिः । न गृह्णातीति प्रतिषेधः । उदितानुदितहोमयोर्विधी । एवं नारास्थिस्पर्शननिषेधो ब्रह्मघ्नश्च तद्वारणविधिरित्येवंजातीयका विधिप्रतिषेधा अर्थवन्तः ।
+
+कुत इत्यत आह -
+
+विकल्पोत्सर्गापवादाश्च ।
+
+चो हेतौ । यस्माद्ग्रहणाग्रहणयोरुदितानुदितहोमयोश्च विरोधात्समुच्चयासम्भवे तुल्यबलतया च बाध्यबाधकभावाभावे सत्यगत्या विकल्पः । नारास्थिस्पर्शननिषेधतद्वारणायोश्च विरुद्धयोरतुल्यबलतया न विकल्पः । किन्तु सामान्यशास्त्रस्य स्पर्शननिषेधस्य धारणविधिविषयेण विशेषशास्त्रेण बाधः । एतदुक्तं भवति - विधिप्रतिषेधैरेव स तादृशो विषयोऽनागतोत्पाद्यरूप उपनीतः, येन पुरुषस्य विधिनिषेधाधीनप्रवृत्तिनिवृत्त्योरपि स्वातन्त्र्यं भवतीति ।
+
+भूते वस्तुनि तु नेयमस्ति विधेत्याह -
+
+न तु वस्त्वेवं नैवमिति ।
+
+तदनेन प्रकारविकल्पो निरस्तः ।
+
+प्रकारिविकल्पं निषेधति -
+
+अस्ति नास्तीति ।
+
+स्यादेतत् । भूतेऽपि वस्तुनि विकल्पो दृष्टः, यथा स्थाणुर्वा पुरुषो वेति, तत्कथं न वस्तु विकल्प्यत इत्यत आह -
+
+विकल्पनास्त्विति ।
+
+पुरुषबुद्धिः = अन्तःकरणं, तदपेक्षा विकल्पनाः = संशयविपर्यासाः । सवासनमनोमात्रयोनयो वा, यथा स्वप्ने । सवासनेन्द्रियमनोयोनयो वा, यथास्थाणुर्वा पुरुषो वेतिस्थाणौ संशयः, पुरुष एवेति वा विपर्यासः । अन्यशब्देन वस्तुतः स्थाणोरन्यस्य पुरुषस्याभिधानात् । न तु पुरुषतत्त्वं वा स्थाणुतत्त्वं वापेक्षन्ते । समानधर्मधर्मिदर्शनमात्राधीनजन्मत्वात् । तस्मादयथावस्तवो विकल्पना न वस्तु विकल्पयन्ति वान्यथयन्ति वेत्यर्थः ।
+
+तत्त्वज्ञानं तु न बुद्धितन्त्रम् , किं तु वस्तुतन्त्रम् , अतस्ततो वस्तुविनिश्चयो युक्तः, न तु विकल्पनाभ्य इत्याह -
+
+न वस्तुयाथात्म्येति ।
+
+एवमुक्तेन प्रकारेण भूतवस्तुविषयाणां ज्ञानानां प्रामाण्यस्य वस्तुतन्त्रतां प्रसाध्य ब्रह्मज्ञानस्य वस्तुतन्त्रतामाह -
+
+तत्रैवं सतीति ।
+
+अत्र चोदयति -
+
+ननु भूतेति ।
+
+यत्किल भूतार्थं वाक्यं तत्प्रमाणान्तरगोचरार्थतयानुवादकं दृष्टम् । यथा नद्यास्तीरे फलानि सन्तीति । तथा च वेदान्ताः । तस्मात् भूतार्थतया प्रमाणान्तरदृष्टमेवार्थमनुवदेयुः । उक्तं च ब्रह्मणि जगज्जन्मादिहेतुकमनुमानं प्रमाणान्तरम् । एवं च मौलिकं तदेव परीक्षणीयम् , न तु वेदान्तवाक्यानि तदधीनसत्यत्वानीति कथं वेदान्तवाक्यग्रथनार्थता सूत्राणामित्यर्थः ।
+
+परिहरति -
+
+न । इन्द्रियाविषयत्वेति ।
+
+कस्मात्पुनर्नेन्द्रियविषयत्वं प्रतीच इत्यत आह -
+
+स्वभावत इति ।
+
+अत एव श्रुतिः - “पराञ्चि खानि व्यतृणत् स्वयम्भूस्तस्मात्पराङ्पश्यति नान्तरात्मन्” (क. उ. २ । १ । १) इति ।
+
+सति हीन्द्रियेति ।
+
+प्रत्यगात्मनस्त्वविषयत्वमुपपादितम् । यथा च सामान्यतो दृष्टमप्यनुमानं ब्रह्मणि न प्रवर्तते तथोपरिष्टान्निपुणतरमुपपादयिष्यामः । उपपादितं चैतदस्माभिर्विस्तरेण न्यायकणिकायाम् । न च भूतार्थतामात्रेणानुवादतेत्युपरिष्टादुपपादयिष्यामः । तस्मात्सर्वमवदातम् । श्रुतिश्च - “यतो वा”(तै. उ. ३ । १ । १) इति जन्म दर्शयति, “येन जातानि जीवन्ति” इति जीवनं स्थितिम् , “यत्प्रयन्ति” इति तत्रैव लयम् ।
+
+तस्य च निर्णयवाक्यम् ।
+
+अत्र च प्रधानादिसंशये निर्णयवाक्यम् -
+
+आनन्दाद्ध्येवेति ।
+
+एतदुक्तं भवति - यथा रज्ज्वज्ञानसहितरज्जूपादाना हि धारा रज्ज्वां सत्यामस्ति, रज्ज्वामेव च लीयते, एवमविद्यासहितब्रह्मोपादानं जगज्जायते, ब्रह्मण्येवास्ति, तत्रैव च लीयत इति सिद्धम् ॥ २ ॥
+
+
+
+English Translation
+
+
+
+
+
+
+
+
+Vyakhya to the introductory of the suthra
+
+The Commentator (Bhashyakara) provides the introductory context (patanika) for this sutra:
+
+It has been stated that "Brahman is to be enquired into." But what, then, is the definition (lakshana) of that Brahman?
+
+Even though the declaration to seek the primary knowledge of the nature of Brahman implies a declaration to also examine its auxiliary factors (such as means of knowledge, etc.), the nature (svarupa) itself is first addressed and established through an objection (akshepa), because it is the most important element.
+
+The Objection: Whatever is experienced in this world is limited, impure, inert, and perishable. Therefore, through the experience of such things, it is impossible to define the nature of Brahman, which is of a contrary nature—eternal, pure, enlightened, and free. Indeed, no one ever defines the "eternal" by the quality of "being produced."
+
+Furthermore, Brahman cannot be defined by its own attributes like "eternality," because those attributes have never been previously perceived [in our common experience]. A definition must be something well-known; it cannot be something entirely unknown. In this way, even Vedic words cannot function here, because Brahman is absolutely unestablished/unknown; and since it is not a "thing" (padartha) expressed by words, it cannot be the meaning of a sentence (vakyartha).
+
+Therefore, due to the absence of a valid definition, the intent of the objection is that Brahman is not a fit subject for enquiry.
+
+The Resolution: The venerable author of the Sutras (Sutrakara) refutes this objection with the formula: "That [is Brahman] from which the origin, etc., of this [universe proceed]" (Brahma Sutra 1.1.2).
+
+The underlying meaning is this: Let it be that the experienced world is not a definition of Brahman by way of its inherent nature or identity. Nevertheless, it will serve as a definition by way of its origination—just as the act of "reaching another place" serves as the indicator (definition) of the sun’s movement.
+
+
+
+Part 1
+
+Having established the commencement of the inquiry into Mimamsa (the study of Vedic interpretation) with the first aphorism, he now begins the inquiry into Brahman: "From which the birth, etc., of this [universe proceed]."
+
+He breaks down the components of the sutra: "Birth (origination) is the beginning (ādi) of this." For the sake of brevity, the author of the Sutras (Vyasa) used the neuter form janmādi. To justify this, [the commentator] explains it as a compound (samāhāra-dvandva): "Birth, sustenance, and dissolution." The passage starting from "of birth" up to the "indication of the cause" is self-explanatory (nigada-vyākhyāta).
+
+An objection arises: While various theories like Primordial Matter (Pradhāna), Time, Fate, World-protectors, Action, Chance, Nature, or Void are being proposed, how is it possible to imagine that Brahman—whose nature is omniscience and omnipotence—is the cause of the birth, etc., of the universe?
+
+To this, he says: "Of this world..." Here, the phrase "manifested by name and form" excludes the possibility of an insentient cause (like Pradhāna) or a non-existent cause (Nirupākhya), by suggesting a conscious agent as the author. Indeed, whatever is manifested by name and form is seen to have a conscious author, such as a pot. This universe, which is the subject of dispute, is manifested by name and form; therefore, it is likely to have a conscious author.
+
+A conscious being first conceives in the mind the "name and form"—the name "pot" and the form of a neck, etc.—and then produces the external pot. This is why even a pot that is yet to be produced is treated as an object of action ("he makes a pot") because it exists as a mental resolve. As the Nyaya Sutra (4.1.50) says: "That which is established in the intellect is not non-existent." Thus, the idea is that an insentient entity cannot be imagined to create something not already conceived in a mind.
+
+Another objection: Perhaps conscious beings like the Planets or World-protectors (Lokapālas) conceive the names and forms in their minds and create the world. What is the need for a Brahman of the described nature?
+
+To this, he says: "Connected with many agents and enjoyers..." Some are agents but not enjoyers (like cooks or priests); some are enjoyers but not agents (like a father or son in ancestral rites). Therefore, both terms are used.
+
+"Place, time, cause, action, and fruit" is a compound of mutual association (itaretara-dvandva). The analysis is: "Those things (place, etc.) which are specifically regulated." The world is that which rests upon them. For instance, some things are produced in specific places (like black deer), some at specific times (like the song of the cuckoo in spring), some by specific causes (like crane embryos from the sound of thunder clouds), and some through specific actions (like the priestly duties of Brahmins and not others). Similarly, fruits are regulated: some are happy, some are miserable, or the same happy person becomes miserable later.
+
+None of this is possible if the world were accidental (yādṛcchika), natural (svābhāvika), or created by an agent who is not omniscient and omnipotent. It is impossible for beings with limited knowledge and power, like Planets or World-protectors, to know or create such a system.
+
+This is what is meant by: "The nature of whose design cannot even be conceived by the mind." If the design of even a single body cannot be fully grasped by the mind, how much less could it be created? This refers to the creation of the entire universe.
+
+He completes the sentence of the Sutra: "That is Brahman" is the remainder of the sentence.
+
+A further question: Why are only birth, sustenance, and dissolution included here by the word ādi (etc.), and not the other changes like growth, transformation, and decay?
+
+He responds: "Because the other modifications of being—growth, etc.—are included within these three." Growth is the accumulation of parts; since a large cloth is essentially a new entity born from a smaller one, growth is included in "birth." Transformation (pariṇāma) is also of three types (of quality, character, and condition) and is essentially "origination." For a substance like gold, a transformation into a bracelet or crown is the "birth" of that form. Similarly, the transformation of a condition (newness or oldness) is a birth of that state. Decay is the reduction of parts, which is essentially "destruction" (nāśa). Thus, being included in their respective categories, growth, etc., are not mentioned separately.
+
+Even if one argues that growth, etc., are not included in the three, one must still only use "birth, sustenance, and dissolution." Doing so brings to mind the Vedic passage: "That from which these beings are born..." (Taittiriya Upanishad 3.1.1), which defines Brahman as the root cause. If one included "exists, grows, etc.," one would be reminded of the Nirukta (etymological) text, which is not intended to describe the root cause, as those six modifications occur even during the period of maintenance after the great creation. To exclude this doubt, he says that the Vedic triad (birth, sustenance, dissolution) is used rather than "the ones enumerated by Yāska."
+
+Objection: Even so, let only "birth" be mentioned; sustenance and dissolution follow by implication. Response: He says: "Birth from Brahman as the cause..." These three together indicate Brahman's status as the material cause (upādāna). Mentioning birth alone might only suggest a nimitta-kāraṇa (instrumental cause), common to many things.
+
+Finally, he explains the purpose of the aforementioned descriptions of cause and effect: "Not like the described..." By this entire discourse, the possibility of the nature of Brahman—the subject of the proposition—has been shown through its definition. Now, the proof (pramāṇa) must be stated. As the Logicians (Naiyāyikas) say: "A claim in a proposition should be proved by a reason once it is shown to be possible. There is no saving a claim by reasons if it is already killed (proven impossible) at its very birth," as in the phrase "a barren woman is a mother."
+
+Thus, birth, etc., are the grounds for the "possibility" (of Brahman). He emphasizes this by saying: "Precisely this..." noting that even others (like the Vaisheshikas) seek to establish the existence of God through this very inference.
+
+
+
+Part 2
+
+The Objection and the Context An objection is raised: "But even here..." (referring to the previous discussion). Since the purpose of the current section (adhikaraṇa) is already completed by this much, the author (Śaṅkara), out of a friendly disposition, addresses the purpose of the upcoming section by way of restatement (anuvāda), saying: "Not by Vedanta..."
+
+The Purpose of Investigation He demonstrates that the purpose is indeed the stringing together of the "flowers" of Vedantic sentences: "Vedanta...". The "conclusion" of this investigation is the destruction of both types of ignorance (avidyā), along with their latent impressions (vāsanā). For from that arises the cessation [of bondage] and the manifestation of the knowledge of Brahman.
+
+Reason and Experience One might ask: "Is no other means of knowledge (māna) to be followed regarding Brahman besides the Word (scripture)? If so, what is the point of reflection (manana), and how can there be experience or direct realization?" To this, he says: "But when Vedantic sentences are present..."
+
+It should be understood that inference (anumāna) must not contradict Vedanta and must be dependent upon it. Reflection (manana) is the process of discerning through reasoning that does not contradict scripture and relies upon it. Such reasoning consists of either presumption (arthāpatti) or inference.
+
+Difference Between Dharma and Brahman Now, a doubt arises: "Just as in the case of Dharma (religious duty), there is no assistance from human intellect, why should it not be the same for Brahman?" He replies: "Not as in the inquiry into Dharma."
+
+By "Shruti and others," he means the Vedas, Epics (Itihāsa), Puranas, and Smritis are the authorities. Experience (anubhava) refers to a specific state of the internal organ (antaḥkaraṇa), which is the direct realization of Brahman. Its result is the manifestation of the true nature of Brahman through the removal of ignorance. This is called a "result" only figuratively (as the result of a means of knowledge).
+
+Action vs. Reality Although the senses etc., function as a collection of causes in the inquiry into Dharma, they do not do so directly. However, in the inquiry into Brahman, direct experience and the like are possible. He states: "Because it ends in experience," meaning the inquiry into Brahman is for the sake of experience. The experience of Brahman is the supreme goal of man (puruṣārtha), as it consists of supreme bliss and the complete wiping away of all sorrow.
+
+The Objectivity of Brahman An objection is raised: "Let the inquiry be for the sake of experience, but that experience itself is impossible because Brahman is not a fit object for it." He replies: "And because the knowledge of Brahman has an existing reality (bhūta-vastu) as its object." The relationship of "subject and object" in the realization of the Absolute is merely a conceptual construct (vikalpa).
+
+Knowledge of Dharma does not end in experience because the experience [of the act] is not an end in itself; the human goal is achieved through the performance (anuṣṭhāna) of the act. Even without experience, the goal is achieved simply through the verbal knowledge of the command. Therefore, he says: "In the case of what is to be done (kartavye)..."
+
+Furthermore, an act is not fit to be an object of immediate realization because it does not exist at the time [of the command], and what is non-existent is unstable. He says: "Dependent on the person." He illustrates the dependence of worldly and Vedic actions on the person: "To do, to not do, or to do otherwise."
+
+Worldly example: "As by a horse..." (one can go by horse, or walk, or not go).
+
+Vedic example: "Thus in the Atirātra sacrifice..." (referring to the choice of taking the vessel or not).
+
+Another example: "When the sun has risen..." (referring to the choice of timing for the Homa).
+
+The Validity of Injunctions It might be argued: "Due to human independence, injunctions (vidhi) and prohibitions (pratiṣedha) would be useless, as human action or inaction would not depend on them." He replies: "Injunctions and prohibitions are meaningful here."
+
+"He takes" is an injunction; "He does not take" is a prohibition.
+
+There are injunctions for offerings both after and before sunrise.
+
+Similarly, the prohibition of touching a human bone and the injunction for carrying [the bone/vessel in specific rituals] are meaningful.
+
+Why? He says: "Because of options (vikalpa), general rules (utsarga), and exceptions (apavāda)." Since "taking" and "not taking" are contradictory and cannot be done together, and since they are of equal strength, an option (vikalpa) is the only way. In the case of the prohibition of touching a bone versus the specific ritual injunction, there is no option; rather, the general prohibition is "sublated" (bādha) by the specific injunction.
+
+Brahman is Not an Option But regarding an existing reality (bhūta-vastu), such options do not exist. He says: "A thing cannot be both 'thus' and 'not thus'." This refutes the idea of options regarding the nature of the object. He then refutes options regarding the existence of the object: "It exists, it does not exist."
+
+An objection: "But options are seen even regarding existing things, like 'Is that a post or a man?'" He replies: "But such constructions (vikalpanāḥ)..." These are dependent on the human mind (doubts or errors). They arise from the mind alone or from the mind and senses together. They do not depend on the reality of the "man-ness" or "post-ness." Therefore, these false constructions do not change or create the object.
+
+True knowledge is not dependent on the mind (buddhi-tantra), but is dependent on the object (vastu-tantra).
+
+Conclusion: Brahman is Beyond Senses He then addresses a final objection: "If a sentence describes an existing thing, it must be a mere restatement (anuvāda) of something already known by other means of knowledge (like 'There are fruits on the riverbank')." If Brahman is the cause of the world, it could be known by inference, making Vedanta redundant.
+
+He replies: "No. Because it is not an object of the senses." Why is the Inner Self not a sense-object? He says: "By nature." As the Shruti says: "The Self-existent pierced the openings of the senses outward; therefore one looks outward, not within at the inner Self." He concludes that since the Inner Self is not an object of perception, and since inference (as will be shown later) does not independently function regarding Brahman, the Vedantic sentences are the only valid means. The Shruti "From which indeed..." indicates the birth, "By which they live" indicates sustenance, and "That into which they enter" indicates dissolution. The deciding sentence in case of doubt (e.g., whether the cause is Pradhāna) is: "From Bliss indeed [these beings are born]."
+
+Summary: Just as a stream (of water) exists in a rope when there is ignorance of the rope, and dissolves back into the rope, so too the universe is born from Brahman-as-associated-with-Ignorance, exists in Brahman, and dissolves into Brahman. This is established.
+
+Nyaya Nirnaya Vyakhya
+
+Sanskrit Commentary
+
+
+
+
+
+
+
+
+Vyakhya to the introductory of the suthra
+
+प्रथमसूत्रेण शास्त्रारम्भमुपपाद्य तदारभमाणो जन्मादिसूत्रस्य पातनिकामाह —
+
+ब्रह्मेति ।
+
+जिज्ञासापदस्यावयवार्थत्यागेनान्तर्णीतविचारार्थत्वमुपेत्य ब्रह्मज्ञातुकामेनेदं शास्त्रं ज्ञातव्यमित्युक्तमित्यर्थः ।
+
+ब्रह्मणो जिज्ञास्यत्वोक्त्यार्थात्प्रमाणादिविचाराणां प्रतिज्ञातव्येऽपि ब्रह्मप्रमाणं ब्रह्मयुक्तिरित्यादिविशिष्टविचाराणां विशेषणवत्यपेक्षत्वादादौ ब्रह्मस्वरूपं वाच्यमित्याह —
+
+किंलक्षणमिति ।
+
+श्रौतस्य ब्रह्मणः श्रौतलक्षणद्वयावेदकं सूत्रं सूत्रकारं पूजयन्नवतारयति —
+
+अत इति ।
+
+
+
+Part 1
+
+'यतो वा इमानि’ इत्यादिवाक्यं ब्रह्म न लक्षयति, लक्षयति वेत्येकस्योभयहेतुत्वासम्भवसम्भवाभ्यां सन्देहे, श्रुतेरनुमानानुगुण्यादेकस्योभयहेतुत्वे दृष्टान्ताभावेनाशक्यानुमानत्वात् , एकतरहेतुत्वस्य लक्षणत्वे वस्तुपरिच्छेदात् , लक्ष्यस्याब्रह्मत्वान्न लक्षयतीति प्राप्ते, पुरुषमतिप्रभवत्वेनानुमानस्य सम्भावितदोषस्य अपौरुषेयत्वेनापास्तदोषागमानुग्राहकतर्कत्वात् , अतीन्द्रयेऽर्थे स्वतोऽप्रामाण्यात् , आगमिकोभयहेतुत्वे सुखादिदृष्टान्तेन सम्भावनामात्रहेतुत्वात् , वस्तुतोऽपरिच्छेदाल्लक्ष्यस्य ब्रह्मत्वसिद्धेर्जगन्निमित्तोपादानं सच्चिदानन्दं ब्रह्मेति लक्षयतीति सिद्धान्तमाह —
+
+जन्मादीति ।
+
+पूर्वाधिकरणेनास्योत्थाप्योत्थापकत्वं सङ्गतिरुक्ता । अधीतिविध्युपादापितोपनिषद्वाक्यस्य स्पष्टब्रह्मलिङ्गस्य लक्षणद्वयवति ब्रह्मणि समन्वयोक्तेः श्रुतिशास्त्राध्यायपादसङ्गतयः । पूर्वाधिकरणस्य ब्रह्मलक्षणपरीक्षणात्तत्फलमेव पूर्वोत्तरपक्षयोरत्र फलम् ।
+
+पदच्छेदः, पदार्थोक्तिः, पदविग्रह इति त्रयं व्याख्याङ्गं दर्शयति —
+
+जन्मेति ।
+
+जन्मस्थितिभङ्गं षष्ठ्योच्यते । तद्गुणसंविज्ञान इत्यत्र, तदा बहुव्रीह्यर्थो गृह्यते तस्य गुणत्वेन संविज्ञानं यत्र समासे स तथा । सर्वस्य विशेषणत्वे समासायोगात्तदर्थैकदेशस्तथा । तेन विशेष्यैकदेशं विशेषणं कृत्वा समास इत्यर्थः ।
+
+तत्र फलमाह —
+
+जन्मस्थितीति ।
+
+जन्मादिरस्य स्थित्यादेरित्यतद्गुणसंविज्ञाने स्थितिभङ्गमात्रं जन्मादिशब्दार्थः स्यात् । ततश्चोभयकारणत्वलाभान्नोपलक्षणत्वं सिध्येत् । न च स्थितिलयमात्रहेतुत्वं तथा, जन्महेतोरन्यत्वे लक्ष्यस्य परिच्छेदादब्रह्मत्वात् । अतो जन्मनोऽपि विशेष्यान्तर्भावाद्धर्मजातस्य संहतिप्रधानस्य हेतुर्ब्रह्मेत्युपलक्षणसिद्धिरित्यर्थः । तादृग्धर्मजातं गृहीत्वा नपुंसकप्रयोगः ।
+
+नन्वनादौ संसारे कथमादित्वं जन्मनो गृह्यते तत्राह —
+
+जन्मनश्चेति ।
+
+एतत्सूत्रलक्षितश्रुतौ जन्मादावुच्यते तदपेक्षं सूत्रेऽपि तस्यादित्वमित्यर्थः ।
+
+श्रुत्यापि कथमुक्तमित्याशङ्क्याह —
+
+वस्त्विति ।
+
+वस्तुनो वृत्तं जनित्वा, स्थित्वा, लीयत इति स्वभावः, जन्मना लब्धात्मकस्य स्थित्यादियोगात् । अतो नानादेः संसारस्यादिर्जन्म किन्तु प्रतिवस्तु तस्यादित्वमिति, तदपेक्षं श्रुतिसूत्रयोस्तदादित्वमित्यर्थः ।
+
+श्रुतिनिर्देशं विशदयति —
+
+श्रुतीति ।
+
+अनुकूलो जन्मादित्वस्येति शेषः । तत्र हेतुर्यत इति ।
+
+वस्तुवृत्तं विभजते —
+
+वस्त्विति ।
+
+जन्मादित्वस्यानुगुणं वस्तुवृत्तमिति विवक्षित्वा हेतुमाह —
+
+जन्मनेति ।
+
+इदमः संनिहितवाचित्वात्प्रत्यक्षमात्रपरामर्शित्वमाशङ्क्य प्रतीतिमात्रं संनिधिरिति गृहीत्वा प्रातिपदिकार्थमाह —
+
+अस्येति ।
+
+सर्वस्य जगतो न जन्मास्ति, विजयादेरनादित्वात् , इत्याशङ्क्य वियदधिकरणन्यायेन विभक्त्यर्थमाह —
+
+षष्ठीति ।
+
+जगतो जन्मादेर्वा ब्रह्मासम्बन्धान्न लक्षणतेत्याशङ्क्याह —
+
+यत इति ।
+
+न जगज्जन्मादि वा ब्रह्मलक्षणं किन्तु तत्कारणत्वं तच्चाज्ञाते ब्रह्मणि सम्भावितमित्यर्थः ।
+
+सूत्रपदान्येवं व्याख्याय पूर्वसूत्राद्ब्रह्मपदानुषङ्गेण तच्छब्दाध्याहारेण च वाक्यार्थमाह —
+
+अस्येत्यादिना ।
+
+प्रधानादिहेतुत्वनिरासेन ब्रह्महेतुत्वं सम्भावयितुं कार्यप्रपञ्चं श्रुतिसिद्धं द्वैराश्येन विशिनष्टि —
+
+नामेति ।
+
+तृतीयेत्थम्भावे । घटादौ स्वनामरूपगर्भविकल्पपूर्वकव्याक्रियादृष्टेः जगतोऽपि तथात्वानुमानादचेनाभावकर्तृकत्वमयुक्तम् । विमतं चेतनभावकर्तृकं, नामरूपात्मकत्वात् , घटादिवदित्यर्थः ।
+
+तर्हि चेताना भावाश्च जीवभेदा नामरूपे बुद्धावालिख्य जगज्जनयिष्यन्ति किं ब्रह्मणेत्यशङ्क्याह —
+
+अनेकेति ।
+
+न चान्यतरस्यार्थिकत्वादुभयग्रहणानर्थक्यं, ऋत्विगादीनां कर्तृत्वेऽप्यभोक्तृत्वात् , पित्रादीनां च श्राद्धादौ भोक्तृत्वेऽप्यकर्तृत्वात् । तथा च जीवानामपि स्रष्टव्यकोटिनिवेशाज्जगत्कर्तृत्वायोग्यतेत्यर्थः ।
+
+सेवादिफलवद्व्यवहितफलत्वात् , कर्मफलस्येश्वरप्रदातृकत्वानुमानात् , तदात्मकं जगदीश्वरकर्तृकमित्याह —
+
+प्रतिनियतेति ।
+
+प्रतिनियतानि देशकालनिमित्तानि येषां क्रियाफलानां तदाश्रयो जगत्तस्येति विग्रहः । प्रतिनियतो देशः, स्वर्गफलस्य मेरुपृष्ठम् । ग्रामादेर्भूमण्डलम् । कालोऽपि स्वर्गस्य प्रतिनियतो देहपातादूर्ध्वं, पुत्रफलस्य बाल्यादूर्ध्वम् । निमित्तमपि प्रतिनियतमुत्तरायणमरणादि स्वर्गादेः । ग्रामादेस्तु राजप्रसादादि । न चेदमीदृशं जगदसर्वज्ञो निर्मातुमर्हतीत्यर्थः ।
+
+विचित्रकार्यत्वाच्च जगतो विशिष्टबुद्धिमत्कर्तृकत्वं प्रासादादिवदनुमेयमित्याह —
+
+मनसेति ।
+
+एतेन कर्तुः सर्वशक्तित्वं सम्भावितम् ।
+
+कल्पितकारणत्वेन सजातीयप्रधानादेर्विजातीयाच्च कार्याद्ब्रह्मव्यवच्छेदकतया जगद्धेतुत्वे तटस्थलक्षणे स्थिते ब्रह्मणः स्वरूपलक्षणं विवक्षन्विशिनष्टि —
+
+सर्वज्ञादिति ।
+
+अद्वितीयत्वं, सत्यचिदात्मत्वं, स्वतन्त्रतया निरतिशयसुखत्वं, विशेषणाभ्यां विवक्षितम् ।
+
+नन्वन्येऽपि परिणामादयो विकारा जन्मादीत्यादिग्रहणेन किं न गृह्यन्ते तत्राह —
+
+अन्येषामिति ।
+
+अजातस्यास्थितस्यानष्टस्य च परिणामाद्ययोगात् , तेषां तदधीनत्वात्तद्ग्रहणेनैव ग्रहात् , जन्मस्थितिनाशानामेवात्रोपादानमित्यर्थः ।
+
+ननु निरुक्तकारस्य ‘जायते, अस्ति, वर्धते, विपरिणमते अपक्षीयते, विनश्यति ‘ इति सूत्रं मूलीकृत्य जन्मादिशब्देन षण्णामपि विकाराणां ग्रहणे नान्तर्भावोक्तिक्लेशस्तत्राह —
+
+यास्केति ।
+
+जन्मादिसूत्रस्य नैरुक्तोक्तिमूलतयानेन तदुक्तविकारग्रहे तद्वाक्यस्य पौरुषेयत्वान्मूलमानापेक्षत्वात् , आगमस्य तन्मूलत्वे सूत्रस्यैव तत्सिद्धौ नैरुक्तोक्तिमूलतानर्थक्यादध्यक्षं तदुक्तिमूलं वाच्यं तच्च महाभूतसर्गादूर्ध्वं सम्भावितं भैतिकविकारगोचरं, ततो यथोक्ताध्यक्षाधीननैरुक्तोक्तिमूलत्वे सूत्रस्य जन्मादिषट्कं जगतो यतः तद्ब्रह्मेत्युक्ते भूतपञ्चकस्य भौतिकविकारहेतुत्वात्तदेव ब्रह्मेति लक्ष्येत । न भूतपञ्चकस्य जन्मादयो मूलकारणाद्ब्रह्मणो गृह्येरन् , एतत्सूत्रमूलभूतनैरुक्तसूत्रस्य तदगोचरत्वात् । तस्मान्मूलकारणं ब्रह्म न लक्षितमित्याशङ्कां निरसितुुं ब्रह्मणः सकाशादुत्पत्तिर्या जगतः श्रुता, यौ च तस्मिन्नेव तस्य स्थितिलयौ श्रृतौ ते जन्मादिशब्देन गृह्यन्ते, तेन तद्विषये ‘यतो वा ‘ इत्यादिवाक्ये बुद्धिस्थे जगज्जन्मादिकारणं ब्रह्म लक्षितं भवतीत्यर्थः । न चैवमपि जन्मैव सूत्र्यतां तन्नान्तरीयकतया स्थितिभङ्गं सेत्स्यतीति युक्तं, जन्ममात्रस्य निमित्तादपि सम्भवात् , त्रिभिरस्योपादानतासूचनादन्यत्र स्थितिलयायोगात् । न च लयाधारत्वादेवोपादानत्वे जन्मस्थितिवचनानर्थक्यं, प्रकृतिविकाराभेदेनाद्वैतसिद्धये त्रयाणामादेयत्वात् । अन्यथा ब्रह्मणो जगदुपादानत्वे तदुत्पत्तिस्थित्योरन्योऽधिष्ठाता, कुम्भोद्भवे कुम्भकारवत् , राजस्थेम्नि राजवच्चेत्याशङ्क्येत तन्मा शङ्कीति त्रयाणां ग्रहणमिति भावः ।
+
+युक्तिं विना लक्षणस्यातिव्याप्त्यसमाधेरर्थादनेन सापि सूत्रितेति तामुपन्यस्यति —
+
+नेत्यादिना ।
+
+नामरूपाभ्यामित्यादिनोक्तविशेषणचतुष्टयविशिष्टस्येत्याह —
+
+यथोक्तेति ।
+
+सर्वज्ञं सर्वशक्तिसमन्वितमित्युक्तं स्मारयति —
+
+यथोक्तविशेषणमिति ।
+
+उक्तस्य जगतो नोक्तमीश्वरं मुक्त्वान्यस्मादुत्पत्त्यादि सम्भावयितुं शक्यमिति सम्बन्धः ।
+
+ननु सर्वे विकाराः सुखदुःखमोहसामान्यप्रकृतिकाः, तदन्वितस्वभावात्वात् । ये यदन्वितस्वभावास्ते तत्प्रकृतिकाः यथा मृदन्वितस्वभावाः शरावादयो मृत्प्रकृतिका इत्यनुमानात् , प्रधानाज्जगज्जन्मादि स्यादित्याशङ्क्याह —
+
+न प्रधानादिति ।
+
+तद्ध्यचेतनं जगदनभिज्ञं न तस्योत्पत्त्यादि कर्तुमीष्टे । अन्तर्बहिर्भावेन सुखादीनां पटादीनां चाध्यक्षेण भेदग्रहात् एकार्थज्ञाने चैकस्यैव ज्ञातुः सुखाद्यात्मत्वेन युगपत्तद्ग्रहापाताद्धेत्वसिद्धेर्न प्रधानकारणता रचनानुपपत्त्यधिकरणे चैतद्वक्ष्यतीति भावः ।
+
+सर्वं कार्यद्रव्यं, स्वपरिमाणादणुतरपरिमाणसंयोगसचिवसमानजातीयानेकद्रव्यारब्धं, कार्यद्रव्यत्वात् , घटवदित्यनुमानात् , अणुभ्यो जगज्जन्मादि सम्भावितमित्याशङ्क्याह —
+
+नाणुभ्य इति ।
+
+दीर्घविस्तीर्णदुकूलारब्धरज्जुद्रव्यस्य ह्रस्वस्यापि कार्यद्रव्यत्वेनानैकान्त्यात् , वैशेषिकाधिकरणे चाणुकारणतानिराकरणात् , न तेभ्यो जगज्जन्मादीत्यर्थः ।
+
+शून्यवादिनस्तु सर्वं कार्यम् , अभावपूर्वकं योग्यत्वे सत्यदृष्टपूर्वावस्थत्वात् , परकीयात्मवदिति व्यतिरेकिणा शून्यस्य जगद्धेतुतामाहुस्तान्प्रत्याह —
+
+नाभावादिति ।
+
+घटस्य पूर्वावस्था मृदध्यक्षेति हेत्वसिद्धेर्न शून्यस्य जगद्धेतुतेत्यर्थः ।
+
+केचित्तु हिरण्यगर्भं संसारिणमेव आगमाज्जगद्धेतुमाचक्षते तान्प्रत्युक्तम् —
+
+न संसारिणो वेति ।
+
+आगमस्य वेदविरुद्धत्वे प्रामाण्यायोगान्नासौ जगद्धेतुरित्यर्थः ।
+
+स्वभाववादं व्युदस्यति —
+
+न चेति ।
+
+उत्पत्त्यादि जगतः सम्भावयितुं न शक्यमिति सम्बन्धः । स्वभावादुत्पद्यत इति स्वयमेव स्वस्य निमित्तमिति वा निमित्तानपेक्षमिति वा विवक्षितम् । नाद्यः, स्वाश्रयत्वात् । न द्वितीयः, भावाभावयोरनिमित्तत्वे यौगपद्यापातात् । स्वतःसिद्धसामर्थ्यानां चार्थानां अन्योन्योपकार्योपकारकत्वस्याध्यक्षत्वादित्यर्थः ।
+
+उक्तलक्षणव्यतिरेक्यनुमानादेवोक्तयुक्तिसहिताद्ब्रह्मणोऽस्तित्वादिसिद्धेः, शास्त्रयोनित्वाद्यधिकरणवैयर्थ्यमित्यशङ्क्याह —
+
+एतदेवेति ।
+
+युक्तिमदुक्तलक्षणमेव स्वतन्त्रमनुमानं सद्विशिष्टेश्वरनिश्चायकमिति यद्वैशेषिकादिमतं तदयुक्तम् । लक्षणं हि युक्तिमदपि सिद्धस्य ब्रह्मणः सजातीयादिव्यावर्तकं न तु तदीदृशमिति तत्स्वरूपनिश्चायकम् । कार्यलिङ्गकानुमानं च कारणसत्तामात्रे पर्यवस्यत्तदेकत्वादौ तटस्थम् । न च तदैक्यासिद्धौ तदीयं सर्वज्ञत्वादि ज्ञातुं शक्यम् । सोऽयं जगद्धेतौ नानात्वैकत्वस्पर्शी संशयो लाघवादुत्कटैककोटितां नीतो मूलकारणे विशिष्टे ब्रह्मणि सम्भावनेत्युच्यते । सम्भाविते तस्मिन्प्रमाणावकाशात् , उत्तराधिकरणार्थवत्तेति भावः ।
+
+
+
+Part 2
+
+अथेदं सूत्रमुक्तब्रह्मनिश्चायकं न वा । न चेदप्रामाण्यात्तदुक्तलक्षणेऽपि विश्वासो न स्यात् । आद्ये व्यतिरेकिणो लक्षणस्य सूत्रोक्तकार्यलिङ्गकानुमानवन्नानिश्चायकतेति चोदयति —
+
+नन्विति ।
+
+तदेवेत्येवकारेणागमो वा तदनुगुणयुक्तिर्वा न सूत्रितेत्युच्यते । प्रस्तुतानुमानं तदर्थः ।
+
+‘नावेदविन्मनुते’ ‘नैषा तर्केण’ इत्यादिश्रुतेर्वैदिकं ब्रह्मेत्युक्तयुक्त्यनुगृहीतलक्षणाख्यव्यतिरेक्यात्मकागमोक्तिपरं सूत्रमिति परिहरति —
+
+नेत्यादिना ।
+
+कार्यानुमानस्य ‘यतः’ इत्याादिश्रुत्युक्तत्वेऽपि नानुमानात्मना निश्चायकत्वम् । तेन सम्भावनामात्राभिधानादागमात्मना निश्चायकत्वमिति भावः ।
+
+उत्तरसूत्रेष्वपि तुल्यमागमप्राधान्यमिति वक्तुं सूत्राणामित्युक्तम् । सूत्रेषु कुसुमग्रथनवन्न वाक्यग्रथनं मुख्यमित्याशङ्क्याह —
+
+वेदान्तेति ।
+
+तेषामपौरुषेयत्वेन निर्दोषाणां स्वत एव स्वार्थनिर्णायकत्वात् विचारानर्थक्यमित्याशङ्क्याह —
+
+वाक्यार्थेति ।
+
+वाक्यस्य तदर्थस्य च तात्पर्यनिश्चयार्थं सम्भावनार्थं च विचारणा, तस्याश्चाध्यवसानं तदुभयनिश्चयः, तेन निर्वृत्तो ब्रह्मसाक्षात्कारः, तस्माद्विचारोऽर्थवानित्यर्थः ।
+
+विचारावधारितशक्तितात्पर्याभ्यां प्रमापकं शब्दं हित्वा शक्तिमात्रेण प्रमापकं प्रमाणान्तरं ब्रह्मणि लाघवादादेयमित्याशङ्क्याह —
+
+नेति ।
+
+ब्रह्मणस्तदगोचरत्वादित्यर्थः ।
+
+तर्हि शब्दादेव ब्रह्मसिद्धेर्मननविधिर्युक्तिसूत्रणं च कथमित्याशङ्क्याह —
+
+सत्स्विति ।
+
+विमतमभिन्नोपादानाधिष्ठातृकं, कार्यत्वात् , सुखादिवत् । विमतं चेतनप्रकृतिकं, कार्यत्वात् , तद्वदित्याह —
+
+अनुमानमपीति ।
+
+तेषु सत्सु तदपि प्रमाणं भवन्न निवार्यत इति सम्बन्धः ।
+
+विचारसंस्कृतवेदान्तानां स्वार्थबोधित्वसिद्धौ किं तेनेत्याशङ्क्याह —
+
+तदर्थेति ।
+
+तेषामर्थो जगतोऽभिन्ननिमित्तोपादानत्वं तस्य ग्रहणं स्वीकारस्तस्य दार्ढ्यं तदुपयोगिसम्भावनात्मा निश्चयस्तदर्थमनुमानमित्यर्थः ।
+
+विमतं भिन्नोपादानाधिष्ठातृकं, कार्यद्रव्यत्वात् , घटवदित्यनुमानबाध इति चेन्नेत्याह —
+
+वेदान्तेति ।
+
+जगतश्चेतनोपादानतानिमित्तत्ववादिवेदविरोधान्न तेऽनुमानम् । मन्मते तदविरोधात्तदर्थे सम्भावनाहेतुरित्यर्थः ।
+
+जगद्धेतुर्न तर्कगम्यः, वैदिकत्वात् , परिशुद्धवस्तुवदित्याशङ्क्याह —
+
+श्रुत्येति ।
+
+तर्कस्य वस्तुनिश्चयाय श्रुत्यैवेष्टतया साध्यविकलतेत्यर्थः ।
+
+कासौ श्रुतिरित्युक्ते श्रवणातिरेकेण मननं युक्त्यनुसन्धानं विधदतीं श्रुतिमाह —
+
+श्रोतव्य इति ।
+
+न केवलं श्रौतस्तर्कोऽत्रोपयुज्यते किन्तु प्रतिबन्धनिवर्तकत्वेन लौकिकोऽपीत्यत्र श्रुतिमाह —
+
+पण्डित इति ।
+
+उक्तार्थधीसामर्थ्यं पाण्डित्यम् । अनुक्तेऽपि प्रयोजकशिक्षयोत्प्रेक्षाशक्तिर्मेधावित्वम् । यथा कश्चिद्गन्धारदेशेभ्यः समानीय चौरैररण्ये बद्धचक्षुर्निक्षिप्तो देशिकोपदेशतस्तदुक्तस्य साकल्येन ज्ञाता पण्डितः स्वयमूहापोहक्षमो मेधावी गन्धारानेव प्राप्नोति, एवं ब्रह्मणः सकाशादाच्छिद्य विवेकदृशं निरुध्याविद्यादिभिः संसारारण्ये निहितो जन्तुरतिकारुणिकगुरूपदेशतः स्वस्वभावं प्रतिपद्यत इत्यर्थः ।
+
+श्रुतितात्पर्यमाह —
+
+पुरुषेति ।
+
+आत्मनः श्रुतेरित्यर्थः ।
+
+ननु धर्मविदविशेषाद्ब्रह्मापि श्रुत्याद्येवापेक्षते तत्कथं तत्र श्रुतिस्तर्कं सहायीकरोति तत्राह —
+
+नेत्यादिना ।
+
+दृष्टान्ते जिज्ञास्यो धर्मो दार्ष्टान्तिके तादृग्ब्रह्म ग्राह्यम् । श्रुत्यादय इत्यादिशब्देन लिङ्गवाक्यप्रकरणस्थानसमाख्या गृह्यन्ते । तत्र पदान्तरनिरपेक्षः शब्दः श्रुतिः । श्रुतस्यार्थस्यार्थान्तरेणाविनाभावो लिङ्गम् । अन्योन्याकाङ्क्षासन्निधियोग्यतावन्ति पदानि वाक्यम् । वाक्यद्वयसामर्थ्यमारभ्याधीतविषयं प्रकरणम् । क्रमवर्तिनां पदार्थानां क्रमवर्तिभिरर्थैर्यथाक्रमं सम्बन्धः स्थानम् । संज्ञासाम्यं समाख्या । गुणोपसंहारे चैषामुदाहरणानि वक्ष्यन्ते ।
+
+किं तर्हि जिज्ञास्ये ब्रह्मणि प्रमाणान्तरमिति प्रश्नपूर्वकमाह —
+
+किं त्विति ।
+
+अनुभवो ब्रह्मसाक्षात्कारो विद्वदनुभवः । आदिपदमनुमानादिसङ्ग्रहार्थम् ।
+
+श्रुत्यादीनामनुमानादीनां च शब्दशक्तितात्पर्यावधृतिद्वारानुभवमुत्पाद्य ब्रह्मणि प्रामाण्यम् , अनुभवस्य साक्षादेव तदविद्याध्वंसित्वेनेति मत्वोक्तम् —
+
+यथासम्भवमिति ।
+
+वेदार्थत्वाद्धर्मवद्ब्रह्मण्यपि नानुभवः सम्भवतीत्याशङ्क्य तदयोग्यत्वमुपाधिरित्याह —
+
+अनुभवेति ।
+
+न हि ज्ञातेऽपि ब्रह्मण्यनुभवं विना नैराकाङ्क्ष्यमतस्तज्ज्ञानस्यानुभवान्तत्वात्तस्मिन्नसावस्तीत्यर्थः ।
+
+साधनव्याप्तिमाशङ्क्याह —
+
+भूतेति ।
+
+चकारः शङ्कानिरासी ।
+
+ननु कर्मवाक्यानामनुभवानपेक्षफलवज्ज्ञानजनकत्वात् , ब्रह्मवाक्यानामपि वेदप्रमाणत्वात्तादृग्धीजनकत्वं, नेत्याह —
+
+कर्तव्येति ।
+
+धर्मस्यानुभवायोग्यत्वात् , तदनुष्ठानस्य च शाब्दधीमात्रादेव सिद्धेः, धर्मवाक्यानां युक्तमुपाधीजनकत्वम् । ब्रह्मणि त्वनुभवयोग्ये तद्वाक्यानां नैवमित्यर्थः ।
+
+धर्मस्यापि ब्रह्मवदनुभवयोग्यत्वं, वेदार्थत्वात् , इत्याशङ्क्याकार्यत्वुपाधिरित्याह —
+
+पुरुषेति ।
+
+चकारोऽत्रापि शङ्कानिरासी ।
+
+कर्तव्येऽपि तुल्यमसाध्यत्वमित्याशङ्क्य लौकिके वैदिके च कर्मणि साध्यत्वमाह —
+
+कर्तुमिति ।
+
+तत्र लौकिकमुदाहरति —
+
+यथेति ।
+
+तेन सह वैदिकं दृष्टान्तं समुच्चिनोति —
+
+तथेति ।
+
+कर्तुमकर्तुमित्यस्य दृष्टान्तमुक्त्वा कर्तुमन्यथा वा कर्तुमित्यस्य दृष्टान्तमाह —
+
+उदित इति ।
+
+इतोऽपि कर्मणो नानुभवयोग्यतेत्याह —
+
+विधीति ।
+
+'यजेत’ इत्यादयो विधयो ‘न हन्यात्’ इत्यादयो निषेधाश्च कर्मणि सावकाशाः । तेन साध्यत्वादनुभवयोग्यतेत्यर्थः ।
+
+तत्रैव हेत्वन्तरमाह —
+
+विकल्पेति ।
+
+उदितानुदितहोमार्थो व्यवस्थितो विकल्पः । ग्रहणाग्रहणार्थस्त्वैच्छिकः । ‘न हिंस्यात्सर्वभूतानि’ इत्युत्सर्गः । ‘अग्नीषोमीयं पशुमालभेत’ इत्यपवादः । ते च कर्मणि सावकाशाः । तथा चाव्यवस्थितं कर्मानुभवायोग्यमित्यर्थः ।
+
+ब्रह्मण्यपि तुल्यत्वादव्यवस्थितत्वस्योक्तोपाध्यसिद्धिरित्याशङ्क्याह —
+
+न त्विति ।
+
+प्रकारविकल्पवत्प्रकारिविकल्पं निरस्यति —
+
+अस्तीति ।
+
+वस्तुन्यपि विकल्पा दृष्टा वादिनामित्याशङ्क्याह —
+
+विकल्पनास्त्विति ।
+
+सम्यग्ज्ञानाधीनत्वाद्वस्तुनः, तस्य च पुरुषाधीनत्वात् , वस्त्वपि तथेत्याशङ्क्याह —
+
+न वस्त्विति ।
+
+कथं तर्हि तदुत्पत्तिरित्याशङ्क्याह —
+
+किं तर्हीति ।
+
+पुरुषतन्त्रत्वं निषेद्धुमेवकारः । न मानाधीनत्वं निषिध्यते ।
+
+विकल्पनानां मनःस्पन्दितमात्रत्वेनासम्यग्धीत्वं, सम्यग्धियश्च वस्त्वधीनतेत्यत्र दृष्टान्तमाह —
+
+नहीति ।
+
+आद्यो वाशब्दोऽवधारणे । पुरोवर्तिनि स्थाणावेकस्मिन्नेव स्थाणुरेवेत्यदुष्टकरणस्य धीः, इतरस्य तत्रैव पुरुषो वा स्थाणुर्वेति संशयः । नहि तदुभयमपि सम्यग्ज्ञानम् , एकस्योभयत्वायोगादित्यर्थः ।
+
+कथं तर्हि विभागधीस्तत्राह —
+
+तत्रेति ।
+
+स्थाणुः सप्तम्यर्थः ।
+
+उक्तन्यायं सञ्चारयति —
+
+एवमिति ।
+
+दार्ष्टान्तिकमाह —
+
+तत्रेति ।
+
+विकल्पनानां बुद्धिजन्यत्वेनावस्त्वनुसारिणीनामसम्यग्धीत्वे, सम्यग्धियश्च वस्त्वनुसारित्वे पूर्वोक्तन्यायेन स्थिते सतीति यावत् । न पुरुषतन्त्रमित्येवकारार्थः । ततो न धीद्वारा वस्तुनोऽपि तदधीनतेति शेषः ।
+
+ब्रह्मज्ञानस्य वस्त्वधीनत्वेन सम्यग्धीत्वे हेतुमाह —
+
+भूतेति ।
+
+परमार्थवस्त्ववगाहित्वादित्यर्थः ।
+
+ब्रह्मणः सिद्धत्वेनासाध्यतया धर्मवैधर्म्यादनुभवयोग्यत्वात्तत्रानुभवापेक्षा युक्त्यनुप्रवेशश्चेत्युक्तम् । इदानीं ब्रह्मणि प्रमाणान्तरप्रवेशे जन्मादिसूत्रमनुमानोपन्यासार्थमित्यनुमतमिति शङ्कते —
+
+नन्विति ।
+
+सिद्धत्वाद्ब्रह्मणो धर्मवैजात्येऽपि मानान्तरगम्यतेत्यनुमानादिविचारं हित्वा वाक्यमात्रविचारोऽयुक्तः, ब्रह्मण्युभयप्रवेशाविशेषात् । अतः सूत्राणां वेदान्तवाक्यग्रथनार्थत्वमसिद्धमित्यर्थः ।
+
+ब्रह्मणि सम्भावनाहेतुश्रुत्यनुगुणानुमानादिप्रवेशात् , गुणतया तद्विचारस्यापीष्टत्वात् , प्राधान्येन वेदान्तवाक्यग्रथनार्थता सूत्राणामिति समाधत्ते —
+
+नेत्यादिना ।
+
+मानान्तरमपि करणमेव ब्रह्मप्रमिताविति पक्षे प्रत्यक्षमनुमानादि वा तदितिविकल्प्य दूषयति —
+
+इन्द्रियेति ।
+
+ब्रह्मणि करणत्वेन मानान्तराप्रवेशादिति शेषः ।
+
+‘पराञ्चि - ‘ इत्यादिश्रुत्या प्रत्यक्षाविषयत्वं ब्रह्मणो विवृणोति —
+
+स्वभावत इति ।
+
+सम्बन्धाग्रहणादित्युक्तं व्यनक्ति —
+
+सति हीति ।
+
+ननु ब्रह्मसम्बद्धमिदं कार्यमिति धिया किं स्यात् , कार्यमेव गृह्यमाणं ब्रह्म ज्ञापयिष्यति, नेत्याह —
+
+कार्येति ।
+
+तन्मात्राद्धेतुमात्रं सिध्यति न सत्यज्ञानादिरूपं ब्रह्म । तत्त्वागमादेव ज्ञेयमित्यर्थः ।
+
+श्रौतार्थे सामान्यद्वारा सम्भावनाहेतुर्मानान्तरमिति युक्ता सूत्राणां वेदान्तग्रथनार्थतेत्युपसंहरति —
+
+तस्मादिति ।
+
+बहुत्वाद्वेदान्तानामेतदधिकरणविषयबुभुत्सया पृच्छति —
+
+किं पुनरिति ।
+
+जिज्ञास्यं लक्षितं ब्रह्म सप्तम्यर्थः ।
+
+विशिष्टाधिकारिणो ब्रह्मज्ञातुकामस्य जगत्कारणत्वोपलक्षणानुवादेन ब्रह्मप्रतिपादकं वाक्यं सोपक्रममाह —
+
+भृगुरिति ।
+
+ननु प्रकृष्टप्रकाशश्चन्द्र इति स्वरूपलक्षणादृते यत्र शाखाग्रं स चन्द्र इत्युपलक्षणमात्राच्चन्द्रस्वरूपादृष्टेः, उपलक्षितस्य स्वरूपलक्षणं वाच्यं तत्राह —
+
+तस्येति ।
+
+ब्रह्मणो जगद्धेतुत्वानुवादेन स्वरूपनिर्णायकमानन्दत्वविधायि वाक्यम् । ततः सत्यादिवाक्याच्च स्वप्रकाशानतिशयानन्दलक्षणं ब्रह्मेति निर्णेतुं शक्यमित्यर्थः ।
+
+तैत्तिरीयश्रुताविव श्रुत्यन्तरे ब्रह्मणो लक्षणद्वयवादीनि वाक्यानि ‘यः सर्वज्ञः सर्ववित् ‘ ‘विज्ञानमानन्दम् ‘ इत्यादीनि सन्ति, तान्यपीहोदाहरणत्वेन द्रष्टव्यानीत्याह —
+
+अन्यान्यपीति ।
+
+एवंजातीयकत्वमेवाह —
+
+नित्येति ।
+
+तदेवं सर्वासु शाखासु लक्षणद्वयवादिवेदान्तवाक्यानि जिज्ञास्ये ब्रह्मणि समन्वितानीति तद्धिया मुक्तिरयत्नलभ्येत्यर्थः ॥ २
+
+
+
+English Translation
+
+
+
+
+
+
+
+
+Vyakhya to the introductory of the suthra
+
+Having established the commencement of the scripture (Shastra) with the first aphorism, [the author], while beginning that [work], provides the introductory context (pātanikā) for the aphorism regarding "birth and so forth" (Janmādi-sūtra):
+
+"Brahma" etc.
+
+The meaning is that by setting aside the literal component-meanings of the word jijñāsā (desire to know) and accepting its implied meaning of "inquiry" (vicāra), it has been stated that this Shastra must be understood by one who desires to know Brahman.
+
+By stating that Brahman is the object of inquiry, it follows by implication that inquiries into the means of knowledge (pramāṇa) and so forth are also promised. However, since specific inquiries—such as "the evidence for Brahman" or "the logic regarding Brahman"—depend upon the thing being qualified, the nature (svarūpa) of Brahman must be stated first. Thus, [the author] asks:
+
+"What is its definition?"
+
+Honoring the Author of the Aphorisms (Sūtrakāra), he introduces the aphorism that makes known the two Scriptural definitions of the Brahman found in the Vedas:
+
+"Therefore..."
+
+
+
+
+
+Part 1
+
+The Doubt and the Prima Facie View (Purvapaksha)
+
+A doubt arises: Does the Vedic passage "That from which these [beings are born]..." (Yato va imani...) define Brahman or not? This doubt stems from whether it is possible or impossible for a single entity to be the cause of both [the birth and dissolution of the world].
+
+The opponent argues that it does not define Brahman because:
+
+Inference (Anumana) must follow Vedic revelation (Shruti). Since we lack a worldly example (Drishtanta) of one thing being the cause of both [creation and destruction], such an inference is impossible.
+
+If we define Brahman as the cause of only one [e.g., just birth], then Brahman becomes limited by other objects (Vastu-pariccheda).
+
+Consequently, the object defined would not truly be "Brahman" (the Infinite). Thus, the definition fails.
+
+The Vedantic Conclusion (Siddhanta)
+
+The conclusion is stated: It does define Brahman as the "Truth-Consciousness-Bliss" (Saccidananda) which is both the material and instrumental cause of the universe.
+
+Unlike human inference, which is prone to error, this logic supports the "Apurusheya" (impersonal/divine) scripture, which is free from defect.
+
+In supersensuous matters, logic has no independent authority; it serves only to show possibility through examples like "happiness" (where one soul is the cause of various states).
+
+Since Brahman is not truly limited by objects, its nature as Brahman is established.
+
+Analysis of the Sutra: Janmadi
+
+The author introduces the Sutra: "Janmadi..." (Birth, etc.).
+
+Connection (Sangati): This sutra follows the previous one by providing a definition for the Brahman that was urged to be known.
+
+Grammar: The word "Birth-etc." (Janmadi) is a compound (Bahuvrihi). It refers to the group of attributes: birth, sustenance, and dissolution.
+
+Why all three? If the definition only included sustenance and destruction, it wouldn't imply Brahman is the material cause. By including "birth" within the definition, it is established that Brahman is the source of the entire collection of worldly phenomena.
+
+Why "Birth" is First
+
+One might ask: In an eternal, beginningless cycle of rebirth (Samsara), how can "birth" be called the "beginning"?
+
+Response: This follows the Vedic text that the sutra is based on.
+
+Nature of Reality: In the nature of things, an object first is born, then exists, then dissolves. Birth is the prerequisite for existence. Therefore, the "beginning" refers to the birth of each individual object within the cycle.
+
+Refuting Other Causes
+
+The commentary clarifies that the universe—characterized by diverse names and forms, complex arrangements of space, time, and causation, and results of actions—cannot be explained by any cause other than an Omniscient Lord (Ishwara).
+
+Not Matter (Pradhana): Dead matter is unconscious; it cannot "plan" or create the intricate design of the world.
+
+Not Atoms (Anu): Atoms cannot account for the specific creation of the universe's vast structures.
+
+Not Non-existence (Abhava/Shunya): A pot is never seen arising from absolute nothingness; it comes from clay.
+
+Not Individual Souls (Samsarin/Jiva): Limited beings do not have the knowledge or power to create the cosmos.
+
+Not Spontaneity (Svabhava): Things do not simply happen without a cause; we observe mutual assistance and causation in the world.
+
+The Role of Logic
+
+Finally, the author addresses whether the definition is purely logical.
+
+The Limit of Inference: Independent inference can only suggest the existence of a cause. It cannot determine that the cause is "One," "Omniscient," or "Brahman."
+
+Scripture as Primary: Logic is used here only to show the possibility of Brahman as the cause. Once logic shows it is possible, Scripture (Shastra) provides the valid means of knowledge (Pramana) to realize the true nature of Brahman. This justifies the necessity of the subsequent sections of the Brahma Sutras.
+
+Key Philosophical Terms Used:
+
+Upalakshana: An indirect or indicative characterization.
+
+Nimitta-Upadana: Instrumental and Material cause.
+
+Vastu-pariccheda: Limitation by space, time, or other objects.
+
+Saccidananda: Being, Consciousness, and Bliss.
+
+
+
+Part 2
+
+Now, is this sutra ($Janmādyasya yataḥ$) a definitive indicator of the Brahman previously described, or not? If it is not, then due to a lack of authority, there would be no faith even in the definition stated therein. On the former view (that it is a determiner), he raises an objection—"Nanviti" (Now then)—stating that a definition based on "difference" ($vyatireki$) cannot be a determiner in the same way that an inference based on the "mark of an effect" ($kāryalinga$) as stated in the sutra cannot. By the word "eva" (only) in "tadeva", it is implied that neither scripture ($āgama$) nor the reasoning consistent with it has been formulated into a sutra. The intended meaning is the present inference.
+
+He refutes this with "Netyādinā" (No, etc.), stating that the sutra is intended to express the scripture (the Vedas) through a definition supported by the aforementioned reasoning, specifically a $vyatireki$ (argument by differentiation), because Brahman is known through the Vedas, as per Shruti texts like "One who does not know the Veda does not meditate on Brahman" and "This [knowledge] is not attainable through logic."
+
+Even though an inference from the effect (the world) is mentioned in Shrutis such as "from which [all these beings are born]," it does not provide certainty in the form of an independent inference. The idea is that since such inference only suggests a "possibility" ($sambhāvanā$), certainty comes from its status as scripture. To show that the primacy of scripture is equal in the subsequent sutras as well, he uses the plural "sūtrāṇām" (of the sutras).
+
+Anticipating the objection that sutras are primarily for stringing sentences together (like stringing flowers in a garland) rather than logical inquiry, he says: "Vedānta...". To the objection that since the Upanishads are authorless ($apauruṣeya$) and faultless, they determine their own meaning spontaneously, making inquiry ($vicāra$) useless, he says: "Vākyārtha...". Inquiry is meant for determining the purport ($tātparya$) of the sentence and its meaning, and for establishing its possibility. The "conclusion" ($adhyavasāna$) of that inquiry is the certainty of both, which results in the direct realization of Brahman ($brahmasākṣātkāra$); therefore, inquiry is meaningful.
+
+To the objection that one should abandon the "word" (scripture) which requires inquiry to determine its power and purport, and instead adopt another means of knowledge ($pramāṇa$) that proves Brahman through its inherent power for the sake of brevity ($lāghava$), he says: "Na" (No). This is because Brahman is not an object of those other means.
+
+Then, if Brahman is established by the word alone, why is there a command for reflection ($manana$) and the formulation of logical sutras? He answers: "Satsu" (When they exist). He presents the logic: "The disputed [world] has a non-different material cause and controller, because it is an effect, like happiness etc." and "The disputed [world] has a conscious nature, because it is an effect, like that." He says: "Anumānamapi" (Inference also). The connection is: "When these [scriptures] exist, [inference] also becomes a means of proof and is not excluded."
+
+One might ask: if the Vedantas, refined by inquiry, are proven to reveal their own meaning, what is the use of inference? He says: "Tadartha...". Their meaning is that the world has [Brahman as] its non-different efficient and material cause. Inference is for the purpose of "grasping" ($grahaṇa$) or accepting that meaning, and for "firmness" ($dārḍhya$), which is the certainty characterized by possibility.
+
+If it is argued that there is a contradiction by the inference "The disputed [world] has a distinct material cause and controller, because it is a produced substance, like a pot," he says: "Vedānta...". Since that inference contradicts the Veda, which teaches that the world has a conscious material and efficient cause, it is not a [valid] inference. In our view, because there is no contradiction, inference serves as a cause for "possibility" regarding that meaning.
+
+To the doubt that "The cause of the world is not attainable through logic because it is Vedic, like a pure object," he says: "Śrutyā...". Since logic is desired by the Shruti itself for the determination of the object, the [opponent's] example lacks the probandum ($sādhya-vikala$). When asked which Shruti that is, he cites the Shruti that ordains reflection ($manana$)—the investigation of reasoning—in addition to hearing ($śravaṇa$): "Śrotavyaḥ" (He is to be heard).
+
+Not only is Vedic reasoning useful here, but even "worldly" ($laukika$) reasoning is useful for removing obstacles; he cites the Shruti: "Paṇḍitaḥ" (The learned man). "Learning" ($pāṇḍitya$) is the ability to understand the stated meaning. "Wisdom" ($medhāvitvam$) is the power of intuition (conjecture) regarding even unstated things through the instruction of the cause. Just as someone brought from the Gandhara country, blindfolded by thieves and left in a forest, reaches Gandhara itself by being a "learned" person who fully knows the guide's instructions and a "wise" person capable of his own reasoning ($ūhāpoha$); similarly, a creature snatched away from Brahman, with its vision of discrimination blocked by ignorance ($avidyā$), attains its own true nature through the instruction of a most compassionate Guru.
+
+He states the purport of the Shruti: "Puruṣa...", meaning from the Self or the Shruti. Now, since there is no difference from a Knower of Dharma (Duty), and Brahman also depends on Shruti etc., why does Shruti seek the help of logic there? He says: "Netyādinā" (No, etc.). In the example, the "Dharma" to be inquired into is mentioned; in the thing illustrated, such "Brahman" should be understood. By the word "ādi" (etc.) in "Shruti etc.," the [Mīmāṃsā tools of] Linga (indicatory mark), Vākya (sentence), Prakaraṇa (context), Sthāna (position), and Samākhyā (name) are included. Among these, "Shruti" is a word independent of other words. "Linga" is the constant concomitance of a heard meaning with another meaning. "Vākya" consists of words possessing mutual expectancy, proximity, and competency. "Prakaraṇa" is the subject matter studied beginning with the capacity of two sentences. "Sthāna" is the connection of sequential items with sequential meanings in order. "Samākhyā" is the similarity of names. Examples of these will be discussed in the context of the "combination of qualities" ($guṇopasaṃhāra$).
+
+Then, asking "What else is the means of proof for Brahman which is to be inquired into?", he says: "Kiṃ tu" (But rather...). "Anubhavaḥ" (Experience) is the direct realization of Brahman, the experience of the wise. The word "ādi" is for including inference, etc.
+
+Shruti and others, as well as inference and others, possess authority regarding Brahman by producing experience through the determination of the word's power and purport; however, "experience" ($anubhava$) itself is stated to be authoritative because it directly destroys ignorance ($avidyā$). Thus he says: "Yathāsambhavam" (as far as possible). To the doubt that experience is not possible in Brahman (as it is not in Dharma) because it is the subject of the Veda, he says that "unsuitability" is the limitation ($upādhi$): "Anubhava...". Even if Brahman is known, there is no cessation of desire [for knowledge] without experience; therefore, since its knowledge ends in experience, experience exists in it.
+
+To the doubt about the pervasion of the means, he says: "Bhūta...". The word "ca" (and/but) removes the doubt. Now, since the sentences regarding action (Karma) produce knowledge whose fruit does not depend on experience, shouldn't Brahman-sentences also produce such knowledge, being Vedic authority? He says: "Kartavya...". Since Dharma is unsuitable for experience and its performance is accomplished merely from verbal knowledge, it is right that Dharma-sentences do not produce [experience]. But in the case of Brahman, which is suitable for experience, its sentences are not like that.
+
+To the doubt that Dharma, like Brahman, is suitable for experience because it is the meaning of the Veda, he states that "being a non-effect" is the limitation: "Puruṣa...". Here too, the word "ca" removes the doubt. To the doubt that even in what is "to be done" ($kartavya$) there is a similar "unaccomplishability," he states the "accomplishability" in both worldly and Vedic actions: "Kartum" (to do). He gives a worldly example: "Yathā" (as). He joins it with a Vedic example: "Tathā" (similarly). Having given an example for "to do or not to do," he gives an example for "to do or to do otherwise": "Udite" (At sunrise...).
+
+He shows further why action is not suitable for experience: "Vidhi...". Injunctions like "one should sacrifice" and prohibitions like "one should not kill" have scope in action. Because it is something to be accomplished, it is [not] suitable for experience. He gives another reason there: "Vikalpa...". There is a fixed option ($vikalpa$) for oblations at sunrise or before sunrise. The option for taking or not taking [the ṣoḍaśī vessel] is optional ($aicchika$). "One should not harm any living being" is the general rule ($utsarga$); "one should immolate a goat for Agni and Soma" is the exception ($apavāda$). These have scope in action. Thus, an unsettled action is unsuitable for experience.
+
+To the doubt that the definition ($upādhi$) is unproven because Brahman is also unsettled/various, he says: "Na tu" (But not...). He refutes the option regarding the "possessor of attributes" ($prakārin$) just as he did for the "attributes" ($prakāra$): "Asti" (It exists). To the doubt that options regarding the object are seen among disputants, he says: "Vikalpanāstu" (But the options...). Since an object depends on right knowledge, and knowledge depends on the person, is the object also like that? He says: "Na vastu" (Not the object). Then how is it produced? He says: "Kiṃ tarhi" (What then?). The word "eva" is used to deny dependence on the person. Dependence on the means of knowledge ($māna$) is not denied.
+
+He gives an example to show that options are mere mental stirrings and thus not right knowledge, whereas right knowledge depends on the object: "Nahi" (For not...). The first "vā" is for emphasis. Regarding a post ($sthāṇu$) standing in front, the knowledge of one with faultless senses is "This is a post only"; for another, it is a doubt: "Is it a man or a post?" Both are not right knowledge, as one thing cannot be two things.
+
+Then how is there a "division of knowledge"? He says: "Tatra" (There). "Post" is in the locative sense. He applies this logic: "Evam" (So). He gives the illustration: "Tatra" (There). Since options are born of the intellect and do not follow the object, they are incorrect knowledge; whereas right knowledge follows the object—this being established by the aforementioned logic. The meaning of "eva" is "not dependent on the person." Therefore, the object does not depend on the person through knowledge.
+
+He gives the reason why Brahman-knowledge is right knowledge due to its dependence on the object: "Bhūta...", meaning it plunges into the absolutely real object.
+
+It was said that because Brahman is already existent ($siddha$) and not something to be accomplished, unlike Dharma, it is suitable for experience, requires experience, and allows the entry of logic. Now he doubts: if another means of knowledge enters into Brahman, then the sutra "Janmādi..." is accepted as being for the sake of presenting an inference—"Nannviti". Although Brahman is different from Dharma due to being already existent, it is improper to abandon the investigation of inference etc., and investigate only the sentences, since both enter into Brahman without distinction. Therefore, the purpose of the sutras as being for stringing together Vedantic sentences is unproven.
+
+He settles this with "Netyādinā" (No, etc.): because inference, which is consistent with the Shruti and a cause of "possibility," enters into Brahman, its investigation is also desired as a subordinate ($guṇa$); however, the sutras are primarily for stringing together the Vedantic sentences. On the view that another means of knowledge is indeed an instrument in the valid cognition of Brahman, he refutes the options of perception or inference etc.: "Indriya..." (Senses...). The remainder is: "because other means do not enter as instruments regarding Brahman."
+
+He explains Brahman's being beyond perception through the Shruti "The senses turn outward...": "Svabhāvataḥ" (By nature). He clarifies what was said about "not grasping the relation": "Sati hi" (For when there is...). Now, what if one has the thought "This effect is related to Brahman"? The effect itself being perceived will make Brahman known. He says: "Kārya...". From the effect alone, only a general cause is established, not Brahman in the form of Truth, Knowledge, etc. That is to be known only from scripture.
+
+He concludes that because other means of knowledge are causes of "possibility" through generalities regarding the scriptural meaning, it is proper that the sutras are for the purpose of stringing together the Vedantas: "Tasmāt" (Therefore). Because the Vedantas are many, he asks with a desire to know the subject matter of this section: "Kiṃ punariti". "Brahman to be inquired into" is the locative sense. He cites the sentence that teaches Brahman by restating ($anuvāda$) the accidental definition ($upalakṣaṇa$) of being the cause of the world, along with its context: "Bhṛguriti".
+
+Now, it might be said that unlike a "natural definition" ($svarūpa-lakṣaṇa$) like "the moon is the brightest light," an "accidental definition" like "the moon is where that branch-tip is" does not show the true nature of the moon; therefore, the true nature of the object indicated must be stated. He says: "Tasya" (Its...). This is the sentence ordaining "Bliss" as the determiner of the true nature, restating Brahman's causality of the world. Thus, from sentences like "Truth..." (Satyam...), Brahman can be determined as having the nature of self-luminous, unsurpassable Bliss.
+
+Just as in the Taittiriya Shruti, there are sentences in other Shrutis providing both types of definitions of Brahman, such as "He who is all-knowing, all-wise," and "Knowledge, Bliss," etc.; these also should be seen as examples here. He says: "Anyānyapi" (Others also). He explains "being of this kind": "Nitya...". Thus, the Vedantic sentences providing both definitions in all branches are harmonized ($samanvita$) in the Brahman to be inquired into, and through that knowledge, liberation is obtained without [further] effort. || 2 ||
+
+
+
+Vaiyasika nyaya mala
+
+Sanskrit Commentary
+
+
+
+
+
+
+
+
+लक्षणं ब्रह्मणो नास्ति किंवाऽस्ति, नहि विद्यते ॥
+जन्मादेरन्यनिष्ठत्वात्सत्यादेश्चाप्रसिद्धितः ॥ १३ ॥
+
+ब्रह्मनिष्ठं कारणत्वं स्याल्लक्ष्म स्रग्भुजङ्गवत् ॥
+लौकिकान्येव सत्यादीन्यखण्डं लक्षयन्ति हि ॥ १४ ॥
+
+
+
+
+
+English Translation
+
+
+
+
+
+
+
+
+Verse 13:
+
+Is there a definition for Brahman, or is there not? [It seems] there is none.
+
+Because [attributes like] birth and so on belong to other things (the world), and [attributes like] truth and so on are not well-known (as they apply to Brahman).
+
+Verse 14:
+
+The quality of being the "cause" resides in Brahman as a definition, much like the [illusory] "snake" resides in a rope.
+
+Indeed, it is the worldly meanings of "Truth" and so on that indicate the Indivisible [Brahman].
+
+Key Philosophical Concepts
+
+To help clarify the logic being used here, the verses deal with two types of definitions used in Indian philosophy:
+
+Tatastha Lakshana (Accidental Attribute): Mentioned in Verse 13 and the first half of 14. Birth, growth, and death belong to the universe, not Brahman. However, we call Brahman the "Cause" of the universe only from our perspective—just as one might mistakenly call a rope a "snake." The snake isn't the rope's nature; it’s a temporary, superimposed description.
+
+Svarupa Lakshana (Essential Nature): Mentioned in Verse 14. Terms like Satyam (Truth), Jnanam (Knowledge), and Anandam (Bliss) are used. The text argues that we take the "worldly" understanding of these words and use them as pointers to describe something that is actually beyond words (Akhandam—the Indivisible).
+
+Technical Breakdown
+
+Srag-bhujangavat: "Like a garland/rope and a snake." This is the classic metaphor for superimposition (adhyasa).
+
+Satyadin: "Truth and the rest." Referring to the definition of Brahman as Sat-Chit-Ananda.
+
+Janmadi: "Birth and so on." Referring to the Brahma Sutras which define Brahman as that from which the birth, etc., of the universe proceed
+
+
+
+
+
+
+
+Close
+Save
+Save & Publish
+Close

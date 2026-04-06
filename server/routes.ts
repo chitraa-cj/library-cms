@@ -88,21 +88,26 @@ function buildSqliteFromBackup(data: any): Buffer {
       shloka_manthra_number TEXT,
       order_num INTEGER,
       sanskrit_text TEXT,
+      sanskrit_iast TEXT,
+      english_translation TEXT,
       bhashyam_text TEXT,
+      bhashyam_iast TEXT,
+      bhashyam_english_translation TEXT,
       created_at TEXT,
       updated_at TEXT,
       published_at TEXT
     );
 
     -- Verse × teeka junction: one row per (manthra, teeka) pair.
-    -- Sanskrit teeka text for this verse stored here.
-    -- Translations of the teeka entry are in the translations table.
+    -- Sanskrit + English teeka text stored here; other languages in translations table.
     CREATE TABLE manthra_teekas (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       manthra_document_id TEXT,
       teeka_document_id TEXT,
       teeka_name TEXT,
-      teeka_entry_sanskrit TEXT
+      teeka_entry_sanskrit TEXT,
+      teeka_entry_iast TEXT,
+      teeka_entry_english TEXT
     );
 
     CREATE TABLE word_meanings (
@@ -162,14 +167,18 @@ function buildSqliteFromBackup(data: any): Buffer {
   const insManthra = db.prepare(`
     INSERT OR REPLACE INTO manthras
       (id, document_id, section_document_id, grantha_document_id, shloka_manthra_number, order_num,
-       sanskrit_text, bhashyam_text, created_at, updated_at, published_at)
+       sanskrit_text, sanskrit_iast, english_translation,
+       bhashyam_text, bhashyam_iast, bhashyam_english_translation,
+       created_at, updated_at, published_at)
     VALUES (@id, @document_id, @section_document_id, @grantha_document_id, @shloka_manthra_number, @order_num,
-            @sanskrit_text, @bhashyam_text, @created_at, @updated_at, @published_at)
+            @sanskrit_text, @sanskrit_iast, @english_translation,
+            @bhashyam_text, @bhashyam_iast, @bhashyam_english_translation,
+            @created_at, @updated_at, @published_at)
   `);
 
   const insTeekaManthra = db.prepare(`
-    INSERT INTO manthra_teekas (manthra_document_id, teeka_document_id, teeka_name, teeka_entry_sanskrit)
-    VALUES (@manthra_document_id, @teeka_document_id, @teeka_name, @teeka_entry_sanskrit)
+    INSERT INTO manthra_teekas (manthra_document_id, teeka_document_id, teeka_name, teeka_entry_sanskrit, teeka_entry_iast, teeka_entry_english)
+    VALUES (@manthra_document_id, @teeka_document_id, @teeka_name, @teeka_entry_sanskrit, @teeka_entry_iast, @teeka_entry_english)
   `);
 
   const insWord = db.prepare(`
@@ -261,6 +270,9 @@ function buildSqliteFromBackup(data: any): Buffer {
       const shloka = m.ShlokaManthraEntry;
       const bhashyam = m.BhashyamEntry;
 
+      const engTr = blocksToText(shloka?.EnglishTranslationText) || null;
+      const bhashyamEngTr = blocksToText(bhashyam?.EnglishTranslationText) || null;
+
       insManthra.run({
         id: m.id ?? null,
         document_id: mDocId,
@@ -269,16 +281,22 @@ function buildSqliteFromBackup(data: any): Buffer {
         shloka_manthra_number: m.ShlokaManthraNumber ?? null,
         order_num: m.order ?? null,
         sanskrit_text: blocksToText(shloka?.SanskritTextEntry) || null,
+        sanskrit_iast: blocksToText(shloka?.IASTTransliteration) || null,
+        english_translation: engTr,
         bhashyam_text: blocksToText(bhashyam?.SanskritTextEntry) || null,
+        bhashyam_iast: blocksToText(bhashyam?.IASTTransliteration) || null,
+        bhashyam_english_translation: bhashyamEngTr,
         created_at: m.createdAt ?? null,
         updated_at: m.updatedAt ?? null,
         published_at: m.publishedAt ?? null,
       });
 
       if (mDocId) {
-        // Manthra Sanskrit translations (Hindi, Kannada, Tamil, etc.)
+        // English translations go into translations table too (for unified querying)
+        if (engTr) insTr.run({ entity_type: "manthra_sanskrit", entity_document_id: mDocId, language: "English", text: engTr });
+        if (bhashyamEngTr) insTr.run({ entity_type: "manthra_bhashyam", entity_document_id: mDocId, language: "English", text: bhashyamEngTr });
+        // Other language translations
         insertTranslations("manthra_sanskrit", mDocId, shloka?.OtherTranslations);
-        // Bhashyam translations
         insertTranslations("manthra_bhashyam", mDocId, bhashyam?.OtherTranslations);
       }
 
@@ -286,18 +304,24 @@ function buildSqliteFromBackup(data: any): Buffer {
       for (const mt of (m.Teekas ?? [])) {
         const teekaDocId = mt.teeka?.documentId ?? mt.documentId ?? null;
         const teekaName = mt.teeka?.TeekaName ?? mt.TeekaName ?? null;
-        const entryText = blocksToText(mt.TeekaEntry?.SanskritTextEntry) || null;
+        const entry = mt.TeekaEntry;
+        const entryText = blocksToText(entry?.SanskritTextEntry) || null;
+        const entryIast = blocksToText(entry?.IASTTransliteration) || null;
+        const entryEng = blocksToText(entry?.EnglishTranslationText) || null;
 
         const result = insTeekaManthra.run({
           manthra_document_id: mDocId,
           teeka_document_id: teekaDocId,
           teeka_name: teekaName,
           teeka_entry_sanskrit: entryText,
+          teeka_entry_iast: entryIast,
+          teeka_entry_english: entryEng,
         });
 
-        // Teeka entry language translations (e.g. Tamil translation of the teeka commentary)
+        // Teeka entry translations: English + other languages all go in translations table
         const mtId = String(result.lastInsertRowid);
-        insertTranslations("teeka_entry", mtId, mt.TeekaEntry?.OtherTranslations);
+        if (entryEng) insTr.run({ entity_type: "teeka_entry", entity_document_id: mtId, language: "English", text: entryEng });
+        insertTranslations("teeka_entry", mtId, entry?.OtherTranslations);
       }
 
       // Word meanings

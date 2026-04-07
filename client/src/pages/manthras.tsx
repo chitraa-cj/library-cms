@@ -53,6 +53,7 @@ import {
   ChevronDown,
   ChevronRight,
   Lock,
+  Eye,
 } from "lucide-react";
 import { blocksToText } from "@/lib/strapi-blocks";
 import { STRAPI_POLL_INTERVAL } from "@/hooks/use-strapi-sync";
@@ -96,6 +97,7 @@ export default function ManthrasPage() {
   const [deleteTarget, setDeleteTarget] = useState<any>(null);
   const [editingItem, setEditingItem] = useState<any>(null);
   const [editingDraftId, setEditingDraftId] = useState<number | null>(null);
+  const [viewOnly, setViewOnly] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
   const [filterGrantha, setFilterGrantha] = useState("__all__");
   const [filterSection, setFilterSection] = useState("__all__");
@@ -235,6 +237,53 @@ export default function ManthrasPage() {
     setFormOpen(true);
   }
 
+  function openView(item: any) {
+    setViewOnly(true);
+    if (item._isDraft) {
+      setEditingItem(item);
+      setEditingDraftId(item._draftId);
+      const d = item._draftData;
+      setFormData({
+        ShlokaManthraNumber: d.ShlokaManthraNumber || "",
+        order: d.order != null ? String(d.order) : "",
+        section: d._section || "",
+        ShlokaManthraEntry: unpackOtherTranslation(d.ShlokaManthraEntry),
+        BhashyamEntry: unpackOtherTranslation(d.BhashyamEntry),
+        Teekas: d.Teekas || [],
+        wordMeanings: (d.wordMeanings || []).map((w: WordMeaning) => ({ ...w, _id: uid() })),
+      });
+      setFormOpen(true);
+    } else {
+      setFetchingEditDocId(item.documentId);
+      fetch(`/api/strapi/manthras/${item.documentId}`)
+        .then((r) => r.json())
+        .then((resp) => {
+          const fullItem = resp.data ?? resp;
+          setEditingItem(fullItem);
+          setEditingDraftId(null);
+          setFormData({
+            ShlokaManthraNumber: fullItem.ShlokaManthraNumber || "",
+            order: fullItem.order != null ? String(fullItem.order) : "",
+            section: fullItem.Section?.documentId || fullItem.section?.documentId || "",
+            ShlokaManthraEntry: unpackOtherTranslation(fullItem.ShlokaManthraEntry),
+            BhashyamEntry: unpackOtherTranslation(fullItem.BhashyamEntry),
+            Teekas: (fullItem.Teekas || []).map((t: any) => ({
+              teeka: t.teeka ? { id: t.teeka.id, documentId: t.teeka.documentId, TeekaName: t.teeka.TeekaName || "", TeekaAuthor: t.teeka.TeekaAuthor || undefined } : null,
+              TeekaName: t.teeka?.TeekaName || t.TeekaName || "",
+              TeekaAuthor: t.teeka?.TeekaAuthor || t.TeekaAuthor || "",
+              TeekaEntry: t.TeekaEntry || {},
+            })),
+            wordMeanings: (fullItem.wordMeanings || []).map((w: WordMeaning) => ({ ...w, _id: uid() })),
+          });
+          setFormOpen(true);
+        })
+        .catch((err) => {
+          toast({ variant: "destructive", title: "Error loading manthra", description: err.message });
+        })
+        .finally(() => setFetchingEditDocId(null));
+    }
+  }
+
   function openEdit(item: any) {
     const granthaDocId = item._isDraft
       ? getGranthaDocIdForSection(item._draftData?._section || "")
@@ -243,6 +292,7 @@ export default function ManthrasPage() {
       toast({ variant: "destructive", title: "Grantha is blocked", description: "This grantha is blocked from editing. Contact an admin to remove the blocker." });
       return;
     }
+    setViewOnly(false);
     if (item._isDraft) {
       setEditingItem(item);
       setEditingDraftId(item._draftId);
@@ -501,9 +551,11 @@ export default function ManthrasPage() {
                     <td className="px-4 py-3 text-muted-foreground">{draft.order ?? "—"}</td>
                     <td className="px-4 py-3">
                       <div className="flex justify-end gap-1">
-                        <Button size="sm" variant="ghost" onClick={() => openEdit(draft)} disabled={draftLocked} title={draftLocked ? "Grantha is blocked" : undefined} data-testid={`button-edit-draft-${draft._draftId}`}>
-                          {draftLocked ? <Lock className="w-3.5 h-3.5 text-orange-500" /> : <Pencil className="w-3.5 h-3.5" />}
-                        </Button>
+                        {draftLocked ? (
+                          <Button size="sm" variant="ghost" onClick={() => openView(draft)} title="View (read-only)" data-testid={`button-view-draft-${draft._draftId}`}><Eye className="w-3.5 h-3.5 text-orange-500" /></Button>
+                        ) : (
+                          <Button size="sm" variant="ghost" onClick={() => openEdit(draft)} data-testid={`button-edit-draft-${draft._draftId}`}><Pencil className="w-3.5 h-3.5" /></Button>
+                        )}
                         <Button size="sm" variant="ghost" className="text-primary hover:text-primary" onClick={() => publishDraft.mutate(draft._draftId)} disabled={isPub || draftLocked} data-testid={`button-publish-draft-${draft._draftId}`}>
                           {isPub ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Send className="w-3.5 h-3.5" />}
                         </Button>
@@ -603,9 +655,15 @@ export default function ManthrasPage() {
                             <td className="px-4 py-3 text-muted-foreground text-sm">{m.order ?? "—"}</td>
                             <td className="px-4 py-3">
                               <div className="flex justify-end gap-1">
-                                <Button size="sm" variant="ghost" onClick={(e) => { e.stopPropagation(); openEdit(m); }} disabled={fetchingEditDocId === m.documentId || granthaLocked} title={granthaLocked ? "Grantha is blocked" : undefined} data-testid={`button-edit-${m.documentId}`}>
-                                  {fetchingEditDocId === m.documentId ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : granthaLocked ? <Lock className="w-3.5 h-3.5 text-orange-500" /> : <Pencil className="w-3.5 h-3.5" />}
-                                </Button>
+                                {granthaLocked ? (
+                                  <Button size="sm" variant="ghost" onClick={(e) => { e.stopPropagation(); openView(m); }} title="View (read-only)" data-testid={`button-view-${m.documentId}`}>
+                                    {fetchingEditDocId === m.documentId ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Eye className="w-3.5 h-3.5 text-orange-500" />}
+                                  </Button>
+                                ) : (
+                                  <Button size="sm" variant="ghost" onClick={(e) => { e.stopPropagation(); openEdit(m); }} disabled={fetchingEditDocId === m.documentId} data-testid={`button-edit-${m.documentId}`}>
+                                    {fetchingEditDocId === m.documentId ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Pencil className="w-3.5 h-3.5" />}
+                                  </Button>
+                                )}
                                 <Button size="sm" variant="ghost" className="text-destructive hover:text-destructive" onClick={(e) => { e.stopPropagation(); setDeleteTarget(m); }} disabled={granthaLocked} data-testid={`button-delete-${m.documentId}`}><Trash2 className="w-3.5 h-3.5" /></Button>
                               </div>
                             </td>
@@ -624,15 +682,22 @@ export default function ManthrasPage() {
       </div>
 
       {/* Form dialog */}
-      <Dialog open={formOpen} onOpenChange={(open) => { setFormOpen(open); if (!open) { resetForm(); setEditingItem(null); } }}>
+      <Dialog open={formOpen} onOpenChange={(open) => { setFormOpen(open); if (!open) { resetForm(); setEditingItem(null); setViewOnly(false); } }}>
         <DialogContent className="max-w-3xl max-h-[90vh] overflow-y-auto">
           <DialogHeader>
-            <DialogTitle>{editingItem ? "Edit Manthra" : "Add Manthra"}</DialogTitle>
+            <DialogTitle>{viewOnly ? "View Manthra" : editingItem ? "Edit Manthra" : "Add Manthra"}</DialogTitle>
             <DialogDescription>
               A Manthra is an individual verse or mantra within a Section.
             </DialogDescription>
           </DialogHeader>
+          {viewOnly && (
+            <div className="flex items-center gap-2 px-4 py-2.5 rounded-lg bg-orange-50 border border-orange-200 dark:bg-orange-950/30 dark:border-orange-800 text-sm text-orange-800 dark:text-orange-300">
+              <Lock className="w-4 h-4 shrink-0" />
+              <span>This grantha is blocked from editing. Viewing in read-only mode.</span>
+            </div>
+          )}
           <form onSubmit={handleSubmit} className="space-y-5">
+          <fieldset disabled={viewOnly} className="contents">
             <div className="grid grid-cols-2 gap-4">
               <div>
                 <Label>Shloka / Manthra Number *</Label>
@@ -774,12 +839,20 @@ export default function ManthrasPage() {
               )}
             </div>
 
+          </fieldset>
+
             <div className="flex justify-between pt-2">
-              <Button type="button" variant="outline" onClick={() => { setFormOpen(false); resetForm(); setEditingItem(null); }}>Cancel</Button>
-              <Button type="submit" disabled={isSaving} data-testid="button-save-manthra">
-                {isSaving && <Loader2 className="w-4 h-4 mr-2 animate-spin" />}
-                Save as Draft
-              </Button>
+              {viewOnly ? (
+                <Button type="button" variant="outline" className="w-full" onClick={() => { setFormOpen(false); resetForm(); setEditingItem(null); setViewOnly(false); }} data-testid="button-close-view">Close</Button>
+              ) : (
+                <>
+                  <Button type="button" variant="outline" onClick={() => { setFormOpen(false); resetForm(); setEditingItem(null); }}>Cancel</Button>
+                  <Button type="submit" disabled={isSaving} data-testid="button-save-manthra">
+                    {isSaving && <Loader2 className="w-4 h-4 mr-2 animate-spin" />}
+                    Save as Draft
+                  </Button>
+                </>
+              )}
             </div>
           </form>
         </DialogContent>

@@ -78,6 +78,7 @@ export default function SectionsPage() {
   const [editingItem, setEditingItem] = useState<any>(null);
   const [editingDraftId, setEditingDraftId] = useState<number | null>(null);
   const [viewingItem, setViewingItem] = useState<any>(null);
+  const [viewOnly, setViewOnly] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
   const [filterGrantha, setFilterGrantha] = useState("__all__");
   const [expandedSections, setExpandedSections] = useState<Set<string>>(new Set());
@@ -179,12 +180,36 @@ export default function SectionsPage() {
     setFormOpen(true);
   }
 
+  function openView(item: any) {
+    setViewOnly(true);
+    const d = item._isDraft ? item._draftData : item;
+    setEditingItem(item);
+    setEditingDraftId(item._isDraft ? item._draftId : null);
+    setFormData({
+      title: (item._isDraft ? d.title : item.title) || "",
+      type: (item._isDraft ? d.type : (item.type && item.type !== "null" ? item.type : "")) || "",
+      order: (item._isDraft ? (d.order != null ? String(d.order) : "") : (item.order != null ? String(item.order) : "")) || "",
+      grantha: (item._isDraft ? d._grantha : item.grantha?.documentId) || "",
+      parent: (item._isDraft ? d._parent : item.parent?.documentId) || "",
+    });
+    setTitleTranslations(
+      ((item._isDraft ? d.titleTranslations : item.titleTranslations) || []).map((t: any) => ({
+        id: uid(),
+        text: t.TranslationText || "",
+        language: t.LanguageOfTranslation || "",
+        isAiTranslated: t.isAiTranslated ?? false,
+      }))
+    );
+    setFormOpen(true);
+  }
+
   function openEdit(item: any) {
     const granthaDocId = item._isDraft ? item._draftData?._grantha : item.grantha?.documentId;
     if (granthaDocId && lockedDocIds.has(granthaDocId)) {
       toast({ variant: "destructive", title: "Grantha is blocked", description: "This grantha is blocked from editing. Contact an admin to remove the blocker." });
       return;
     }
+    setViewOnly(false);
     setEditingItem(item);
     if (item._isDraft) {
       setEditingDraftId(item._draftId);
@@ -397,9 +422,11 @@ export default function SectionsPage() {
                     <td className="px-4 py-3 text-muted-foreground text-xs">—</td>
                     <td className="px-4 py-3">
                       <div className="flex justify-end gap-1">
-                        <Button size="sm" variant="ghost" onClick={() => openEdit(draft)} disabled={draftLocked} title={draftLocked ? "Grantha is blocked" : undefined} data-testid={`button-edit-draft-${draft._draftId}`}>
-                          {draftLocked ? <Lock className="w-3.5 h-3.5 text-orange-500" /> : <Pencil className="w-3.5 h-3.5" />}
-                        </Button>
+                        {draftLocked ? (
+                          <Button size="sm" variant="ghost" onClick={() => openView(draft)} title="View (read-only)" data-testid={`button-view-draft-${draft._draftId}`}><Eye className="w-3.5 h-3.5 text-orange-500" /></Button>
+                        ) : (
+                          <Button size="sm" variant="ghost" onClick={() => openEdit(draft)} data-testid={`button-edit-draft-${draft._draftId}`}><Pencil className="w-3.5 h-3.5" /></Button>
+                        )}
                         <Button size="sm" variant="ghost" className="text-primary hover:text-primary" onClick={() => publishDraft.mutate(draft._draftId)} disabled={isPub || draftLocked} data-testid={`button-publish-draft-${draft._draftId}`}>
                           {isPub ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Send className="w-3.5 h-3.5" />}
                         </Button>
@@ -496,9 +523,11 @@ export default function SectionsPage() {
                           const nodeLocked = nodeGranthaDocId ? lockedDocIds.has(nodeGranthaDocId) : false;
                           return (
                             <div className="flex justify-end gap-1">
-                              <Button size="sm" variant="ghost" onClick={() => openEdit(node)} disabled={nodeLocked} title={nodeLocked ? "Grantha is blocked" : undefined} data-testid={`button-edit-${node.documentId}`}>
-                                {nodeLocked ? <Lock className="w-3.5 h-3.5 text-orange-500" /> : <Pencil className="w-3.5 h-3.5" />}
-                              </Button>
+                              {nodeLocked ? (
+                                <Button size="sm" variant="ghost" onClick={() => openView(node)} title="View (read-only)" data-testid={`button-view-${node.documentId}`}><Eye className="w-3.5 h-3.5 text-orange-500" /></Button>
+                              ) : (
+                                <Button size="sm" variant="ghost" onClick={() => openEdit(node)} data-testid={`button-edit-${node.documentId}`}><Pencil className="w-3.5 h-3.5" /></Button>
+                              )}
                               <Button size="sm" variant="ghost" className="text-destructive hover:text-destructive" onClick={() => setDeleteTarget(node)} disabled={nodeLocked} data-testid={`button-delete-${node.documentId}`}><Trash2 className="w-3.5 h-3.5" /></Button>
                             </div>
                           );
@@ -559,15 +588,22 @@ export default function SectionsPage() {
       </div>
 
       {/* Form dialog */}
-      <Dialog open={formOpen} onOpenChange={(open) => { setFormOpen(open); if (!open) resetForm(); }}>
+      <Dialog open={formOpen} onOpenChange={(open) => { setFormOpen(open); if (!open) { resetForm(); setViewOnly(false); } }}>
         <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
           <DialogHeader>
-            <DialogTitle>{editingItem ? "Edit Section" : "Add Section"}</DialogTitle>
+            <DialogTitle>{viewOnly ? "View Section" : editingItem ? "Edit Section" : "Add Section"}</DialogTitle>
             <DialogDescription>
               Sections are structural divisions of a Grantha — Adhyaya, Khanda, Valli, Pada, etc. A section can optionally nest inside a parent section.
             </DialogDescription>
           </DialogHeader>
+          {viewOnly && (
+            <div className="flex items-center gap-2 px-4 py-2.5 rounded-lg bg-orange-50 border border-orange-200 dark:bg-orange-950/30 dark:border-orange-800 text-sm text-orange-800 dark:text-orange-300">
+              <Lock className="w-4 h-4 shrink-0" />
+              <span>This grantha is blocked from editing. Viewing in read-only mode.</span>
+            </div>
+          )}
           <form onSubmit={handleSubmit} className="space-y-5">
+          <fieldset disabled={viewOnly} className="contents">
 
             {/* ── Basic info ── */}
             <div className="space-y-3">
@@ -754,12 +790,20 @@ export default function SectionsPage() {
               )}
             </div>
 
+          </fieldset>
+
             <div className="flex justify-between pt-2">
-              <Button type="button" variant="outline" onClick={() => { setFormOpen(false); resetForm(); setEditingItem(null); }}>Cancel</Button>
-              <Button type="submit" disabled={isSaving} data-testid="button-save-section">
-                {isSaving && <Loader2 className="w-4 h-4 mr-2 animate-spin" />}
-                Save as Draft
-              </Button>
+              {viewOnly ? (
+                <Button type="button" variant="outline" className="w-full" onClick={() => { setFormOpen(false); resetForm(); setEditingItem(null); setViewOnly(false); }} data-testid="button-close-view">Close</Button>
+              ) : (
+                <>
+                  <Button type="button" variant="outline" onClick={() => { setFormOpen(false); resetForm(); setEditingItem(null); }}>Cancel</Button>
+                  <Button type="submit" disabled={isSaving} data-testid="button-save-section">
+                    {isSaving && <Loader2 className="w-4 h-4 mr-2 animate-spin" />}
+                    Save as Draft
+                  </Button>
+                </>
+              )}
             </div>
           </form>
         </DialogContent>

@@ -47,6 +47,7 @@ import {
   BookOpen,
   X,
   Lock,
+  Eye,
 } from "lucide-react";
 import { STRAPI_POLL_INTERVAL } from "@/hooks/use-strapi-sync";
 
@@ -57,6 +58,7 @@ export default function TeekasPage() {
   const [deleteTarget, setDeleteTarget] = useState<any>(null);
   const [editingItem, setEditingItem] = useState<any>(null);
   const [editingDraftId, setEditingDraftId] = useState<number | null>(null);
+  const [viewOnly, setViewOnly] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
   const [filterGrantha, setFilterGrantha] = useState("__all__");
 
@@ -125,12 +127,27 @@ export default function TeekasPage() {
     setFormOpen(true);
   }
 
+  function openView(item: any) {
+    setViewOnly(true);
+    setEditingItem(item);
+    if (item._isDraft) {
+      setEditingDraftId(item._draftId);
+      const d = item._draftData;
+      setFormData({ TeekaName: d.TeekaName || "", TeekaAuthor: d.TeekaAuthor || "", grantha: d._grantha || "" });
+    } else {
+      setEditingDraftId(null);
+      setFormData({ TeekaName: item.TeekaName || "", TeekaAuthor: item.TeekaAuthor || "", grantha: item.grantha?.documentId || "" });
+    }
+    setFormOpen(true);
+  }
+
   function openEdit(item: any) {
     const granthaDocId = item._isDraft ? item._draftData?._grantha : item.grantha?.documentId;
     if (granthaDocId && lockedDocIds.has(granthaDocId)) {
       toast({ variant: "destructive", title: "Grantha is blocked", description: "This grantha is blocked from editing. Contact an admin to remove the blocker." });
       return;
     }
+    setViewOnly(false);
     setEditingItem(item);
     if (item._isDraft) {
       setEditingDraftId(item._draftId);
@@ -301,9 +318,11 @@ export default function TeekasPage() {
                     </td>
                     <td className="px-4 py-3">
                       <div className="flex justify-end gap-1">
-                        <Button size="sm" variant="ghost" onClick={() => openEdit(draft)} disabled={draftLocked} title={draftLocked ? "Grantha is blocked" : undefined} data-testid={`button-edit-draft-${draft._draftId}`}>
-                          {draftLocked ? <Lock className="w-3.5 h-3.5 text-orange-500" /> : <Pencil className="w-3.5 h-3.5" />}
-                        </Button>
+                        {draftLocked ? (
+                          <Button size="sm" variant="ghost" onClick={() => openView(draft)} title="View (read-only)" data-testid={`button-view-draft-${draft._draftId}`}><Eye className="w-3.5 h-3.5 text-orange-500" /></Button>
+                        ) : (
+                          <Button size="sm" variant="ghost" onClick={() => openEdit(draft)} data-testid={`button-edit-draft-${draft._draftId}`}><Pencil className="w-3.5 h-3.5" /></Button>
+                        )}
                         <Button size="sm" variant="ghost" className="text-primary hover:text-primary" onClick={() => publishDraft.mutate(draft._draftId)} disabled={isPub || draftLocked} data-testid={`button-publish-draft-${draft._draftId}`}>
                           {isPub ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Send className="w-3.5 h-3.5" />}
                         </Button>
@@ -331,9 +350,11 @@ export default function TeekasPage() {
                     </td>
                     <td className="px-4 py-3">
                       <div className="flex justify-end gap-1">
-                        <Button size="sm" variant="ghost" onClick={() => openEdit(teeka)} disabled={teekaLocked} title={teekaLocked ? "Grantha is blocked" : undefined} data-testid={`button-edit-${teeka.documentId}`}>
-                          {teekaLocked ? <Lock className="w-3.5 h-3.5 text-orange-500" /> : <Pencil className="w-3.5 h-3.5" />}
-                        </Button>
+                        {teekaLocked ? (
+                          <Button size="sm" variant="ghost" onClick={() => openView(teeka)} title="View (read-only)" data-testid={`button-view-${teeka.documentId}`}><Eye className="w-3.5 h-3.5 text-orange-500" /></Button>
+                        ) : (
+                          <Button size="sm" variant="ghost" onClick={() => openEdit(teeka)} data-testid={`button-edit-${teeka.documentId}`}><Pencil className="w-3.5 h-3.5" /></Button>
+                        )}
                         <Button size="sm" variant="ghost" className="text-destructive hover:text-destructive" onClick={() => setDeleteTarget(teeka)} disabled={teekaLocked} data-testid={`button-delete-${teeka.documentId}`}><Trash2 className="w-3.5 h-3.5" /></Button>
                       </div>
                     </td>
@@ -346,13 +367,20 @@ export default function TeekasPage() {
       </div>
 
       {/* Form dialog */}
-      <Dialog open={formOpen} onOpenChange={(open) => { setFormOpen(open); if (!open) resetForm(); }}>
+      <Dialog open={formOpen} onOpenChange={(open) => { setFormOpen(open); if (!open) { resetForm(); setViewOnly(false); } }}>
         <DialogContent className="max-w-md">
           <DialogHeader>
-            <DialogTitle>{editingItem ? "Edit Teeka" : "Add Teeka"}</DialogTitle>
+            <DialogTitle>{viewOnly ? "View Teeka" : editingItem ? "Edit Teeka" : "Add Teeka"}</DialogTitle>
             <DialogDescription>A Teeka is a commentary work on a Grantha.</DialogDescription>
           </DialogHeader>
+          {viewOnly && (
+            <div className="flex items-center gap-2 px-4 py-2.5 rounded-lg bg-orange-50 border border-orange-200 dark:bg-orange-950/30 dark:border-orange-800 text-sm text-orange-800 dark:text-orange-300">
+              <Lock className="w-4 h-4 shrink-0" />
+              <span>This grantha is blocked from editing. Viewing in read-only mode.</span>
+            </div>
+          )}
           <form onSubmit={handleSubmit} className="space-y-4">
+          <fieldset disabled={viewOnly} className="contents">
             <div>
               <Label>Teeka Name *</Label>
               <Input
@@ -400,12 +428,20 @@ export default function TeekasPage() {
               </Select>
             </div>
 
+          </fieldset>
+
             <div className="flex justify-between pt-2">
-              <Button type="button" variant="outline" onClick={() => { setFormOpen(false); resetForm(); setEditingItem(null); }}>Cancel</Button>
-              <Button type="submit" disabled={isSaving} data-testid="button-save-teeka">
-                {isSaving && <Loader2 className="w-4 h-4 mr-2 animate-spin" />}
-                Save as Draft
-              </Button>
+              {viewOnly ? (
+                <Button type="button" variant="outline" className="w-full" onClick={() => { setFormOpen(false); resetForm(); setEditingItem(null); setViewOnly(false); }} data-testid="button-close-view">Close</Button>
+              ) : (
+                <>
+                  <Button type="button" variant="outline" onClick={() => { setFormOpen(false); resetForm(); setEditingItem(null); }}>Cancel</Button>
+                  <Button type="submit" disabled={isSaving} data-testid="button-save-teeka">
+                    {isSaving && <Loader2 className="w-4 h-4 mr-2 animate-spin" />}
+                    Save as Draft
+                  </Button>
+                </>
+              )}
             </div>
           </form>
         </DialogContent>

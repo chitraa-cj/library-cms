@@ -57,7 +57,9 @@ import {
   Layers,
   X,
   Lock,
+  BookOpen,
 } from "lucide-react";
+import { blocksToText } from "@/lib/strapi-blocks";
 import { STRAPI_POLL_INTERVAL } from "@/hooks/use-strapi-sync";
 
 let _uid = 0;
@@ -79,6 +81,9 @@ export default function SectionsPage() {
   const [editingDraftId, setEditingDraftId] = useState<number | null>(null);
   const [viewingItem, setViewingItem] = useState<any>(null);
   const [viewOnly, setViewOnly] = useState(false);
+  const [expandedManthraId, setExpandedManthraId] = useState<string | null>(null);
+  const [manthraDetailsCache, setManthraDetailsCache] = useState<Record<string, any>>({});
+  const [fetchingManthraId, setFetchingManthraId] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState("");
   const [filterGrantha, setFilterGrantha] = useState("__all__");
   const [expandedSections, setExpandedSections] = useState<Set<string>>(new Set());
@@ -201,6 +206,24 @@ export default function SectionsPage() {
       }))
     );
     setFormOpen(true);
+  }
+
+  function toggleManthra(docId: string) {
+    if (expandedManthraId === docId) {
+      setExpandedManthraId(null);
+      return;
+    }
+    setExpandedManthraId(docId);
+    if (manthraDetailsCache[docId]) return;
+    setFetchingManthraId(docId);
+    fetch(`/api/strapi/manthras/${docId}`)
+      .then((r) => r.json())
+      .then((resp) => {
+        const full = resp.data ?? resp;
+        setManthraDetailsCache((prev) => ({ ...prev, [docId]: full }));
+      })
+      .catch(() => {})
+      .finally(() => setFetchingManthraId(null));
   }
 
   function openEdit(item: any) {
@@ -588,7 +611,7 @@ export default function SectionsPage() {
       </div>
 
       {/* Form dialog */}
-      <Dialog open={formOpen} onOpenChange={(open) => { setFormOpen(open); if (!open) { resetForm(); setViewOnly(false); } }}>
+      <Dialog open={formOpen} onOpenChange={(open) => { setFormOpen(open); if (!open) { resetForm(); setViewOnly(false); setExpandedManthraId(null); } }}>
         <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
           <DialogHeader>
             <DialogTitle>{viewOnly ? "View Section" : editingItem ? "Edit Section" : "Add Section"}</DialogTitle>
@@ -792,9 +815,56 @@ export default function SectionsPage() {
 
           </fieldset>
 
+            {/* Manthras list — only in view-only mode */}
+            {viewOnly && Array.isArray(editingItem?.manthras) && editingItem.manthras.length > 0 && (
+              <div className="space-y-2 pt-2">
+                <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide flex items-center gap-1.5">
+                  <BookOpen className="w-3.5 h-3.5" />
+                  Manthras in this section ({editingItem.manthras.length}{editingItem.manthras.length === 25 ? "+" : ""})
+                </p>
+                <div className="border rounded-lg divide-y overflow-hidden">
+                  {[...editingItem.manthras]
+                    .sort((a: any, b: any) => (a.order ?? 9999) - (b.order ?? 9999))
+                    .map((m: any) => {
+                      const isOpen = expandedManthraId === m.documentId;
+                      const isFetching = fetchingManthraId === m.documentId;
+                      const detail = manthraDetailsCache[m.documentId];
+                      const sanskritBlocks = detail?.ShlokaManthraEntry?.SanskritTextEntry;
+                      const sanskritText = sanskritBlocks ? blocksToText(sanskritBlocks) : null;
+                      return (
+                        <div key={m.documentId}>
+                          <button
+                            type="button"
+                            className="w-full flex items-center justify-between px-3 py-2 text-sm hover:bg-muted/30 transition-colors text-left"
+                            onClick={() => toggleManthra(m.documentId)}
+                            data-testid={`button-view-manthra-${m.documentId}`}
+                          >
+                            <span className="font-medium">{m.ShlokaManthraNumber || `#${m.order}`}</span>
+                            <span className="text-muted-foreground">
+                              {isFetching ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : isOpen ? <ChevronDown className="w-3.5 h-3.5" /> : <ChevronRight className="w-3.5 h-3.5" />}
+                            </span>
+                          </button>
+                          {isOpen && (
+                            <div className="px-3 pb-3 pt-1 bg-muted/20">
+                              {isFetching ? (
+                                <p className="text-xs text-muted-foreground">Loading…</p>
+                              ) : sanskritText ? (
+                                <p className="text-sm font-serif whitespace-pre-wrap leading-relaxed">{sanskritText}</p>
+                              ) : (
+                                <p className="text-xs text-muted-foreground italic">No text content available.</p>
+                              )}
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })}
+                </div>
+              </div>
+            )}
+
             <div className="flex justify-between pt-2">
               {viewOnly ? (
-                <Button type="button" variant="outline" className="w-full" onClick={() => { setFormOpen(false); resetForm(); setEditingItem(null); setViewOnly(false); }} data-testid="button-close-view">Close</Button>
+                <Button type="button" variant="outline" className="w-full" onClick={() => { setFormOpen(false); resetForm(); setEditingItem(null); setViewOnly(false); setExpandedManthraId(null); }} data-testid="button-close-view">Close</Button>
               ) : (
                 <>
                   <Button type="button" variant="outline" onClick={() => { setFormOpen(false); resetForm(); setEditingItem(null); }}>Cancel</Button>

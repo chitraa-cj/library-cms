@@ -65,6 +65,8 @@ import {
   ExternalLink,
   Eye,
   AlertTriangle,
+  Lock,
+  LockOpen,
 } from "lucide-react";
 
 const STRAPI_ADMIN = "http://13.53.121.15:1337/admin";
@@ -341,6 +343,10 @@ function GranthaCard({
   isPublishing,
   currentUserId,
   isDuplicate,
+  isLocked,
+  isAdmin,
+  onLock,
+  onUnlock,
 }: {
   item: any;
   onEdit: () => void;
@@ -350,13 +356,17 @@ function GranthaCard({
   isPublishing: boolean;
   currentUserId?: string | null;
   isDuplicate?: boolean;
+  isLocked?: boolean;
+  isAdmin?: boolean;
+  onLock?: () => void;
+  onUnlock?: () => void;
 }) {
   const isDraft = item._isDraft;
   const canDelete = !currentUserId || item._createdBy === currentUserId;
 
   return (
     <div
-      className="group relative border rounded-xl bg-card p-5 cursor-pointer hover:border-primary/50 hover:shadow-sm transition-all"
+      className={`group relative border rounded-xl bg-card p-5 cursor-pointer hover:border-primary/50 hover:shadow-sm transition-all ${isLocked ? "border-orange-300 dark:border-orange-700/60" : ""}`}
       onClick={onEdit}
       data-testid={`card-grantha-${item.documentId || item._draftId}`}
     >
@@ -377,6 +387,16 @@ function GranthaCard({
           >
             {isDraft ? "Draft" : "Published"}
           </Badge>
+          {isLocked && (
+            <Badge
+              variant="outline"
+              className="text-xs border-orange-300 text-orange-700 bg-orange-50 dark:bg-orange-950/30 dark:text-orange-400 flex items-center gap-1"
+              data-testid={`badge-locked-${item.documentId || item._draftId}`}
+            >
+              <Lock className="w-2.5 h-2.5" />
+              Locked
+            </Badge>
+          )}
         </div>
 
         <div
@@ -388,11 +408,12 @@ function GranthaCard({
             variant="ghost"
             className="h-7 w-7"
             onClick={onEdit}
+            title={isLocked ? "View only (locked)" : "Edit"}
             data-testid={`button-edit-${item.documentId || item._draftId}`}
           >
-            <Pencil className="w-3.5 h-3.5" />
+            {isLocked ? <Eye className="w-3.5 h-3.5" /> : <Pencil className="w-3.5 h-3.5" />}
           </Button>
-          {isDraft && (
+          {!isLocked && isDraft && (
             <Button
               size="icon"
               variant="ghost"
@@ -420,7 +441,32 @@ function GranthaCard({
               <ExternalLink className="w-3.5 h-3.5" />
             </button>
           )}
-          {canDelete && (
+          {isAdmin && item.documentId && (
+            isLocked ? (
+              <Button
+                size="icon"
+                variant="ghost"
+                className="h-7 w-7 text-orange-600 hover:text-orange-600"
+                onClick={onUnlock}
+                title="Remove blocker — allow editing"
+                data-testid={`button-unlock-${item.documentId}`}
+              >
+                <LockOpen className="w-3.5 h-3.5" />
+              </Button>
+            ) : (
+              <Button
+                size="icon"
+                variant="ghost"
+                className="h-7 w-7 text-muted-foreground hover:text-orange-600"
+                onClick={onLock}
+                title="Add blocker — prevent editing"
+                data-testid={`button-lock-${item.documentId}`}
+              >
+                <Lock className="w-3.5 h-3.5" />
+              </Button>
+            )
+          )}
+          {!isLocked && canDelete && (
             <Button
               size="icon"
               variant="ghost"
@@ -797,6 +843,47 @@ export default function GranthasPage() {
     },
   });
 
+  // Grantha locks
+  const { data: locksData } = useQuery<any[]>({
+    queryKey: ["/api/granthas/locks"],
+    refetchInterval: 30000,
+    refetchOnWindowFocus: true,
+  });
+
+  const lockedDocIds = new Set<string>((locksData ?? []).map((l: any) => l.granthaDocId));
+
+  const lockMutation = useMutation({
+    mutationFn: async ({ docId, granthaName }: { docId: string; granthaName?: string }) => {
+      const res = await apiRequest("POST", `/api/admin/granthas/${docId}/lock`, { granthaName });
+      if (!res.ok) throw new Error((await res.json()).message || "Failed to lock");
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/granthas/locks"] });
+      toast({ title: "Grantha locked", description: "Editing is now blocked for all users." });
+    },
+    onError: (err: any) => {
+      toast({ variant: "destructive", title: "Error", description: err.message });
+    },
+  });
+
+  const unlockMutation = useMutation({
+    mutationFn: async (docId: string) => {
+      const res = await apiRequest("DELETE", `/api/admin/granthas/${docId}/lock`);
+      if (!res.ok) throw new Error((await res.json()).message || "Failed to unlock");
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/granthas/locks"] });
+      toast({ title: "Grantha unblocked", description: "Editing is now allowed." });
+    },
+    onError: (err: any) => {
+      toast({ variant: "destructive", title: "Error", description: err.message });
+    },
+  });
+
+  const isAdmin = user?.role === "admin";
+
   // Per-manthra publish mutation
   const publishMantraMutation = useMutation({
     mutationFn: async (params: { draftId: number; adhyayaId: string; khandaId: string; padaId?: string; manthraId: string }) => {
@@ -908,13 +995,22 @@ export default function GranthasPage() {
   }
 
   async function openEdit(item: any) {
+    const granthaDocId = item.documentId || item._strapiDocId;
+    const isItemLocked = !!(granthaDocId && lockedDocIds.has(granthaDocId));
+
     track("grantha_editor_opened", {
       grantha_name: item.GranthaName || item._draftData?.GranthaName || item.title || "(unknown)",
       grantha_type: item.GranthaType || item._draftData?.GranthaType || "",
       is_draft: !!item._isDraft,
-      has_strapi_link: !!(item.documentId || item._strapiDocId),
+      has_strapi_link: !!granthaDocId,
+      is_locked: isItemLocked,
     });
     setEditingItem(item);
+
+    // If this grantha is locked, open in view-only mode
+    if (isItemLocked) {
+      setViewOnly(true);
+    }
 
     // New drafts with no Strapi link: use draft hierarchy directly and return early.
     if (item._isDraft && !item._strapiDocId) {
@@ -2404,6 +2500,10 @@ export default function GranthasPage() {
                     }
                     currentUserId={user?.id}
                     isDuplicate={norm ? duplicateSet.has(norm) : false}
+                    isLocked={!!(item.documentId && lockedDocIds.has(item.documentId))}
+                    isAdmin={isAdmin}
+                    onLock={() => lockMutation.mutate({ docId: item.documentId, granthaName: item.GranthaName })}
+                    onUnlock={() => unlockMutation.mutate(item.documentId)}
                   />
                 );
               });
@@ -2447,17 +2547,32 @@ export default function GranthasPage() {
   return (
     <div className="p-6 lg:p-8 max-w-4xl mx-auto">
       {/* View-only banner */}
-      {viewOnly && (
-        <div className="flex items-center justify-between gap-3 mb-6 px-4 py-3 rounded-lg bg-muted/60 border border-border">
-          <div className="flex items-center gap-2 text-sm text-muted-foreground">
-            <Eye className="w-4 h-4 shrink-0" />
-            <span>You are viewing <strong>{formData.GranthaName}</strong> in read-only mode. No changes can be made.</span>
+      {viewOnly && (() => {
+        const itemDocId = editingItem?.documentId || editingItem?._strapiDocId;
+        const lockInfo = itemDocId ? (locksData ?? []).find((l: any) => l.granthaDocId === itemDocId) : null;
+        const isItemLocked = !!lockInfo;
+        return (
+          <div className={`flex items-center justify-between gap-3 mb-6 px-4 py-3 rounded-lg border ${isItemLocked ? "bg-orange-50 dark:bg-orange-950/20 border-orange-200 dark:border-orange-800" : "bg-muted/60 border-border"}`}>
+            <div className="flex items-center gap-2 text-sm text-muted-foreground">
+              {isItemLocked ? <Lock className="w-4 h-4 shrink-0 text-orange-600 dark:text-orange-400" /> : <Eye className="w-4 h-4 shrink-0" />}
+              <span>
+                {isItemLocked
+                  ? <>
+                      <strong>{formData.GranthaName}</strong> is <strong className="text-orange-700 dark:text-orange-400">blocked from editing</strong>.
+                      {lockInfo.lockedByUsername && <> Locked by <strong>{lockInfo.lockedByUsername}</strong>.</>}
+                      {lockInfo.reason && <> Reason: {lockInfo.reason}.</>}
+                      {isAdmin && " You can remove the blocker from the grantha list."}
+                    </>
+                  : <>You are viewing <strong>{formData.GranthaName}</strong> in read-only mode. No changes can be made.</>
+                }
+              </span>
+            </div>
+            <Button size="sm" variant="outline" onClick={() => { setView("list"); resetForm(); }} data-testid="button-close-view">
+              Close
+            </Button>
           </div>
-          <Button size="sm" variant="outline" onClick={() => { setView("list"); resetForm(); }} data-testid="button-close-view">
-            Close
-          </Button>
-        </div>
-      )}
+        );
+      })()}
 
       {/* Step indicator — hidden in view-only mode */}
       {!viewOnly && (

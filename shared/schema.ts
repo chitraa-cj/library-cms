@@ -1,5 +1,5 @@
 import { sql } from "drizzle-orm";
-import { pgTable, text, varchar, timestamp, serial, jsonb, integer } from "drizzle-orm/pg-core";
+import { pgTable, text, varchar, timestamp, serial, jsonb, integer, boolean } from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod";
 
@@ -60,6 +60,18 @@ export const granthaBackups = pgTable("grantha_backups", {
 
 export type GranthaBackup = typeof granthaBackups.$inferSelect;
 export type GranthaBackupMeta = Omit<GranthaBackup, "data">;
+
+export const granthaLocks = pgTable("grantha_locks", {
+  id: serial("id").primaryKey(),
+  granthaDocId: text("grantha_doc_id").notNull().unique(),
+  granthaName: text("grantha_name"),
+  lockedByUserId: varchar("locked_by_user_id").references(() => users.id),
+  lockedByUsername: text("locked_by_username"),
+  lockedAt: timestamp("locked_at").defaultNow().notNull(),
+  reason: text("reason"),
+});
+
+export type GranthaLock = typeof granthaLocks.$inferSelect;
 
 // ---------- Controlled vocabularies ----------
 // Values match the Strapi schema enumerations exactly.

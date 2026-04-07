@@ -2237,5 +2237,45 @@ export async function registerRoutes(
     }
   });
 
+  // ---------- Grantha lock / unlock ----------
+
+  app.get("/api/granthas/locks", requireAuth, async (_req, res) => {
+    try {
+      const locks = await storage.getGranthaLocks();
+      res.json(locks);
+    } catch (error: any) {
+      res.status(500).json({ message: error.message || "Failed to fetch locks" });
+    }
+  });
+
+  app.post("/api/admin/granthas/:docId/lock", requireAuth, requireAdmin, async (req, res) => {
+    try {
+      const { docId } = req.params;
+      const { reason, granthaName } = req.body ?? {};
+      const user = req.user as User;
+      const lock = await storage.lockGrantha(
+        docId,
+        granthaName || undefined,
+        user.id,
+        user.username,
+        reason || undefined,
+      );
+      res.status(201).json(lock);
+    } catch (error: any) {
+      res.status(500).json({ message: error.message || "Failed to lock grantha" });
+    }
+  });
+
+  app.delete("/api/admin/granthas/:docId/lock", requireAuth, requireAdmin, async (req, res) => {
+    try {
+      const { docId } = req.params;
+      const removed = await storage.unlockGrantha(docId);
+      if (!removed) return res.status(404).json({ message: "No lock found for this grantha" });
+      res.json({ message: "Grantha unlocked" });
+    } catch (error: any) {
+      res.status(500).json({ message: error.message || "Failed to unlock grantha" });
+    }
+  });
+
   return httpServer;
 }

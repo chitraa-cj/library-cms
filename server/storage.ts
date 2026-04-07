@@ -1,4 +1,4 @@
-import { type User, type InsertUser, type Draft, type InsertDraft, users, contentDrafts, granthaBackups, type GranthaBackup, type GranthaBackupMeta } from "@shared/schema";
+import { type User, type InsertUser, type Draft, type InsertDraft, users, contentDrafts, granthaBackups, type GranthaBackup, type GranthaBackupMeta, granthaLocks, type GranthaLock } from "@shared/schema";
 import { db } from "./db";
 import { eq, and, desc } from "drizzle-orm";
 
@@ -22,6 +22,10 @@ export interface IStorage {
   createBackup(label: string, data: any, granthaCount: number, sectionCount: number, manthraCount: number): Promise<GranthaBackup>;
   listBackups(): Promise<GranthaBackupMeta[]>;
   getBackup(id: number): Promise<GranthaBackup | null>;
+  getGranthaLocks(): Promise<GranthaLock[]>;
+  getGranthaLock(granthaDocId: string): Promise<GranthaLock | null>;
+  lockGrantha(granthaDocId: string, granthaName: string | undefined, userId: string, username: string, reason?: string): Promise<GranthaLock>;
+  unlockGrantha(granthaDocId: string): Promise<boolean>;
 }
 
 export class DatabaseStorage implements IStorage {
@@ -155,6 +159,32 @@ export class DatabaseStorage implements IStorage {
   async getBackup(id: number): Promise<GranthaBackup | null> {
     const [backup] = await db.select().from(granthaBackups).where(eq(granthaBackups.id, id));
     return backup ?? null;
+  }
+
+  async getGranthaLocks(): Promise<GranthaLock[]> {
+    return db.select().from(granthaLocks).orderBy(desc(granthaLocks.lockedAt));
+  }
+
+  async getGranthaLock(granthaDocId: string): Promise<GranthaLock | null> {
+    const [lock] = await db.select().from(granthaLocks).where(eq(granthaLocks.granthaDocId, granthaDocId));
+    return lock ?? null;
+  }
+
+  async lockGrantha(granthaDocId: string, granthaName: string | undefined, userId: string, username: string, reason?: string): Promise<GranthaLock> {
+    const [lock] = await db
+      .insert(granthaLocks)
+      .values({ granthaDocId, granthaName, lockedByUserId: userId, lockedByUsername: username, reason })
+      .onConflictDoUpdate({
+        target: granthaLocks.granthaDocId,
+        set: { granthaName, lockedByUserId: userId, lockedByUsername: username, reason, lockedAt: new Date() },
+      })
+      .returning();
+    return lock;
+  }
+
+  async unlockGrantha(granthaDocId: string): Promise<boolean> {
+    const result = await db.delete(granthaLocks).where(eq(granthaLocks.granthaDocId, granthaDocId)).returning();
+    return result.length > 0;
   }
 }
 

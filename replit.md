@@ -53,6 +53,8 @@ A data feeding website for the Ekatmadham Library that connects to a Strapi CMS 
 - `users` - User accounts (id, username, password, displayName, role)
 - `session` - Express sessions (connect-pg-simple)
 - `content_drafts` - Draft content (id, content_type, strapi_document_id, title, data as JSONB, status, created_by, timestamps)
+- `grantha_backups` - Strapi data snapshots (id, label, timestamps, grantha/section/manthra counts, data as JSONB)
+- `grantha_locks` - Grantha edit blockers (id, grantha_doc_id UNIQUE, grantha_name, locked_by_user_id, locked_by_username, locked_at, reason)
 
 ## File Structure
 - `shared/schema.ts` - Database schema (users + content_drafts) + Strapi TypeScript interfaces + enums
@@ -72,6 +74,7 @@ A data feeding website for the Ekatmadham Library that connects to a Strapi CMS 
 - Self-registration is enabled — anyone can create an account via the Register tab; new accounts get the "editor" role automatically
 - Admin API routes: `GET/POST /api/admin/users`, `PATCH /api/admin/users/:id/role`, `PATCH /api/admin/users/:id/password`, `DELETE /api/admin/users/:id`
 - "Administration" section in sidebar visible only to admin-role users
+- **Grantha blocker**: Admins can lock (block editing on) any published grantha via the lock icon on the grantha card. Locked granthas are read-only for ALL users. Admins can unlock at any time. API: `GET /api/granthas/locks`, `POST /api/admin/granthas/:docId/lock`, `DELETE /api/admin/granthas/:docId/lock`
 
 ## Security
 - All draft operations are user-scoped (users can only see/edit/delete their own drafts)

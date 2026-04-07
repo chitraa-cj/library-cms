@@ -56,6 +56,7 @@ import {
   ChevronDown,
   Layers,
   X,
+  Lock,
 } from "lucide-react";
 import { STRAPI_POLL_INTERVAL } from "@/hooks/use-strapi-sync";
 
@@ -109,6 +110,13 @@ export default function SectionsPage() {
     queryKey: ["/api/strapi", "granthas"],
     refetchOnWindowFocus: true,
   });
+
+  const { data: locksData } = useQuery<any[]>({
+    queryKey: ["/api/granthas/locks"],
+    refetchOnWindowFocus: true,
+  });
+
+  const lockedDocIds = useMemo(() => new Set((locksData ?? []).map((l: any) => l.granthaDocId as string)), [locksData]);
 
   const { unpublishedDrafts, isLoadingDrafts, saveDraft, publishDraft, deleteDraft } =
     useDrafts("sections");
@@ -172,6 +180,11 @@ export default function SectionsPage() {
   }
 
   function openEdit(item: any) {
+    const granthaDocId = item._isDraft ? item._draftData?._grantha : item.grantha?.documentId;
+    if (granthaDocId && lockedDocIds.has(granthaDocId)) {
+      toast({ variant: "destructive", title: "Grantha is blocked", description: "This grantha is blocked from editing. Contact an admin to remove the blocker." });
+      return;
+    }
     setEditingItem(item);
     if (item._isDraft) {
       setEditingDraftId(item._draftId);
@@ -368,18 +381,26 @@ export default function SectionsPage() {
               {displayedDrafts.map((draft) => {
                 const isPub = publishDraft.isPending && publishDraft.variables === draft._draftId;
                 const grantha = allGranthas.find((g) => g.documentId === draft._grantha);
+                const draftLocked = draft._grantha ? lockedDocIds.has(draft._grantha) : false;
                 return (
                   <tr key={`draft-${draft._draftId}`} className="border-b border-border hover:bg-muted/30 transition-colors" data-testid={`row-draft-${draft._draftId}`}>
                     <td className="px-4 py-3"><Badge className="bg-amber-100 text-amber-800 border-amber-200 text-xs">Draft</Badge></td>
                     <td className="px-4 py-3 font-medium">{draft.title}</td>
                     <td className="px-4 py-3 text-muted-foreground text-xs">{draft.type || "—"}</td>
-                    <td className="px-4 py-3 text-muted-foreground text-xs">{grantha?.GranthaName || "—"}</td>
+                    <td className="px-4 py-3 text-muted-foreground text-xs">
+                      <div className="flex items-center gap-1">
+                        {grantha?.GranthaName || "—"}
+                        {draftLocked && <Lock className="w-3 h-3 text-orange-500 shrink-0" />}
+                      </div>
+                    </td>
                     <td className="px-4 py-3 text-muted-foreground text-xs">—</td>
                     <td className="px-4 py-3 text-muted-foreground text-xs">—</td>
                     <td className="px-4 py-3">
                       <div className="flex justify-end gap-1">
-                        <Button size="sm" variant="ghost" onClick={() => openEdit(draft)} data-testid={`button-edit-draft-${draft._draftId}`}><Pencil className="w-3.5 h-3.5" /></Button>
-                        <Button size="sm" variant="ghost" className="text-primary hover:text-primary" onClick={() => publishDraft.mutate(draft._draftId)} disabled={isPub} data-testid={`button-publish-draft-${draft._draftId}`}>
+                        <Button size="sm" variant="ghost" onClick={() => openEdit(draft)} disabled={draftLocked} title={draftLocked ? "Grantha is blocked" : undefined} data-testid={`button-edit-draft-${draft._draftId}`}>
+                          {draftLocked ? <Lock className="w-3.5 h-3.5 text-orange-500" /> : <Pencil className="w-3.5 h-3.5" />}
+                        </Button>
+                        <Button size="sm" variant="ghost" className="text-primary hover:text-primary" onClick={() => publishDraft.mutate(draft._draftId)} disabled={isPub || draftLocked} data-testid={`button-publish-draft-${draft._draftId}`}>
                           {isPub ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Send className="w-3.5 h-3.5" />}
                         </Button>
                         {(!user?.id || draft._createdBy === user.id) && (
@@ -470,10 +491,18 @@ export default function SectionsPage() {
                             : "—"}
                       </td>
                       <td className={`${px} ${py}`}>
-                        <div className="flex justify-end gap-1">
-                          <Button size="sm" variant="ghost" onClick={() => openEdit(node)} data-testid={`button-edit-${node.documentId}`}><Pencil className="w-3.5 h-3.5" /></Button>
-                          <Button size="sm" variant="ghost" className="text-destructive hover:text-destructive" onClick={() => setDeleteTarget(node)} data-testid={`button-delete-${node.documentId}`}><Trash2 className="w-3.5 h-3.5" /></Button>
-                        </div>
+                        {(() => {
+                          const nodeGranthaDocId = node.grantha?.documentId;
+                          const nodeLocked = nodeGranthaDocId ? lockedDocIds.has(nodeGranthaDocId) : false;
+                          return (
+                            <div className="flex justify-end gap-1">
+                              <Button size="sm" variant="ghost" onClick={() => openEdit(node)} disabled={nodeLocked} title={nodeLocked ? "Grantha is blocked" : undefined} data-testid={`button-edit-${node.documentId}`}>
+                                {nodeLocked ? <Lock className="w-3.5 h-3.5 text-orange-500" /> : <Pencil className="w-3.5 h-3.5" />}
+                              </Button>
+                              <Button size="sm" variant="ghost" className="text-destructive hover:text-destructive" onClick={() => setDeleteTarget(node)} disabled={nodeLocked} data-testid={`button-delete-${node.documentId}`}><Trash2 className="w-3.5 h-3.5" /></Button>
+                            </div>
+                          );
+                        })()}
                       </td>
                     </tr>
                   );

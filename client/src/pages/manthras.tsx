@@ -52,6 +52,7 @@ import {
   X,
   ChevronDown,
   ChevronRight,
+  Lock,
 } from "lucide-react";
 import { blocksToText } from "@/lib/strapi-blocks";
 import { STRAPI_POLL_INTERVAL } from "@/hooks/use-strapi-sync";
@@ -130,6 +131,13 @@ export default function ManthrasPage() {
     refetchOnWindowFocus: true,
   });
 
+  const { data: locksData } = useQuery<any[]>({
+    queryKey: ["/api/granthas/locks"],
+    refetchOnWindowFocus: true,
+  });
+
+  const lockedDocIds = useMemo(() => new Set((locksData ?? []).map((l: any) => l.granthaDocId as string)), [locksData]);
+
   const { unpublishedDrafts, isLoadingDrafts, saveDraft, publishDraft, deleteDraft } =
     useDrafts("manthras");
 
@@ -203,6 +211,11 @@ export default function ManthrasPage() {
     return (sec as any)?.grantha?.GranthaName || "";
   }
 
+  function getGranthaDocIdForSection(sectionDocId: string) {
+    const sec = allSections.find((s) => s.documentId === sectionDocId);
+    return (sec as any)?.grantha?.documentId || "";
+  }
+
   function resetForm() {
     setFormData({
       ShlokaManthraNumber: "",
@@ -223,6 +236,13 @@ export default function ManthrasPage() {
   }
 
   function openEdit(item: any) {
+    const granthaDocId = item._isDraft
+      ? getGranthaDocIdForSection(item._draftData?._section || "")
+      : (item as any).grantha?.documentId;
+    if (granthaDocId && lockedDocIds.has(granthaDocId)) {
+      toast({ variant: "destructive", title: "Grantha is blocked", description: "This grantha is blocked from editing. Contact an admin to remove the blocker." });
+      return;
+    }
     if (item._isDraft) {
       setEditingItem(item);
       setEditingDraftId(item._draftId);
@@ -450,6 +470,8 @@ export default function ManthrasPage() {
                 const isPub = publishDraft.isPending && publishDraft.variables === draft._draftId;
                 const section = allSections.find((s) => s.documentId === draft._section);
                 const granthaName = getGranthaForSection(draft._section || "");
+                const draftGranthaDocId = getGranthaDocIdForSection(draft._section || "");
+                const draftLocked = draftGranthaDocId ? lockedDocIds.has(draftGranthaDocId) : false;
                 const sanskrit = blocksToText(draft.ShlokaManthraEntry?.SanskritTextEntry);
                 return (
                   <tr key={`draft-${draft._draftId}`} className="border-b border-border hover:bg-muted/30 transition-colors" data-testid={`row-draft-${draft._draftId}`}>
@@ -461,18 +483,28 @@ export default function ManthrasPage() {
                     <td className="px-4 py-3 text-xs">
                       {section ? (
                         <div>
-                          {granthaName && <p className="font-medium text-foreground text-xs">{granthaName}</p>}
+                          {granthaName && (
+                            <p className="font-medium text-foreground text-xs flex items-center gap-1">
+                              {granthaName}
+                              {draftLocked && <Lock className="w-3 h-3 text-orange-500 shrink-0" />}
+                            </p>
+                          )}
                           <p className="text-muted-foreground">{section.title}{section.type && section.type !== "null" ? <span className="text-muted-foreground/60"> ({section.type})</span> : null}</p>
                         </div>
                       ) : granthaName ? (
-                        <span className="font-medium text-foreground">{granthaName}</span>
+                        <span className="font-medium text-foreground flex items-center gap-1">
+                          {granthaName}
+                          {draftLocked && <Lock className="w-3 h-3 text-orange-500 shrink-0" />}
+                        </span>
                       ) : <span className="text-muted-foreground">—</span>}
                     </td>
                     <td className="px-4 py-3 text-muted-foreground">{draft.order ?? "—"}</td>
                     <td className="px-4 py-3">
                       <div className="flex justify-end gap-1">
-                        <Button size="sm" variant="ghost" onClick={() => openEdit(draft)} data-testid={`button-edit-draft-${draft._draftId}`}><Pencil className="w-3.5 h-3.5" /></Button>
-                        <Button size="sm" variant="ghost" className="text-primary hover:text-primary" onClick={() => publishDraft.mutate(draft._draftId)} disabled={isPub} data-testid={`button-publish-draft-${draft._draftId}`}>
+                        <Button size="sm" variant="ghost" onClick={() => openEdit(draft)} disabled={draftLocked} title={draftLocked ? "Grantha is blocked" : undefined} data-testid={`button-edit-draft-${draft._draftId}`}>
+                          {draftLocked ? <Lock className="w-3.5 h-3.5 text-orange-500" /> : <Pencil className="w-3.5 h-3.5" />}
+                        </Button>
+                        <Button size="sm" variant="ghost" className="text-primary hover:text-primary" onClick={() => publishDraft.mutate(draft._draftId)} disabled={isPub || draftLocked} data-testid={`button-publish-draft-${draft._draftId}`}>
                           {isPub ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Send className="w-3.5 h-3.5" />}
                         </Button>
                         {(!user?.id || draft._createdBy === user.id) && (
@@ -549,6 +581,7 @@ export default function ManthrasPage() {
                     // Manthra rows (hidden when section is collapsed)
                     if (!isCollapsed) {
                       const sorted = [...sManthras].sort((a: any, b: any) => (a.order ?? 999) - (b.order ?? 999));
+                      const granthaLocked = lockedDocIds.has(gId);
                       for (const m of sorted) {
                         const sanskrit = blocksToText(m.ShlokaManthraEntry?.SanskritTextEntry);
                         rows.push(
@@ -570,10 +603,10 @@ export default function ManthrasPage() {
                             <td className="px-4 py-3 text-muted-foreground text-sm">{m.order ?? "—"}</td>
                             <td className="px-4 py-3">
                               <div className="flex justify-end gap-1">
-                                <Button size="sm" variant="ghost" onClick={(e) => { e.stopPropagation(); openEdit(m); }} disabled={fetchingEditDocId === m.documentId} data-testid={`button-edit-${m.documentId}`}>
-                                  {fetchingEditDocId === m.documentId ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Pencil className="w-3.5 h-3.5" />}
+                                <Button size="sm" variant="ghost" onClick={(e) => { e.stopPropagation(); openEdit(m); }} disabled={fetchingEditDocId === m.documentId || granthaLocked} title={granthaLocked ? "Grantha is blocked" : undefined} data-testid={`button-edit-${m.documentId}`}>
+                                  {fetchingEditDocId === m.documentId ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : granthaLocked ? <Lock className="w-3.5 h-3.5 text-orange-500" /> : <Pencil className="w-3.5 h-3.5" />}
                                 </Button>
-                                <Button size="sm" variant="ghost" className="text-destructive hover:text-destructive" onClick={(e) => { e.stopPropagation(); setDeleteTarget(m); }} data-testid={`button-delete-${m.documentId}`}><Trash2 className="w-3.5 h-3.5" /></Button>
+                                <Button size="sm" variant="ghost" className="text-destructive hover:text-destructive" onClick={(e) => { e.stopPropagation(); setDeleteTarget(m); }} disabled={granthaLocked} data-testid={`button-delete-${m.documentId}`}><Trash2 className="w-3.5 h-3.5" /></Button>
                               </div>
                             </td>
                           </tr>

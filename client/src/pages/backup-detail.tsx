@@ -26,7 +26,7 @@ type Translation = {
 type ShlokEntry = {
   id: number;
   SanskritTextEntry?: Block[];
-  IASTTransliteration?: string | null;
+  IASTTransliteration?: Block[] | string | null;
   EnglishTranslationText?: Block[];
   OtherTranslations?: Translation[];
 };
@@ -74,6 +74,14 @@ function blocksToText(blocks: Block[] | undefined): string {
   return blocks.map((b) => b.children?.map((c) => c.text).join("") ?? "").join("\n").trim();
 }
 
+// IASTTransliteration comes from Strapi as rich-text blocks but may also be
+// stored as a plain string in older backup records. Normalize to plain text.
+function iastToText(v: Block[] | string | null | undefined): string {
+  if (!v) return "";
+  if (typeof v === "string") return v.trim();
+  return blocksToText(v);
+}
+
 function BlockText({ blocks, className = "" }: { blocks: Block[] | undefined; className?: string }) {
   const text = blocksToText(blocks);
   if (!text) return null;
@@ -88,7 +96,7 @@ function SectionLabel({ label }: { label: string }) {
 
 function EntryBlock({ entry, showBadge }: { entry: ShlokEntry; showBadge?: string }) {
   const hasSanskrit = !!blocksToText(entry.SanskritTextEntry);
-  const hasIAST = !!entry.IASTTransliteration?.trim();
+  const hasIAST = !!iastToText(entry.IASTTransliteration);
   const hasEnglish = !!blocksToText(entry.EnglishTranslationText);
   const otherTranslations = entry.OtherTranslations?.filter(
     (t) => blocksToText(t.TranslationText)
@@ -112,7 +120,7 @@ function EntryBlock({ entry, showBadge }: { entry: ShlokEntry; showBadge?: strin
       {hasIAST && (
         <div>
           <SectionLabel label="IAST Transliteration" />
-          <p className="text-sm italic text-muted-foreground whitespace-pre-wrap leading-relaxed">{entry.IASTTransliteration}</p>
+          <p className="text-sm italic text-muted-foreground whitespace-pre-wrap leading-relaxed">{iastToText(entry.IASTTransliteration)}</p>
         </div>
       )}
       {hasEnglish && (
@@ -149,7 +157,7 @@ function ManthraCard({ manthra }: { manthra: ManthraEntry }) {
     !!(bhashyam.OtherTranslations?.filter((t) => blocksToText(t.TranslationText)).length)
   );
   const hasExtras = hasBhashyam || teekas.length > 0 || wordMeanings.length > 0 ||
-    shloka?.IASTTransliteration || blocksToText(shloka?.EnglishTranslationText) ||
+    iastToText(shloka?.IASTTransliteration) || blocksToText(shloka?.EnglishTranslationText) ||
     (shloka?.OtherTranslations?.filter((t) => blocksToText(t.TranslationText)).length ?? 0) > 0;
 
   return (
@@ -179,12 +187,12 @@ function ManthraCard({ manthra }: { manthra: ManthraEntry }) {
 
         {expanded && (
           <>
-            {shloka && (shloka.IASTTransliteration || blocksToText(shloka.EnglishTranslationText) || (shloka.OtherTranslations?.length ?? 0) > 0) && (
+            {shloka && (iastToText(shloka.IASTTransliteration) || blocksToText(shloka.EnglishTranslationText) || (shloka.OtherTranslations?.length ?? 0) > 0) && (
               <div className="space-y-3 pl-3 border-l-2 border-muted">
-                {shloka.IASTTransliteration?.trim() && (
+                {!!iastToText(shloka.IASTTransliteration) && (
                   <div>
                     <div className="flex items-center gap-1.5 mb-1.5"><Type className="w-3 h-3 text-muted-foreground" /><SectionLabel label="IAST Transliteration" /></div>
-                    <p className="text-sm italic text-muted-foreground whitespace-pre-wrap leading-relaxed">{shloka.IASTTransliteration}</p>
+                    <p className="text-sm italic text-muted-foreground whitespace-pre-wrap leading-relaxed">{iastToText(shloka.IASTTransliteration)}</p>
                   </div>
                 )}
                 {!!blocksToText(shloka.EnglishTranslationText) && (
@@ -221,10 +229,10 @@ function ManthraCard({ manthra }: { manthra: ManthraEntry }) {
                         <BlockText blocks={bhashyam.SanskritTextEntry} className="text-sm font-[Noto_Serif_Devanagari,serif]" />
                       </div>
                     )}
-                    {bhashyam.IASTTransliteration?.trim() && (
+                    {!!iastToText(bhashyam.IASTTransliteration) && (
                       <div>
                         <div className="flex items-center gap-1.5 mb-1.5"><Type className="w-3 h-3 text-muted-foreground" /><SectionLabel label="IAST" /></div>
-                        <p className="text-sm italic text-muted-foreground whitespace-pre-wrap leading-relaxed">{bhashyam.IASTTransliteration}</p>
+                        <p className="text-sm italic text-muted-foreground whitespace-pre-wrap leading-relaxed">{iastToText(bhashyam.IASTTransliteration)}</p>
                       </div>
                     )}
                     {!!blocksToText(bhashyam.EnglishTranslationText) && (

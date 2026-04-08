@@ -836,6 +836,19 @@ function isOrphanedDocError(e: any): boolean {
   );
 }
 
+// Attempt to DELETE an orphaned manthra from Strapi so we can POST a clean replacement.
+// The document exists in Strapi's DB but its locale entry is null, making PUT/publish
+// fail. A DELETE is typically still accepted even for locale-null documents.
+// Errors are swallowed — the subsequent POST will either succeed or produce its own error.
+async function deleteOrphanedManthra(docId: string, label: string): Promise<void> {
+  try {
+    await strapiRequest(`/api/manthras/${docId}`, { method: "DELETE" });
+    console.log(`[publish] Orphaned manthra "${label}" (${docId}) deleted from Strapi — will recreate`);
+  } catch (delErr: any) {
+    console.warn(`[publish] Could not delete orphaned manthra "${label}" (${docId}): ${delErr?.message?.slice(0, 120)} — proceeding to POST anyway`);
+  }
+}
+
 // Helper: create a manthra in Strapi if one with the same ShlokaManthraNumber+Section doesn't exist.
 // If one IS found, UPDATE it so that content changes (teeka entries, shloka text, etc.)
 // are never silently discarded.  A manthra can end up here without a stored strapiDocumentId
@@ -877,8 +890,10 @@ async function createOrUpdateManthra(
             return await updateExistingManthra(existingDocId, mData, label + " [auto-update]", warnings);
           } catch (updateErr: any) {
             if (isOrphanedDocError(updateErr)) {
-              // The docId returned by the lookup is itself orphaned — fall through to POST.
-              console.warn(`[publish] Manthra "${label}" — found by name but docId ${existingDocId} is orphaned, will recreate`);
+              // The docId returned by the lookup is itself orphaned (locale null).
+              // Delete it from Strapi first so the subsequent POST can succeed cleanly.
+              console.warn(`[publish] Manthra "${label}" — found by name but docId ${existingDocId} is orphaned, deleting then recreating`);
+              await deleteOrphanedManthra(existingDocId, label);
             } else {
               throw updateErr;
             }
@@ -904,7 +919,8 @@ async function createOrUpdateManthra(
             return await updateExistingManthra(existingDocId, mData, label + " [auto-update by order]", warnings);
           } catch (updateErr: any) {
             if (isOrphanedDocError(updateErr)) {
-              console.warn(`[publish] Manthra "${label}" — found by order but docId ${existingDocId} is orphaned, will recreate`);
+              console.warn(`[publish] Manthra "${label}" — found by order but docId ${existingDocId} is orphaned, deleting then recreating`);
+              await deleteOrphanedManthra(existingDocId, label);
             } else {
               throw updateErr;
             }
@@ -1152,12 +1168,13 @@ async function publishGranthaWithHierarchy(
           returnedDocId = await updateExistingManthra(storedDocId, mData, manthra.title, publishFailures);
         } catch (putErr: any) {
           if (isOrphanedDocError(putErr)) {
-            // The stored Strapi docId is orphaned (manthra was deleted in Strapi or
-            // its locale entry is null). Skip the dedup lookup (it would only find
-            // the same dead docId) and go straight to POST.
+            // The stored Strapi docId is orphaned (manthra deleted or locale=null).
+            // DELETE it from Strapi so the subsequent POST has no duplicate conflict,
+            // then recreate with skipLookup=true to bypass the dedup search.
             console.warn(
-              `[publish] Manthra "${manthra.ShlokaManthraNumber || manthra.title}" — PUT ${putErr?.status} orphaned (docId ${storedDocId}), recreating with skipLookup`
+              `[publish] Manthra "${manthra.ShlokaManthraNumber || manthra.title}" — PUT ${putErr?.status} orphaned (docId ${storedDocId}), deleting then recreating`
             );
+            await deleteOrphanedManthra(storedDocId, manthra.ShlokaManthraNumber || manthra.title);
             returnedDocId = await createOrUpdateManthra(mData, manthra.title, publishFailures, true);
           } else {
             throw putErr;
@@ -1773,7 +1790,8 @@ export async function registerRoutes(
           returnedDocId = await updateExistingManthra(storedDocId, mData, manthraNode.title, publishFailures);
         } catch (putErr: any) {
           if (isOrphanedDocError(putErr)) {
-            console.warn(`[publish-manthra] PUT ${putErr?.status} — orphaned docId ${storedDocId}, recreating with skipLookup`);
+            console.warn(`[publish-manthra] PUT ${putErr?.status} — orphaned docId ${storedDocId}, deleting then recreating`);
+            await deleteOrphanedManthra(storedDocId, manthraNode.ShlokaManthraNumber || manthraNode.title);
             returnedDocId = await createOrUpdateManthra(mData, manthraNode.title, publishFailures, true);
           } else {
             throw putErr;

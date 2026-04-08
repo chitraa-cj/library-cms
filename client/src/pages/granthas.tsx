@@ -4016,6 +4016,82 @@ export default function GranthasPage() {
                             data-testid={`textarea-teeka-english-${tIdx}`}
                           />
                         </div>
+                        <div className="pt-2 border-t">
+                          <div className="flex items-center justify-between mb-2">
+                            <Label className="text-xs">Other Language Translations</Label>
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              className="h-7 text-xs px-2"
+                              onClick={() => {
+                                const existing = teeka.TeekaEntry?.OtherTranslations ?? [];
+                                const updated = { ...teeka, TeekaEntry: { ...teeka.TeekaEntry, OtherTranslations: [...existing, { LanguageOfTranslation: "" }] } };
+                                updateManthraContent(editingManthra.adhyayaId, editingManthra.khandaId, editingManthra.manthraId, { Teekas: buildUpdated(updated) }, editingManthra.padaId);
+                              }}
+                              data-testid={`button-add-teeka-translation-${tIdx}`}
+                            >
+                              <Plus className="w-3 h-3 mr-1" />
+                              Add Language
+                            </Button>
+                          </div>
+                          {(teeka.TeekaEntry?.OtherTranslations ?? []).length === 0 ? (
+                            <p className="text-xs text-muted-foreground text-center py-2">No other language translations added yet</p>
+                          ) : (
+                            <div className="space-y-2">
+                              {(teeka.TeekaEntry?.OtherTranslations ?? []).map((ot: any, i: number) => (
+                                <div key={i} className="p-3 bg-muted/40 rounded-lg space-y-2">
+                                  <div className="flex items-center justify-between">
+                                    <Select
+                                      value={ot.LanguageOfTranslation ?? ""}
+                                      onValueChange={(val) => {
+                                        const otUpdated = (teeka.TeekaEntry?.OtherTranslations ?? []).map((x: any, idx: number) =>
+                                          idx === i ? { ...x, LanguageOfTranslation: val } : x
+                                        );
+                                        const updated = { ...teeka, TeekaEntry: { ...teeka.TeekaEntry, OtherTranslations: otUpdated } };
+                                        updateManthraContent(editingManthra.adhyayaId, editingManthra.khandaId, editingManthra.manthraId, { Teekas: buildUpdated(updated) }, editingManthra.padaId);
+                                      }}
+                                    >
+                                      <SelectTrigger className="h-7 text-xs w-44" data-testid={`select-teeka-otlang-${tIdx}-${i}`}>
+                                        <SelectValue placeholder="Select language" />
+                                      </SelectTrigger>
+                                      <SelectContent>
+                                        {translationLanguages.map((l) => (
+                                          <SelectItem key={l} value={l}>{l}</SelectItem>
+                                        ))}
+                                      </SelectContent>
+                                    </Select>
+                                    <Button
+                                      variant="ghost"
+                                      size="icon"
+                                      className="h-7 w-7 text-destructive"
+                                      onClick={() => {
+                                        const otUpdated = (teeka.TeekaEntry?.OtherTranslations ?? []).filter((_: any, idx: number) => idx !== i);
+                                        const updated = { ...teeka, TeekaEntry: { ...teeka.TeekaEntry, OtherTranslations: otUpdated } };
+                                        updateManthraContent(editingManthra.adhyayaId, editingManthra.khandaId, editingManthra.manthraId, { Teekas: buildUpdated(updated) }, editingManthra.padaId);
+                                      }}
+                                      data-testid={`button-remove-teeka-otlang-${tIdx}-${i}`}
+                                    >
+                                      <Trash2 className="w-3.5 h-3.5" />
+                                    </Button>
+                                  </div>
+                                  <RichTextEditor
+                                    value={ot.TranslationText ?? []}
+                                    onChange={(v) => {
+                                      const otUpdated = (teeka.TeekaEntry?.OtherTranslations ?? []).map((x: any, idx: number) =>
+                                        idx === i ? { ...x, TranslationText: v as any } : x
+                                      );
+                                      const updated = { ...teeka, TeekaEntry: { ...teeka.TeekaEntry, OtherTranslations: otUpdated } };
+                                      updateManthraContent(editingManthra.adhyayaId, editingManthra.khandaId, editingManthra.manthraId, { Teekas: buildUpdated(updated) }, editingManthra.padaId);
+                                    }}
+                                    placeholder={`${ot.LanguageOfTranslation || "Translation"} text...`}
+                                    minHeight={80}
+                                    data-testid={`textarea-teeka-ottext-${tIdx}-${i}`}
+                                  />
+                                </div>
+                              ))}
+                            </div>
+                          )}
+                        </div>
                       </div>
                     );
                   })}

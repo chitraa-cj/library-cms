@@ -8,8 +8,15 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Separator } from "@/components/ui/separator";
 import {
+  Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter,
+} from "@/components/ui/dialog";
+import {
+  Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
+} from "@/components/ui/select";
+import {
   ArrowLeft, BookOpen, ChevronRight, Hash, ScrollText, Download,
   ChevronDown, ChevronUp, Languages, BookMarked, Type, Loader2,
+  RotateCcw, CheckCircle, AlertCircle,
 } from "lucide-react";
 
 // ── Types ──────────────────────────────────────────────────────────
@@ -303,12 +310,80 @@ function ManthraCard({ manthra }: { manthra: ManthraEntry }) {
 }
 
 // ── Main Page ──────────────────────────────────────────────────────
+type RestoreResult = {
+  total: number; restored: number; skipped: number; errored: number;
+  results: { manthra: string; docId: string; action: string }[];
+  errors: { manthra: string; error: string }[];
+};
+
 export default function BackupDetailPage() {
   const params = useParams<{ id: string }>();
   const id = params.id;
 
   const [selectedGranthaId, setSelectedGranthaId] = useState<number | null>(null);
   const [selectedSectionId, setSelectedSectionId] = useState<number | null>(null);
+
+  // Restore state
+  const [restoreOpen, setRestoreOpen] = useState(false);
+  const [restoreField, setRestoreField] = useState<string>("both");
+  const [restoring, setRestoring] = useState(false);
+  const [restoreResult, setRestoreResult] = useState<RestoreResult | null>(null);
+
+  const [restoreProgress, setRestoreProgress] = useState<{ current: number; total: number } | null>(null);
+
+  async function handleRestore(granthaDocId: string) {
+    setRestoring(true);
+    setRestoreResult(null);
+    setRestoreProgress(null);
+    try {
+      // Start the async restore job
+      const startRes = await fetch(`/api/admin/backups/${id}/restore-grantha`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ granthaDocId, field: restoreField }),
+      });
+      const startData = await startRes.json();
+      if (!startRes.ok) throw new Error(startData.message || "Restore failed to start");
+
+      // If no jobId, the result came back inline (0 manthras case)
+      if (!startData.jobId) {
+        setRestoreResult(startData);
+        return;
+      }
+
+      setRestoreProgress({ current: 0, total: startData.total });
+
+      // Poll for job completion
+      const jobId = startData.jobId;
+      while (true) {
+        await new Promise((r) => setTimeout(r, 2500));
+        const pollRes = await fetch(`/api/admin/restore-jobs/${jobId}`);
+        if (!pollRes.ok) throw new Error("Failed to poll restore job");
+        const pollData = await pollRes.json();
+        setRestoreProgress({ current: pollData.progress, total: pollData.total });
+
+        if (pollData.status === "done" || pollData.status === "error") {
+          setRestoreResult({
+            total: pollData.total,
+            restored: pollData.restored,
+            skipped: pollData.skipped,
+            errored: pollData.errored,
+            results: pollData.results,
+            errors: pollData.errors,
+          });
+          if (pollData.status === "error" && pollData.message) {
+            setRestoreResult((prev: any) => prev ? { ...prev, errors: [{ manthra: "Fatal", error: pollData.message }, ...(prev.errors ?? [])] } : null);
+          }
+          break;
+        }
+      }
+    } catch (e: any) {
+      setRestoreResult({ total: 0, restored: 0, skipped: 0, errored: 1, results: [], errors: [{ manthra: "—", error: e.message }] });
+    } finally {
+      setRestoring(false);
+      setRestoreProgress(null);
+    }
+  }
 
   // ── Load lightweight summary (granthas + section list, no manthra text) ──
   const { data: summary, isLoading, error } = useQuery<BackupSummary>({
@@ -480,10 +555,21 @@ export default function BackupDetailPage() {
           <>
             {/* Sections sidebar */}
             <div className="w-64 border-r flex flex-col flex-shrink-0 min-h-0">
-              <div className="px-4 py-2.5 border-b flex-shrink-0">
+              <div className="px-4 py-2.5 border-b flex-shrink-0 space-y-2">
                 <p className="text-[10px] font-semibold uppercase tracking-widest text-muted-foreground">
                   Sections ({sections.length})
                 </p>
+                {selectedGrantha?.documentId && (
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    className="w-full text-xs h-7"
+                    onClick={() => { setRestoreResult(null); setRestoreOpen(true); }}
+                    data-testid="button-restore-grantha"
+                  >
+                    <RotateCcw className="w-3 h-3 mr-1.5" /> Restore to Strapi
+                  </Button>
+                )}
               </div>
               <ScrollArea className="flex-1">
                 <div className="p-2 space-y-0.5">
@@ -541,6 +627,119 @@ export default function BackupDetailPage() {
           </>
         )}
       </div>
+
+      {/* Restore Dialog */}
+      <Dialog open={restoreOpen} onOpenChange={(o) => { if (!restoring) { setRestoreOpen(o); if (!o) setRestoreResult(null); } }}>
+        <DialogContent className="max-w-lg">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <RotateCcw className="w-4 h-4" />
+              Restore to Strapi — {selectedGrantha?.GranthaName}
+            </DialogTitle>
+          </DialogHeader>
+
+          {!restoreResult ? (
+            <div className="space-y-4">
+              <p className="text-sm text-muted-foreground">
+                Compares each mantra in this snapshot against live Strapi. Only pushes data where the live record is <strong>missing</strong> content — existing live content is never overwritten.
+              </p>
+              <div className="space-y-1.5">
+                <p className="text-xs font-medium text-muted-foreground uppercase tracking-wider">What to restore</p>
+                <Select value={restoreField} onValueChange={setRestoreField} disabled={restoring}>
+                  <SelectTrigger data-testid="select-restore-field">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="both">Teekas + Bhashyam (both)</SelectItem>
+                    <SelectItem value="teekas">Teekas only</SelectItem>
+                    <SelectItem value="bhashyam">Bhashyam only</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+              {restoring && restoreProgress && (
+                <div className="space-y-2">
+                  <div className="flex justify-between text-xs text-muted-foreground">
+                    <span>Restoring manthras…</span>
+                    <span>{restoreProgress.current} / {restoreProgress.total} processed</span>
+                  </div>
+                  <div className="w-full bg-muted rounded-full h-2 overflow-hidden">
+                    <div
+                      className="h-2 bg-primary rounded-full transition-all duration-500"
+                      style={{ width: `${restoreProgress.total > 0 ? Math.round((restoreProgress.current / restoreProgress.total) * 100) : 0}%` }}
+                    />
+                  </div>
+                </div>
+              )}
+              {restoring && !restoreProgress && (
+                <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                  <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                  Scanning Strapi for missing content…
+                </div>
+              )}
+            </div>
+          ) : (
+            <div className="space-y-3">
+              <div className="grid grid-cols-4 gap-2 text-center">
+                {[
+                  { label: "Total", value: restoreResult.total, color: "text-foreground" },
+                  { label: "Restored", value: restoreResult.restored, color: "text-green-600 dark:text-green-400" },
+                  { label: "Skipped", value: restoreResult.skipped, color: "text-muted-foreground" },
+                  { label: "Errors", value: restoreResult.errored, color: restoreResult.errored > 0 ? "text-red-500" : "text-muted-foreground" },
+                ].map((s) => (
+                  <div key={s.label} className="rounded-lg border p-2">
+                    <p className={`text-xl font-bold ${s.color}`}>{s.value}</p>
+                    <p className="text-[10px] text-muted-foreground uppercase">{s.label}</p>
+                  </div>
+                ))}
+              </div>
+              {restoreResult.results.filter((r) => !r.action.includes("skipped")).length > 0 && (
+                <ScrollArea className="h-40 rounded border">
+                  <div className="p-2 space-y-1">
+                    {restoreResult.results.filter((r) => !r.action.includes("skipped")).map((r, i) => (
+                      <div key={i} className="flex items-start gap-1.5 text-xs">
+                        <CheckCircle className="w-3 h-3 text-green-500 flex-shrink-0 mt-0.5" />
+                        <span><span className="font-medium">{r.manthra}</span> — {r.action}</span>
+                      </div>
+                    ))}
+                    {restoreResult.errors.map((e, i) => (
+                      <div key={i} className="flex items-start gap-1.5 text-xs">
+                        <AlertCircle className="w-3 h-3 text-red-500 flex-shrink-0 mt-0.5" />
+                        <span><span className="font-medium">{e.manthra}</span> — {e.error}</span>
+                      </div>
+                    ))}
+                  </div>
+                </ScrollArea>
+              )}
+              {restoreResult.errored === 0 && restoreResult.restored === 0 && (
+                <p className="text-sm text-muted-foreground text-center py-2">
+                  All content already present in live Strapi — nothing to restore.
+                </p>
+              )}
+            </div>
+          )}
+
+          <DialogFooter>
+            {!restoreResult ? (
+              <>
+                <Button variant="outline" onClick={() => setRestoreOpen(false)} disabled={restoring} data-testid="button-restore-cancel">
+                  Cancel
+                </Button>
+                <Button
+                  onClick={() => handleRestore(selectedGrantha!.documentId)}
+                  disabled={restoring}
+                  data-testid="button-restore-confirm"
+                >
+                  {restoring ? <><Loader2 className="w-3.5 h-3.5 mr-1.5 animate-spin" />Restoring…</> : <><RotateCcw className="w-3.5 h-3.5 mr-1.5" />Start Restore</>}
+                </Button>
+              </>
+            ) : (
+              <Button variant="outline" onClick={() => { setRestoreOpen(false); setRestoreResult(null); }} data-testid="button-restore-close">
+                Close
+              </Button>
+            )}
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

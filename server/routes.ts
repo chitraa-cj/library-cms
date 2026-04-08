@@ -2192,6 +2192,200 @@ export async function registerRoutes(
     }
   });
 
+  // ── Restore lost Strapi content from a snapshot ──────────────────────────────
+  // Compares each manthra in the backup against live Strapi and re-pushes any
+  // field (teekas | bhashyam | both) that is present in the backup but missing
+  // from the live record.  Only overwrites when the live field is genuinely empty
+  // (Teekas=[] / BhashyamEntry null) so existing live content is never clobbered.
+  //
+  // Strategy: batch-fetch ALL manthras for the grantha from Strapi in one paginated
+  // query (much faster than one API call per manthra), then for each manthra where
+  // the backup has content that is absent in Strapi, push the content back.
+  //
+  // The endpoint responds immediately with "started" and a jobId.
+  // The caller polls GET /api/admin/restore-jobs/:jobId for progress + results.
+  const restoreJobs = new Map<string, {
+    status: "running" | "done" | "error";
+    progress: number; total: number;
+    results: { manthra: string; docId: string; action: string }[];
+    errors: { manthra: string; error: string }[];
+    message?: string;
+  }>();
+
+  app.post("/api/admin/backups/:id/restore-grantha", requireAuth, requireAdmin, async (req, res) => {
+    const backupId = parseInt(req.params.id);
+    const { granthaDocId, field = "both" } = req.body as { granthaDocId: string; field?: string };
+    if (!granthaDocId) return res.status(400).json({ message: "granthaDocId is required" });
+    if (isNaN(backupId)) return res.status(400).json({ message: "Invalid backup ID" });
+
+    const backup = await storage.getBackup(backupId);
+    if (!backup) return res.status(404).json({ message: "Backup not found" });
+    const bData = backup.data as any;
+
+    const sectionDocIds = new Set<string>(
+      (bData.sections ?? [])
+        .filter((s: any) => s.grantha?.documentId === granthaDocId)
+        .map((s: any) => s.documentId as string)
+    );
+
+    const backupManthras: any[] = (bData.manthras ?? []).filter((m: any) =>
+      sectionDocIds.has(m.Section?.documentId ?? m.section?.documentId ?? "")
+    );
+
+    if (backupManthras.length === 0) {
+      return res.json({ total: 0, restored: 0, skipped: 0, errored: 0, results: [], errors: [] });
+    }
+
+    // Generate a simple job ID
+    const jobId = `restore-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    restoreJobs.set(jobId, { status: "running", progress: 0, total: backupManthras.length, results: [], errors: [] });
+
+    // Respond immediately so the HTTP connection doesn't time out
+    res.status(202).json({ jobId, total: backupManthras.length });
+
+    // Run the restore in the background
+    (async () => {
+      const job = restoreJobs.get(jobId)!;
+      try {
+        // Step 1: Batch-fetch all live manthras for this grantha from Strapi (paginated)
+        // We ask for just enough fields to know whether teekas/bhashyam are present.
+        const liveManthraMap = new Map<string, { hasTeekas: boolean; hasBhashyam: boolean }>();
+        let page = 1;
+        while (true) {
+          const liveRes = await strapiRequest(
+            `/api/manthras?filters[Section][grantha][documentId][$eq]=${encodeURIComponent(granthaDocId)}` +
+            `&fields[0]=documentId` +
+            `&populate[Teekas][fields][0]=id` +
+            `&populate[BhashyamEntry][fields][0]=id` +
+            `&pagination[page]=${page}&pagination[pageSize]=50`
+          );
+          const items: any[] = liveRes?.data ?? [];
+          for (const item of items) {
+            liveManthraMap.set(item.documentId, {
+              hasTeekas: Array.isArray(item.Teekas) && item.Teekas.length > 0,
+              hasBhashyam: !!(item.BhashyamEntry?.id),
+            });
+          }
+          if (items.length < 50) break;
+          page++;
+        }
+
+        console.log(`[restore-job ${jobId}] Fetched ${liveManthraMap.size} live manthras from Strapi`);
+
+        // Step 2: Identify manthras that need restoration
+        const toRestoreTeekas: any[] = [];
+        const toRestoreBhashyam: any[] = [];
+
+        for (const bm of backupManthras) {
+          const docId: string = bm.documentId;
+          if (!docId) continue;
+          const live = liveManthraMap.get(docId);
+          if (!live) continue; // Not found in Strapi — skip (don't create)
+
+          if (field === "teekas" || field === "both") {
+            const backupHasTeeka = (bm.Teekas ?? []).some(
+              (t: any) =>
+                t.TeekaEntry?.SanskritTextEntry?.length > 0 ||
+                t.TeekaEntry?.EnglishTranslationText?.length > 0 ||
+                t.TeekaEntry?.OtherTranslations?.length > 0
+            );
+            if (backupHasTeeka && !live.hasTeekas) {
+              toRestoreTeekas.push(bm);
+            }
+          }
+
+          if (field === "bhashyam" || field === "both") {
+            const backupHasBhashyam =
+              bm.BhashyamEntry &&
+              (bm.BhashyamEntry.SanskritTextEntry?.length > 0 ||
+                bm.BhashyamEntry.EnglishTranslationText?.length > 0);
+            if (backupHasBhashyam && !live.hasBhashyam) {
+              toRestoreBhashyam.push(bm);
+            }
+          }
+        }
+
+        const needingRestore = new Set([...toRestoreTeekas, ...toRestoreBhashyam].map((m: any) => m.documentId));
+        job.total = backupManthras.length;
+        console.log(`[restore-job ${jobId}] Need teeka restore: ${toRestoreTeekas.length}, bhashyam restore: ${toRestoreBhashyam.length}`);
+
+        // Mark manthras that don't need restoration as skipped
+        for (const bm of backupManthras) {
+          if (!needingRestore.has(bm.documentId)) {
+            const label = bm.ShlokaManthraNumber ?? bm.documentId;
+            const hasBackupContent =
+              (bm.Teekas ?? []).some((t: any) => t.TeekaEntry?.SanskritTextEntry?.length > 0 || t.TeekaEntry?.EnglishTranslationText?.length > 0) ||
+              (bm.BhashyamEntry?.SanskritTextEntry?.length > 0 || bm.BhashyamEntry?.EnglishTranslationText?.length > 0);
+            if (hasBackupContent) {
+              job.results.push({ manthra: label, docId: bm.documentId, action: "already present — skipped" });
+            }
+          }
+        }
+
+        // Step 3: Restore teekas for manthras that need it
+        for (const bm of toRestoreTeekas) {
+          const label = bm.ShlokaManthraNumber ?? bm.documentId;
+          try {
+            const resolved = await resolveManthraTeekas(bm.Teekas, granthaDocId);
+            if (resolved.length > 0) {
+              await strapiRequest(`/api/manthras/${bm.documentId}`, {
+                method: "PUT",
+                body: JSON.stringify({ data: { Teekas: resolved } }),
+              });
+              job.results.push({ manthra: label, docId: bm.documentId, action: `restored ${resolved.length} teeka(s)` });
+            } else {
+              job.errors.push({ manthra: label, error: "Could not resolve teeka docIds from Strapi" });
+            }
+          } catch (e: any) {
+            job.errors.push({ manthra: label, error: e?.message ?? String(e) });
+          }
+          job.progress++;
+        }
+
+        // Step 4: Restore BhashyamEntry for manthras that need it
+        for (const bm of toRestoreBhashyam) {
+          const label = bm.ShlokaManthraNumber ?? bm.documentId;
+          try {
+            const normalizedBhashyam = normalizeTextAndTranslation(bm.BhashyamEntry);
+            await strapiRequest(`/api/manthras/${bm.documentId}`, {
+              method: "PUT",
+              body: JSON.stringify({ data: { BhashyamEntry: normalizedBhashyam } }),
+            });
+            job.results.push({ manthra: label, docId: bm.documentId, action: "restored BhashyamEntry" });
+          } catch (e: any) {
+            job.errors.push({ manthra: label, error: e?.message ?? String(e) });
+          }
+          job.progress++;
+        }
+
+        job.status = "done";
+        console.log(`[restore-job ${jobId}] Done. restored=${job.results.filter(r => !r.action.includes("skipped")).length} errors=${job.errors.length}`);
+      } catch (e: any) {
+        job.status = "error";
+        job.message = e?.message ?? String(e);
+        console.error(`[restore-job ${jobId}] Fatal error:`, e.message);
+      }
+    })();
+  });
+
+  app.get("/api/admin/restore-jobs/:jobId", requireAuth, (req, res) => {
+    const job = restoreJobs.get(req.params.jobId);
+    if (!job) return res.status(404).json({ message: "Job not found" });
+    const restoredCount = job.results.filter((r) => !r.action.includes("skipped")).length;
+    const skippedCount = job.results.filter((r) => r.action.includes("skipped")).length;
+    res.json({
+      status: job.status,
+      progress: job.progress,
+      total: job.total,
+      restored: restoredCount,
+      skipped: skippedCount,
+      errored: job.errors.length,
+      results: job.results,
+      errors: job.errors,
+      message: job.message,
+    });
+  });
+
   // Track in-progress backup to prevent duplicate requests.
   let backupInProgress = false;
 

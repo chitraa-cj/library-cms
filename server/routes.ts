@@ -2020,35 +2020,40 @@ export async function registerRoutes(
   // Backups are immutable: no update or delete routes exist.
 
   async function fetchAllStrapiPages(basePath: string): Promise<any[]> {
-    const all: any[] = [];
-    let page = 1;
-    while (true) {
-      const sep = basePath.includes("?") ? "&" : "?";
-      const url = `${basePath}${sep}pagination[page]=${page}&pagination[pageSize]=100`;
-      const result = await strapiRequest(url);
-      if (!result?.data || !Array.isArray(result.data)) break;
-      all.push(...result.data);
-      const { pageCount } = result.meta?.pagination ?? {};
-      if (!pageCount || page >= pageCount) break;
-      page++;
-    }
-    return all;
+    const sep = basePath.includes("?") ? "&" : "?";
+    const firstUrl = `${basePath}${sep}pagination[page]=1&pagination[pageSize]=100`;
+    const first = await strapiRequest(firstUrl);
+    if (!first?.data || !Array.isArray(first.data)) return [];
+    const { pageCount } = first.meta?.pagination ?? {};
+    if (!pageCount || pageCount <= 1) return first.data;
+    const remaining = Array.from({ length: pageCount - 1 }, (_, i) => i + 2);
+    const pages = await Promise.all(
+      remaining.map((p) => strapiRequest(`${basePath}${sep}pagination[page]=${p}&pagination[pageSize]=100`))
+    );
+    return [first.data, ...pages.map((r) => (r?.data ?? []))].flat();
   }
 
-  async function fetchAllStrapiPagesLarge(basePath: string): Promise<any[]> {
-    const all: any[] = [];
-    let page = 1;
-    while (true) {
-      const sep = basePath.includes("?") ? "&" : "?";
-      const url = `${basePath}${sep}pagination[page]=${page}&pagination[pageSize]=100`;
-      const result = await strapiRequestLarge(url);
-      if (!result?.data || !Array.isArray(result.data)) break;
-      all.push(...result.data);
-      const { pageCount } = result.meta?.pagination ?? {};
-      if (!pageCount || page >= pageCount) break;
-      page++;
+  async function fetchAllStrapiPagesLarge(basePath: string, concurrency = 5): Promise<any[]> {
+    const sep = basePath.includes("?") ? "&" : "?";
+    const firstUrl = `${basePath}${sep}pagination[page]=1&pagination[pageSize]=100`;
+    const first = await strapiRequestLarge(firstUrl);
+    if (!first?.data || !Array.isArray(first.data)) return [];
+    const { pageCount } = first.meta?.pagination ?? {};
+    if (!pageCount || pageCount <= 1) return first.data;
+
+    const results: any[][] = new Array(pageCount - 1);
+    const remaining = Array.from({ length: pageCount - 1 }, (_, i) => i + 2);
+
+    for (let i = 0; i < remaining.length; i += concurrency) {
+      const batch = remaining.slice(i, i + concurrency);
+      const batchResults = await Promise.all(
+        batch.map((p) => strapiRequestLarge(`${basePath}${sep}pagination[page]=${p}&pagination[pageSize]=100`))
+      );
+      batchResults.forEach((r, j) => { results[i + j] = r?.data ?? []; });
+      console.log(`[backup] Fetched manthra pages ${batch[0]}–${batch[batch.length - 1]} of ${pageCount}`);
     }
-    return all;
+
+    return [first.data, ...results].flat();
   }
 
   app.get("/api/admin/backups", requireAuth, async (_req, res) => {

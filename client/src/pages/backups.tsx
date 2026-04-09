@@ -47,6 +47,13 @@ export default function BackupsPage() {
           ? `Backed up ${newest.granthaCount} granthas, ${newest.sectionCount} sections, ${newest.manthraCount} manthras.`
           : "Snapshot saved successfully.",
       });
+    } else if (serverDone && !listGrew && (statusData as any)?.lastError) {
+      setPolling(false);
+      toast({
+        title: "Snapshot failed",
+        description: (statusData as any).lastError,
+        variant: "destructive",
+      });
     }
   }, [polling, statusData, backups, prevCount]);
 

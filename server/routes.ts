@@ -5,6 +5,24 @@ import { createStrapiRouter, strapiRequest, strapiRequestLarge } from "./strapi"
 import { storage } from "./storage";
 import Database from "better-sqlite3";
 import type { User } from "@shared/schema";
+import { gzipSync, gunzipSync } from "node:zlib";
+
+/** Compress a snapshot payload for DB storage (gzip + base64 wrapper). */
+function compressBackupData(data: any): any {
+  const jsonStr = JSON.stringify(data);
+  const compressed = gzipSync(Buffer.from(jsonStr, "utf8"), { level: 6 });
+  return { _compressed: true, data: compressed.toString("base64") };
+}
+
+/** Decompress a snapshot payload returned from DB — handles both old (raw) and new (compressed) formats. */
+function decompressBackupData(raw: any): any {
+  if (raw && raw._compressed === true && typeof raw.data === "string") {
+    const buf = Buffer.from(raw.data, "base64");
+    const decompressed = gunzipSync(buf);
+    return JSON.parse(decompressed.toString("utf8"));
+  }
+  return raw; // legacy uncompressed backups
+}
 
 const STRAPI_INTERNAL_KEYS = new Set(["id", "_id", "__component", "createdAt", "updatedAt", "publishedAt", "documentId", "locale"]);
 
@@ -2079,7 +2097,7 @@ export async function registerRoutes(
         granthaCount: backup.granthaCount,
         sectionCount: backup.sectionCount,
         manthraCount: backup.manthraCount,
-        data: backup.data,
+        data: decompressBackupData(backup.data),
       });
     } catch (e: any) {
       res.status(500).json({ message: e.message || "Failed to load backup" });
@@ -2094,7 +2112,7 @@ export async function registerRoutes(
       if (isNaN(id)) return res.status(400).json({ message: "Invalid backup ID" });
       const backup = await storage.getBackup(id);
       if (!backup) return res.status(404).json({ message: "Backup not found" });
-      const d = backup.data as any;
+      const d = decompressBackupData(backup.data);
 
       // Build per-section manthra count from the manthras array.
       const manthraCountBySection: Record<number, number> = {};
@@ -2135,7 +2153,7 @@ export async function registerRoutes(
       if (isNaN(id) || isNaN(sectionId)) return res.status(400).json({ message: "Invalid ID" });
       const backup = await storage.getBackup(id);
       if (!backup) return res.status(404).json({ message: "Backup not found" });
-      const d = backup.data as any;
+      const d = decompressBackupData(backup.data);
       const manthras = (d.manthras ?? []).filter((m: any) => m?.Section?.id === sectionId);
       manthras.sort((a: any, b: any) => (a.order ?? 999) - (b.order ?? 999));
       res.json(manthras);
@@ -2153,7 +2171,7 @@ export async function registerRoutes(
       const label = (backup.label as string).replace(/[^a-z0-9_\-]/gi, "_");
       res.setHeader("Content-Type", "application/json");
       res.setHeader("Content-Disposition", `attachment; filename="ekatmadham-backup-${label}-${backup.id}.json"`);
-      res.json(backup.data);
+      res.json(decompressBackupData(backup.data));
     } catch (e: any) {
       res.status(500).json({ message: e.message || "Failed to download backup" });
     }
@@ -2167,7 +2185,7 @@ export async function registerRoutes(
       const backup = await storage.getBackup(id);
       if (!backup) return res.status(404).json({ message: "Backup not found" });
       const label = (backup.label as string).replace(/[^a-z0-9_\-]/gi, "_");
-      const sqliteBuf = buildSqliteFromBackup(backup.data);
+      const sqliteBuf = buildSqliteFromBackup(decompressBackupData(backup.data));
       res.setHeader("Content-Type", "application/x-sqlite3");
       res.setHeader("Content-Disposition", `attachment; filename="ekatmadham-${label}-${backup.id}.sqlite"`);
       res.setHeader("Content-Length", sqliteBuf.length);
@@ -2186,7 +2204,7 @@ export async function registerRoutes(
       if (!data || typeof data !== "object") return res.status(400).json({ message: "Missing data payload" });
       const backup = await storage.createBackup(
         label ?? new Date().toISOString(),
-        data,
+        compressBackupData(data),
         Number(granthaCount ?? 0),
         Number(sectionCount ?? 0),
         Number(manthraCount ?? 0),
@@ -2225,7 +2243,7 @@ export async function registerRoutes(
 
     const backup = await storage.getBackup(backupId);
     if (!backup) return res.status(404).json({ message: "Backup not found" });
-    const bData = backup.data as any;
+    const bData = decompressBackupData(backup.data);
 
     const sectionDocIds = new Set<string>(
       (bData.sections ?? [])
@@ -2393,6 +2411,7 @@ export async function registerRoutes(
 
   // Track in-progress backup to prevent duplicate requests.
   let backupInProgress = false;
+  let backupLastError: string | null = null;
 
   app.post("/api/admin/backup", requireAuth, requireAdmin, (_req, res) => {
     if (backupInProgress) {
@@ -2401,6 +2420,7 @@ export async function registerRoutes(
 
     // Respond immediately so the HTTP connection never times out.
     backupInProgress = true;
+    backupLastError = null;
     res.status(202).json({ status: "started" });
 
     // Run the heavy Strapi fetches in the background.
@@ -2449,9 +2469,12 @@ export async function registerRoutes(
           manthras,
         };
 
+        console.log(`[backup] Compressing snapshot data...`);
+        const compressedPayload = compressBackupData(snapshotData);
+        console.log(`[backup] Saving to database...`);
         const backup = await storage.createBackup(
           label,
-          snapshotData,
+          compressedPayload,
           granthas.length,
           sections.length,
           manthras.length
@@ -2459,7 +2482,9 @@ export async function registerRoutes(
 
         console.log(`[backup] Saved as backup #${backup.id}`);
       } catch (e: any) {
-        console.error("[backup] Failed:", e.message);
+        const msg = e?.message ?? String(e);
+        backupLastError = msg;
+        console.error("[backup] Failed:", msg, e?.stack?.slice(0, 500));
       } finally {
         backupInProgress = false;
       }
@@ -2467,7 +2492,7 @@ export async function registerRoutes(
   });
 
   app.get("/api/admin/backup/status", requireAuth, (_req, res) => {
-    res.json({ inProgress: backupInProgress });
+    res.json({ inProgress: backupInProgress, lastError: backupLastError });
   });
 
   // Delete user (admin only — cannot delete yourself)

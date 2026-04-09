@@ -40,6 +40,7 @@ import {
   teekaAuthors,
   translationLanguages,
   type StrapiGrantha,
+  type StrapiTeeka,
   type StrapiResponse,
   type StrapiBlock,
   type TextAndTranslation,
@@ -851,6 +852,13 @@ export default function GranthasPage() {
   });
 
   const lockedDocIds = new Set<string>((locksData ?? []).map((l: any) => l.granthaDocId));
+
+  // All teekas in the system — used in the "Link Existing Teeka" dropdown
+  const { data: allTeekasData } = useQuery<StrapiResponse<StrapiTeeka>>({
+    queryKey: ["/api/strapi/teekas"],
+    refetchOnWindowFocus: false,
+  });
+  const allStrapiTeekas: StrapiTeeka[] = (allTeekasData?.data ?? []) as StrapiTeeka[];
 
   const lockMutation = useMutation({
     mutationFn: async ({ docId, granthaName }: { docId: string; granthaName?: string }) => {
@@ -2799,10 +2807,47 @@ export default function GranthasPage() {
                   Define commentary works associated with this Grantha
                 </p>
               </div>
-              <Button size="sm" variant="outline" onClick={addTeeka} data-testid="button-add-teeka">
-                <Plus className="w-3.5 h-3.5 mr-1.5" />
-                Add Teeka
-              </Button>
+              <div className="flex items-center gap-2">
+                {(() => {
+                  const linkedDocIds = new Set(teekas.map((t) => t.id));
+                  const linkedNames = new Set(teekas.map((t) => (t.TeekaName || "").trim().toLowerCase()));
+                  const unlinkable = allStrapiTeekas.filter((t: any) => {
+                    const docId = t.documentId || "";
+                    const name = (t.TeekaName || "").trim().toLowerCase();
+                    return !linkedDocIds.has(docId) && !linkedNames.has(name);
+                  });
+                  if (unlinkable.length === 0) return null;
+                  return (
+                    <Select
+                      value=""
+                      onValueChange={(docId) => {
+                        const t = allStrapiTeekas.find((x: any) => x.documentId === docId);
+                        if (!t) return;
+                        setTeekas((prev) => [
+                          ...prev,
+                          { id: (t as any).documentId || uid(), TeekaName: (t as any).TeekaName || "", TeekaAuthor: (t as any).TeekaAuthor || "" },
+                        ]);
+                      }}
+                    >
+                      <SelectTrigger className="h-8 text-sm w-48" data-testid="select-link-existing-teeka">
+                        <SelectValue placeholder="Link Existing…" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {unlinkable.map((t: any) => (
+                          <SelectItem key={t.documentId} value={t.documentId}>
+                            {t.TeekaName || "(unnamed)"}
+                            {t.TeekaAuthor ? ` — ${t.TeekaAuthor}` : ""}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  );
+                })()}
+                <Button size="sm" variant="outline" onClick={addTeeka} data-testid="button-add-teeka">
+                  <Plus className="w-3.5 h-3.5 mr-1.5" />
+                  Add New
+                </Button>
+              </div>
             </div>
 
             {teekas.length === 0 ? (

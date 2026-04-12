@@ -991,13 +991,17 @@ async function publishGranthaWithHierarchy(
 
   // Convert local granthaNameTranslations → Strapi GranthaNameTranslations format.
   // The shared.translations component uses TranslationText (blocks) not GranthaNameTranslation.
+  // Skip entries that don't have a language selected — Strapi's enum rejects empty/missing values.
   if (Array.isArray(granthaNameTranslationsLocal) && granthaNameTranslationsLocal.length > 0) {
-    granthaPayload.GranthaNameTranslations = granthaNameTranslationsLocal.map((t: any) => ({
-      LanguageOfTranslation: t.language || "",
-      TranslationText: t.name
-        ? [{ type: "paragraph", children: [{ type: "text", text: t.name }] }]
-        : [{ type: "paragraph", children: [{ type: "text", text: "" }] }],
-    }));
+    const validNameTranslations = granthaNameTranslationsLocal.filter((t: any) => t.language?.trim());
+    if (validNameTranslations.length > 0) {
+      granthaPayload.GranthaNameTranslations = validNameTranslations.map((t: any) => ({
+        LanguageOfTranslation: t.language,
+        TranslationText: t.name
+          ? [{ type: "paragraph", children: [{ type: "text", text: t.name }] }]
+          : [{ type: "paragraph", children: [{ type: "text", text: "" }] }],
+      }));
+    }
   }
 
   // 1. Create or update the Grantha record
@@ -1357,8 +1361,10 @@ function normalizeTextAndTranslation(field: Record<string, any>): Record<string,
     ...rest
   } = field;
 
-  // Start with any already-correct OtherTranslations entries
-  const existing: Array<Record<string, any>> = Array.isArray(OtherTranslations) ? OtherTranslations : [];
+  // Start with any already-correct OtherTranslations entries — drop any that have no language selected
+  const existing: Array<Record<string, any>> = Array.isArray(OtherTranslations)
+    ? OtherTranslations.filter((t) => typeof t?.LanguageOfTranslation === "string" && t.LanguageOfTranslation.trim())
+    : [];
 
   // Promote legacy flat fields into the array if both language and text are present
   const legacyText = Array.isArray(OtherLanguagesTranslation) && OtherLanguagesTranslation.length > 0

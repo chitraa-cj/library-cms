@@ -513,14 +513,19 @@ function GranthaCard({
               (sum: number, s: any) => sum + (Array.isArray(s.manthras) ? s.manthras.length : 0),
               0
             );
-            const displaySections = leafSections.length > 0 ? leafSections : item.sections;
+            // Show leaf sections sorted by order; cap at 12 to keep card compact.
+            const sorted = [...(leafSections.length > 0 ? leafSections : item.sections)]
+              .sort((a: any, b: any) => (a.order ?? 999) - (b.order ?? 999));
+            const SECTION_DISPLAY_CAP = 12;
+            const visible = sorted.slice(0, SECTION_DISPLAY_CAP);
+            const overflow = sorted.length - SECTION_DISPLAY_CAP;
             return (
               <div>
                 <p className="text-xs font-medium text-muted-foreground mb-1">
-                  Sections ({displaySections.length}){totalManthras > 0 ? ` · ${totalManthras} mantra${totalManthras !== 1 ? "s" : ""}` : ""}
+                  Sections ({sorted.length}){totalManthras > 0 ? ` · ${totalManthras} mantra${totalManthras !== 1 ? "s" : ""}` : ""}
                 </p>
                 <div className="flex flex-wrap gap-1">
-                  {displaySections.map((s: any) => (
+                  {visible.map((s: any) => (
                     <span
                       key={s.documentId || s.id}
                       className="inline-flex items-center text-xs bg-muted rounded px-1.5 py-0.5 text-foreground"
@@ -529,6 +534,11 @@ function GranthaCard({
                       {s.type && <span className="ml-1 text-muted-foreground">· {s.type}</span>}
                     </span>
                   ))}
+                  {overflow > 0 && (
+                    <span className="inline-flex items-center text-xs bg-muted/60 rounded px-1.5 py-0.5 text-muted-foreground">
+                      +{overflow} more
+                    </span>
+                  )}
                 </div>
               </div>
             );

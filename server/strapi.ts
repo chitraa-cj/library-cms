@@ -148,9 +148,6 @@ export function createStrapiRouter() {
     granthas: [
       "populate[BhashyakaraIntroduction][populate]=*",
       "populate[GranthaNameTranslations]=*",
-      // Sections are intentionally excluded from the list populate to keep
-      // the response small. Section hierarchy (with manthras) is fetched
-      // on-demand via /sections/by-grantha/:granthaDocId when editing.
       "populate[teekas][fields][0]=documentId&populate[teekas][fields][1]=TeekaName&populate[teekas][fields][2]=TeekaAuthor",
       "pagination[pageSize]=100",
       "sort=GranthaName:asc",
@@ -551,6 +548,100 @@ export function createStrapiRouter() {
   });
   router.delete("/prasthana-thraya-screens/:documentId", (_req, res) => {
     res.status(501).json({ message: STRAPI_ADMIN_NOTE });
+  });
+
+  // ── Granthas list: augment with full sections metadata so the card on the
+  // granthas page can display section names (e.g. "Viyada Adhikaranam" for
+  // Brahma Sutra). We fetch sections separately (paginated, no 25-item cap)
+  // and attach them to each grantha before returning.
+  router.get("/granthas", async (req, res) => {
+    try {
+      const queryString = req.url.includes("?") ? req.url.substring(req.url.indexOf("?") + 1) : "";
+
+      if (queryString) {
+        const data = await strapiRequest(`/api/granthas?${queryString}`);
+        return res.json(data);
+      }
+
+      const granthaPopulate = DEEP_POPULATE["granthas"];
+
+      // Fetch granthas and sections metadata in parallel
+      const SECTION_META = [
+        "fields[0]=documentId",
+        "fields[1]=title",
+        "fields[2]=type",
+        "fields[3]=order",
+        "populate[grantha][fields][0]=documentId",
+        "populate[parent][fields][0]=documentId",
+        "pagination[pageSize]=100",
+      ].join("&");
+
+      const [firstGranthaPage, firstSectionPage] = await Promise.all([
+        strapiRequest(`/api/granthas?${granthaPopulate}&pagination[page]=1`),
+        strapiRequest(`/api/sections?${SECTION_META}&pagination[page]=1`),
+      ]);
+
+      // Paginate granthas if needed
+      const granthaTotal: number = firstGranthaPage?.meta?.pagination?.total ?? 0;
+      const granthaPageSize: number = firstGranthaPage?.meta?.pagination?.pageSize ?? 100;
+      const granthaPageCount = Math.ceil(granthaTotal / granthaPageSize) || 1;
+
+      let allGranthas: any[] = [...(firstGranthaPage?.data ?? [])];
+      if (granthaPageCount > 1) {
+        const restPages = await Promise.all(
+          Array.from({ length: granthaPageCount - 1 }, (_, i) =>
+            strapiRequest(`/api/granthas?${granthaPopulate}&pagination[page]=${i + 2}`)
+          )
+        );
+        allGranthas = allGranthas.concat(restPages.flatMap((p: any) => p?.data ?? []));
+      }
+
+      // Paginate sections if needed
+      const sectionTotal: number = firstSectionPage?.meta?.pagination?.total ?? 0;
+      const sectionPageSize: number = firstSectionPage?.meta?.pagination?.pageSize ?? 100;
+      const sectionPageCount = Math.ceil(sectionTotal / sectionPageSize) || 1;
+
+      let allSectionsMeta: any[] = [...(firstSectionPage?.data ?? [])];
+      if (sectionPageCount > 1) {
+        const restSectionPages = await Promise.all(
+          Array.from({ length: sectionPageCount - 1 }, (_, i) =>
+            strapiRequest(`/api/sections?${SECTION_META}&pagination[page]=${i + 2}`)
+          )
+        );
+        allSectionsMeta = allSectionsMeta.concat(restSectionPages.flatMap((p: any) => p?.data ?? []));
+      }
+
+      // Group sections by grantha documentId
+      const sectionsByGrantha = new Map<string, any[]>();
+      for (const s of allSectionsMeta) {
+        const gDocId = s.grantha?.documentId;
+        if (!gDocId) continue;
+        if (!sectionsByGrantha.has(gDocId)) sectionsByGrantha.set(gDocId, []);
+        sectionsByGrantha.get(gDocId)!.push({
+          documentId: s.documentId,
+          title: s.title,
+          type: s.type,
+          order: s.order,
+          parent: s.parent ? { documentId: s.parent.documentId } : null,
+        });
+      }
+
+      // Attach sections to granthas
+      const enriched = allGranthas.map((g: any) => ({
+        ...g,
+        sections: sectionsByGrantha.get(g.documentId) ?? [],
+      }));
+
+      return res.json({
+        data: enriched,
+        meta: { pagination: { page: 1, pageSize: enriched.length, pageCount: 1, total: enriched.length } },
+      });
+    } catch (error: any) {
+      if (error.status === 404) {
+        return res.json({ data: [], meta: { pagination: { page: 1, pageSize: 25, pageCount: 0, total: 0 } } });
+      }
+      res.status(500).json({ message: error.message || "Failed to fetch granthas" });
+    }
   });
 
   for (const ct of contentTypes) {

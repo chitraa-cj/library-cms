@@ -1631,29 +1631,56 @@ export default function GranthasPage() {
               if (sec.documentId && existingKhandaDocIds.has(sec.documentId)) continue;
               // Skip explicitly deleted sections — do not re-add them from Strapi
               if (sec.documentId && deletedDocIdsSet.has(sec.documentId)) continue;
-              // This Strapi khanda is missing from the draft — add it with its manthras.
-              // Use the section's own documentId (unique) rather than its title (non-unique)
-              // to fetch the correct manthras for THIS specific section.
-              const secList = sec.documentId
-                ? (strapiMantrasBySecDocId.get(sec.documentId) ?? [])
-                : (strapiMantrasBySecTitle.get(sec.title) ?? []);
-              const secManthras = secList
-                .sort((x, y) => (x.order ?? 0) - (y.order ?? 0))
-                .filter((sm) => !deletedManthraDocIdsSet.has(sm.docId))
-                .map((sm) => ({
+              // Check if this section has level-3 sub-sections (e.g. Adhikaranams under a Pada).
+              const secGrandChildren = sec.documentId
+                ? (strapiChildSectionsByParentDocId.get(sec.documentId) ?? [])
+                    .sort((x: any, y: any) => (x.order ?? 0) - (y.order ?? 0))
+                : [];
+              let supplementPadas: PadaNode[] = [];
+              let supplementManthras: ManthraNode[] = [];
+              if (secGrandChildren.length > 0) {
+                // Level-3: this khanda's manthras live inside its sub-sections (padas).
+                supplementPadas = secGrandChildren.map((gc: any) => ({
                   id: uid(),
-                  title: sm.title,
-                  order: sm.order,
-                  strapiDocumentId: sm.docId,
-                } as ManthraNode));
+                  title: gc.title,
+                  order: gc.order ?? 0,
+                  expanded: true,
+                  documentId: gc.documentId || undefined,
+                  manthras: (gc.documentId
+                    ? (strapiMantrasBySecDocId.get(gc.documentId) ?? strapiMantrasBySecTitle.get(gc.title) ?? [])
+                    : (strapiMantrasBySecTitle.get(gc.title) ?? []))
+                    .sort((x: any, y: any) => (x.order ?? 0) - (y.order ?? 0))
+                    .filter((sm: any) => !deletedManthraDocIdsSet.has(sm.docId))
+                    .map((sm: any) => ({
+                      id: uid(),
+                      title: sm.title,
+                      order: sm.order,
+                      strapiDocumentId: sm.docId,
+                    } as ManthraNode)),
+                } as PadaNode));
+              } else {
+                // Level-2: manthras live directly on this khanda section.
+                const secList = sec.documentId
+                  ? (strapiMantrasBySecDocId.get(sec.documentId) ?? [])
+                  : (strapiMantrasBySecTitle.get(sec.title) ?? []);
+                supplementManthras = secList
+                  .sort((x, y) => (x.order ?? 0) - (y.order ?? 0))
+                  .filter((sm) => !deletedManthraDocIdsSet.has(sm.docId))
+                  .map((sm) => ({
+                    id: uid(),
+                    title: sm.title,
+                    order: sm.order,
+                    strapiDocumentId: sm.docId,
+                  } as ManthraNode));
+              }
               supplementKhandas.push({
                 id: uid(),
                 title: sec.title,
                 order: sec.order ?? 0,
                 expanded: true,
                 documentId: sec.documentId || undefined,
-                padas: [],
-                manthras: secManthras,
+                padas: supplementPadas,
+                manthras: supplementManthras,
               });
             }
           }
@@ -1691,25 +1718,63 @@ export default function GranthasPage() {
           .sort((x: any, y: any) => (x.order ?? 0) - (y.order ?? 0));
         let khandas: KhandaNode[];
         if (strapiChildren.length > 0) {
-          khandas = strapiChildren.map((child: any) => ({
-            id: uid(),
-            title: child.title,
-            order: child.order ?? 0,
-            expanded: true,
-            documentId: child.documentId || undefined,
-            padas: [],
-            manthras: (child.documentId
-              ? (strapiMantrasBySecDocId.get(child.documentId) ?? strapiMantrasBySecTitle.get(child.title) ?? [])
-              : (strapiMantrasBySecTitle.get(child.title) ?? []))
-              .sort((x: any, y: any) => (x.order ?? 0) - (y.order ?? 0))
-              .filter((sm: any) => !topLevelDeletedManthraDocIdsSet.has(sm.docId))
-              .map((sm: any, mi: number) => ({
+          khandas = strapiChildren.map((child: any) => {
+            // Check for level-3 sub-sections (e.g. Adhikaranams under Padas in Brahma Sutra).
+            const grandChildren = child.documentId
+              ? (strapiChildSectionsByParentDocId.get(child.documentId) ?? [])
+                  .sort((x: any, y: any) => (x.order ?? 0) - (y.order ?? 0))
+              : [];
+            if (grandChildren.length > 0) {
+              // Level-3: build padas for each grandchild section
+              const padas: PadaNode[] = grandChildren.map((gc: any) => ({
                 id: uid(),
-                title: sm.title,
-                order: sm.order ?? mi + 1,
-                strapiDocumentId: sm.docId,
-              } as ManthraNode)),
-          } as KhandaNode));
+                title: gc.title,
+                order: gc.order ?? 0,
+                expanded: true,
+                documentId: gc.documentId || undefined,
+                manthras: (gc.documentId
+                  ? (strapiMantrasBySecDocId.get(gc.documentId) ?? strapiMantrasBySecTitle.get(gc.title) ?? [])
+                  : (strapiMantrasBySecTitle.get(gc.title) ?? []))
+                  .sort((x: any, y: any) => (x.order ?? 0) - (y.order ?? 0))
+                  .filter((sm: any) => !topLevelDeletedManthraDocIdsSet.has(sm.docId))
+                  .map((sm: any, mi: number) => ({
+                    id: uid(),
+                    title: sm.title,
+                    order: sm.order ?? mi + 1,
+                    strapiDocumentId: sm.docId,
+                  } as ManthraNode)),
+              } as PadaNode));
+              return {
+                id: uid(),
+                title: child.title,
+                order: child.order ?? 0,
+                expanded: true,
+                documentId: child.documentId || undefined,
+                padas,
+                manthras: [],
+              } as KhandaNode;
+            }
+            // Level-2: manthras live directly on this child section
+            return {
+              id: uid(),
+              title: child.title,
+              order: child.order ?? 0,
+              expanded: true,
+              documentId: child.documentId || undefined,
+              padas: [],
+              manthras: (child.documentId
+                ? (strapiMantrasBySecDocId.get(child.documentId) ?? strapiMantrasBySecTitle.get(child.title) ?? [])
+                : (strapiMantrasBySecTitle.get(child.title) ?? []))
+                .sort((x: any, y: any) => (x.order ?? 0) - (y.order ?? 0))
+                .filter((sm: any) => !topLevelDeletedManthraDocIdsSet.has(sm.docId))
+                .map((sm: any, mi: number) => ({
+                  id: uid(),
+                  title: sm.title,
+                  order: sm.order ?? mi + 1,
+                  strapiDocumentId: sm.docId,
+                } as ManthraNode)),
+            } as KhandaNode;
+          });
         } else {
           // Flat section — create a synthetic "_default" khanda with this section's manthras
           const manthrasForSec = (sec.documentId

@@ -836,6 +836,7 @@ export default function GranthasPage() {
     isLoadingDrafts,
     saveDraft,
     publishDraft,
+    publishProgress,
     deleteDraft,
   } = useDrafts("granthas");
 
@@ -3753,6 +3754,7 @@ export default function GranthasPage() {
                   <ArrowLeft className="w-4 h-4 mr-2" />
                   Back
                 </Button>
+                <div className="relative flex items-center gap-2">
                 <Button
                   variant="outline"
                   onClick={handleSave}
@@ -3768,8 +3770,26 @@ export default function GranthasPage() {
                   data-testid="button-save-and-publish"
                 >
                   {(saveDraft.isPending || publishDraft.isPending) && <Loader2 className="w-4 h-4 mr-2 animate-spin" />}
-                  Save & Publish
+                  {publishDraft.isPending ? "Publishing…" : "Save & Publish"}
                 </Button>
+                {publishDraft.isPending && publishProgress && publishProgress.total > 0 && (
+                  <div className="absolute bottom-full mb-2 right-0 bg-popover border rounded-md shadow-md p-3 min-w-[260px] text-sm z-50" data-testid="publish-progress-box">
+                    <div className="flex items-center gap-2 mb-1 text-muted-foreground">
+                      <Loader2 className="w-3 h-3 animate-spin flex-shrink-0" />
+                      <span className="font-medium">Publishing to Strapi</span>
+                    </div>
+                    <div className="w-full bg-muted rounded-full h-1.5 mb-1">
+                      <div
+                        className="bg-primary rounded-full h-1.5 transition-all"
+                        style={{ width: `${Math.round((publishProgress.done / publishProgress.total) * 100)}%` }}
+                      />
+                    </div>
+                    <div className="text-xs text-muted-foreground truncate">
+                      {publishProgress.done}/{publishProgress.total} — {publishProgress.current}
+                    </div>
+                  </div>
+                )}
+                </div>
               </>
             )}
           </div>

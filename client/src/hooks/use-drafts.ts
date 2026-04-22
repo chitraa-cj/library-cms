@@ -1,10 +1,19 @@
+import { useState } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { queryClient, apiRequest } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
 import type { Draft } from "@shared/schema";
 
+export interface PublishProgress {
+  done: number;
+  total: number;
+  current: string;
+}
+
 export function useDrafts(contentType: string) {
   const { toast } = useToast();
+
+  const [publishProgress, setPublishProgress] = useState<PublishProgress | null>(null);
 
   const draftsQuery = useQuery<Draft[]>({
     queryKey: ["/api/drafts", contentType],
@@ -62,10 +71,54 @@ export function useDrafts(contentType: string) {
 
   const publishMutation = useMutation({
     mutationFn: async (draftId: number) => {
+      setPublishProgress(null);
+
       const res = await apiRequest("POST", `/api/drafts/${draftId}/publish`);
-      return res.json();
+      if (!res.ok) {
+        const errData = await res.json().catch(() => ({}));
+        throw new Error(errData.message || `HTTP ${res.status}`);
+      }
+      const data = await res.json();
+
+      if (data.async && data.jobId) {
+        const jobId: string = data.jobId;
+        const maxAttempts = 180; // poll for up to 6 minutes (every 2 s)
+        for (let attempt = 0; attempt < maxAttempts; attempt++) {
+          await new Promise((resolve) => setTimeout(resolve, 2000));
+          try {
+            const statusRes = await fetch(
+              `/api/drafts/${draftId}/publish-status?jobId=${encodeURIComponent(jobId)}`,
+              { credentials: "include" }
+            );
+            if (!statusRes.ok) continue;
+            const status = await statusRes.json();
+            if (status.progress) {
+              setPublishProgress({
+                done: status.progress.done,
+                total: status.progress.total,
+                current: status.progress.current,
+              });
+            }
+            if (status.status === "done") {
+              setPublishProgress(null);
+              return status.result;
+            }
+            if (status.status === "failed") {
+              setPublishProgress(null);
+              throw new Error(status.error || "Publish failed");
+            }
+          } catch (pollErr: any) {
+            if (pollErr.message && !pollErr.message.includes("fetch")) throw pollErr;
+          }
+        }
+        setPublishProgress(null);
+        throw new Error("Publish is taking too long. Check the server logs and try again.");
+      }
+
+      return data;
     },
     onSuccess: (data: any) => {
+      setPublishProgress(null);
       queryClient.invalidateQueries({ queryKey: ["/api/drafts", contentType] });
       queryClient.invalidateQueries({ queryKey: ["/api/strapi"] });
 
@@ -101,6 +154,7 @@ export function useDrafts(contentType: string) {
       }
     },
     onError: (err: any) => {
+      setPublishProgress(null);
       toast({
         variant: "destructive",
         title: "Publish failed",
@@ -137,6 +191,7 @@ export function useDrafts(contentType: string) {
     isLoadingDrafts: draftsQuery.isLoading,
     saveDraft: saveDraftMutation,
     publishDraft: publishMutation,
+    publishProgress,
     deleteDraft: deleteDraftMutation,
   };
 }

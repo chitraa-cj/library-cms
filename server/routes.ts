@@ -26,6 +26,22 @@ function decompressBackupData(raw: any): any {
 
 const STRAPI_INTERNAL_KEYS = new Set(["id", "_id", "__component", "createdAt", "updatedAt", "publishedAt", "documentId", "locale"]);
 
+// ─── Background publish job store ────────────────────────────────────────────
+interface PublishJob {
+  status: "running" | "done" | "failed";
+  progress: { done: number; total: number; current: string };
+  result?: any;
+  error?: string;
+  startedAt: Date;
+}
+const publishJobs = new Map<string, PublishJob>();
+function cleanOldPublishJobs() {
+  const cutoff = Date.now() - 15 * 60 * 1000; // 15 min TTL
+  for (const [id, job] of publishJobs) {
+    if (job.startedAt.getTime() < cutoff) publishJobs.delete(id);
+  }
+}
+
 // ─── SQLite export helpers ────────────────────────────────────────────────────
 
 /** Extract plain text from a Strapi blocks (rich-text) field */
@@ -956,7 +972,8 @@ async function createOrUpdateManthra(
 }
 
 async function publishGranthaWithHierarchy(
-  draft: any
+  draft: any,
+  onProgress?: (done: number, total: number, current: string) => void
 ): Promise<any> {
   const rawData = draft.data as Record<string, any>;
   // Strip wizard-only / local-format fields from the Grantha payload
@@ -1045,6 +1062,7 @@ async function publishGranthaWithHierarchy(
   }
 
   const granthaDocId: string | undefined = strapiResult?.data?.documentId;
+  reportProgress("Grantha record");
 
   // 2. Publish teekas (best-effort) — create each teeka and link to this grantha.
   // Also build a TeekaName→Strapi-documentId map so step 3 can resolve teekas instantly
@@ -1069,6 +1087,7 @@ async function publishGranthaWithHierarchy(
         if (existingDocId) {
           console.log(`[publish] Teeka "${effectiveName}" already exists (${existingDocId}) — reusing`);
           teekaNameToDocId.set(effectiveName.toLowerCase(), existingDocId);
+          reportProgress(`Teeka: ${effectiveName}`);
           continue;
         }
         const created = await strapiRequest("/api/teekas", {
@@ -1088,8 +1107,10 @@ async function publishGranthaWithHierarchy(
         } else {
           console.warn(`[publish] Teeka "${effectiveName}" created but no documentId returned`);
         }
+        reportProgress(`Teeka: ${effectiveName}`);
       } catch (e: any) {
         console.error(`[publish] Teeka "${effectiveName}" failed:`, e.message);
+        reportProgress(`Teeka: ${effectiveName}`);
       }
     }
   }
@@ -1139,6 +1160,32 @@ async function publishGranthaWithHierarchy(
   // Collect manthra publish failures so they can be surfaced to the user.
   // Each entry: { manthra: string (number/title), error: string }
   const publishFailures: Array<{ manthra: string; error: string }> = [];
+
+  // ── Progress tracking ─────────────────────────────────────────────────────
+  // Count total publishable items so callers can show a progress indicator.
+  let _progressDone = 0;
+  function countHierarchyItems(hier: any[]): number {
+    let n = 0;
+    for (const a of hier) {
+      n++; // adhyaya section
+      for (const k of (a.khandas ?? [])) {
+        if (k.title && k.title !== "_default") n++; // khanda section
+        if (levelThreeEnabled && Array.isArray(k.padas) && k.padas.length > 0) {
+          for (const p of k.padas) { n++; n += (p.manthras ?? []).length; }
+        } else {
+          n += (k.manthras ?? []).length;
+        }
+      }
+    }
+    return n;
+  }
+  const _progressTotal = 1 /* grantha */ +
+    (Array.isArray(teekaDefinitions) ? teekaDefinitions.length : 0) +
+    (Array.isArray(hierarchy) ? countHierarchyItems(hierarchy) : 0);
+  function reportProgress(current: string) {
+    _progressDone++;
+    onProgress?.(_progressDone, _progressTotal, current);
+  }
 
   // Keys that carry no rich content — only identify/position the manthra.
   // A cleaned mData that only has these keys is a "Strapi-only" node: the user
@@ -1243,6 +1290,7 @@ async function publishGranthaWithHierarchy(
       }
       if (!adhyayaDocId) continue;
       if (adhyaya.id) adhyayaIdToDocId.set(adhyaya.id, adhyayaDocId);
+      reportProgress(adhyaya.title);
 
       for (const khanda of (adhyaya.khandas ?? [])) {
         const isDefaultKhanda = khanda.title === "_default" || !levelTwoEnabled;
@@ -1266,6 +1314,7 @@ async function publishGranthaWithHierarchy(
           }
           if (!khandaDocId) continue;
           if (khanda.id) khandaIdToDocId.set(khanda.id, khandaDocId);
+          reportProgress(khanda.title);
         } else {
           khandaDocId = adhyayaDocId;
         }
@@ -1290,13 +1339,16 @@ async function publishGranthaWithHierarchy(
             }
             if (!padaDocId) continue;
             if (pada.id) padaIdToDocId.set(pada.id, padaDocId);
+            reportProgress(pada.title);
             for (const manthra of (pada.manthras ?? [])) {
               await publishManthra(manthra, padaDocId);
+              reportProgress(manthra.title || manthra.id);
             }
           }
         } else {
           for (const manthra of (khanda.manthras ?? [])) {
             await publishManthra(manthra, khandaDocId);
+            reportProgress(manthra.title || manthra.id);
           }
         }
       }
@@ -1908,12 +1960,50 @@ export async function registerRoutes(
       let publishFailures: Array<{ manthra: string; error: string }> | undefined;
 
       if (draft.contentType === "granthas") {
-        // Granthas need special handling: strip wizard-only fields and
-        // create chapter records separately in the correct order.
-        const result = await publishGranthaWithHierarchy(draft);
-        strapiResult = result.strapiResult;
-        updatedHierarchy = result.updatedHierarchy;
-        publishFailures = result.publishFailures;
+        // Granthas publish can take several minutes (hundreds of Strapi API calls).
+        // Run it in a background job so the HTTP request returns immediately and the
+        // Replit proxy doesn't time it out. The client polls /publish-status for progress.
+        const jobId = Math.random().toString(36).substring(2, 14);
+        const job: PublishJob = {
+          status: "running",
+          progress: { done: 0, total: 0, current: "Starting…" },
+          startedAt: new Date(),
+        };
+        publishJobs.set(jobId, job);
+        cleanOldPublishJobs();
+
+        // Respond immediately so the client connection is freed
+        res.json({ jobId, async: true, message: "Publish started in background" });
+
+        // Background: run the actual publish (don't await here)
+        publishGranthaWithHierarchy(draft, (done, total, current) => {
+          job.progress = { done, total, current };
+        })
+          .then(async (result) => {
+            // Sync Strapi documentIds back into the draft hierarchy
+            if (result.updatedHierarchy) {
+              const existingData = (draft.data as Record<string, any>) ?? {};
+              await storage.updateDraft(id, user.id, {
+                data: { ...existingData, hierarchy: result.updatedHierarchy },
+              });
+            }
+            const newDocumentId =
+              result.strapiResult?.data?.documentId || draft.strapiDocumentId;
+            const updated = await storage.markDraftPublished(id, user.id, newDocumentId);
+            const responseBody: Record<string, any> = { draft: updated, strapi: result.strapiResult };
+            if (result.publishFailures && result.publishFailures.length > 0) {
+              responseBody.warnings = result.publishFailures;
+            }
+            job.status = "done";
+            job.result = responseBody;
+          })
+          .catch((err: any) => {
+            console.error(`[publish-bg] Job ${jobId} failed:`, err.message);
+            job.status = "failed";
+            job.error = err.message || "Publish failed";
+          });
+
+        return; // Response already sent
       } else {
         const cleanedData =
           draft.contentType === "manthras"
@@ -1962,6 +2052,26 @@ export async function registerRoutes(
     } catch (error: any) {
       res.status(500).json({ message: error.message || "Failed to publish draft" });
     }
+  });
+
+  // ── Background publish status polling ──────────────────────────────────────
+  // Client polls this endpoint while a grantha publish job is running.
+  // Returns { status, progress: { done, total, current }, result?, error? }
+  app.get("/api/drafts/:id/publish-status", requireAuth, (req, res) => {
+    const { jobId } = req.query;
+    if (!jobId || typeof jobId !== "string") {
+      return res.status(400).json({ message: "jobId query param required" });
+    }
+    const job = publishJobs.get(jobId);
+    if (!job) {
+      return res.status(404).json({ message: "Job not found (may have expired)" });
+    }
+    res.json({
+      status: job.status,
+      progress: job.progress,
+      ...(job.result ? { result: job.result } : {}),
+      ...(job.error ? { error: job.error } : {}),
+    });
   });
 
   // ───────────────── Admin: User Management ─────────────────

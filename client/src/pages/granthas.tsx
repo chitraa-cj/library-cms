@@ -2139,6 +2139,16 @@ export default function GranthasPage() {
       title.replace(/(\d+)$/, (_, n) => String(Number(n) + 1));
 
     /**
+     * Extract the word prefix from an existing manthra title so the new entry
+     * inherits the same label (e.g. "Shloka 1.1.1" → "Shloka", "Mantra 2.3" → "Mantra").
+     * Falls back to the grantha config leafName if the title doesn't match the pattern.
+     */
+    const titlePrefix = (title: string): string => {
+      const m = title.match(/^(.+?)\s+[\d.]+$/);
+      return m ? m[1] : leaf;
+    };
+
+    /**
      * Split a Strapi blocks array at the first verse-end marker.
      * Returns [part1, part2].  part2 is empty when no marker is found.
      * Leading blank paragraphs at the start of part2 are stripped.
@@ -2242,9 +2252,10 @@ export default function GranthasPage() {
                   );
                   if (afterIdx < 0) return p;
                   const insertOrder = p.manthras[afterIdx].order + 1;
+                  const pfx = titlePrefix(p.manthras[afterIdx].title);
                   const newTitle = isDefaultKhanda
-                    ? `${leaf} ${aIdx}.${pIdx}.${insertOrder}`
-                    : `${leaf} ${aIdx}.${kIdx}.${pIdx}.${insertOrder}`;
+                    ? `${pfx} ${aIdx}.${pIdx}.${insertOrder}`
+                    : `${pfx} ${aIdx}.${kIdx}.${pIdx}.${insertOrder}`;
                   const { sourceUpdate, newManthra } = buildSplitResult(
                     p.manthras[afterIdx], newTitle, insertOrder,
                   );
@@ -2271,10 +2282,11 @@ export default function GranthasPage() {
             );
             if (afterIdx < 0) return k;
             const insertOrder = k.manthras[afterIdx].order + 1;
+            const pfx = titlePrefix(k.manthras[afterIdx].title);
             const newTitle =
               structureConfig.levelTwoEnabled && !isDefaultKhanda
-                ? `${leaf} ${aIdx}.${kIdx}.${insertOrder}`
-                : `${leaf} ${aIdx}.${insertOrder}`;
+                ? `${pfx} ${aIdx}.${kIdx}.${insertOrder}`
+                : `${pfx} ${aIdx}.${insertOrder}`;
             const { sourceUpdate, newManthra } = buildSplitResult(
               k.manthras[afterIdx], newTitle, insertOrder,
             );

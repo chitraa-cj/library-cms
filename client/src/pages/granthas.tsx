@@ -2113,15 +2113,20 @@ export default function GranthasPage() {
   }
 
   /**
-   * Insert a new manthra immediately after `afterManthraId`.
+   * Insert a new manthra immediately after `afterManthraId`, automatically splitting
+   * the combined verse text at the first verse-end marker:
+   *   - Sanskrit/Devanagari: ॥ N ॥
+   *   - IAST / English:      || N ||
    *
-   * The new entry is pre-populated with the **mantra text only** (ShlokaManthraEntry — both
-   * Devanagari and English) copied from the source entry so the editor has the combined text
-   * to work with and can trim each entry to its own sloka.  Bhashyam and Teekas are left empty.
+   * The SOURCE entry is trimmed in-place to contain only the text up to (and including)
+   * the first verse marker.  The NEW entry receives the remaining text (verse 2+) as its
+   * mantra text with no bhashyam and empty teeka slots.
    *
-   * All manthras that come after the insertion point get their order incremented by 1 and their
-   * title's last numeric segment bumped by 1 (e.g. "Shloka 1.1.3" → "Shloka 1.1.4") so the
-   * sequence stays gapless.
+   * If no verse-end marker is found the source is left unchanged and the new entry is blank
+   * so the editor can fill in the content manually.
+   *
+   * All manthras after the insertion point are renumbered (+1 order and +1 final title
+   * segment) so the sequence stays gapless.
    */
   function insertManthraAfter(
     adhyayaId: string,
@@ -2133,27 +2138,82 @@ export default function GranthasPage() {
     const bumpTitle = (title: string) =>
       title.replace(/(\d+)$/, (_, n) => String(Number(n) + 1));
 
-    /** Deep-clone via JSON so the new entry gets its own copy of the rich-text blocks. */
-    const cloneEntry = (entry: TextAndTranslation | undefined): TextAndTranslation | undefined =>
-      entry ? JSON.parse(JSON.stringify(entry)) : undefined;
+    /**
+     * Split a Strapi blocks array at the first verse-end marker.
+     * Returns [part1, part2].  part2 is empty when no marker is found.
+     * Leading blank paragraphs at the start of part2 are stripped.
+     */
+    const splitBlocks = (
+      blocks: StrapiBlock[] | string | null | undefined,
+    ): [StrapiBlock[], StrapiBlock[]] => {
+      if (!blocks || typeof blocks === "string" || !Array.isArray(blocks)) {
+        return [[], []];
+      }
+      const verseEndRe = /॥\s*\d+\s*॥|\|\|\s*\d+\s*\|\|/;
+      for (let i = 0; i < blocks.length; i++) {
+        const lineText = (blocks[i].children || []).map((c) => c.text || "").join("");
+        if (verseEndRe.test(lineText)) {
+          const part1 = blocks.slice(0, i + 1);
+          let j = i + 1;
+          while (j < blocks.length) {
+            const t = (blocks[j].children || []).map((c) => c.text || "").join("").trim();
+            if (t) break;
+            j++;
+          }
+          return [part1, blocks.slice(j)];
+        }
+      }
+      return [blocks, []];
+    };
 
-    /** Build the new manthra node: mantra text copied, bhashyam/teekas empty. */
-    const buildNew = (
-      sourceManthra: ManthraNode,
-      title: string,
-      order: number,
-    ): ManthraNode => ({
-      id: uid(),
-      title,
-      order,
-      ShlokaManthraEntry: cloneEntry(sourceManthra.ShlokaManthraEntry),
-      // BhashyamForShlokaManthra intentionally omitted (empty)
-      Teekas: teekas.map((t) => ({
-        TeekaName: t.TeekaName,
-        TeekaAuthor: t.TeekaAuthor,
-        // TeekaEntry intentionally omitted (empty)
-      })),
-    });
+    /**
+     * Compute the source-update patch and the new manthra to insert.
+     * If a split point is found:
+     *   - sourceUpdate: trimmed ShlokaManthraEntry with only verse 1 text
+     *   - newManthra:   verse 2+ text, no bhashyam, empty teeka slots
+     * If no split point is found:
+     *   - sourceUpdate: {} (source unchanged)
+     *   - newManthra:   blank entry with empty teeka slots
+     */
+    const buildSplitResult = (
+      source: ManthraNode,
+      newTitle: string,
+      newOrder: number,
+    ): { sourceUpdate: Partial<ManthraNode>; newManthra: ManthraNode } => {
+      const entry = source.ShlokaManthraEntry;
+      const [skt1, skt2] = splitBlocks(entry?.SanskritTextEntry as StrapiBlock[]);
+      const [iast1, iast2] = splitBlocks(entry?.IASTTransliteration as StrapiBlock[]);
+      const [eng1, eng2] = splitBlocks(entry?.EnglishTranslationText as StrapiBlock[]);
+
+      const hasSplit = skt2.length > 0 || iast2.length > 0 || eng2.length > 0;
+
+      const newManthra: ManthraNode = {
+        id: uid(),
+        title: newTitle,
+        order: newOrder,
+        ShlokaManthraEntry: hasSplit
+          ? {
+              SanskritTextEntry: skt2.length > 0 ? skt2 : undefined,
+              IASTTransliteration: iast2.length > 0 ? iast2 : undefined,
+              EnglishTranslationText: eng2.length > 0 ? eng2 : undefined,
+            }
+          : undefined,
+        Teekas: teekas.map((t) => ({ TeekaName: t.TeekaName, TeekaAuthor: t.TeekaAuthor })),
+      };
+
+      const sourceUpdate: Partial<ManthraNode> = hasSplit
+        ? {
+            ShlokaManthraEntry: {
+              ...entry,
+              SanskritTextEntry: skt1.length > 0 ? skt1 : entry?.SanskritTextEntry,
+              IASTTransliteration: iast1.length > 0 ? iast1 : entry?.IASTTransliteration,
+              EnglishTranslationText: eng1.length > 0 ? eng1 : entry?.EnglishTranslationText,
+            },
+          }
+        : {};
+
+      return { sourceUpdate, newManthra };
+    };
 
     setAdhyayas(
       adhyayas.map((a) => {
@@ -2184,11 +2244,14 @@ export default function GranthasPage() {
                   const newTitle = isDefaultKhanda
                     ? `${leaf} ${aIdx}.${pIdx}.${insertOrder}`
                     : `${leaf} ${aIdx}.${kIdx}.${pIdx}.${insertOrder}`;
-                  const newManthra = buildNew(p.manthras[afterIdx], newTitle, insertOrder);
+                  const { sourceUpdate, newManthra } = buildSplitResult(
+                    p.manthras[afterIdx], newTitle, insertOrder,
+                  );
                   return {
                     ...p,
                     manthras: [
-                      ...p.manthras.slice(0, afterIdx + 1),
+                      ...p.manthras.slice(0, afterIdx),
+                      { ...p.manthras[afterIdx], ...sourceUpdate },
                       newManthra,
                       ...p.manthras.slice(afterIdx + 1).map((m) => ({
                         ...m,
@@ -2211,11 +2274,14 @@ export default function GranthasPage() {
               structureConfig.levelTwoEnabled && !isDefaultKhanda
                 ? `${leaf} ${aIdx}.${kIdx}.${insertOrder}`
                 : `${leaf} ${aIdx}.${insertOrder}`;
-            const newManthra = buildNew(k.manthras[afterIdx], newTitle, insertOrder);
+            const { sourceUpdate, newManthra } = buildSplitResult(
+              k.manthras[afterIdx], newTitle, insertOrder,
+            );
             return {
               ...k,
               manthras: [
-                ...k.manthras.slice(0, afterIdx + 1),
+                ...k.manthras.slice(0, afterIdx),
+                { ...k.manthras[afterIdx], ...sourceUpdate },
                 newManthra,
                 ...k.manthras.slice(afterIdx + 1).map((m) => ({
                   ...m,

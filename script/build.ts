@@ -55,7 +55,13 @@ async function buildAll() {
     define: {
       "process.env.NODE_ENV": '"production"',
     },
-    minify: true,
+    // Minify whitespace and syntax but NOT identifiers:
+    // Renaming variables to single letters causes esbuild TDZ bugs in complex
+    // async code and makes runtime error messages unreadable (e.g. "Cannot access
+    // 'F' before initialization" instead of the actual variable name).
+    minifyWhitespace: true,
+    minifySyntax: true,
+    minifyIdentifiers: false,
     external: externals,
     logLevel: "info",
   });

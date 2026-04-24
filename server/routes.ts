@@ -2,6 +2,7 @@ import type { Express } from "express";
 import { type Server } from "http";
 import { setupAuth, requireAuth, requireAdmin, hashPassword } from "./auth";
 import { createStrapiRouter, strapiRequest, strapiRequestLarge } from "./strapi";
+import { createMigrateRouter } from "./migrate-vivekachudamani";
 import { storage } from "./storage";
 import Database from "better-sqlite3";
 import type { User } from "@shared/schema";
@@ -1652,6 +1653,9 @@ export async function registerRoutes(
 
   const strapiRouter = createStrapiRouter();
   app.use("/api/strapi", strapiRouter);
+
+  const migrateRouter = createMigrateRouter();
+  app.use("/api/strapi/migrate", migrateRouter);
 
   const VALID_CONTENT_TYPES = [...Object.keys(CONTENT_TYPE_MAP), ...Array.from(STRAPI_UNROUTED_TYPES)];
 

@@ -1010,6 +1010,34 @@ async function publishGranthaWithHierarchy(
   } = rawData;
   const granthaPayload = cleanPayloadForStrapi(granthaDataRaw);
 
+  // ── Progress tracking ─────────────────────────────────────────────────────
+  // Declared here (before any await) so `reportProgress` is safe to call anywhere
+  // in this function without hitting the `let` temporal dead zone.
+  let _progressDone = 0;
+  function countHierarchyItems(hier: any[]): number {
+    const l3 = !!structureConfig?.levelThreeEnabled;
+    let n = 0;
+    for (const a of (hier ?? [])) {
+      n++; // adhyaya section
+      for (const k of (a.khandas ?? [])) {
+        if (k.title && k.title !== "_default") n++; // khanda section
+        if (l3 && Array.isArray(k.padas) && k.padas.length > 0) {
+          for (const p of k.padas) { n++; n += (p.manthras ?? []).length; }
+        } else {
+          n += (k.manthras ?? []).length;
+        }
+      }
+    }
+    return n;
+  }
+  const _progressTotal = 1 /* grantha */ +
+    (Array.isArray(teekaDefinitions) ? teekaDefinitions.length : 0) +
+    (Array.isArray(hierarchy) ? countHierarchyItems(hierarchy) : 0);
+  function reportProgress(current: string) {
+    _progressDone++;
+    onProgress?.(_progressDone, _progressTotal, current);
+  }
+
   // Strapi requires BhashyakaraIntroduction.SanskritTextEntry to always be present
   // when BhashyakaraIntroduction is included. cleanPayloadForStrapi may have stripped
   // it out if it was empty (empty array → dropped). Ensure it exists with a default.
@@ -1179,32 +1207,6 @@ async function publishGranthaWithHierarchy(
   // Collect manthra publish failures so they can be surfaced to the user.
   // Each entry: { manthra: string (number/title), error: string }
   const publishFailures: Array<{ manthra: string; error: string }> = [];
-
-  // ── Progress tracking ─────────────────────────────────────────────────────
-  // Count total publishable items so callers can show a progress indicator.
-  let _progressDone = 0;
-  function countHierarchyItems(hier: any[]): number {
-    let n = 0;
-    for (const a of hier) {
-      n++; // adhyaya section
-      for (const k of (a.khandas ?? [])) {
-        if (k.title && k.title !== "_default") n++; // khanda section
-        if (levelThreeEnabled && Array.isArray(k.padas) && k.padas.length > 0) {
-          for (const p of k.padas) { n++; n += (p.manthras ?? []).length; }
-        } else {
-          n += (k.manthras ?? []).length;
-        }
-      }
-    }
-    return n;
-  }
-  const _progressTotal = 1 /* grantha */ +
-    (Array.isArray(teekaDefinitions) ? teekaDefinitions.length : 0) +
-    (Array.isArray(hierarchy) ? countHierarchyItems(hierarchy) : 0);
-  function reportProgress(current: string) {
-    _progressDone++;
-    onProgress?.(_progressDone, _progressTotal, current);
-  }
 
   // Keys that carry no rich content — only identify/position the manthra.
   // A cleaned mData that only has these keys is a "Strapi-only" node: the user

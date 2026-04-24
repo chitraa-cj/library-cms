@@ -235,12 +235,14 @@ async function main() {
     log(`Deleted: ${totalDeleted} total`);
 
     // Phase 3b: create individual verse entries in parallel
+    // Title and order use the ACTUAL verse marker number (not sequential position)
+    // so Shloka 1.1.83 means verse ॥83॥, matching the Advaitasharada numbering.
     log(`Creating ${sortedNums.length} verse entries...`);
     let createDone = 0;
-    await pmap(sortedNums, async (verseNum, i) => {
+    await pmap(sortedNums, async (verseNum, _i) => {
       const vd = verseData.get(verseNum)!;
-      const order = (i as number) + 1;
-      const title = `${titlePfx} ${secNums}.${order}`;
+      const order = verseNum;               // order == verse number
+      const title = `${titlePfx} ${secNums}.${verseNum}`; // e.g. Shloka 1.1.83
       const payload = {
         data: {
           ShlokaManthraNumber: title,

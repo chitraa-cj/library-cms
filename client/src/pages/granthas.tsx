@@ -685,6 +685,7 @@ export default function GranthasPage() {
     strapiDocumentId?: string; // set if this mantra is already published to Strapi
   } | null>(null);
   const [manthraLoading, setManthraLoading] = useState(false);
+  const [splittingAll, setSplittingAll] = useState(false);
   const [editingGranthaSectionsLoading, setEditingGranthaSectionsLoading] = useState(false);
 
   // When the mantra dialog opens for a published mantra (has strapiDocumentId),
@@ -2317,16 +2318,59 @@ export default function GranthasPage() {
   /**
    * Batch-split ALL multi-verse entries in one click.
    *
+   * Step 1: Fetch content from Strapi for every manthra that has a strapiDocumentId but
+   *         whose ShlokaManthraEntry is not yet loaded (content is lazy-loaded normally).
+   * Step 2: For each entry, split at ALL verse-end markers in a single pass.
+   *
    * Rules:
-   *  • Only entries loaded at click time are processed (newly-inserted blank entries skip
-   *    because they have no verse-end markers and therefore numVerses === 1).
-   *  • Safety check: the verse-end marker number inside the FIRST detected verse must match
-   *    the trailing number in the entry's title (e.g. "Shloka 1.1.3" → first marker should
-   *    be ॥ ३ ॥ / || 3 ||). If they disagree the entry is renumbered but NOT split so the
-   *    user can inspect it manually.
+   *  • Entries with only 1 verse (or blank new entries) are left unchanged (just renumbered).
+   *  • Safety check: the verse-end marker number of the FIRST detected verse must match the
+   *    trailing number in the entry's title. On mismatch the entry is renumbered but not split.
    *  • After splitting, every entry in the sequence is renumbered to stay gapless.
    */
-  function splitAllManthrasInView() {
+  async function splitAllManthrasInView() {
+    setSplittingAll(true);
+    try {
+    // ── Step 1: collect manthras whose content hasn't been fetched yet ────────
+    const toLoad: { id: string; docId: string }[] = [];
+    const collectUnloaded = (manthras: ManthraNode[]) => {
+      for (const m of manthras) {
+        if (m.strapiDocumentId && !m.ShlokaManthraEntry) {
+          toLoad.push({ id: m.id, docId: m.strapiDocumentId });
+        }
+      }
+    };
+    for (const a of adhyayas) {
+      for (const k of a.khandas) {
+        if (structureConfig.levelThreeEnabled) {
+          for (const p of k.padas ?? []) collectUnloaded(p.manthras);
+        } else {
+          collectUnloaded(k.manthras);
+        }
+      }
+    }
+
+    // ── Step 2: fetch in batches of 10 ────────────────────────────────────────
+    const BATCH = 10;
+    const contentById = new Map<string, any>(); // manthra local-id → Strapi data
+    for (let i = 0; i < toLoad.length; i += BATCH) {
+      const slice = toLoad.slice(i, i + BATCH);
+      const results = await Promise.all(
+        slice.map(async ({ id, docId }) => {
+          try {
+            const r = await fetch(`/api/strapi/manthras/${docId}`, { credentials: "include" });
+            const j = await r.json();
+            return { id, data: j?.data ?? null };
+          } catch {
+            return { id, data: null };
+          }
+        }),
+      );
+      for (const { id, data } of results) {
+        if (data) contentById.set(id, data);
+      }
+    }
+
     const leaf = structureConfig.leafName;
     const verseEndRe = /॥\s*[\d\u0966-\u096F]+\s*॥|\|\|\s*[\d\u0966-\u096F]+\s*\|\|/;
 
@@ -2376,7 +2420,9 @@ export default function GranthasPage() {
       let nextOrder = 1;
       for (const m of manthras) {
         const pfx = titlePfx(m.title);
-        const entry = m.ShlokaManthraEntry;
+        // Prefer already-loaded content; fall back to freshly fetched Strapi data
+        const fetched = contentById.get(m.id);
+        const entry: typeof m.ShlokaManthraEntry = m.ShlokaManthraEntry ?? fetched?.ShlokaManthraEntry;
         const sktV = splitVerses(entry?.SanskritTextEntry);
         const iastV = splitVerses(entry?.IASTTransliteration);
         const engV = splitVerses(entry?.EnglishTranslationText);
@@ -2463,6 +2509,9 @@ export default function GranthasPage() {
         };
       }),
     );
+    } finally {
+      setSplittingAll(false);
+    }
   }
 
   function removeManthra(adhyayaId: string, khandaId: string, manthraId: string, padaId?: string) {
@@ -4139,12 +4188,12 @@ export default function GranthasPage() {
                 <Button
                   variant="outline"
                   onClick={splitAllManthrasInView}
-                  disabled={saveDraft.isPending || publishDraft.isPending}
+                  disabled={saveDraft.isPending || publishDraft.isPending || splittingAll}
                   data-testid="button-split-all-verses"
-                  title="Split every multi-verse entry into individual entries in one click. Entries that already have a single verse are left unchanged."
+                  title="Fetch content for all entries and split every multi-verse entry into individual entries. Single-verse entries are left unchanged."
                 >
-                  <Scissors className="w-4 h-4 mr-2" />
-                  Split All Verses
+                  {splittingAll ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Scissors className="w-4 h-4 mr-2" />}
+                  {splittingAll ? "Splitting…" : "Split All Verses"}
                 </Button>
                 <Button
                   variant="outline"

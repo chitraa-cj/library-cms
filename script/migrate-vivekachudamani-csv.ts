@@ -197,13 +197,12 @@ function verseNumOf(blocks: Block[]): number | null {
 }
 
 /**
- * Split a Strapi blocks array into individual verse arrays.
- * Returns a Map<verseNumber, Block[]>.
- * If no markers found, returns a single entry with key=null.
+ * Split a Strapi blocks array into groups at verse-end markers.
+ * Returns an ordered array of Block[] (one per verse), preserving original order.
+ * If no markers found, returns [blocks] (the whole thing as one group).
  */
-function splitByVerseMarkers(blocks: any): Map<number | null, Block[]> {
-  const result = new Map<number | null, Block[]>();
-  if (!Array.isArray(blocks) || !blocks.length) return result;
+function splitByVerseMarkers(blocks: any): Block[][] {
+  if (!Array.isArray(blocks) || !blocks.length) return [];
 
   const verses: Block[][] = [];
   let current: Block[] = [];
@@ -219,30 +218,23 @@ function splitByVerseMarkers(blocks: any): Map<number | null, Block[]> {
   }
   if (current.length > 0) verses.push(current);
 
-  if (verses.length === 0) return result;
-
-  // Map by verse number, sorted ascending
-  const sorted = [...verses].sort((a, b) => {
-    const na = verseNumOf(a) ?? 0;
-    const nb = verseNumOf(b) ?? 0;
-    return na - nb;
-  });
-
-  for (const v of sorted) {
-    const n = verseNumOf(v);
-    result.set(n ?? null, v);
-  }
-  return result;
+  return verses;
 }
 
 /**
  * Given a source entry and N expected outputs, produce N content objects
  * by splitting the Sanskrit/IAST/English text at verse markers.
  *
+ * Splitting is done by POSITION (index), not by verse number matching.
+ * The Nth Sanskrit verse group → output[N], Nth English verse group → output[N].
+ *
  * Rules:
- *  - If the source has exactly N verse markers → assign one verse block to each output.
- *  - If count doesn't match or markers are absent → put all content in output[0], leave rest blank.
- *  - BhashyamEntry and Teekas only go to output[0]; extra outputs get blank.
+ *  - Each field (Sanskrit, English, IAST) is split independently by verse markers.
+ *  - The Nth group from each field goes to output[N].
+ *  - If a field has fewer groups than outputCount, remaining outputs get no content for that field.
+ *  - If a field has no verse markers at all → all its content goes to output[0].
+ *  - If neither Sanskrit nor English has enough verse groups → cannot split, put all in output[0].
+ *  - BhashyamEntry and Teekas only go to output[0].
  */
 function splitContent(source: any, outputCount: number): any[] {
   const entry = source.ShlokaManthraEntry || {};
@@ -253,19 +245,15 @@ function splitContent(source: any, outputCount: number): any[] {
     return [source];
   }
 
-  // Split each field
-  const sktMap = splitByVerseMarkers(entry.SanskritTextEntry);
-  const iastMap = splitByVerseMarkers(entry.IASTTransliteration);
-  const engMap = splitByVerseMarkers(entry.EnglishTranslationText);
+  // Split each field by position
+  const sktGroups = splitByVerseMarkers(entry.SanskritTextEntry);
+  const iastGroups = splitByVerseMarkers(entry.IASTTransliteration);
+  const engGroups = splitByVerseMarkers(entry.EnglishTranslationText);
 
-  // Gather all verse numbers found across all fields
-  const allNums = new Set<number | null>();
-  for (const k of [...sktMap.keys(), ...iastMap.keys(), ...engMap.keys()]) allNums.add(k);
-  const sortedNums = [...allNums].sort((a, b) => (a ?? 0) - (b ?? 0));
+  // Determine if we can split at all: need at least one field with enough groups
+  const maxGroups = Math.max(sktGroups.length, engGroups.length, iastGroups.length);
 
-  const hasEnoughVerses = sortedNums.length >= outputCount;
-
-  if (!hasEnoughVerses) {
+  if (maxGroups < outputCount) {
     // Can't split cleanly — put everything in output[0], blank for rest
     const outputs: any[] = [source];
     for (let i = 1; i < outputCount; i++) {
@@ -278,20 +266,19 @@ function splitContent(source: any, outputCount: number): any[] {
     return outputs;
   }
 
-  // We have enough verse blocks — assign them
+  // We have enough groups — assign by position
   const outputs: any[] = [];
   for (let i = 0; i < outputCount; i++) {
-    const vNum = sortedNums[i];
-    const sktBlocks = sktMap.get(vNum) ?? sktMap.get(null);
-    const iastBlocks = iastMap.get(vNum) ?? iastMap.get(null);
-    const engBlocks = engMap.get(vNum) ?? engMap.get(null);
+    const sktBlocks = sktGroups[i] ?? (sktGroups.length === 1 && i === 0 ? sktGroups[0] : undefined);
+    const iastBlocks = iastGroups[i] ?? (iastGroups.length === 1 && i === 0 ? iastGroups[0] : undefined);
+    const engBlocks = engGroups[i] ?? (engGroups.length === 1 && i === 0 ? engGroups[0] : undefined);
 
     outputs.push({
       ShlokaManthraEntry: {
         ...entry,
-        SanskritTextEntry: sktBlocks || (i === 0 ? entry.SanskritTextEntry : undefined),
-        IASTTransliteration: iastBlocks || (i === 0 ? entry.IASTTransliteration : undefined),
-        EnglishTranslationText: engBlocks || (i === 0 ? entry.EnglishTranslationText : undefined),
+        SanskritTextEntry: sktBlocks || undefined,
+        IASTTransliteration: iastBlocks || undefined,
+        EnglishTranslationText: engBlocks || undefined,
         ShlokaManthraNumber: undefined, // will be set from outputRef below
       },
       // BhashyamEntry and Teekas only on the first output

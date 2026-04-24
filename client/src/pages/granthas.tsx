@@ -2732,62 +2732,6 @@ export default function GranthasPage() {
           </AlertDialogContent>
         </AlertDialog>
 
-        {/* Insert manthra confirmation */}
-        <AlertDialog open={!!pendingInsert} onOpenChange={(open) => { if (!open) setPendingInsert(null); }}>
-          <AlertDialogContent>
-            <AlertDialogHeader>
-              <AlertDialogTitle>Insert new {structureConfig.leafName}?</AlertDialogTitle>
-              <AlertDialogDescription className="space-y-2">
-                <span className="block">
-                  A new blank <strong>{structureConfig.leafName}</strong> will be inserted after{" "}
-                  <strong>&quot;{pendingInsert?.afterTitle}&quot;</strong>.
-                </span>
-                <span className="block text-amber-600 dark:text-amber-400">
-                  All subsequent {structureConfig.leafName}s in this section will be renumbered (+1).
-                </span>
-              </AlertDialogDescription>
-            </AlertDialogHeader>
-            <AlertDialogFooter>
-              <AlertDialogCancel data-testid="button-cancel-insert-manthra">Cancel</AlertDialogCancel>
-              <AlertDialogAction
-                onClick={confirmInsertManthra}
-                className="bg-primary text-primary-foreground hover:bg-primary/90"
-                data-testid="button-confirm-insert-manthra"
-              >
-                <Plus className="w-4 h-4 mr-2" />
-                Insert
-              </AlertDialogAction>
-            </AlertDialogFooter>
-          </AlertDialogContent>
-        </AlertDialog>
-
-        {/* Remove manthra confirmation */}
-        <AlertDialog open={!!pendingRemove} onOpenChange={(open) => { if (!open) setPendingRemove(null); }}>
-          <AlertDialogContent>
-            <AlertDialogHeader>
-              <AlertDialogTitle>Remove {structureConfig.leafName}?</AlertDialogTitle>
-              <AlertDialogDescription className="space-y-2">
-                <span className="block">
-                  Remove <strong>&quot;{pendingRemove?.title}&quot;</strong> from the list?
-                </span>
-                <span className="block text-amber-600 dark:text-amber-400">
-                  If it has been published to the CMS, it will be deleted from Strapi on the next save.
-                </span>
-              </AlertDialogDescription>
-            </AlertDialogHeader>
-            <AlertDialogFooter>
-              <AlertDialogCancel data-testid="button-cancel-remove-manthra">Cancel</AlertDialogCancel>
-              <AlertDialogAction
-                onClick={confirmRemoveManthra}
-                className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
-                data-testid="button-confirm-remove-manthra"
-              >
-                <X className="w-4 h-4 mr-2" />
-                Remove
-              </AlertDialogAction>
-            </AlertDialogFooter>
-          </AlertDialogContent>
-        </AlertDialog>
       </div>
     );
   }
@@ -4465,6 +4409,63 @@ export default function GranthasPage() {
           )}
         </DialogContent>
       </Dialog>
+
+      {/* Insert manthra confirmation */}
+      <AlertDialog open={!!pendingInsert} onOpenChange={(open) => { if (!open) setPendingInsert(null); }}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Insert new {structureConfig.leafName}?</AlertDialogTitle>
+            <AlertDialogDescription className="space-y-2">
+              <span className="block">
+                A new blank <strong>{structureConfig.leafName}</strong> will be inserted after{" "}
+                <strong>&quot;{pendingInsert?.afterTitle}&quot;</strong>.
+              </span>
+              <span className="block text-amber-600 dark:text-amber-400">
+                All subsequent {structureConfig.leafName}s in this section will be renumbered (+1).
+              </span>
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel data-testid="button-cancel-insert-manthra">Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={confirmInsertManthra}
+              className="bg-primary text-primary-foreground hover:bg-primary/90"
+              data-testid="button-confirm-insert-manthra"
+            >
+              <Plus className="w-4 h-4 mr-2" />
+              Insert
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      {/* Remove manthra confirmation */}
+      <AlertDialog open={!!pendingRemove} onOpenChange={(open) => { if (!open) setPendingRemove(null); }}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Remove {structureConfig.leafName}?</AlertDialogTitle>
+            <AlertDialogDescription className="space-y-2">
+              <span className="block">
+                Remove <strong>&quot;{pendingRemove?.title}&quot;</strong> from the list?
+              </span>
+              <span className="block text-amber-600 dark:text-amber-400">
+                If it has been published to the CMS, it will be deleted from Strapi on the next save.
+              </span>
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel data-testid="button-cancel-remove-manthra">Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={confirmRemoveManthra}
+              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+              data-testid="button-confirm-remove-manthra"
+            >
+              <X className="w-4 h-4 mr-2" />
+              Remove
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 }

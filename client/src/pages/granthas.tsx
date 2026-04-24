@@ -685,6 +685,8 @@ export default function GranthasPage() {
   } | null>(null);
   const [manthraLoading, setManthraLoading] = useState(false);
   const [editingGranthaSectionsLoading, setEditingGranthaSectionsLoading] = useState(false);
+  const [pendingInsert, setPendingInsert] = useState<{ adhyayaId: string; khandaId: string; manthraId: string; padaId?: string; afterTitle: string } | null>(null);
+  const [pendingRemove, setPendingRemove] = useState<{ adhyayaId: string; khandaId: string; manthraId: string; padaId?: string; title: string } | null>(null);
 
   // When the mantra dialog opens for a published mantra (has strapiDocumentId),
   // fetch the live Strapi content and merge it with any portal-draft edits so
@@ -2208,6 +2210,55 @@ export default function GranthasPage() {
       }),
     );
   }
+  function removeManthra(adhyayaId: string, khandaId: string, manthraId: string, padaId?: string) {
+    const a = adhyayas.find((x) => x.id === adhyayaId);
+    const k = a?.khandas.find((x) => x.id === khandaId);
+    let target: ManthraNode | undefined;
+    if (padaId) {
+      const p = k?.padas?.find((x) => x.id === padaId);
+      target = p?.manthras.find((x) => x.id === manthraId);
+    } else {
+      target = k?.manthras.find((x) => x.id === manthraId);
+    }
+    if (target?.strapiDocumentId) {
+      setDeletedStrapiManthraDocIds((prev) => [...new Set([...prev, target!.strapiDocumentId!])]);
+    }
+    setAdhyayas(
+      adhyayas.map((a) => {
+        if (a.id !== adhyayaId) return a;
+        return {
+          ...a,
+          khandas: a.khandas.map((k) => {
+            if (k.id !== khandaId) return k;
+            if (padaId) {
+              return {
+                ...k,
+                padas: (k.padas ?? []).map((p) =>
+                  p.id === padaId
+                    ? { ...p, manthras: p.manthras.filter((m) => m.id !== manthraId) }
+                    : p
+                ),
+              };
+            }
+            return { ...k, manthras: k.manthras.filter((m) => m.id !== manthraId) };
+          }),
+        };
+      })
+    );
+  }
+
+  function confirmInsertManthra() {
+    if (!pendingInsert) return;
+    insertManthraAfter(pendingInsert.adhyayaId, pendingInsert.khandaId, pendingInsert.manthraId, pendingInsert.padaId);
+    setPendingInsert(null);
+  }
+
+  function confirmRemoveManthra() {
+    if (!pendingRemove) return;
+    removeManthra(pendingRemove.adhyayaId, pendingRemove.khandaId, pendingRemove.manthraId, pendingRemove.padaId);
+    setPendingRemove(null);
+  }
+
   function updateManthraContent(
     adhyayaId: string,
     khandaId: string,
@@ -2676,6 +2727,63 @@ export default function GranthasPage() {
                   <Loader2 className="w-4 h-4 mr-2 animate-spin" />
                 )}
                 Delete
+              </AlertDialogAction>
+            </AlertDialogFooter>
+          </AlertDialogContent>
+        </AlertDialog>
+
+        {/* Insert manthra confirmation */}
+        <AlertDialog open={!!pendingInsert} onOpenChange={(open) => { if (!open) setPendingInsert(null); }}>
+          <AlertDialogContent>
+            <AlertDialogHeader>
+              <AlertDialogTitle>Insert new {structureConfig.leafName}?</AlertDialogTitle>
+              <AlertDialogDescription className="space-y-2">
+                <span className="block">
+                  A new blank <strong>{structureConfig.leafName}</strong> will be inserted after{" "}
+                  <strong>&quot;{pendingInsert?.afterTitle}&quot;</strong>.
+                </span>
+                <span className="block text-amber-600 dark:text-amber-400">
+                  All subsequent {structureConfig.leafName}s in this section will be renumbered (+1).
+                </span>
+              </AlertDialogDescription>
+            </AlertDialogHeader>
+            <AlertDialogFooter>
+              <AlertDialogCancel data-testid="button-cancel-insert-manthra">Cancel</AlertDialogCancel>
+              <AlertDialogAction
+                onClick={confirmInsertManthra}
+                className="bg-primary text-primary-foreground hover:bg-primary/90"
+                data-testid="button-confirm-insert-manthra"
+              >
+                <Plus className="w-4 h-4 mr-2" />
+                Insert
+              </AlertDialogAction>
+            </AlertDialogFooter>
+          </AlertDialogContent>
+        </AlertDialog>
+
+        {/* Remove manthra confirmation */}
+        <AlertDialog open={!!pendingRemove} onOpenChange={(open) => { if (!open) setPendingRemove(null); }}>
+          <AlertDialogContent>
+            <AlertDialogHeader>
+              <AlertDialogTitle>Remove {structureConfig.leafName}?</AlertDialogTitle>
+              <AlertDialogDescription className="space-y-2">
+                <span className="block">
+                  Remove <strong>&quot;{pendingRemove?.title}&quot;</strong> from the list?
+                </span>
+                <span className="block text-amber-600 dark:text-amber-400">
+                  If it has been published to the CMS, it will be deleted from Strapi on the next save.
+                </span>
+              </AlertDialogDescription>
+            </AlertDialogHeader>
+            <AlertDialogFooter>
+              <AlertDialogCancel data-testid="button-cancel-remove-manthra">Cancel</AlertDialogCancel>
+              <AlertDialogAction
+                onClick={confirmRemoveManthra}
+                className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+                data-testid="button-confirm-remove-manthra"
+              >
+                <X className="w-4 h-4 mr-2" />
+                Remove
               </AlertDialogAction>
             </AlertDialogFooter>
           </AlertDialogContent>
@@ -3535,7 +3643,7 @@ export default function GranthasPage() {
                                 <Button
                                   size="icon" variant="ghost"
                                   className="h-6 w-6 opacity-0 group-hover:opacity-100 transition-opacity text-blue-500 hover:text-blue-700"
-                                  onClick={() => insertManthraAfter(adhyaya.id, adhyaya.khandas[0].id, manthra.id)}
+                                  onClick={() => setPendingInsert({ adhyayaId: adhyaya.id, khandaId: adhyaya.khandas[0].id, manthraId: manthra.id, afterTitle: manthra.title })}
                                   title={`Insert blank ${leaf} after this one`}
                                   data-testid={`button-insert-after-manthra-${aIdx}-0-${mIdx}`}
                                 >
@@ -3544,7 +3652,7 @@ export default function GranthasPage() {
                                 <Button
                                   size="icon" variant="ghost"
                                   className="h-6 w-6 opacity-0 group-hover:opacity-100 transition-opacity text-destructive hover:text-destructive"
-                                  onClick={() => removeManthra(adhyaya.id, adhyaya.khandas[0].id, manthra.id)}
+                                  onClick={() => setPendingRemove({ adhyayaId: adhyaya.id, khandaId: adhyaya.khandas[0].id, manthraId: manthra.id, title: manthra.title })}
                                   data-testid={`button-remove-manthra-${aIdx}-0-${mIdx}`}
                                 >
                                   <X className="w-3 h-3" />
@@ -3679,7 +3787,7 @@ export default function GranthasPage() {
                                                 <Button
                                                   size="icon" variant="ghost"
                                                   className="h-6 w-6 opacity-0 group-hover:opacity-100 transition-opacity text-blue-500 hover:text-blue-700"
-                                                  onClick={() => insertManthraAfter(adhyaya.id, khanda.id, manthra.id, pada.id)}
+                                                  onClick={() => setPendingInsert({ adhyayaId: adhyaya.id, khandaId: khanda.id, manthraId: manthra.id, padaId: pada.id, afterTitle: manthra.title })}
                                                   title={`Insert blank ${leaf} after this one`}
                                                   data-testid={`button-insert-after-manthra-${aIdx}-${kIdx}-${pIdx}-${mIdx}`}
                                                 >
@@ -3688,7 +3796,7 @@ export default function GranthasPage() {
                                                 <Button
                                                   size="icon" variant="ghost"
                                                   className="h-6 w-6 opacity-0 group-hover:opacity-100 transition-opacity text-destructive hover:text-destructive"
-                                                  onClick={() => removeManthra(adhyaya.id, khanda.id, manthra.id, pada.id)}
+                                                  onClick={() => setPendingRemove({ adhyayaId: adhyaya.id, khandaId: khanda.id, manthraId: manthra.id, padaId: pada.id, title: manthra.title })}
                                                   data-testid={`button-remove-manthra-${aIdx}-${kIdx}-${pIdx}-${mIdx}`}
                                                 >
                                                   <X className="w-3 h-3" />
@@ -3760,7 +3868,7 @@ export default function GranthasPage() {
                                         <Button
                                           size="icon" variant="ghost"
                                           className="h-6 w-6 opacity-0 group-hover:opacity-100 transition-opacity text-blue-500 hover:text-blue-700"
-                                          onClick={() => insertManthraAfter(adhyaya.id, khanda.id, manthra.id)}
+                                          onClick={() => setPendingInsert({ adhyayaId: adhyaya.id, khandaId: khanda.id, manthraId: manthra.id, afterTitle: manthra.title })}
                                           title={`Insert blank ${leaf} after this one`}
                                           data-testid={`button-insert-after-manthra-${aIdx}-${kIdx}-${mIdx}`}
                                         >
@@ -3769,7 +3877,7 @@ export default function GranthasPage() {
                                         <Button
                                           size="icon" variant="ghost"
                                           className="h-6 w-6 opacity-0 group-hover:opacity-100 transition-opacity text-destructive hover:text-destructive"
-                                          onClick={() => removeManthra(adhyaya.id, khanda.id, manthra.id)}
+                                          onClick={() => setPendingRemove({ adhyayaId: adhyaya.id, khandaId: khanda.id, manthraId: manthra.id, title: manthra.title })}
                                           data-testid={`button-remove-manthra-${aIdx}-${kIdx}-${mIdx}`}
                                         >
                                           <X className="w-3 h-3" />

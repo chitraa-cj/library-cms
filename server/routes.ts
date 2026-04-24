@@ -1011,10 +1011,12 @@ async function publishGranthaWithHierarchy(
   const granthaPayload = cleanPayloadForStrapi(granthaDataRaw);
 
   // ── Progress tracking ─────────────────────────────────────────────────────
-  // Declared here (before any await) so `reportProgress` is safe to call anywhere
-  // in this function without hitting the `let` temporal dead zone.
+  // All three bindings use const/let (not function declarations) so they are
+  // NOT hoisted. Any call site that appears above these lines will get a
+  // ReferenceError on the function name itself — making the dependency chain
+  // self-enforcing rather than relying on code placement conventions.
   let _progressDone = 0;
-  function countHierarchyItems(hier: any[]): number {
+  const countHierarchyItems = (hier: any[]): number => {
     const l3 = !!structureConfig?.levelThreeEnabled;
     let n = 0;
     for (const a of (hier ?? [])) {
@@ -1029,14 +1031,14 @@ async function publishGranthaWithHierarchy(
       }
     }
     return n;
-  }
+  };
   const _progressTotal = 1 /* grantha */ +
     (Array.isArray(teekaDefinitions) ? teekaDefinitions.length : 0) +
     (Array.isArray(hierarchy) ? countHierarchyItems(hierarchy) : 0);
-  function reportProgress(current: string) {
+  const reportProgress = (current: string): void => {
     _progressDone++;
     onProgress?.(_progressDone, _progressTotal, current);
-  }
+  };
 
   // Strapi requires BhashyakaraIntroduction.SanskritTextEntry to always be present
   // when BhashyakaraIntroduction is included. cleanPayloadForStrapi may have stripped

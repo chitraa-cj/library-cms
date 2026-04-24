@@ -2185,6 +2185,25 @@ export default function GranthasPage() {
      *
      * `makeTitle(offset)` generates the title for the (offset+1)-th new entry.
      */
+    // Build a verse-number → blocks map (same logic as in splitAllManthrasInView)
+    const buildVerseMap = (verseArrays: StrapiBlock[][]): Map<number, StrapiBlock[]> => {
+      const vm = new Map<number, StrapiBlock[]>();
+      for (const v of verseArrays) {
+        const last = v[v.length - 1];
+        if (!last) continue;
+        const txt = (last.children || []).map((c) => c.text || "").join("");
+        const d = txt.match(/॥\s*([\d\u0966-\u096F]+)\s*॥/);
+        if (d) {
+          const n = parseInt(d[1].replace(/[\u0966-\u096F]/g, (c) => String(c.charCodeAt(0) - 0x0966)), 10);
+          vm.set(n, v);
+          continue;
+        }
+        const a = txt.match(/\|\|\s*(\d+)\s*\|\|/);
+        if (a) vm.set(parseInt(a[1], 10), v);
+      }
+      return vm;
+    };
+
     const buildAll = (
       source: ManthraNode,
       baseOrder: number,
@@ -2194,9 +2213,15 @@ export default function GranthasPage() {
       const sktV = splitAllVerses(entry?.SanskritTextEntry);
       const iastV = splitAllVerses(entry?.IASTTransliteration);
       const engV = splitAllVerses(entry?.EnglishTranslationText);
-      const numVerses = Math.max(sktV.length, iastV.length, engV.length, 1);
 
-      if (numVerses <= 1) {
+      const sktMap = buildVerseMap(sktV);
+      const iastMap = buildVerseMap(iastV);
+      const engMap = buildVerseMap(engV);
+
+      // All verse numbers across all fields, sorted ascending
+      const allNums = [...new Set([...sktMap.keys(), ...iastMap.keys(), ...engMap.keys()])].sort((a, b) => a - b);
+
+      if (allNums.length <= 1) {
         // Single verse or no markers — insert one blank entry, leave source unchanged
         return {
           sourceUpdate: {},
@@ -2209,31 +2234,32 @@ export default function GranthasPage() {
         };
       }
 
-      // Trim source to verse 0
+      // Source entry → first verse number
+      const [firstNum, ...restNums] = allNums;
       const sourceUpdate: Partial<ManthraNode> = {
         ShlokaManthraEntry: {
           ...entry,
-          SanskritTextEntry: (sktV[0]?.length ?? 0) > 0 ? sktV[0] : entry?.SanskritTextEntry,
-          IASTTransliteration: (iastV[0]?.length ?? 0) > 0 ? iastV[0] : entry?.IASTTransliteration,
-          EnglishTranslationText: (engV[0]?.length ?? 0) > 0 ? engV[0] : entry?.EnglishTranslationText,
+          SanskritTextEntry: sktMap.get(firstNum) ?? (sktMap.size > 0 ? undefined : entry?.SanskritTextEntry),
+          IASTTransliteration: iastMap.get(firstNum) ?? (iastMap.size > 0 ? undefined : entry?.IASTTransliteration),
+          EnglishTranslationText: engMap.get(firstNum) ?? (engMap.size > 0 ? undefined : entry?.EnglishTranslationText),
         },
       };
 
-      // One new entry per extra verse
+      // One new entry per additional verse number
       const newManthras: ManthraNode[] = [];
-      for (let v = 1; v < numVerses; v++) {
+      restNums.forEach((verseNum, i) => {
         newManthras.push({
           id: uid(),
-          title: makeTitle(v - 1),
-          order: baseOrder + (v - 1),
+          title: makeTitle(i),
+          order: baseOrder + i,
           ShlokaManthraEntry: {
-            SanskritTextEntry: (sktV[v]?.length ?? 0) > 0 ? sktV[v] : undefined,
-            IASTTransliteration: (iastV[v]?.length ?? 0) > 0 ? iastV[v] : undefined,
-            EnglishTranslationText: (engV[v]?.length ?? 0) > 0 ? engV[v] : undefined,
+            SanskritTextEntry: sktMap.get(verseNum),
+            IASTTransliteration: iastMap.get(verseNum),
+            EnglishTranslationText: engMap.get(verseNum),
           },
           Teekas: teekas.map((t) => ({ TeekaName: t.TeekaName, TeekaAuthor: t.TeekaAuthor })),
         });
-      }
+      });
 
       return { sourceUpdate, newManthras };
     };
@@ -2407,6 +2433,20 @@ export default function GranthasPage() {
       return verses.length > 0 ? verses : [[...(blocks as StrapiBlock[])]];
     };
 
+    /**
+     * Build a verse-number → blocks map from a split verse array.
+     * Fields that have actual verse-end markers are keyed by marker number.
+     * Fields with no markers return an empty map (treated as "no verse data").
+     */
+    const verseMap = (verseArrays: StrapiBlock[][]): Map<number, StrapiBlock[]> => {
+      const m = new Map<number, StrapiBlock[]>();
+      for (const v of verseArrays) {
+        const n = verseEndNum(v);
+        if (n !== null) m.set(n, v);
+      }
+      return m;
+    };
+
     const processList = (
       manthras: ManthraNode[],
       makeTitle: (pfx: string, order: number) => string,
@@ -2421,22 +2461,29 @@ export default function GranthasPage() {
         const sktV = splitVerses(entry?.SanskritTextEntry);
         const iastV = splitVerses(entry?.IASTTransliteration);
         const engV = splitVerses(entry?.EnglishTranslationText);
-        const numVerses = Math.max(sktV.length, iastV.length, engV.length, 1);
 
-        if (numVerses <= 1) {
+        // Build verse-number maps so each field's content lands in the right entry
+        const sktMap = verseMap(sktV);
+        const iastMap = verseMap(iastV);
+        const engMap = verseMap(engV);
+
+        // All verse numbers across all three fields, sorted ascending
+        const allNums = [...new Set([...sktMap.keys(), ...iastMap.keys(), ...engMap.keys()])].sort((a, b) => a - b);
+
+        if (allNums.length <= 1) {
+          // Single verse or no markers at all — just renumber
           result.push({ ...m, order: nextOrder, title: makeTitle(pfx, nextOrder) });
           nextOrder++;
           continue;
         }
 
-        // Safety check: verse-end markers within the combined entry must be consecutive
-        // (e.g. 5, 6, 7, 8 is fine; 5, 8, 11 suggests a data problem — skip split).
-        // Use whichever field has the most detected verses.
-        const bestV = sktV.length >= iastV.length && sktV.length >= engV.length ? sktV
-          : iastV.length >= engV.length ? iastV : engV;
-        const markerNums = bestV.map((v) => verseEndNum(v)).filter((n): n is number => n !== null);
-        if (markerNums.length > 1) {
-          const consecutive = markerNums.every((n, i) => i === 0 || n === markerNums[i - 1] + 1);
+        // Safety check: the field with the MOST verses must have consecutive markers
+        // (e.g. 5, 6, 7, 8 is good; 5, 8, 11 suggests a data problem → skip)
+        const authMap = sktMap.size >= iastMap.size && sktMap.size >= engMap.size ? sktMap
+          : iastMap.size >= engMap.size ? iastMap : engMap;
+        const authNums = [...authMap.keys()].sort((a, b) => a - b);
+        if (authNums.length > 1) {
+          const consecutive = authNums.every((n, i) => i === 0 || n === authNums[i - 1] + 1);
           if (!consecutive) {
             result.push({ ...m, order: nextOrder, title: makeTitle(pfx, nextOrder) });
             nextOrder++;
@@ -2444,30 +2491,31 @@ export default function GranthasPage() {
           }
         }
 
-        // Source entry → verse 0
+        // First verse number → source entry (trimmed to that verse)
+        const [firstNum, ...restNums] = allNums;
         result.push({
           ...m,
           order: nextOrder,
           title: makeTitle(pfx, nextOrder),
           ShlokaManthraEntry: {
             ...entry,
-            SanskritTextEntry: (sktV[0]?.length ?? 0) > 0 ? sktV[0] : entry?.SanskritTextEntry,
-            IASTTransliteration: (iastV[0]?.length ?? 0) > 0 ? iastV[0] : entry?.IASTTransliteration,
-            EnglishTranslationText: (engV[0]?.length ?? 0) > 0 ? engV[0] : entry?.EnglishTranslationText,
+            SanskritTextEntry: sktMap.get(firstNum) ?? (sktMap.size > 0 ? undefined : entry?.SanskritTextEntry),
+            IASTTransliteration: iastMap.get(firstNum) ?? (iastMap.size > 0 ? undefined : entry?.IASTTransliteration),
+            EnglishTranslationText: engMap.get(firstNum) ?? (engMap.size > 0 ? undefined : entry?.EnglishTranslationText),
           },
         });
         nextOrder++;
 
-        // New entries for verses 1..N-1
-        for (let v = 1; v < numVerses; v++) {
+        // One new entry per additional verse number, with only that verse's content
+        for (const verseNum of restNums) {
           result.push({
             id: uid(),
             title: makeTitle(pfx, nextOrder),
             order: nextOrder,
             ShlokaManthraEntry: {
-              SanskritTextEntry: (sktV[v]?.length ?? 0) > 0 ? sktV[v] : undefined,
-              IASTTransliteration: (iastV[v]?.length ?? 0) > 0 ? iastV[v] : undefined,
-              EnglishTranslationText: (engV[v]?.length ?? 0) > 0 ? engV[v] : undefined,
+              SanskritTextEntry: sktMap.get(verseNum),
+              IASTTransliteration: iastMap.get(verseNum),
+              EnglishTranslationText: engMap.get(verseNum),
             },
             Teekas: teekas.map((t) => ({ TeekaName: t.TeekaName, TeekaAuthor: t.TeekaAuthor })),
           });

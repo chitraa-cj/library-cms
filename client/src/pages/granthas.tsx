@@ -2113,10 +2113,15 @@ export default function GranthasPage() {
   }
 
   /**
-   * Insert a blank manthra immediately after `afterManthraId`.
-   * All manthras that come after the insertion point get their order incremented by 1
-   * and their title's last numeric segment bumped by 1 (e.g. "Shloka 1.1.3" → "Shloka 1.1.4"),
-   * so sequence numbers stay gapless.
+   * Insert a new manthra immediately after `afterManthraId`.
+   *
+   * The new entry is pre-populated with the **mantra text only** (ShlokaManthraEntry — both
+   * Devanagari and English) copied from the source entry so the editor has the combined text
+   * to work with and can trim each entry to its own sloka.  Bhashyam and Teekas are left empty.
+   *
+   * All manthras that come after the insertion point get their order incremented by 1 and their
+   * title's last numeric segment bumped by 1 (e.g. "Shloka 1.1.3" → "Shloka 1.1.4") so the
+   * sequence stays gapless.
    */
   function insertManthraAfter(
     adhyayaId: string,
@@ -2127,6 +2132,28 @@ export default function GranthasPage() {
     const leaf = structureConfig.leafName;
     const bumpTitle = (title: string) =>
       title.replace(/(\d+)$/, (_, n) => String(Number(n) + 1));
+
+    /** Deep-clone via JSON so the new entry gets its own copy of the rich-text blocks. */
+    const cloneEntry = (entry: TextAndTranslation | undefined): TextAndTranslation | undefined =>
+      entry ? JSON.parse(JSON.stringify(entry)) : undefined;
+
+    /** Build the new manthra node: mantra text copied, bhashyam/teekas empty. */
+    const buildNew = (
+      sourceManthra: ManthraNode,
+      title: string,
+      order: number,
+    ): ManthraNode => ({
+      id: uid(),
+      title,
+      order,
+      ShlokaManthraEntry: cloneEntry(sourceManthra.ShlokaManthraEntry),
+      // BhashyamForShlokaManthra intentionally omitted (empty)
+      Teekas: teekas.map((t) => ({
+        TeekaName: t.TeekaName,
+        TeekaAuthor: t.TeekaAuthor,
+        // TeekaEntry intentionally omitted (empty)
+      })),
+    });
 
     setAdhyayas(
       adhyayas.map((a) => {
@@ -2154,17 +2181,10 @@ export default function GranthasPage() {
                   );
                   if (afterIdx < 0) return p;
                   const insertOrder = p.manthras[afterIdx].order + 1;
-                  const newManthra: ManthraNode = {
-                    id: uid(),
-                    title: isDefaultKhanda
-                      ? `${leaf} ${aIdx}.${pIdx}.${insertOrder}`
-                      : `${leaf} ${aIdx}.${kIdx}.${pIdx}.${insertOrder}`,
-                    order: insertOrder,
-                    Teekas: teekas.map((t) => ({
-                      TeekaName: t.TeekaName,
-                      TeekaAuthor: t.TeekaAuthor,
-                    })),
-                  };
+                  const newTitle = isDefaultKhanda
+                    ? `${leaf} ${aIdx}.${pIdx}.${insertOrder}`
+                    : `${leaf} ${aIdx}.${kIdx}.${pIdx}.${insertOrder}`;
+                  const newManthra = buildNew(p.manthras[afterIdx], newTitle, insertOrder);
                   return {
                     ...p,
                     manthras: [
@@ -2187,18 +2207,11 @@ export default function GranthasPage() {
             );
             if (afterIdx < 0) return k;
             const insertOrder = k.manthras[afterIdx].order + 1;
-            const newManthra: ManthraNode = {
-              id: uid(),
-              title:
-                structureConfig.levelTwoEnabled && !isDefaultKhanda
-                  ? `${leaf} ${aIdx}.${kIdx}.${insertOrder}`
-                  : `${leaf} ${aIdx}.${insertOrder}`,
-              order: insertOrder,
-              Teekas: teekas.map((t) => ({
-                TeekaName: t.TeekaName,
-                TeekaAuthor: t.TeekaAuthor,
-              })),
-            };
+            const newTitle =
+              structureConfig.levelTwoEnabled && !isDefaultKhanda
+                ? `${leaf} ${aIdx}.${kIdx}.${insertOrder}`
+                : `${leaf} ${aIdx}.${insertOrder}`;
+            const newManthra = buildNew(k.manthras[afterIdx], newTitle, insertOrder);
             return {
               ...k,
               manthras: [

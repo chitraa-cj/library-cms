@@ -490,6 +490,111 @@ export function createStrapiRouter() {
     }
   });
 
+  // ── Insert a new blank manthra between two consecutive ones ──
+  // Shifts order (and last numeric segment of ShlokaManthraNumber) for all
+  // manthras in the same section that come after the anchor, then creates the
+  // new blank manthra at the freed-up position.
+  router.post("/manthras/insert-between", async (req, res) => {
+    try {
+      const { afterDocumentId, sectionDocId } = req.body as {
+        afterDocumentId: string;
+        sectionDocId: string;
+      };
+      if (!afterDocumentId || !sectionDocId) {
+        res.status(400).json({ message: "afterDocumentId and sectionDocId are required" });
+        return;
+      }
+
+      // 1. Fetch all manthras in the section, minimal fields
+      const sectionFilter = encodeURIComponent(sectionDocId);
+      const listQuery = [
+        `filters[Section][documentId][$eq]=${sectionFilter}`,
+        "fields[0]=documentId",
+        "fields[1]=order",
+        "fields[2]=ShlokaManthraNumber",
+        "pagination[pageSize]=100",
+        "sort=order:asc",
+      ].join("&");
+
+      let all: any[] = [];
+      let page = 1;
+      while (true) {
+        const r = await strapiRequest(`/api/manthras?${listQuery}&pagination[page]=${page}`);
+        all.push(...(r.data || []));
+        if (page >= (r.meta?.pagination?.pageCount ?? 1)) break;
+        page++;
+      }
+
+      // 2. Sort by order, find anchor
+      all.sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
+      const anchorIdx = all.findIndex((m) => m.documentId === afterDocumentId);
+      if (anchorIdx === -1) {
+        res.status(404).json({ message: `Manthra ${afterDocumentId} not found in section` });
+        return;
+      }
+
+      const anchorOrder: number = all[anchorIdx].order ?? anchorIdx + 1;
+      const newOrder = anchorOrder + 1;
+
+      // Helper: increment the last run of digits in a string (e.g. "Shloka 1.1.5" → "Shloka 1.1.6")
+      function incrementLastNum(s: string): string {
+        return s.replace(/(\d+)(?=\D*$)/, (_, n) => String(parseInt(n, 10) + 1));
+      }
+
+      // 3. Determine the new manthra's ShlokaManthraNumber from the anchor's
+      const anchorNum: string = all[anchorIdx].ShlokaManthraNumber ?? "";
+      const newNum = anchorNum ? incrementLastNum(anchorNum) : "";
+
+      // 4. Shift order (and ShlokaManthraNumber) for all manthras after anchor.
+      //    Use concurrency 5 to avoid hammering Strapi.
+      const toShift = all.slice(anchorIdx + 1);
+
+      async function pLimit<T>(tasks: (() => Promise<T>)[], concurrency: number): Promise<T[]> {
+        const results: T[] = [];
+        let i = 0;
+        async function run(): Promise<void> {
+          while (i < tasks.length) {
+            const idx = i++;
+            results[idx] = await tasks[idx]();
+          }
+        }
+        await Promise.all(Array.from({ length: Math.min(concurrency, tasks.length) }, run));
+        return results;
+      }
+
+      await pLimit(
+        toShift.map((m) => async () => {
+          const updates: any = { order: (m.order ?? 0) + 1 };
+          if (m.ShlokaManthraNumber) {
+            updates.ShlokaManthraNumber = incrementLastNum(m.ShlokaManthraNumber);
+          }
+          await strapiRequest(`/api/manthras/${m.documentId}`, {
+            method: "PUT",
+            body: JSON.stringify({ data: updates }),
+          });
+        }),
+        5,
+      );
+
+      // 5. Create the new blank manthra
+      const newPayload = {
+        data: {
+          ShlokaManthraNumber: newNum,
+          order: newOrder,
+          Section: sectionDocId,
+        },
+      };
+      const created = await strapiRequest("/api/manthras", {
+        method: "POST",
+        body: JSON.stringify(newPayload),
+      });
+
+      res.json({ data: created.data, shiftedCount: toShift.length });
+    } catch (error: any) {
+      res.status(error.status || 500).json({ message: error.message });
+    }
+  });
+
   router.post("/manthras", async (req, res) => {
     try {
       const data = await strapiRequest("/api/manthras", { method: "POST", body: JSON.stringify(req.body) });

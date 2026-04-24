@@ -104,6 +104,8 @@ export default function ManthrasPage() {
   // All sections start expanded; clicking a section header collapses it
   const [collapsedSections, setCollapsedSections] = useState<Set<string>>(new Set());
   const [fetchingEditDocId, setFetchingEditDocId] = useState<string | null>(null);
+  const [insertTarget, setInsertTarget] = useState<{ afterDocumentId: string; afterNum: string; sectionDocId: string } | null>(null);
+  const [isInserting, setIsInserting] = useState(false);
   function toggleSection(key: string) {
     setCollapsedSections((prev) => {
       const next = new Set(prev);
@@ -235,6 +237,46 @@ export default function ManthrasPage() {
     setEditingItem(null);
     resetForm();
     setFormOpen(true);
+  }
+
+  async function confirmInsert() {
+    if (!insertTarget) return;
+    setIsInserting(true);
+    try {
+      const res = await apiRequest("POST", "/api/strapi/manthras/insert-between", {
+        afterDocumentId: insertTarget.afterDocumentId,
+        sectionDocId: insertTarget.sectionDocId,
+      });
+      const json = await res.json();
+      const newDoc = json?.data;
+      setInsertTarget(null);
+      await queryClient.invalidateQueries({ queryKey: ["/api/strapi", "manthras"] });
+      toast({ title: `Shloka inserted after ${insertTarget.afterNum}`, description: `${json.shiftedCount ?? 0} subsequent shlokas renumbered.` });
+      if (newDoc?.documentId) {
+        fetch(`/api/strapi/manthras/${newDoc.documentId}`)
+          .then((r) => r.json())
+          .then((resp) => {
+            const fullItem = resp.data ?? resp;
+            setEditingItem(fullItem);
+            setEditingDraftId(null);
+            setFormData({
+              ShlokaManthraNumber: fullItem.ShlokaManthraNumber || "",
+              order: fullItem.order != null ? String(fullItem.order) : "",
+              section: fullItem.Section?.documentId || fullItem.section?.documentId || "",
+              ShlokaManthraEntry: { ...EMPTY_TT },
+              BhashyamEntry: { ...EMPTY_TT },
+              Teekas: [],
+              wordMeanings: [],
+            });
+            setViewOnly(false);
+            setFormOpen(true);
+          });
+      }
+    } catch (e: any) {
+      toast({ variant: "destructive", title: "Insert failed", description: e.message });
+    } finally {
+      setIsInserting(false);
+    }
   }
 
   function openView(item: any) {
@@ -634,7 +676,8 @@ export default function ManthrasPage() {
                     if (!isCollapsed) {
                       const sorted = [...sManthras].sort((a: any, b: any) => (a.order ?? 999) - (b.order ?? 999));
                       const granthaLocked = lockedDocIds.has(gId);
-                      for (const m of sorted) {
+                      for (let mi = 0; mi < sorted.length; mi++) {
+                        const m = sorted[mi];
                         const sanskrit = blocksToText(m.ShlokaManthraEntry?.SanskritTextEntry);
                         rows.push(
                           <tr
@@ -669,6 +712,42 @@ export default function ManthrasPage() {
                             </td>
                           </tr>
                         );
+                        {/* Insert-between separator row — shown between consecutive live rows only */}
+                        if (mi < sorted.length - 1 && !granthaLocked) {
+                          rows.push(
+                            <tr
+                              key={`insert-${m.documentId}`}
+                              className="group h-0 border-0 hover:h-auto"
+                              data-testid={`row-insert-after-${m.documentId}`}
+                            >
+                              <td colSpan={5} className="p-0">
+                                <div className="flex items-center justify-center h-0 group-hover:h-6 overflow-hidden transition-all duration-150">
+                                  <div className="flex items-center gap-2 w-full px-14">
+                                    <div className="flex-1 border-t border-dashed border-primary/30" />
+                                    <Button
+                                      size="sm"
+                                      variant="outline"
+                                      className="h-5 px-2 py-0 text-xs rounded-full border-primary/40 text-primary hover:bg-primary hover:text-primary-foreground gap-1"
+                                      onClick={(e) => {
+                                        e.stopPropagation();
+                                        setInsertTarget({
+                                          afterDocumentId: m.documentId,
+                                          afterNum: m.ShlokaManthraNumber || String(m.order ?? "?"),
+                                          sectionDocId: sId,
+                                        });
+                                      }}
+                                      data-testid={`button-insert-after-${m.documentId}`}
+                                    >
+                                      <Plus className="w-3 h-3" />
+                                      Insert
+                                    </Button>
+                                    <div className="flex-1 border-t border-dashed border-primary/30" />
+                                  </div>
+                                </div>
+                              </td>
+                            </tr>
+                          );
+                        }
                       }
                     }
                   }
@@ -871,6 +950,29 @@ export default function ManthrasPage() {
             <AlertDialogCancel>Cancel</AlertDialogCancel>
             <AlertDialogAction onClick={confirmDelete} className="bg-destructive text-destructive-foreground hover:bg-destructive/90" data-testid="button-confirm-delete">
               Delete
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      {/* Insert-between confirmation */}
+      <AlertDialog open={!!insertTarget} onOpenChange={(open) => { if (!open) setInsertTarget(null); }}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Insert new shloka?</AlertDialogTitle>
+            <AlertDialogDescription className="space-y-2">
+              <span className="block">
+                A new blank shloka will be inserted <strong>after {insertTarget?.afterNum}</strong>.
+              </span>
+              <span className="block text-amber-600 dark:text-amber-400">
+                All subsequent shlokas in this section will be renumbered (+1). This may take a moment.
+              </span>
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={isInserting}>Cancel</AlertDialogCancel>
+            <AlertDialogAction onClick={confirmInsert} disabled={isInserting} data-testid="button-confirm-insert">
+              {isInserting ? <><Loader2 className="w-4 h-4 mr-2 animate-spin inline" />Inserting…</> : "Insert & Renumber"}
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>

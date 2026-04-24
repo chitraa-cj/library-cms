@@ -2314,6 +2314,157 @@ export default function GranthasPage() {
     );
   }
 
+  /**
+   * Batch-split ALL multi-verse entries in one click.
+   *
+   * Rules:
+   *  • Only entries loaded at click time are processed (newly-inserted blank entries skip
+   *    because they have no verse-end markers and therefore numVerses === 1).
+   *  • Safety check: the verse-end marker number inside the FIRST detected verse must match
+   *    the trailing number in the entry's title (e.g. "Shloka 1.1.3" → first marker should
+   *    be ॥ ३ ॥ / || 3 ||). If they disagree the entry is renumbered but NOT split so the
+   *    user can inspect it manually.
+   *  • After splitting, every entry in the sequence is renumbered to stay gapless.
+   */
+  function splitAllManthrasInView() {
+    const leaf = structureConfig.leafName;
+    const verseEndRe = /॥\s*[\d\u0966-\u096F]+\s*॥|\|\|\s*[\d\u0966-\u096F]+\s*\|\|/;
+
+    const titlePfx = (title: string): string => {
+      const m = title.match(/^(.+?)\s+[\d.]+$/);
+      return m ? m[1] : leaf;
+    };
+
+    const titleLastNum = (title: string): number | null => {
+      const m = title.match(/(\d+)$/);
+      return m ? parseInt(m[1], 10) : null;
+    };
+
+    const devaToArabic = (s: string): number =>
+      parseInt(s.replace(/[\u0966-\u096F]/g, (c) => String(c.charCodeAt(0) - 0x0966)), 10);
+
+    const verseEndNum = (verseBlocks: StrapiBlock[] | undefined): number | null => {
+      if (!verseBlocks || verseBlocks.length === 0) return null;
+      const last = verseBlocks[verseBlocks.length - 1];
+      const txt = (last.children || []).map((c) => c.text || "").join("");
+      const d = txt.match(/॥\s*([\d\u0966-\u096F]+)\s*॥/);
+      if (d) return devaToArabic(d[1]);
+      const a = txt.match(/\|\|\s*(\d+)\s*\|\|/);
+      if (a) return parseInt(a[1], 10);
+      return null;
+    };
+
+    const splitVerses = (blocks: StrapiBlock[] | string | null | undefined): StrapiBlock[][] => {
+      if (!blocks || typeof blocks === "string" || !Array.isArray(blocks) || blocks.length === 0) return [];
+      const verses: StrapiBlock[][] = [];
+      let current: StrapiBlock[] = [];
+      for (const block of blocks) {
+        const txt = (block.children || []).map((c) => c.text || "").join("");
+        if (txt.trim() === "" && current.length === 0) continue;
+        current.push(block);
+        if (verseEndRe.test(txt)) { verses.push(current); current = []; }
+      }
+      if (current.length > 0) verses.push(current);
+      return verses.length > 0 ? verses : [[...(blocks as StrapiBlock[])]];
+    };
+
+    const processList = (
+      manthras: ManthraNode[],
+      makeTitle: (pfx: string, order: number) => string,
+    ): ManthraNode[] => {
+      const result: ManthraNode[] = [];
+      let nextOrder = 1;
+      for (const m of manthras) {
+        const pfx = titlePfx(m.title);
+        const entry = m.ShlokaManthraEntry;
+        const sktV = splitVerses(entry?.SanskritTextEntry);
+        const iastV = splitVerses(entry?.IASTTransliteration);
+        const engV = splitVerses(entry?.EnglishTranslationText);
+        const numVerses = Math.max(sktV.length, iastV.length, engV.length, 1);
+
+        if (numVerses <= 1) {
+          result.push({ ...m, order: nextOrder, title: makeTitle(pfx, nextOrder) });
+          nextOrder++;
+          continue;
+        }
+
+        // Safety check: first verse's end-marker number must match title's last number
+        const expectedNum = titleLastNum(m.title);
+        const actualNum = verseEndNum(sktV[0] ?? iastV[0] ?? engV[0]);
+        if (expectedNum !== null && actualNum !== null && expectedNum !== actualNum) {
+          // Mismatch — renumber only, no split
+          result.push({ ...m, order: nextOrder, title: makeTitle(pfx, nextOrder) });
+          nextOrder++;
+          continue;
+        }
+
+        // Source entry → verse 0
+        result.push({
+          ...m,
+          order: nextOrder,
+          title: makeTitle(pfx, nextOrder),
+          ShlokaManthraEntry: {
+            ...entry,
+            SanskritTextEntry: (sktV[0]?.length ?? 0) > 0 ? sktV[0] : entry?.SanskritTextEntry,
+            IASTTransliteration: (iastV[0]?.length ?? 0) > 0 ? iastV[0] : entry?.IASTTransliteration,
+            EnglishTranslationText: (engV[0]?.length ?? 0) > 0 ? engV[0] : entry?.EnglishTranslationText,
+          },
+        });
+        nextOrder++;
+
+        // New entries for verses 1..N-1
+        for (let v = 1; v < numVerses; v++) {
+          result.push({
+            id: uid(),
+            title: makeTitle(pfx, nextOrder),
+            order: nextOrder,
+            ShlokaManthraEntry: {
+              SanskritTextEntry: (sktV[v]?.length ?? 0) > 0 ? sktV[v] : undefined,
+              IASTTransliteration: (iastV[v]?.length ?? 0) > 0 ? iastV[v] : undefined,
+              EnglishTranslationText: (engV[v]?.length ?? 0) > 0 ? engV[v] : undefined,
+            },
+            Teekas: teekas.map((t) => ({ TeekaName: t.TeekaName, TeekaAuthor: t.TeekaAuthor })),
+          });
+          nextOrder++;
+        }
+      }
+      return result;
+    };
+
+    setAdhyayas(
+      adhyayas.map((a, ai) => {
+        const aIdx = ai + 1;
+        return {
+          ...a,
+          khandas: a.khandas.map((k, ki) => {
+            const isDefaultKhanda = k.title === "_default";
+            const kIdx = structureConfig.levelTwoEnabled && !isDefaultKhanda ? ki + 1 : aIdx;
+
+            if (structureConfig.levelThreeEnabled) {
+              return {
+                ...k,
+                padas: (k.padas ?? []).map((p, pi) => {
+                  const pIdx = pi + 1;
+                  const makeTitle = (pfx: string, order: number) =>
+                    isDefaultKhanda
+                      ? `${pfx} ${aIdx}.${pIdx}.${order}`
+                      : `${pfx} ${aIdx}.${kIdx}.${pIdx}.${order}`;
+                  return { ...p, manthras: processList(p.manthras, makeTitle) };
+                }),
+              };
+            }
+
+            const makeTitle = (pfx: string, order: number) =>
+              structureConfig.levelTwoEnabled && !isDefaultKhanda
+                ? `${pfx} ${aIdx}.${kIdx}.${order}`
+                : `${pfx} ${aIdx}.${order}`;
+            return { ...k, manthras: processList(k.manthras, makeTitle) };
+          }),
+        };
+      }),
+    );
+  }
+
   function removeManthra(adhyayaId: string, khandaId: string, manthraId: string, padaId?: string) {
     // Track the deleted manthra's Strapi documentId so enrichHierarchy won't re-add it.
     const a = adhyayas.find((x) => x.id === adhyayaId);
@@ -3985,6 +4136,16 @@ export default function GranthasPage() {
                   Back
                 </Button>
                 <div className="relative flex items-center gap-2">
+                <Button
+                  variant="outline"
+                  onClick={splitAllManthrasInView}
+                  disabled={saveDraft.isPending || publishDraft.isPending}
+                  data-testid="button-split-all-verses"
+                  title="Split every multi-verse entry into individual entries in one click. Entries that already have a single verse are left unchanged."
+                >
+                  <Scissors className="w-4 h-4 mr-2" />
+                  Split All Verses
+                </Button>
                 <Button
                   variant="outline"
                   onClick={handleSave}

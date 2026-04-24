@@ -2149,7 +2149,8 @@ export default function GranthasPage() {
       if (!blocks || typeof blocks === "string" || !Array.isArray(blocks)) {
         return [[], []];
       }
-      const verseEndRe = /॥\s*\d+\s*॥|\|\|\s*\d+\s*\|\|/;
+      // \u0966-\u096F covers Devanagari digits (०-९); \d covers ASCII 0-9
+      const verseEndRe = /॥\s*[\d\u0966-\u096F]+\s*॥|\|\|\s*[\d\u0966-\u096F]+\s*\|\|/;
       for (let i = 0; i < blocks.length; i++) {
         const lineText = (blocks[i].children || []).map((c) => c.text || "").join("");
         if (verseEndRe.test(lineText)) {
@@ -3663,7 +3664,7 @@ export default function GranthasPage() {
                                   size="icon" variant="ghost"
                                   className="h-6 w-6 opacity-0 group-hover:opacity-100 transition-opacity text-blue-500 hover:text-blue-700"
                                   onClick={() => insertManthraAfter(adhyaya.id, adhyaya.khandas[0].id, manthra.id)}
-                                  title="Insert blank shloka after this one"
+                                  title={`Insert blank ${leaf} after this one`}
                                   data-testid={`button-insert-after-manthra-${aIdx}-0-${mIdx}`}
                                 >
                                   <Scissors className="w-3 h-3" />
@@ -3807,7 +3808,7 @@ export default function GranthasPage() {
                                                   size="icon" variant="ghost"
                                                   className="h-6 w-6 opacity-0 group-hover:opacity-100 transition-opacity text-blue-500 hover:text-blue-700"
                                                   onClick={() => insertManthraAfter(adhyaya.id, khanda.id, manthra.id, pada.id)}
-                                                  title="Insert blank shloka after this one"
+                                                  title={`Insert blank ${leaf} after this one`}
                                                   data-testid={`button-insert-after-manthra-${aIdx}-${kIdx}-${pIdx}-${mIdx}`}
                                                 >
                                                   <Scissors className="w-3 h-3" />
@@ -3888,7 +3889,7 @@ export default function GranthasPage() {
                                           size="icon" variant="ghost"
                                           className="h-6 w-6 opacity-0 group-hover:opacity-100 transition-opacity text-blue-500 hover:text-blue-700"
                                           onClick={() => insertManthraAfter(adhyaya.id, khanda.id, manthra.id)}
-                                          title="Insert blank shloka after this one"
+                                          title={`Insert blank ${leaf} after this one`}
                                           data-testid={`button-insert-after-manthra-${aIdx}-${kIdx}-${mIdx}`}
                                         >
                                           <Scissors className="w-3 h-3" />

@@ -68,6 +68,7 @@ import {
   AlertTriangle,
   Lock,
   LockOpen,
+  Scissors,
 } from "lucide-react";
 
 const STRAPI_ADMIN = "http://13.53.121.15:1337/admin";
@@ -2111,6 +2112,111 @@ export default function GranthasPage() {
     );
   }
 
+  /**
+   * Insert a blank manthra immediately after `afterManthraId`.
+   * All manthras that come after the insertion point get their order incremented by 1
+   * and their title's last numeric segment bumped by 1 (e.g. "Shloka 1.1.3" → "Shloka 1.1.4"),
+   * so sequence numbers stay gapless.
+   */
+  function insertManthraAfter(
+    adhyayaId: string,
+    khandaId: string,
+    afterManthraId: string,
+    padaId?: string,
+  ) {
+    const leaf = structureConfig.leafName;
+    const bumpTitle = (title: string) =>
+      title.replace(/(\d+)$/, (_, n) => String(Number(n) + 1));
+
+    setAdhyayas(
+      adhyayas.map((a) => {
+        if (a.id !== adhyayaId) return a;
+        const aIdx = adhyayas.findIndex((x) => x.id === adhyayaId) + 1;
+        return {
+          ...a,
+          khandas: a.khandas.map((k) => {
+            if (k.id !== khandaId) return k;
+            const isDefaultKhanda = k.title === "_default";
+            const kIdx =
+              structureConfig.levelTwoEnabled && !isDefaultKhanda
+                ? a.khandas.findIndex((x) => x.id === khandaId) + 1
+                : aIdx;
+
+            if (structureConfig.levelThreeEnabled && padaId) {
+              return {
+                ...k,
+                padas: (k.padas ?? []).map((p) => {
+                  if (p.id !== padaId) return p;
+                  const pIdx =
+                    (k.padas ?? []).findIndex((x) => x.id === padaId) + 1;
+                  const afterIdx = p.manthras.findIndex(
+                    (m) => m.id === afterManthraId,
+                  );
+                  if (afterIdx < 0) return p;
+                  const insertOrder = p.manthras[afterIdx].order + 1;
+                  const newManthra: ManthraNode = {
+                    id: uid(),
+                    title: isDefaultKhanda
+                      ? `${leaf} ${aIdx}.${pIdx}.${insertOrder}`
+                      : `${leaf} ${aIdx}.${kIdx}.${pIdx}.${insertOrder}`,
+                    order: insertOrder,
+                    Teekas: teekas.map((t) => ({
+                      TeekaName: t.TeekaName,
+                      TeekaAuthor: t.TeekaAuthor,
+                    })),
+                  };
+                  return {
+                    ...p,
+                    manthras: [
+                      ...p.manthras.slice(0, afterIdx + 1),
+                      newManthra,
+                      ...p.manthras.slice(afterIdx + 1).map((m) => ({
+                        ...m,
+                        order: m.order + 1,
+                        title: bumpTitle(m.title),
+                      })),
+                    ],
+                  };
+                }),
+              };
+            }
+
+            // L3 disabled: manthras directly inside Khanda
+            const afterIdx = k.manthras.findIndex(
+              (m) => m.id === afterManthraId,
+            );
+            if (afterIdx < 0) return k;
+            const insertOrder = k.manthras[afterIdx].order + 1;
+            const newManthra: ManthraNode = {
+              id: uid(),
+              title:
+                structureConfig.levelTwoEnabled && !isDefaultKhanda
+                  ? `${leaf} ${aIdx}.${kIdx}.${insertOrder}`
+                  : `${leaf} ${aIdx}.${insertOrder}`,
+              order: insertOrder,
+              Teekas: teekas.map((t) => ({
+                TeekaName: t.TeekaName,
+                TeekaAuthor: t.TeekaAuthor,
+              })),
+            };
+            return {
+              ...k,
+              manthras: [
+                ...k.manthras.slice(0, afterIdx + 1),
+                newManthra,
+                ...k.manthras.slice(afterIdx + 1).map((m) => ({
+                  ...m,
+                  order: m.order + 1,
+                  title: bumpTitle(m.title),
+                })),
+              ],
+            };
+          }),
+        };
+      }),
+    );
+  }
+
   function removeManthra(adhyayaId: string, khandaId: string, manthraId: string, padaId?: string) {
     // Track the deleted manthra's Strapi documentId so enrichHierarchy won't re-add it.
     const a = adhyayas.find((x) => x.id === adhyayaId);
@@ -3476,6 +3582,15 @@ export default function GranthasPage() {
                                 </Button>
                                 <Button
                                   size="icon" variant="ghost"
+                                  className="h-6 w-6 opacity-0 group-hover:opacity-100 transition-opacity text-blue-500 hover:text-blue-700"
+                                  onClick={() => insertManthraAfter(adhyaya.id, adhyaya.khandas[0].id, manthra.id)}
+                                  title="Insert blank shloka after this one"
+                                  data-testid={`button-insert-after-manthra-${aIdx}-0-${mIdx}`}
+                                >
+                                  <Scissors className="w-3 h-3" />
+                                </Button>
+                                <Button
+                                  size="icon" variant="ghost"
                                   className="h-6 w-6 opacity-0 group-hover:opacity-100 transition-opacity text-destructive hover:text-destructive"
                                   onClick={() => removeManthra(adhyaya.id, adhyaya.khandas[0].id, manthra.id)}
                                   data-testid={`button-remove-manthra-${aIdx}-0-${mIdx}`}
@@ -3611,6 +3726,15 @@ export default function GranthasPage() {
                                                 </Button>
                                                 <Button
                                                   size="icon" variant="ghost"
+                                                  className="h-6 w-6 opacity-0 group-hover:opacity-100 transition-opacity text-blue-500 hover:text-blue-700"
+                                                  onClick={() => insertManthraAfter(adhyaya.id, khanda.id, manthra.id, pada.id)}
+                                                  title="Insert blank shloka after this one"
+                                                  data-testid={`button-insert-after-manthra-${aIdx}-${kIdx}-${pIdx}-${mIdx}`}
+                                                >
+                                                  <Scissors className="w-3 h-3" />
+                                                </Button>
+                                                <Button
+                                                  size="icon" variant="ghost"
                                                   className="h-6 w-6 opacity-0 group-hover:opacity-100 transition-opacity text-destructive hover:text-destructive"
                                                   onClick={() => removeManthra(adhyaya.id, khanda.id, manthra.id, pada.id)}
                                                   data-testid={`button-remove-manthra-${aIdx}-${kIdx}-${pIdx}-${mIdx}`}
@@ -3680,6 +3804,15 @@ export default function GranthasPage() {
                                           title="Enter text content"
                                         >
                                           <Pencil className="w-3 h-3" />
+                                        </Button>
+                                        <Button
+                                          size="icon" variant="ghost"
+                                          className="h-6 w-6 opacity-0 group-hover:opacity-100 transition-opacity text-blue-500 hover:text-blue-700"
+                                          onClick={() => insertManthraAfter(adhyaya.id, khanda.id, manthra.id)}
+                                          title="Insert blank shloka after this one"
+                                          data-testid={`button-insert-after-manthra-${aIdx}-${kIdx}-${mIdx}`}
+                                        >
+                                          <Scissors className="w-3 h-3" />
                                         </Button>
                                         <Button
                                           size="icon" variant="ghost"

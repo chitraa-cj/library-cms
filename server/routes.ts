@@ -251,11 +251,29 @@ function buildSqliteFromBackup(data: any): Buffer {
     }
   }
 
+  // ── Deduplicate source data by documentId before inserting ─────────────────
+  // Backup data can contain the same manthra/section/grantha more than once if the
+  // Strapi API returned overlapping pages during the snapshot (e.g. due to data
+  // mutations mid-pagination).  Keep only the last occurrence per documentId so the
+  // plain INSERT INTO translations / manthra_teekas statements can't produce
+  // duplicate rows even if the manthras array has repeated documentIds.
+  function dedupeByDocId<T extends { documentId?: any; id?: any }>(arr: T[]): T[] {
+    const seen = new Map<string, T>();
+    for (const item of (arr ?? [])) {
+      const key = item.documentId ?? String(item.id ?? Math.random());
+      seen.set(key, item);
+    }
+    return Array.from(seen.values());
+  }
+  const dedupedManthras = dedupeByDocId(data.manthras ?? []);
+  const dedupedSections = dedupeByDocId(data.sections ?? []);
+  const dedupedGranthas = dedupeByDocId(data.granthas ?? []);
+
   // ── Insert all data in a single transaction ────────────────────────────────
   const insertAll = db.transaction(() => {
 
     // 1. Granthas + their embedded teekas + grantha name translations
-    for (const g of (data.granthas ?? [])) {
+    for (const g of dedupedGranthas) {
       const gDocId = g.documentId ?? null;
       const bhIntr = g.BhashyakaraIntroduction;
       insGrantha.run({
@@ -307,7 +325,7 @@ function buildSqliteFromBackup(data: any): Buffer {
     }
 
     // 2. Sections + title translations
-    for (const s of (data.sections ?? [])) {
+    for (const s of dedupedSections) {
       const sDocId = s.documentId ?? null;
       insSection.run({
         id: s.id ?? null,
@@ -332,7 +350,7 @@ function buildSqliteFromBackup(data: any): Buffer {
     }
 
     // 3. Manthras + translations + teekas + word meanings
-    for (const m of (data.manthras ?? [])) {
+    for (const m of dedupedManthras) {
       const mDocId = m.documentId ?? null;
       const shloka = m.ShlokaManthraEntry;
       const bhashyam = m.BhashyamEntry;

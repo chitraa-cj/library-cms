@@ -2379,11 +2379,6 @@ export default function GranthasPage() {
       return m ? m[1] : leaf;
     };
 
-    const titleLastNum = (title: string): number | null => {
-      const m = title.match(/(\d+)$/);
-      return m ? parseInt(m[1], 10) : null;
-    };
-
     const devaToArabic = (s: string): number =>
       parseInt(s.replace(/[\u0966-\u096F]/g, (c) => String(c.charCodeAt(0) - 0x0966)), 10);
 
@@ -2434,14 +2429,19 @@ export default function GranthasPage() {
           continue;
         }
 
-        // Safety check: first verse's end-marker number must match title's last number
-        const expectedNum = titleLastNum(m.title);
-        const actualNum = verseEndNum(sktV[0] ?? iastV[0] ?? engV[0]);
-        if (expectedNum !== null && actualNum !== null && expectedNum !== actualNum) {
-          // Mismatch — renumber only, no split
-          result.push({ ...m, order: nextOrder, title: makeTitle(pfx, nextOrder) });
-          nextOrder++;
-          continue;
+        // Safety check: verse-end markers within the combined entry must be consecutive
+        // (e.g. 5, 6, 7, 8 is fine; 5, 8, 11 suggests a data problem — skip split).
+        // Use whichever field has the most detected verses.
+        const bestV = sktV.length >= iastV.length && sktV.length >= engV.length ? sktV
+          : iastV.length >= engV.length ? iastV : engV;
+        const markerNums = bestV.map((v) => verseEndNum(v)).filter((n): n is number => n !== null);
+        if (markerNums.length > 1) {
+          const consecutive = markerNums.every((n, i) => i === 0 || n === markerNums[i - 1] + 1);
+          if (!consecutive) {
+            result.push({ ...m, order: nextOrder, title: makeTitle(pfx, nextOrder) });
+            nextOrder++;
+            continue;
+          }
         }
 
         // Source entry → verse 0

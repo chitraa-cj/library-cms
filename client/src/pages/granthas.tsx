@@ -2123,10 +2123,10 @@ export default function GranthasPage() {
   ) {
     const leaf = structureConfig.leafName;
     const titlePrefix = (title: string): string => {
-      const m = title.match(/^(.+?)s+[d.]+$/);
+      const m = title.match(/^(.+?)\s+[\d.]+$/);
       return m ? m[1] : leaf;
     };
-    const bumpLast = (title: string) => title.replace(/(d+)$/, (_, d) => String(Number(d) + 1));
+    const bumpLast = (title: string) => title.replace(/(\d+)$/, (_, d) => String(Number(d) + 1));
 
     setAdhyayas(
       adhyayas.map((a) => {

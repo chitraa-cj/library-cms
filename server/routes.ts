@@ -1245,10 +1245,12 @@ async function publishGranthaWithHierarchy(
   // content with an empty payload, so we skip the update entirely.
   const IDENTITY_ONLY_KEYS = new Set(["ShlokaManthraNumber", "order", "Section"]);
 
-  async function publishManthra(
+  // const (not function declaration) so it is NOT hoisted — any accidental call
+  // before this line would TDZ on `publishManthra` itself, not on a closed-over variable.
+  const publishManthra = async (
     manthra: any,
     sectionDocId: string | undefined
-  ): Promise<void> {
+  ): Promise<void> => {
     try {
       const mData = await buildManthraData(manthra, sectionDocId, granthaDocId, teekaNameToDocId);
 
@@ -1311,7 +1313,7 @@ async function publishGranthaWithHierarchy(
       console.error(`[publish] Manthra "${label}" failed:`, e?.message || e);
       publishFailures.push({ manthra: label, error: msg });
     }
-  }
+  };
 
   // Publish a list of manthras under the same section concurrently (CONCURRENCY at a
   // time). Manthras within a section are independent — they all link to the same
@@ -1341,11 +1343,39 @@ async function publishGranthaWithHierarchy(
   const khandaIdToDocId: Map<string, string> = new Map();
   const padaIdToDocId: Map<string, string> = new Map();
 
-  if (Array.isArray(hierarchy) && granthaDocId) {
+  // Count how many manthras live under a given hierarchy node so we can report
+  // "N manthras skipped" when their parent section fails to publish.
+  const countManthrasUnder = (node: any): number => {
+    if (levelThreeEnabled && Array.isArray(node.padas) && node.padas.length > 0) {
+      return node.padas.reduce((s: number, p: any) => s + (p.manthras?.length ?? 0), 0);
+    }
+    return (node.manthras?.length ?? 0) +
+      (node.khandas ?? []).reduce((s: number, k: any) => {
+        if (levelThreeEnabled && Array.isArray(k.padas) && k.padas.length > 0) {
+          return s + k.padas.reduce((ks: number, p: any) => ks + (p.manthras?.length ?? 0), 0);
+        }
+        return s + (k.manthras?.length ?? 0);
+      }, 0);
+  };
+
+  if (!granthaDocId) {
+    console.error("[publish] Grantha documentId missing from Strapi response — cannot publish sections or manthras");
+    publishFailures.push({
+      manthra: "[Grantha]",
+      error: "Strapi did not return a documentId for the grantha record. Sections and manthras were not published. Please try publishing again.",
+    });
+  } else if (Array.isArray(hierarchy) && hierarchy.length > 0) {
     for (const adhyaya of hierarchy) {
       // Guard: skip L1 sections with blank titles — they cannot be deduped and corrupt Strapi
       if (!adhyaya.title?.trim()) {
+        const skipped = countManthrasUnder(adhyaya);
         console.warn(`[publish] Skipping L1 section with blank title (order=${adhyaya.order}) — fix the title in the portal before publishing`);
+        if (skipped > 0) {
+          publishFailures.push({
+            manthra: `[Section order=${adhyaya.order}]`,
+            error: `Section has no title — ${skipped} mantra${skipped === 1 ? "" : "s"} not published. Add a title in the portal and re-publish.`,
+          });
+        }
         continue;
       }
 
@@ -1357,7 +1387,9 @@ async function publishGranthaWithHierarchy(
       } catch (e: any) {
         const msg = strapiErrorMessage(e);
         console.error(`[publish] Section L1 "${adhyaya.title}" failed:`, e?.message || e);
-        publishFailures.push({ manthra: `[Section] ${adhyaya.title}`, error: msg });
+        const skipped = countManthrasUnder(adhyaya);
+        const skipNote = skipped > 0 ? ` (${skipped} mantra${skipped === 1 ? "" : "s"} not published)` : "";
+        publishFailures.push({ manthra: `[Section] ${adhyaya.title}`, error: msg + skipNote });
         continue;
       }
       if (!adhyayaDocId) continue;
@@ -1371,7 +1403,14 @@ async function publishGranthaWithHierarchy(
         if (!isDefaultKhanda) {
           // Guard: skip L2 sections with blank titles
           if (!khanda.title?.trim()) {
+            const skipped = countManthrasUnder(khanda);
             console.warn(`[publish] Skipping L2 section with blank title under "${adhyaya.title}" (order=${khanda.order}) — fix the title in the portal before publishing`);
+            if (skipped > 0) {
+              publishFailures.push({
+                manthra: `[Section under ${adhyaya.title}, order=${khanda.order}]`,
+                error: `Section has no title — ${skipped} mantra${skipped === 1 ? "" : "s"} not published. Add a title in the portal and re-publish.`,
+              });
+            }
             continue;
           }
           try {
@@ -1381,7 +1420,9 @@ async function publishGranthaWithHierarchy(
           } catch (e: any) {
             const msg = strapiErrorMessage(e);
             console.error(`[publish] Section L2 "${khanda.title}" failed:`, e?.message || e);
-            publishFailures.push({ manthra: `[Section] ${khanda.title}`, error: msg });
+            const skipped = countManthrasUnder(khanda);
+            const skipNote = skipped > 0 ? ` (${skipped} mantra${skipped === 1 ? "" : "s"} not published)` : "";
+            publishFailures.push({ manthra: `[Section] ${khanda.title}`, error: msg + skipNote });
             continue;
           }
           if (!khandaDocId) continue;
@@ -1395,7 +1436,14 @@ async function publishGranthaWithHierarchy(
           for (const pada of khanda.padas) {
             // Guard: skip L3 sections with blank titles
             if (!pada.title?.trim()) {
+              const skipped = pada.manthras?.length ?? 0;
               console.warn(`[publish] Skipping L3 section with blank title under "${khanda.title}" (order=${pada.order}) — fix the title in the portal before publishing`);
+              if (skipped > 0) {
+                publishFailures.push({
+                  manthra: `[Section under ${khanda.title}, order=${pada.order}]`,
+                  error: `Section has no title — ${skipped} mantra${skipped === 1 ? "" : "s"} not published. Add a title in the portal and re-publish.`,
+                });
+              }
               continue;
             }
             let padaDocId: string | undefined;
@@ -1405,8 +1453,10 @@ async function publishGranthaWithHierarchy(
               );
             } catch (e: any) {
               const msg = strapiErrorMessage(e);
+              const skipped = pada.manthras?.length ?? 0;
+              const skipNote = skipped > 0 ? ` (${skipped} mantra${skipped === 1 ? "" : "s"} not published)` : "";
               console.warn(`[publish] Pada "${pada.title}" failed:`, e?.message || e);
-              publishFailures.push({ manthra: `[Section] ${pada.title}`, error: msg });
+              publishFailures.push({ manthra: `[Section] ${pada.title}`, error: msg + skipNote });
               continue;
             }
             if (!padaDocId) continue;

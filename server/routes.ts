@@ -1285,6 +1285,27 @@ async function publishGranthaWithHierarchy(
     }
   }
 
+  // Publish a list of manthras under the same section concurrently (CONCURRENCY at a
+  // time). Manthras within a section are independent — they all link to the same
+  // sectionDocId and do not depend on each other — so concurrent publishing is safe.
+  // Running 5 in parallel gives ~5x throughput vs the old sequential loop, cutting
+  // publish time for large granthas from 10-15 min down to 2-4 min.
+  const MANTHRA_CONCURRENCY = 5;
+  const publishManthrasBatch = async (
+    manthras: any[],
+    sectionDocId: string | undefined
+  ): Promise<void> => {
+    for (let i = 0; i < manthras.length; i += MANTHRA_CONCURRENCY) {
+      const batch = manthras.slice(i, i + MANTHRA_CONCURRENCY);
+      await Promise.all(
+        batch.map(async (m) => {
+          await publishManthra(m, sectionDocId);
+          reportProgress(m.title || m.id);
+        })
+      );
+    }
+  };
+
   // Maps: local node .id → Strapi documentId, collected during traversal.
   // All three section levels + manthras are tracked so the next publish can
   // use the fast-path (direct PUT) without any dedup API lookups.
@@ -1363,16 +1384,10 @@ async function publishGranthaWithHierarchy(
             if (!padaDocId) continue;
             if (pada.id) padaIdToDocId.set(pada.id, padaDocId);
             reportProgress(pada.title);
-            for (const manthra of (pada.manthras ?? [])) {
-              await publishManthra(manthra, padaDocId);
-              reportProgress(manthra.title || manthra.id);
-            }
+            await publishManthrasBatch(pada.manthras ?? [], padaDocId);
           }
         } else {
-          for (const manthra of (khanda.manthras ?? [])) {
-            await publishManthra(manthra, khandaDocId);
-            reportProgress(manthra.title || manthra.id);
-          }
+          await publishManthrasBatch(khanda.manthras ?? [], khandaDocId);
         }
       }
     }

@@ -82,7 +82,7 @@ export function useDrafts(contentType: string) {
 
       if (data.async && data.jobId) {
         const jobId: string = data.jobId;
-        const maxAttempts = 180; // poll for up to 6 minutes (every 2 s)
+        const maxAttempts = 450; // poll for up to 15 minutes (every 2 s) — matches server job TTL
         for (let attempt = 0; attempt < maxAttempts; attempt++) {
           await new Promise((resolve) => setTimeout(resolve, 2000));
           try {

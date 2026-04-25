@@ -37,8 +37,16 @@ interface PublishJob {
 }
 const publishJobs = new Map<string, PublishJob>();
 function cleanOldPublishJobs() {
-  const cutoff = Date.now() - 15 * 60 * 1000; // 15 min TTL
+  const now = Date.now();
+  // Completed/failed jobs: clean after 15 min (user has had time to read the result).
+  // Still-running jobs: keep up to 60 min so a very large grantha can finish without
+  // the job being deleted while the backend is still working. After 60 min a running
+  // job is almost certainly a zombie (process crash with no .catch) and should be reaped.
+  const doneCutoff    = now - 15 * 60 * 1000;
+  const runningCutoff = now - 60 * 60 * 1000;
   for (const [id, job] of publishJobs) {
+    const isComplete = job.status === "done" || job.status === "failed";
+    const cutoff = isComplete ? doneCutoff : runningCutoff;
     if (job.startedAt.getTime() < cutoff) publishJobs.delete(id);
   }
 }
@@ -685,11 +693,16 @@ async function findOrCreateSection(
       }
       return existingDocId;
     }
-  } catch {
-    // ignore lookup failure — fall through to create
+  } catch (lookupErr: any) {
+    // Log the lookup failure but still fall through to create — resilience over perfection.
+    // Downside: may create a duplicate section if Strapi has one already. Warn so this is visible.
+    console.warn(
+      `[publish] Section "${title}" dedup lookup failed (${lookupErr?.message || lookupErr}) — ` +
+      `falling through to create; may produce a duplicate if the section already exists in Strapi`
+    );
   }
 
-  // Not found — create a new section
+  // Not found (or lookup failed) — create a new section
   const payload: Record<string, any> = { title: title.trim(), grantha: granthaDocId };
   if (effectiveType) payload.type = effectiveType;
   if (order != null) payload.order = order;
@@ -699,6 +712,15 @@ async function findOrCreateSection(
     body: JSON.stringify({ data: payload }),
   });
   const newDocId: string | undefined = r?.data?.documentId;
+  if (!newDocId) {
+    // Strapi returned a 2xx but with no documentId — this is a data-consistency failure.
+    // Throw so the caller's catch block can add a visible entry to publishFailures and
+    // skip this section's manthras (rather than silently proceeding with an undefined docId).
+    throw new Error(
+      `Section "${title}" was accepted by Strapi but no documentId was returned — ` +
+      `cannot link manthras to it. Check Strapi logs for this section and re-publish.`
+    );
+  }
   console.log(`[publish] Section "${title}" created: ${newDocId}`);
   return newDocId;
 }
@@ -787,7 +809,11 @@ async function strapiManthraRequest(
     putEndpoint = `/api/manthras/${newDocId}`;
   } else {
     await strapiRequest(endpoint, { method: "PUT", body: JSON.stringify({ data: coreData }) });
-    mainRes = { data: { documentId: endpoint.split("/").pop() } };
+    // Extract the docId from the PUT endpoint robustly: filter empty segments to handle
+    // any trailing slashes, and strip potential query params from the last segment.
+    const lastSegment = endpoint.split("/").filter(Boolean).pop() ?? "";
+    const putDocId = lastSegment.split("?")[0];
+    mainRes = { data: { documentId: putDocId } };
   }
 
   // Chunk 2: BhashyamEntry (separate PUT — Strapi preserves other fields when omitted)
@@ -908,12 +934,13 @@ function strapiErrorMessage(e: any): string {
 // Strapi v5 returns 400 ValidationError (not 404) when a document exists in the DB
 // but its locale entry is null — e.g. "Document with id X, locale null not found".
 function isOrphanedDocError(e: any): boolean {
-  return (
-    e?.status === 404 ||
-    (e?.status === 400 &&
-      typeof e?.message === "string" &&
-      e.message.toLowerCase().includes("not found"))
-  );
+  if (e?.status === 404) return true;
+  if (e?.status === 400 && typeof e?.message === "string") {
+    const lower = e.message.toLowerCase();
+    // Strapi v5 uses several forms: "not found", "document not found", "invalid document id", "invalid id"
+    return lower.includes("not found") || lower.includes("invalid") && lower.includes("id");
+  }
+  return false;
 }
 
 // Attempt to DELETE an orphaned manthra from Strapi so we can POST a clean replacement.

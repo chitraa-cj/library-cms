@@ -2149,13 +2149,18 @@ export default function GranthasPage() {
                 padas: (k.padas ?? []).map((p) => {
                   if (p.id !== padaId) return p;
                   const pIdx = (k.padas ?? []).findIndex((x) => x.id === padaId) + 1;
-                  const afterIdx = p.manthras.findIndex((m) => m.id === afterManthraId);
-                  if (afterIdx < 0) return p;
-                  const pfx = titlePrefix(p.manthras[afterIdx].title);
-                  const newOrder = p.manthras[afterIdx].order + 1;
+                  const afterManthra = p.manthras.find((m) => m.id === afterManthraId);
+                  if (!afterManthra) return p;
+                  const pfx = titlePrefix(afterManthra.title);
+                  const newOrder = afterManthra.order + 1;
+                  // Use the title's last visible number (+1) for the label so that even if
+                  // .order and the title number have drifted, the new manthra always appears
+                  // as a natural continuation of what the user sees on screen.
+                  const afterTitleNum = parseInt(afterManthra.title?.match(/(\d+)$/)?.[1] ?? "0", 10);
+                  const newTitleNum = afterTitleNum + 1;
                   const newTitle = isDefaultKhanda
-                    ? `${pfx} ${aIdx}.${pIdx}.${newOrder}`
-                    : `${pfx} ${aIdx}.${kIdx}.${pIdx}.${newOrder}`;
+                    ? `${pfx} ${aIdx}.${pIdx}.${newTitleNum}`
+                    : `${pfx} ${aIdx}.${kIdx}.${pIdx}.${newTitleNum}`;
                   const newManthra = {
                     id: uid(),
                     title: newTitle,
@@ -2164,28 +2169,36 @@ export default function GranthasPage() {
                   };
                   return {
                     ...p,
+                    // Bump every manthra whose order falls at or above the insertion point,
+                    // regardless of its array position (the list is displayed sorted by order,
+                    // so array order ≠ display order).  Then append the new manthra; the
+                    // display sort will place it correctly.
                     manthras: [
-                      ...p.manthras.slice(0, afterIdx + 1),
+                      ...p.manthras.map((m) =>
+                        m.order >= newOrder
+                          ? { ...m, order: m.order + 1, title: bumpLast(m.title) }
+                          : m
+                      ),
                       newManthra,
-                      ...p.manthras.slice(afterIdx + 1).map((m) => ({
-                        ...m,
-                        order: m.order + 1,
-                        title: bumpLast(m.title),
-                      })),
                     ],
                   };
                 }),
               };
             }
 
-            const afterIdx = k.manthras.findIndex((m) => m.id === afterManthraId);
-            if (afterIdx < 0) return k;
-            const pfx = titlePrefix(k.manthras[afterIdx].title);
-            const newOrder = k.manthras[afterIdx].order + 1;
+            const afterManthra = k.manthras.find((m) => m.id === afterManthraId);
+            if (!afterManthra) return k;
+            const pfx = titlePrefix(afterManthra.title);
+            const newOrder = afterManthra.order + 1;
+            // Use the title's last visible number (+1) for the label so that even if
+            // .order and the title number have drifted, the new manthra always appears
+            // as a natural continuation of what the user sees on screen.
+            const afterTitleNum = parseInt(afterManthra.title?.match(/(\d+)$/)?.[1] ?? "0", 10);
+            const newTitleNum = afterTitleNum + 1;
             const newTitle =
               structureConfig.levelTwoEnabled && !isDefaultKhanda
-                ? `${pfx} ${aIdx}.${kIdx}.${newOrder}`
-                : `${pfx} ${aIdx}.${newOrder}`;
+                ? `${pfx} ${aIdx}.${kIdx}.${newTitleNum}`
+                : `${pfx} ${aIdx}.${newTitleNum}`;
             const newManthra = {
               id: uid(),
               title: newTitle,
@@ -2194,14 +2207,17 @@ export default function GranthasPage() {
             };
             return {
               ...k,
+              // Bump every manthra whose order falls at or above the insertion point,
+              // regardless of its array position (the list is displayed sorted by order,
+              // so array order ≠ display order).  Then append the new manthra; the
+              // display sort will place it correctly.
               manthras: [
-                ...k.manthras.slice(0, afterIdx + 1),
+                ...k.manthras.map((m) =>
+                  m.order >= newOrder
+                    ? { ...m, order: m.order + 1, title: bumpLast(m.title) }
+                    : m
+                ),
                 newManthra,
-                ...k.manthras.slice(afterIdx + 1).map((m) => ({
-                  ...m,
-                  order: m.order + 1,
-                  title: bumpLast(m.title),
-                })),
               ],
             };
           }),

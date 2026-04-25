@@ -2170,9 +2170,9 @@ export default function GranthasPage() {
                   return {
                     ...p,
                     // Bump every manthra whose order falls at or above the insertion point,
-                    // regardless of its array position (the list is displayed sorted by order,
-                    // so array order ≠ display order).  Then append the new manthra; the
-                    // display sort will place it correctly.
+                    // regardless of its array position (bump by order-value, not slice index).
+                    // Sort the resulting array so the render (which iterates without sorting)
+                    // displays slokas in the correct sequential order.
                     manthras: [
                       ...p.manthras.map((m) =>
                         m.order >= newOrder
@@ -2180,7 +2180,7 @@ export default function GranthasPage() {
                           : m
                       ),
                       newManthra,
-                    ],
+                    ].sort((a, b) => a.order - b.order),
                   };
                 }),
               };
@@ -2208,9 +2208,9 @@ export default function GranthasPage() {
             return {
               ...k,
               // Bump every manthra whose order falls at or above the insertion point,
-              // regardless of its array position (the list is displayed sorted by order,
-              // so array order ≠ display order).  Then append the new manthra; the
-              // display sort will place it correctly.
+              // regardless of its array position (bump by order-value, not slice index).
+              // Sort the resulting array so the render (which iterates without sorting)
+              // displays slokas in the correct sequential order.
               manthras: [
                 ...k.manthras.map((m) =>
                   m.order >= newOrder
@@ -2218,7 +2218,7 @@ export default function GranthasPage() {
                     : m
                 ),
                 newManthra,
-              ],
+              ].sort((a, b) => a.order - b.order),
             };
           }),
         };

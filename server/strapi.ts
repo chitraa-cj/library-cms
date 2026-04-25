@@ -19,7 +19,7 @@ function curlRequest(
       "-g",
       "-s",
       "-k",
-      "--max-time", "20",
+      "--max-time", "40",
       "-w", "|||HTTPSTATUS|||%{http_code}",
       "-X", method,
       "-H", `Authorization: Bearer ${STRAPI_TOKEN()}`,
@@ -38,7 +38,7 @@ function curlRequest(
 
     args.push(url);
 
-    execFile("curl", args, { timeout: 25000, maxBuffer: 10 * 1024 * 1024 }, (err, stdout, stderr) => {
+    execFile("curl", args, { timeout: 45000, maxBuffer: 10 * 1024 * 1024 }, (err, stdout, stderr) => {
       // Always clean up the temp file
       if (tmpFile) {
         try { unlinkSync(tmpFile); } catch { /* ignore */ }
@@ -66,23 +66,50 @@ function curlRequest(
   });
 }
 
-export async function strapiRequest(path: string, options: { method?: string; body?: string } = {}) {
+export async function strapiRequest(
+  path: string,
+  options: { method?: string; body?: string } = {},
+  _maxRetries = 3
+) {
   const url = `${STRAPI_URL}${path}`;
-  const res = await curlRequest(url, options.method || "GET", options.body);
+  const method = options.method || "GET";
+  let lastErr: any;
 
-  if (!res.ok) {
-    const err = new Error(`Strapi error ${res.status}: ${res.body.slice(0, 300)}`) as any;
-    err.status = res.status;
-    throw err;
+  for (let attempt = 1; attempt <= _maxRetries; attempt++) {
+    try {
+      const res = await curlRequest(url, method, options.body);
+
+      if (!res.ok) {
+        const err = new Error(`Strapi error ${res.status}: ${res.body.slice(0, 300)}`) as any;
+        err.status = res.status;
+
+        // 4xx errors are permanent — do not retry (bad payload, not found, etc.)
+        if (res.status >= 400 && res.status < 500) throw err;
+
+        // 5xx → server-side transient failure, worth retrying
+        lastErr = err;
+      } else {
+        if (!res.body.trim()) return { data: null };
+        try { return JSON.parse(res.body); }
+        catch { return { data: null }; }
+      }
+    } catch (e: any) {
+      // Network/timeout errors from curl (no HTTP status) → retryable
+      const isNetwork = e?.message?.includes("curl failed") ||
+                        e?.message?.includes("curl no-status") ||
+                        e?.message?.includes("max-time");
+      if (!isNetwork) throw e; // propagate non-transient errors immediately
+      lastErr = e;
+    }
+
+    if (attempt < _maxRetries) {
+      const waitMs = attempt * 2000; // 2 s, 4 s
+      console.warn(`[strapi] ${method} ${path} attempt ${attempt}/${_maxRetries} failed — retrying in ${waitMs}ms…`);
+      await new Promise((r) => setTimeout(r, waitMs));
+    }
   }
 
-  if (!res.body.trim()) return { data: null };
-
-  try {
-    return JSON.parse(res.body);
-  } catch {
-    return { data: null };
-  }
+  throw lastErr;
 }
 
 /**

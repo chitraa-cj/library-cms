@@ -1288,9 +1288,9 @@ async function publishGranthaWithHierarchy(
   // Publish a list of manthras under the same section concurrently (CONCURRENCY at a
   // time). Manthras within a section are independent — they all link to the same
   // sectionDocId and do not depend on each other — so concurrent publishing is safe.
-  // Running 5 in parallel gives ~5x throughput vs the old sequential loop, cutting
-  // publish time for large granthas from 10-15 min down to 2-4 min.
-  const MANTHRA_CONCURRENCY = 5;
+  // Running 3 in parallel gives ~3x throughput vs the old sequential loop.
+  // 3 (not 5) keeps the remote Strapi server from getting overwhelmed and timing out.
+  const MANTHRA_CONCURRENCY = 3; // keep Strapi load manageable to reduce timeouts
   const publishManthrasBatch = async (
     manthras: any[],
     sectionDocId: string | undefined

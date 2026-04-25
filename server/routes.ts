@@ -876,6 +876,34 @@ async function updateExistingManthra(
   return strapiDocumentId;
 }
 
+// Extract a human-readable description from a Strapi error object or raw error message.
+// Strapi wraps its real message inside JSON: { error: { message, details } }.
+// This function unwraps it so users see "title must not be empty" instead of
+// the full raw "Strapi error 400: {\"data\":null,\"error\":{...huge JSON...}}" blob.
+function strapiErrorMessage(e: any): string {
+  const raw: string = e?.message || String(e);
+  // Try to parse the JSON body that strapiRequest embeds after "Strapi error NNN: "
+  const match = raw.match(/Strapi error \d+: (\{.+)/s);
+  if (match) {
+    try {
+      const parsed = JSON.parse(match[1]);
+      const msg: string = parsed?.error?.message || "";
+      const details = parsed?.error?.details;
+      // ValidationError details often contain per-field error info
+      let extra = "";
+      if (details?.errors && Array.isArray(details.errors)) {
+        extra = ": " + details.errors.map((d: any) => `${d.path?.join(".") || "field"} — ${d.message}`).join("; ");
+      }
+      if (msg) return msg + extra;
+    } catch { /* fall through to raw */ }
+  }
+  // Simplify network/curl errors into something actionable
+  if (raw.includes("curl failed") || raw.includes("max-time")) {
+    return "Network timeout reaching Strapi — check server connectivity";
+  }
+  return raw;
+}
+
 // Returns true if the Strapi error looks like an orphaned-locale "document not found".
 // Strapi v5 returns 400 ValidationError (not 404) when a document exists in the DB
 // but its locale entry is null — e.g. "Document with id X, locale null not found".
@@ -1279,8 +1307,8 @@ async function publishGranthaWithHierarchy(
       }
     } catch (e: any) {
       const label = manthra.ShlokaManthraNumber || manthra.title || "(unknown)";
-      const msg: string = e?.message || String(e);
-      console.error(`[publish] Manthra "${label}" failed:`, msg);
+      const msg = strapiErrorMessage(e);
+      console.error(`[publish] Manthra "${label}" failed:`, e?.message || e);
       publishFailures.push({ manthra: label, error: msg });
     }
   }
@@ -1327,8 +1355,8 @@ async function publishGranthaWithHierarchy(
           adhyaya.documentId, adhyaya.title, L1type, adhyaya.order ?? undefined, granthaDocId, undefined
         );
       } catch (e: any) {
-        const msg = e?.message || String(e);
-        console.error(`[publish] Section L1 "${adhyaya.title}" failed:`, msg);
+        const msg = strapiErrorMessage(e);
+        console.error(`[publish] Section L1 "${adhyaya.title}" failed:`, e?.message || e);
         publishFailures.push({ manthra: `[Section] ${adhyaya.title}`, error: msg });
         continue;
       }
@@ -1351,8 +1379,8 @@ async function publishGranthaWithHierarchy(
               khanda.documentId, khanda.title, L2type, khanda.order ?? undefined, granthaDocId, adhyayaDocId
             );
           } catch (e: any) {
-            const msg = e?.message || String(e);
-            console.error(`[publish] Section L2 "${khanda.title}" failed:`, msg);
+            const msg = strapiErrorMessage(e);
+            console.error(`[publish] Section L2 "${khanda.title}" failed:`, e?.message || e);
             publishFailures.push({ manthra: `[Section] ${khanda.title}`, error: msg });
             continue;
           }
@@ -1376,8 +1404,8 @@ async function publishGranthaWithHierarchy(
                 pada.documentId, pada.title, L3type, pada.order ?? undefined, granthaDocId, khandaDocId
               );
             } catch (e: any) {
-              const msg = e?.message || String(e);
-              console.warn(`[publish] Pada "${pada.title}" failed:`, msg);
+              const msg = strapiErrorMessage(e);
+              console.warn(`[publish] Pada "${pada.title}" failed:`, e?.message || e);
               publishFailures.push({ manthra: `[Section] ${pada.title}`, error: msg });
               continue;
             }

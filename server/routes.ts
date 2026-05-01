@@ -473,7 +473,7 @@ function mapSectionType(name: string): string | undefined {
 // Strapi teekas.TeekaAuthor enum — exact values the API accepts
 const STRAPI_TEEKA_AUTHORS = new Set([
   "Anandagiri", "Ananda Gana", "Bharathi Theertha",
-  "Raagavendra", "Sadanandha", "Srimad Devagnya Pandiya", "Shreedharaswami", "Upanishad Brahmendra",
+  "Raagavendra", "Sadanandha", "Srimad Devagnya Pandiya", "Shreedharaswami", "Upanishad Brahmendra", "Keshava Bhattacharya",
   "Vachaspati Mishra", "Padmapada", "Sureshvaracharya",
   "Prakasatman", "Govindananda", "Ramananda Saraswati", "Madhusudana Saraswati",
   "Dhanapati Suri", "Amalananda", "Appayya Dikshita", "Shankarananda",

@@ -202,6 +202,7 @@ export const teekaAuthors = [
   "Srimad Devagnya Pandiya",
   "Shreedharaswami",
   "Upanishad Brahmendra",
+  "Keshava Bhattacharya",
   "Vachaspati Mishra",
   "Padmapada",
   "Sureshvaracharya",

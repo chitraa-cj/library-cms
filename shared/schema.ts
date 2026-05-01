@@ -195,6 +195,8 @@ export const translationLanguages = [
 
 export const teekaAuthors = [
   "Anandagiri",
+  "Ananda Gana",
+  "Bharathi Theertha",
   "Vachaspati Mishra",
   "Padmapada",
   "Sureshvaracharya",

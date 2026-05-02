@@ -2167,15 +2167,15 @@ export default function GranthasPage() {
                     order: newOrder,
                     Teekas: teekas.map((t) => ({ TeekaName: t.TeekaName, TeekaAuthor: t.TeekaAuthor })),
                   };
+                  // Only bump existing manthras if the newOrder slot is already occupied.
+                  // When there's a gap (no mantra at newOrder), the new entry fills it without
+                  // displacing anything — so existing titles/orders stay unchanged.
+                  const needsBump = p.manthras.some((m) => m.order === newOrder);
                   return {
                     ...p,
-                    // Bump every manthra whose order falls at or above the insertion point,
-                    // regardless of its array position (bump by order-value, not slice index).
-                    // Sort the resulting array so the render (which iterates without sorting)
-                    // displays slokas in the correct sequential order.
                     manthras: [
                       ...p.manthras.map((m) =>
-                        m.order >= newOrder
+                        needsBump && m.order >= newOrder
                           ? { ...m, order: m.order + 1, title: bumpLast(m.title) }
                           : m
                       ),
@@ -2205,15 +2205,15 @@ export default function GranthasPage() {
               order: newOrder,
               Teekas: teekas.map((t) => ({ TeekaName: t.TeekaName, TeekaAuthor: t.TeekaAuthor })),
             };
+            // Only bump existing manthras if the newOrder slot is already occupied.
+            // When there's a gap (no mantra at newOrder), the new entry fills it without
+            // displacing anything — so existing titles/orders stay unchanged.
+            const needsBump = k.manthras.some((m) => m.order === newOrder);
             return {
               ...k,
-              // Bump every manthra whose order falls at or above the insertion point,
-              // regardless of its array position (bump by order-value, not slice index).
-              // Sort the resulting array so the render (which iterates without sorting)
-              // displays slokas in the correct sequential order.
               manthras: [
                 ...k.manthras.map((m) =>
-                  m.order >= newOrder
+                  needsBump && m.order >= newOrder
                     ? { ...m, order: m.order + 1, title: bumpLast(m.title) }
                     : m
                 ),

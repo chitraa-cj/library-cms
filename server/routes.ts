@@ -608,19 +608,35 @@ async function buildManthraData(
   // resolveManthraTeekas looks up each Teeka record in Strapi and converts to the
   // { teeka: documentId, TeekaEntry: {...} } format Strapi's bhashya-entries component expects.
   //
-  // IMPORTANT: when the manthra has a Teekas array (even if empty or unresolvable),
-  // always include Teekas in the PUT payload — even as [].  Strapi v5 validates ALL
-  // existing relations on every PUT, so if the manthra's stored Teekas relation in
-  // Strapi points to a deleted teeka document, omitting Teekas from the PUT body causes
-  // Strapi to return 400 "Document with id X not found" for that stale relation.
-  // By explicitly sending Teekas: [] we force Strapi to clear the broken relation.
+  // SAFETY RULE — preserve existing Strapi teeka content:
+  // When the local draft has NO teeka entries (rawTeekas = []) and the manthra already
+  // exists in Strapi (has a strapiDocumentId), we OMIT Teekas from the PUT payload
+  // entirely. This tells Strapi to keep whatever teeka content is already stored there.
+  //
+  // We only send Teekas: [] explicitly for NEW manthras (no strapiDocumentId) because
+  // there is nothing to preserve. For existing manthras, sending [] would wipe all
+  // teeka content in Strapi — the original "stale relation" workaround had this
+  // unintended destructive side-effect.
+  //
+  // The stale-relation scenario (Strapi returns 400 on PUT because an existing teeka
+  // relation points to a deleted teeka document) is now handled at a higher level:
+  // resolveManthraTeekas filters teeka entries by content, so only entries the user
+  // has actually filled in are included — never empty slots for a newly-added teeka.
   const rawTeekas = manthra.Teekas;
+  const isExistingStrapi =
+    typeof manthra.strapiDocumentId === "string" && manthra.strapiDocumentId.length >= 10;
   if (Array.isArray(rawTeekas)) {
-    const resolvedTeekas = rawTeekas.length > 0
-      ? await resolveManthraTeekas(rawTeekas, granthaDocId, teekaNameToDocId)
-      : [];
-    // Always set — even [] — so Strapi clears stale/broken teeka relations
-    cleaned.Teekas = resolvedTeekas;
+    if (rawTeekas.length > 0) {
+      const resolvedTeekas = await resolveManthraTeekas(rawTeekas, granthaDocId, teekaNameToDocId);
+      // Always set when there are local teekas to send (even if resolvedTeekas = []
+      // because all failed to look up) — lets Strapi clear truly broken relations.
+      cleaned.Teekas = resolvedTeekas;
+    } else if (!isExistingStrapi) {
+      // New manthra: explicitly send [] so Strapi initialises the teekas field cleanly.
+      cleaned.Teekas = [];
+    }
+    // else: existing Strapi manthra, empty local teekas → omit Teekas from payload
+    // so Strapi preserves whatever content it already holds for this manthra.
   }
 
   return cleaned;
@@ -1650,13 +1666,26 @@ async function resolveManthraTeekas(
       }
     }
 
-    const item: any = { teeka: teekaDocId };
-    if (t.TeekaEntry && typeof t.TeekaEntry === "object") {
-      item.TeekaEntry = normalizeTextAndTranslation(t.TeekaEntry);
-      console.log(`[resolveManthraTeekas] TeekaEntry keys: ${Object.keys(t.TeekaEntry).join(", ")}`);
-    } else {
-      console.warn(`[resolveManthraTeekas] No TeekaEntry for teeka documentId="${teekaDocId}" — teeka relation will be linked but entry content will be empty`);
+    // Only include this teeka entry if it actually has content.
+    // Sending an empty TeekaEntry (or no TeekaEntry at all) to Strapi would overwrite
+    // whatever content was previously stored for this teeka on the manthra — for example,
+    // when a new teeka is added to the grantha and the user hasn't filled it in yet,
+    // its slot in the UI is empty; we must not let that empty slot wipe Strapi content.
+    if (!t.TeekaEntry || typeof t.TeekaEntry !== "object") {
+      console.warn(`[resolveManthraTeekas] Skipping teeka "${teekaDocId}" — no TeekaEntry provided; existing Strapi content preserved`);
+      continue;
     }
+    const norm = normalizeTextAndTranslation(t.TeekaEntry);
+    const hasRealContent =
+      (norm.SanskritTextEntry?.length ?? 0) > 0 ||
+      (norm.EnglishTranslationText?.length ?? 0) > 0 ||
+      (norm.OtherTranslations?.length ?? 0) > 0;
+    if (!hasRealContent) {
+      console.warn(`[resolveManthraTeekas] Skipping teeka "${teekaDocId}" — TeekaEntry has no content; existing Strapi content preserved`);
+      continue;
+    }
+    const item: any = { teeka: teekaDocId, TeekaEntry: norm };
+    console.log(`[resolveManthraTeekas] TeekaEntry keys: ${Object.keys(t.TeekaEntry).join(", ")}`);
     resolved.push(item);
   }
   console.log(`[resolveManthraTeekas] Resolved ${resolved.length}/${rawTeekas.length} teeka(s)`);

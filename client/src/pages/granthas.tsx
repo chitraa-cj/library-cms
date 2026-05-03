@@ -2591,6 +2591,27 @@ export default function GranthasPage() {
     );
   }
 
+  // Auto-save the draft silently then close the mantra dialog.
+  // Called whenever the dialog closes — whether via the Close button, clicking outside,
+  // or pressing Escape — so edits are never lost just because the user forgot to Save.
+  function closeMantraDialog() {
+    setEditingManthra(null);
+    if (!formData.GranthaName.trim() || saveDraft.isPending || publishMantraMutation.isPending) return;
+    const payload = buildSavePayload();
+    const strapiDocId =
+      editingItem && !editingItem._isDraft
+        ? editingItem.documentId
+        : editingItem?._strapiDocId || undefined;
+    saveDraft.mutate(
+      { title: formData.GranthaName, data: payload, strapiDocumentId: strapiDocId, draftId: editingDraftId ?? undefined },
+      {
+        onSuccess: (saved: any) => {
+          if (!editingDraftId && saved?.id) setEditingDraftId(saved.id);
+        },
+      }
+    );
+  }
+
   // Save the draft then publish just the currently open manthra to Strapi
   function handleSaveAndPublishManthra() {
     if (!editingManthra) return;
@@ -3995,7 +4016,7 @@ export default function GranthasPage() {
       {/* Manthra content dialog */}
       <Dialog
         open={!!editingManthra}
-        onOpenChange={(open) => { if (!open) setEditingManthra(null); }}
+        onOpenChange={(open) => { if (!open) closeMantraDialog(); }}
       >
         <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
           <DialogHeader>
@@ -4437,7 +4458,7 @@ export default function GranthasPage() {
               <div className="flex items-center justify-between pt-2 gap-2 border-t mt-2">
                 <Button
                   variant="outline"
-                  onClick={() => setEditingManthra(null)}
+                  onClick={() => closeMantraDialog()}
                   data-testid="button-manthra-close"
                   disabled={saveDraft.isPending || publishMantraMutation.isPending}
                 >

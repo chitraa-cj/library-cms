@@ -499,6 +499,56 @@ export function createStrapiRouter() {
     }
   });
 
+  // ── Bulk teeka fetch for all manthras in a grantha ──
+  // Called once during grantha load to pre-populate teeka data into the portal
+  // hierarchy state. This ensures teeka content is ALWAYS present in state and
+  // can never be accidentally cleared by saving before opening each dialog.
+  router.get("/manthras/teekas-by-grantha/:granthaDocId", async (req, res) => {
+    try {
+      const { granthaDocId } = req.params;
+      const BULK_TEEKA_POPULATE = [
+        `filters[Section][grantha][documentId][$eq]=${granthaDocId}`,
+        "populate[Teekas][populate][teeka][fields][0]=documentId",
+        "populate[Teekas][populate][teeka][fields][1]=TeekaName",
+        "populate[Teekas][populate][teeka][fields][2]=TeekaAuthor",
+        "populate[Teekas][populate][TeekaEntry][populate]=*",
+        "fields[0]=documentId",
+        "pagination[pageSize]=100",
+      ].join("&");
+
+      const firstPage = await strapiRequest(`/api/manthras?${BULK_TEEKA_POPULATE}&pagination[page]=1`);
+      const allManthras: any[] = [...(firstPage.data || [])];
+      const pageCount: number = firstPage.meta?.pagination?.pageCount ?? 1;
+
+      if (pageCount > 1) {
+        const rest = await Promise.all(
+          Array.from({ length: pageCount - 1 }, (_, i) =>
+            strapiRequest(`/api/manthras?${BULK_TEEKA_POPULATE}&pagination[page]=${i + 2}`)
+          )
+        );
+        for (const page of rest) allManthras.push(...(page.data || []));
+      }
+
+      // Return map: manthraDocumentId → teekas[] (only where teeka has content)
+      const result: Record<string, any[]> = {};
+      for (const m of allManthras) {
+        if (!m.documentId || !Array.isArray(m.Teekas) || !m.Teekas.length) continue;
+        const withContent = m.Teekas.filter((t: any) => {
+          const te = t.TeekaEntry;
+          return te && (
+            (Array.isArray(te.SanskritTextEntry) && te.SanskritTextEntry.length > 0) ||
+            (Array.isArray(te.OtherTranslations) && te.OtherTranslations.length > 0)
+          );
+        });
+        if (withContent.length > 0) result[m.documentId] = withContent;
+      }
+
+      res.json({ data: result });
+    } catch (error: any) {
+      res.status(500).json({ message: error.message || "Failed to fetch bulk teekas" });
+    }
+  });
+
   router.get("/manthras/:documentId", async (req, res) => {
     try {
       const data = await strapiRequest(`/api/manthras/${req.params.documentId}?${MANTHRA_POPULATE}`);

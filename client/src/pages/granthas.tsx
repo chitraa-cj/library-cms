@@ -165,6 +165,61 @@ function hasBlocks(v: StrapiBlock[] | string | null | undefined): boolean {
   return false;
 }
 
+// ── Module-level teeka merge helpers ──
+// These are used both by the per-dialog Strapi fetch (useEffect) and by the
+// bulk grantha-load pre-populate so teeka data is ALWAYS in state from open.
+
+function mergeEntry(draft: any | undefined, fromStrapi: any | undefined): any | undefined {
+  if (!fromStrapi && !draft) return undefined;
+  if (!fromStrapi) return draft;
+  if (!draft) return fromStrapi;
+  return {
+    ...fromStrapi,
+    ...(hasBlocks(draft.SanskritTextEntry) && { SanskritTextEntry: draft.SanskritTextEntry }),
+    ...(hasBlocks(draft.EnglishTranslationText) && { EnglishTranslationText: draft.EnglishTranslationText }),
+    ...(draft.IASTTransliteration && { IASTTransliteration: draft.IASTTransliteration }),
+    ...(Array.isArray(draft.OtherTranslations) && draft.OtherTranslations.length > 0 && { OtherTranslations: draft.OtherTranslations }),
+  };
+}
+
+function mergeTeekas(draftTeekas: ManthraTeekaEntry[] | undefined, strapiTeekas: any[]): ManthraTeekaEntry[] {
+  const matchedDraftIndices = new Set<number>();
+  const result: ManthraTeekaEntry[] = strapiTeekas.map((t: any) => {
+    const strapiName = t.teeka?.TeekaName || t.TeekaName || "";
+    const strapiAuthor = t.teeka?.TeekaAuthor || t.TeekaAuthor || "";
+    const strapiDocId = t.teeka?.documentId;
+    const draftIdx = draftTeekas
+      ? draftTeekas.findIndex(
+          (d, i) =>
+            !matchedDraftIndices.has(i) && (
+              (strapiDocId && d.teekaDocId === strapiDocId) ||
+              d.TeekaName === strapiName ||
+              (!d.TeekaName && strapiAuthor && d.TeekaAuthor === strapiAuthor)
+            )
+        )
+      : -1;
+    if (draftIdx >= 0) matchedDraftIndices.add(draftIdx);
+    const draft = draftIdx >= 0 ? draftTeekas![draftIdx] : undefined;
+    return {
+      TeekaName: strapiName,
+      TeekaAuthor: t.teeka?.TeekaAuthor || t.TeekaAuthor || "",
+      teekaDocId: strapiDocId || undefined,
+      TeekaEntry: mergeEntry(draft?.TeekaEntry, t.TeekaEntry),
+    };
+  });
+  if (draftTeekas) {
+    for (let i = 0; i < draftTeekas.length; i++) {
+      if (!matchedDraftIndices.has(i)) {
+        const d = draftTeekas[i];
+        if (d.TeekaEntry && (hasBlocks(d.TeekaEntry.SanskritTextEntry) || hasBlocks(d.TeekaEntry.EnglishTranslationText))) {
+          result.push({ ...d });
+        }
+      }
+    }
+  }
+  return result;
+}
+
 /**
  * Rebuilds the portal hierarchy (AdhyayaNode[]) from Strapi section data.
  * Used as a fallback when no local draft hierarchy exists (e.g. different user
@@ -701,70 +756,7 @@ export default function GranthasPage() {
     let cancelled = false;
     setManthraLoading(true);
 
-    // Helper: merge two ShlokaManthraEntry-style objects, preferring non-empty
-    // draft content on a per-field basis.
-    function mergeEntry(draft: any | undefined, fromStrapi: any | undefined): any | undefined {
-      if (!fromStrapi && !draft) return undefined;
-      if (!fromStrapi) return draft;
-      if (!draft) return fromStrapi;
-      return {
-        ...fromStrapi,
-        // Prefer draft value when it contains meaningful content
-        ...(hasBlocks(draft.SanskritTextEntry) && { SanskritTextEntry: draft.SanskritTextEntry }),
-        ...(hasBlocks(draft.EnglishTranslationText) && { EnglishTranslationText: draft.EnglishTranslationText }),
-        ...(draft.IASTTransliteration && { IASTTransliteration: draft.IASTTransliteration }),
-        ...(Array.isArray(draft.OtherTranslations) && draft.OtherTranslations.length > 0 && { OtherTranslations: draft.OtherTranslations }),
-      };
-    }
-
-    // Helper: merge Teekas arrays — for each Strapi teeka, prefer draft TeekaEntry
-    // content if it is non-empty, so draft translations are not lost.
-    // Draft teekas that have TeekaEntry content but aren't matched to any Strapi teeka
-    // are appended at the end so portal-only content is never lost on re-open.
-    function mergeTeekas(draftTeekas: ManthraTeekaEntry[] | undefined, strapiTeekas: any[]): ManthraTeekaEntry[] {
-      const matchedDraftIndices = new Set<number>();
-      const result = strapiTeekas.map((t: any) => {
-        const strapiName = t.teeka?.TeekaName || t.TeekaName || "";
-        const strapiAuthor = t.teeka?.TeekaAuthor || t.TeekaAuthor || "";
-        const strapiDocId = t.teeka?.documentId;
-        const draftIdx = draftTeekas
-          ? draftTeekas.findIndex(
-              (d, i) =>
-                !matchedDraftIndices.has(i) && (
-                  (strapiDocId && d.teekaDocId === strapiDocId) ||
-                  d.TeekaName === strapiName ||
-                  // Author fallback: when draft teeka has no TeekaName (user only filled author),
-                  // match by author so content from Strapi is associated with the right slot.
-                  (!d.TeekaName && strapiAuthor && d.TeekaAuthor === strapiAuthor)
-                )
-            )
-          : -1;
-        if (draftIdx >= 0) matchedDraftIndices.add(draftIdx);
-        const draft = draftIdx >= 0 ? draftTeekas![draftIdx] : undefined;
-        const strapiEntry = t.TeekaEntry;
-        const draftEntry = draft?.TeekaEntry;
-        return {
-          TeekaName: strapiName,
-          TeekaAuthor: t.teeka?.TeekaAuthor || t.TeekaAuthor || "",
-          teekaDocId: strapiDocId || undefined,
-          TeekaEntry: mergeEntry(draftEntry, strapiEntry),
-        };
-      });
-      // Preserve draft teekas with content that have no matching Strapi entry yet.
-      // This prevents content entered in the portal from disappearing when Strapi
-      // doesn't yet have that teeka linked for this manthra (e.g. unpublished entries).
-      if (draftTeekas) {
-        for (let i = 0; i < draftTeekas.length; i++) {
-          if (!matchedDraftIndices.has(i)) {
-            const d = draftTeekas[i];
-            if (d.TeekaEntry && (hasBlocks(d.TeekaEntry.SanskritTextEntry) || hasBlocks(d.TeekaEntry.EnglishTranslationText))) {
-              result.push({ ...d });
-            }
-          }
-        }
-      }
-      return result;
-    }
+    // mergeEntry and mergeTeekas are module-level functions (see top of file).
 
     fetch(`/api/strapi/manthras/${docId}`, { credentials: "include" })
       .then((r) => r.json())
@@ -1815,6 +1807,46 @@ export default function GranthasPage() {
       setAdhyayas(finalHier2);
     setStep(1);
     setView("form");
+
+    // ── Bulk teeka pre-populate ──
+    // After the hierarchy is in state, fetch ALL manthras' teeka data from
+    // Strapi in one request and merge it into the hierarchy. This guarantees
+    // that teeka content (especially OtherTranslations) is ALWAYS present in
+    // state from the moment the grantha opens — not just after each dialog
+    // is individually opened. Without this, any "Save" before opening every
+    // dialog would clear teeka content in the draft.
+    if (granthaDocId) {
+      fetch(`/api/strapi/manthras/teekas-by-grantha/${granthaDocId}`, { credentials: "include" })
+        .then((r) => r.ok ? r.json() : null)
+        .then((payload) => {
+          if (!payload?.data || typeof payload.data !== "object") return;
+          const teekaMap: Record<string, any[]> = payload.data;
+          setAdhyayas((prev) =>
+            prev.map((a) => ({
+              ...a,
+              khandas: a.khandas.map((k) => ({
+                ...k,
+                manthras: k.manthras.map((m) => {
+                  const st = m.strapiDocumentId ? teekaMap[m.strapiDocumentId] : null;
+                  if (!st?.length) return m;
+                  return { ...m, Teekas: mergeTeekas(m.Teekas, st) };
+                }),
+                padas: (k.padas ?? []).map((p) => ({
+                  ...p,
+                  manthras: p.manthras.map((m) => {
+                    const st = m.strapiDocumentId ? teekaMap[m.strapiDocumentId] : null;
+                    if (!st?.length) return m;
+                    return { ...m, Teekas: mergeTeekas(m.Teekas, st) };
+                  }),
+                })),
+              })),
+            }))
+          );
+        })
+        .catch(() => {
+          // Silent — per-dialog fetch still acts as fallback
+        });
+    }
   }
 
   async function openView(item: any) {

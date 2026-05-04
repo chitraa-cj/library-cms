@@ -608,29 +608,91 @@ async function buildManthraData(
   // resolveManthraTeekas looks up each Teeka record in Strapi and converts to the
   // { teeka: documentId, TeekaEntry: {...} } format Strapi's bhashya-entries component expects.
   //
-  // SAFETY RULE — preserve existing Strapi teeka content:
-  // When the local draft has NO teeka entries (rawTeekas = []) and the manthra already
-  // exists in Strapi (has a strapiDocumentId), we OMIT Teekas from the PUT payload
-  // entirely. This tells Strapi to keep whatever teeka content is already stored there.
+  // SAFETY RULE — always merge with existing Strapi teeka content:
+  // Strapi treats a PUT with a Teekas array as a COMPLETE REPLACEMENT of all teekas on
+  // that mantra. If the user only edited one teeka (e.g. "Upanishad Brahmendra") and we
+  // send only that one, Strapi silently deletes every other teeka that was there (e.g.
+  // "Kathopanishad"). To prevent this, for existing Strapi manthras we:
+  //   1. Fetch the current teekas already stored in Strapi.
+  //   2. Build a merged array: keep every existing Strapi entry UNLESS the local draft
+  //      has updated content for that same teeka; add any brand-new local entries.
+  //   3. Send the merged array — so no existing teeka is ever silently wiped.
   //
-  // We only send Teekas: [] explicitly for NEW manthras (no strapiDocumentId) because
-  // there is nothing to preserve. For existing manthras, sending [] would wipe all
-  // teeka content in Strapi — the original "stale relation" workaround had this
-  // unintended destructive side-effect.
-  //
-  // The stale-relation scenario (Strapi returns 400 on PUT because an existing teeka
-  // relation points to a deleted teeka document) is now handled at a higher level:
-  // resolveManthraTeekas filters teeka entries by content, so only entries the user
-  // has actually filled in are included — never empty slots for a newly-added teeka.
+  // When the local draft has NO teeka entries at all and the manthra already exists in
+  // Strapi we OMIT Teekas from the PUT payload so Strapi is untouched.
+  // Only for brand-new manthras (no strapiDocumentId) do we send Teekas: [].
   const rawTeekas = manthra.Teekas;
   const isExistingStrapi =
     typeof manthra.strapiDocumentId === "string" && manthra.strapiDocumentId.length >= 10;
   if (Array.isArray(rawTeekas)) {
     if (rawTeekas.length > 0) {
       const resolvedTeekas = await resolveManthraTeekas(rawTeekas, granthaDocId, teekaNameToDocId);
-      // Always set when there are local teekas to send (even if resolvedTeekas = []
-      // because all failed to look up) — lets Strapi clear truly broken relations.
-      cleaned.Teekas = resolvedTeekas;
+
+      if (resolvedTeekas.length > 0 && isExistingStrapi) {
+        // ── MERGE with existing Strapi teekas ─────────────────────────────────
+        // Fetch the current Strapi teekas for this mantra so we can keep all
+        // existing entries and only overwrite the ones the user actually edited.
+        let existingTeekas: any[] = [];
+        try {
+          const strapiDocId = manthra.strapiDocumentId as string;
+          const fetchUrl =
+            `/api/manthras/${strapiDocId}` +
+            `?populate[Teekas][populate][TeekaEntry][populate]=*` +
+            `&populate[Teekas][populate][teeka][fields][0]=TeekaName` +
+            `&populate[Teekas][populate][teeka][fields][1]=documentId`;
+          const fetched = await strapiRequest(fetchUrl);
+          existingTeekas = fetched?.data?.Teekas ?? [];
+          console.log(`[buildManthraData] Fetched ${existingTeekas.length} existing Strapi teeka(s) for merge`);
+        } catch (e: any) {
+          console.warn(`[buildManthraData] Could not fetch existing teekas for merge — sending local only: ${e.message}`);
+        }
+
+        // Map existing entries by their teeka documentId so we can look them up fast.
+        const existingByTeekaDocId = new Map<string, any>();
+        for (const et of existingTeekas) {
+          const tDocId = et.teeka?.documentId;
+          if (tDocId) existingByTeekaDocId.set(tDocId, et);
+        }
+
+        // Map local resolved entries by their teeka documentId.
+        const localByTeekaDocId = new Map<string, any>();
+        for (const lt of resolvedTeekas) {
+          if (lt.teeka) localByTeekaDocId.set(lt.teeka as string, lt);
+        }
+
+        const mergedTeekas: any[] = [];
+
+        // Pass 1 — walk existing Strapi entries:
+        //   • If local has new content for this teeka → use local content but
+        //     carry over the Strapi component `id` so Strapi updates in-place
+        //     instead of deleting + re-creating.
+        //   • If local has no update → keep as-is (re-send with id + teeka docId
+        //     + full TeekaEntry so Strapi doesn't clear it).
+        for (const et of existingTeekas) {
+          const tDocId = et.teeka?.documentId;
+          if (!tDocId) continue;
+          const local = localByTeekaDocId.get(tDocId);
+          if (local) {
+            // Use local content; preserve component instance id for in-place update.
+            mergedTeekas.push({ id: et.id, teeka: tDocId, TeekaEntry: local.TeekaEntry });
+            localByTeekaDocId.delete(tDocId); // mark as handled
+          } else {
+            // No local edit — keep existing content unchanged.
+            mergedTeekas.push({ id: et.id, teeka: tDocId, TeekaEntry: et.TeekaEntry ?? null });
+          }
+        }
+
+        // Pass 2 — add brand-new teekas that had no existing entry in Strapi.
+        for (const [, lt] of localByTeekaDocId) {
+          mergedTeekas.push(lt);
+        }
+
+        console.log(`[buildManthraData] Merged teekas: ${existingTeekas.length} existing + ${resolvedTeekas.length} local → ${mergedTeekas.length} total`);
+        cleaned.Teekas = mergedTeekas;
+      } else {
+        // New mantra or nothing resolved — send as-is.
+        cleaned.Teekas = resolvedTeekas;
+      }
     } else if (!isExistingStrapi) {
       // New manthra: explicitly send [] so Strapi initialises the teekas field cleanly.
       cleaned.Teekas = [];

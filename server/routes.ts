@@ -1754,7 +1754,10 @@ async function resolveManthraTeekas(
   return resolved;
 }
 
-async function buildManthraPayloadAsync(data: Record<string, any>): Promise<Record<string, any>> {
+async function buildManthraPayloadAsync(
+  data: Record<string, any>,
+  strapiDocumentId?: string
+): Promise<Record<string, any>> {
   const {
     section,       // lowercase local field → maps to Strapi's capital-S Section relation
     grantha,       // local tracking only — not a direct field in Strapi Manthra schema
@@ -1786,12 +1789,84 @@ async function buildManthraPayloadAsync(data: Record<string, any>): Promise<Reco
     else delete payload.order;
   }
 
-  // Resolve teekas: look up each Teeka record by name and build the component array
-  if (Array.isArray(rawTeekas) && rawTeekas.length > 0) {
-    const resolvedTeekas = await resolveManthraTeekas(rawTeekas);
-    if (resolvedTeekas.length > 0) {
-      payload.Teekas = resolvedTeekas;
+  // Resolve and merge teekas — mirrors the same safe-merge logic in buildManthraData.
+  //
+  // SAFETY RULE — always merge with existing Strapi teeka content:
+  // Strapi treats a PUT with a Teekas array as a COMPLETE REPLACEMENT of all teekas on
+  // that mantra. If the user only edited one teeka (e.g. "Upanishad Brahmendra") and we
+  // send only that one, Strapi silently deletes every other teeka that was there (e.g.
+  // "Kathopanishad"). To prevent this, for existing Strapi manthras we:
+  //   1. Fetch the current teekas already stored in Strapi.
+  //   2. Build a merged array: keep every existing Strapi entry UNLESS the local draft
+  //      has updated content for that same teeka; add any brand-new local entries.
+  //   3. Send the merged array — so no existing teeka is ever silently wiped.
+  //
+  // When the local draft has NO teeka entries and the manthra already exists in Strapi
+  // we OMIT Teekas from the payload so Strapi preserves whatever content it holds.
+  const isExistingStrapi = typeof strapiDocumentId === "string" && strapiDocumentId.length >= 10;
+  if (Array.isArray(rawTeekas)) {
+    if (rawTeekas.length > 0) {
+      const resolvedTeekas = await resolveManthraTeekas(rawTeekas);
+
+      if (resolvedTeekas.length > 0 && isExistingStrapi) {
+        // ── MERGE with existing Strapi teekas ─────────────────────────────────
+        let existingTeekas: any[] = [];
+        try {
+          const fetchUrl =
+            `/api/manthras/${strapiDocumentId}` +
+            `?populate[Teekas][populate][TeekaEntry][populate]=*` +
+            `&populate[Teekas][populate][teeka][fields][0]=TeekaName` +
+            `&populate[Teekas][populate][teeka][fields][1]=documentId`;
+          const fetched = await strapiRequest(fetchUrl);
+          existingTeekas = fetched?.data?.Teekas ?? [];
+          console.log(`[buildManthraPayloadAsync] Fetched ${existingTeekas.length} existing Strapi teeka(s) for merge`);
+        } catch (e: any) {
+          console.warn(`[buildManthraPayloadAsync] Could not fetch existing teekas for merge — sending local only: ${e.message}`);
+        }
+
+        const existingByTeekaDocId = new Map<string, any>();
+        for (const et of existingTeekas) {
+          const tDocId = et.teeka?.documentId;
+          if (tDocId) existingByTeekaDocId.set(tDocId, et);
+        }
+
+        const localByTeekaDocId = new Map<string, any>();
+        for (const lt of resolvedTeekas) {
+          if (lt.teeka) localByTeekaDocId.set(lt.teeka as string, lt);
+        }
+
+        const mergedTeekas: any[] = [];
+
+        // Pass 1 — walk existing Strapi entries; prefer local edits, keep rest unchanged
+        for (const et of existingTeekas) {
+          const tDocId = et.teeka?.documentId;
+          if (!tDocId) continue;
+          const local = localByTeekaDocId.get(tDocId);
+          if (local) {
+            mergedTeekas.push({ id: et.id, teeka: tDocId, TeekaEntry: local.TeekaEntry });
+            localByTeekaDocId.delete(tDocId);
+          } else {
+            mergedTeekas.push({ id: et.id, teeka: tDocId, TeekaEntry: et.TeekaEntry ?? null });
+          }
+        }
+
+        // Pass 2 — add brand-new teekas that had no existing entry in Strapi
+        for (const [, lt] of localByTeekaDocId) {
+          mergedTeekas.push(lt);
+        }
+
+        console.log(`[buildManthraPayloadAsync] Merged teekas: ${existingTeekas.length} existing + ${resolvedTeekas.length} local → ${mergedTeekas.length} total`);
+        payload.Teekas = mergedTeekas;
+      } else {
+        // New mantra or nothing resolved — send as-is
+        payload.Teekas = resolvedTeekas;
+      }
+    } else if (!isExistingStrapi) {
+      // New mantra with no teekas — explicitly initialise the field
+      payload.Teekas = [];
     }
+    // else: existing Strapi mantra, empty local teekas → omit Teekas from payload
+    // so Strapi preserves whatever content it already holds for this mantra.
   }
 
   return payload;
@@ -2246,7 +2321,7 @@ export async function registerRoutes(
       } else {
         const cleanedData =
           draft.contentType === "manthras"
-            ? await buildManthraPayloadAsync(draft.data as Record<string, any>)
+            ? await buildManthraPayloadAsync(draft.data as Record<string, any>, draft.strapiDocumentId ?? undefined)
             : draft.contentType === "sections"
             ? buildSectionPayload(draft.data as Record<string, any>)
             : draft.contentType === "chapters"

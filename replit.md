@@ -90,3 +90,61 @@ A data feeding website for the Ekatmadham Library that connects to a Strapi CMS 
 - `STRAPI_URL` - Strapi CMS URL (http://13.53.121.15:1337)
 - **Note**: Strapi connection uses curl subprocess (execFile) with `-g` flag to handle special characters in query strings. Node.js native fetch/https cannot reach this server from the workflow process.
 - `STRAPI_API_TOKEN` - Strapi API authentication token
+
+## Data Safety: Teeka Merge Logic (CRITICAL)
+
+Strapi treats a `PUT` with a `Teekas` array as a **complete replacement** of all teekas on that mantra. Sending only one teeka silently wipes every other teeka. Both publish paths now prevent this:
+
+### Fix applied to both publish paths
+**`buildManthraData`** (used by bulk publish + individual mantra publish):
+1. Resolve local draft teekas via `resolveManthraTeekas`
+2. **Fetch existing Strapi teekas** for this mantra docId
+3. Build merged array: keep every Strapi entry, overwrite only the ones the local draft edited, append brand-new entries
+4. Send the merged array — no existing teeka is ever wiped
+
+**`buildManthraPayloadAsync`** (used by standalone draft publish):
+- Same merge logic now applied (was missing before — fixed in this session)
+
+### OtherTranslations field names (CRITICAL)
+Strapi stores multilingual content as:
+```json
+{ "LanguageOfTranslation": "Tamil", "TranslationText": [...blocks] }
+```
+**NOT** `{ "Language": "Tamil", "Translation": [...] }`. Any restore/import script must use the correct field names or all 43 language translations will be silently dropped.
+
+### When no local teekas → omit Teekas from PUT payload
+If the user hasn't edited any teeka on a mantra, Teekas is omitted from the payload entirely so Strapi preserves whatever it already holds.
+
+## Tests
+
+### Regression Test Suite
+`tests/teeka-merge-regression.mjs` — run with `node tests/teeka-merge-regression.mjs`
+
+Covers:
+1. Strapi baseline: verifies 43 OtherTranslations present on Mantra 1.1.1
+2. **Destructive PUT proof**: confirms a single-teeka PUT wipes other teekas (why merge is essential)
+3. **Merge PUT**: verifies that sending merged array preserves all teekas
+4. OtherTranslations field name validation (LanguageOfTranslation + TranslationText)
+5. Portal login + Strapi proxy correctness
+6. OtherTranslations round-trip through portal draft save/load
+
+All 24 assertions pass.
+
+### E2E UI Test
+Run via testing skill. Verifies:
+- Login → open Katho Upanishad → navigate to Book Structure → open mantra dialog
+- Dialog shows Mantra 1.1.1 with Sanskrit content + OtherTranslations
+- Close via Escape → re-open → content still intact (auto-save on close works)
+
+## Backup & Restore
+
+### Backup format (grantha_backups table)
+- Backups are gzip-compressed JSON stored as base64 in `grantha_backups.data._compressed`
+- OtherTranslations format: `{ LanguageOfTranslation, TranslationText, isAiTranslated }`
+- Teeka structure: `{ teeka: { TeekaName, documentId }, TeekaEntry }`
+
+### Restore script
+`scripts/force_restore_katho.mjs` — restores all 120 Katho Upanishad manthras from backup #210
+- Sends OtherTranslations in batches of 15 (Strapi 413 prevention)
+- Uses concurrency=6; run in slices for manthras > 100 due to 2-min timeout
+- Final 20 manthras (indices 100-119) restored separately due to ordering

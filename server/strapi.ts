@@ -573,9 +573,10 @@ export function createStrapiRouter() {
   // new blank manthra at the freed-up position.
   router.post("/manthras/insert-between", async (req, res) => {
     try {
-      const { afterDocumentId, sectionDocId } = req.body as {
+      const { afterDocumentId, sectionDocId, afterNum } = req.body as {
         afterDocumentId: string;
         sectionDocId: string;
+        afterNum?: string;
       };
       if (!afterDocumentId || !sectionDocId) {
         res.status(400).json({ message: "afterDocumentId and sectionDocId are required" });
@@ -613,17 +614,21 @@ export function createStrapiRouter() {
       const anchorOrder: number = all[anchorIdx].order ?? anchorIdx + 1;
       const newOrder = anchorOrder + 1;
 
-      // Helper: increment the last run of digits in a string (e.g. "Shloka 1.1.5" → "Shloka 1.1.6")
-      function incrementLastNum(s: string): string {
-        return s.replace(/(\d+)(?=\D*$)/, (_, n) => String(parseInt(n, 10) + 1));
+      // Helper: increment the last run of digits by N (e.g. "Shloka 1.1.5", 3 → "Shloka 1.1.8")
+      function incrementBy(s: string, n: number): string {
+        return s.replace(/(\d+)(?=\D*$)/, (_, num) => String(parseInt(num, 10) + n));
       }
 
-      // 3. Determine the new manthra's ShlokaManthraNumber from the anchor's
-      const anchorNum: string = all[anchorIdx].ShlokaManthraNumber ?? "";
-      const newNum = anchorNum ? incrementLastNum(anchorNum) : "";
+      // 3. Determine the new manthra's ShlokaManthraNumber.
+      //    Prefer the client-supplied afterNum (what the user actually sees in the
+      //    portal list) over the Strapi record value, which may have drifted from
+      //    the displayed sequence due to previous insertions.
+      const anchorNum: string = afterNum || all[anchorIdx].ShlokaManthraNumber || "";
+      const newNum = anchorNum ? incrementBy(anchorNum, 1) : "";
 
-      // 4. Shift order (and ShlokaManthraNumber) for all manthras after anchor.
-      //    Use concurrency 5 to avoid hammering Strapi.
+      // 4. Shift order for all manthras after anchor, and RE-NUMBER them
+      //    sequentially from anchorNum + 2, anchorNum + 3, … so that any
+      //    drift in existing Strapi numbers is corrected at the same time.
       const toShift = all.slice(anchorIdx + 1);
 
       async function pLimit<T>(tasks: (() => Promise<T>)[], concurrency: number): Promise<T[]> {
@@ -640,10 +645,11 @@ export function createStrapiRouter() {
       }
 
       await pLimit(
-        toShift.map((m) => async () => {
+        toShift.map((m, relIdx) => async () => {
           const updates: any = { order: (m.order ?? 0) + 1 };
-          if (m.ShlokaManthraNumber) {
-            updates.ShlokaManthraNumber = incrementLastNum(m.ShlokaManthraNumber);
+          if (anchorNum) {
+            // relIdx 0 → anchorNum + 2, relIdx 1 → anchorNum + 3, …
+            updates.ShlokaManthraNumber = incrementBy(anchorNum, relIdx + 2);
           }
           await strapiRequest(`/api/manthras/${m.documentId}`, {
             method: "PUT",

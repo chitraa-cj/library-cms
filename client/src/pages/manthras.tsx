@@ -246,6 +246,7 @@ export default function ManthrasPage() {
       const res = await apiRequest("POST", "/api/strapi/manthras/insert-between", {
         afterDocumentId: insertTarget.afterDocumentId,
         sectionDocId: insertTarget.sectionDocId,
+        afterNum: insertTarget.afterNum,
       });
       const json = await res.json();
       const newDoc = json?.data;

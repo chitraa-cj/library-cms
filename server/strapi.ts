@@ -456,9 +456,9 @@ export function createStrapiRouter() {
     "populate[Section][populate][grantha][fields][0]=id",
     "populate[Section][populate][grantha][fields][1]=documentId",
     "populate[Section][populate][grantha][fields][2]=GranthaName",
-    "populate[ShlokaManthraEntry][populate]=*",
-    "populate[BhashyamEntry][populate]=*",
-    "populate[Teekas][populate][teeka][fields][0]=documentId&populate[Teekas][populate][teeka][fields][1]=TeekaName&populate[Teekas][populate][teeka][fields][2]=TeekaAuthor&populate[Teekas][populate][TeekaEntry][populate]=*",
+    "populate[ShlokaManthraEntry][populate][OtherTranslations]=*",
+    "populate[BhashyamEntry][populate][OtherTranslations]=*",
+    "populate[Teekas][populate][teeka][fields][0]=documentId&populate[Teekas][populate][teeka][fields][1]=TeekaName&populate[Teekas][populate][teeka][fields][2]=TeekaAuthor&populate[Teekas][populate][TeekaEntry][populate][OtherTranslations]=*",
     "populate[wordMeanings]=*",
     "pagination[pageSize]=100",
   ].join("&");

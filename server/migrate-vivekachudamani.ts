@@ -89,7 +89,7 @@ export function createMigrateRouter() {
         "populate[Section][populate][parent][fields][0]=documentId",
         "populate[Section][populate][parent][fields][1]=title",
         "populate[Section][populate][parent][fields][2]=order",
-        "populate[ShlokaManthraEntry][populate]=*",
+        "populate[ShlokaManthraEntry][populate][OtherTranslations]=*",
         "fields[0]=documentId",
         "fields[1]=ShlokaManthraNumber",
         "fields[2]=order",

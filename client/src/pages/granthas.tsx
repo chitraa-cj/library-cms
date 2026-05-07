@@ -173,12 +173,38 @@ function mergeEntry(draft: any | undefined, fromStrapi: any | undefined): any | 
   if (!fromStrapi && !draft) return undefined;
   if (!fromStrapi) return draft;
   if (!draft) return fromStrapi;
+
+  // OtherTranslations merge: Strapi is authoritative base when it has more entries.
+  // This prevents a draft with 1 language (e.g. Tamil) from wiping 43 Strapi translations.
+  const draftOT: any[] = Array.isArray(draft.OtherTranslations) ? draft.OtherTranslations : [];
+  const strapiOT: any[] = Array.isArray(fromStrapi.OtherTranslations) ? fromStrapi.OtherTranslations : [];
+  let mergedOT: any[] | undefined;
+  if (draftOT.length === 0) {
+    mergedOT = strapiOT.length > 0 ? strapiOT : undefined;
+  } else if (draftOT.length >= strapiOT.length) {
+    // Draft has equal or more entries — user added languages, keep draft
+    mergedOT = draftOT;
+  } else {
+    // Strapi has more entries — use Strapi as base, overlay draft edits by language
+    const merged = strapiOT.map((sOT: any) => {
+      const match = draftOT.find((d: any) => d.LanguageOfTranslation === sOT.LanguageOfTranslation);
+      return match ?? sOT;
+    });
+    // Append any draft languages not present in Strapi
+    for (const dOT of draftOT) {
+      if (!merged.some((m: any) => m.LanguageOfTranslation === dOT.LanguageOfTranslation)) {
+        merged.push(dOT);
+      }
+    }
+    mergedOT = merged;
+  }
+
   return {
     ...fromStrapi,
     ...(hasBlocks(draft.SanskritTextEntry) && { SanskritTextEntry: draft.SanskritTextEntry }),
     ...(hasBlocks(draft.EnglishTranslationText) && { EnglishTranslationText: draft.EnglishTranslationText }),
     ...(draft.IASTTransliteration && { IASTTransliteration: draft.IASTTransliteration }),
-    ...(Array.isArray(draft.OtherTranslations) && draft.OtherTranslations.length > 0 && { OtherTranslations: draft.OtherTranslations }),
+    ...(mergedOT !== undefined && { OtherTranslations: mergedOT }),
   };
 }
 

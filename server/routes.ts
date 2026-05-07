@@ -1140,7 +1140,7 @@ async function publishGranthaWithHierarchy(
     otherTranslations: _otherLocal,
     granthaNameTranslations: granthaNameTranslationsLocal,
     deletedStrapiSectionDocIds,
-    deletedStrapiManthraDocIds: _deletedStrapiManthraDocIds,
+    deletedStrapiManthraDocIds,
     ...granthaDataRaw
   } = rawData;
   const granthaPayload = cleanPayloadForStrapi(granthaDataRaw);
@@ -1313,6 +1313,24 @@ async function publishGranthaWithHierarchy(
         // 404 means already gone — that's fine
         if (e?.status !== 404) {
           console.error(`[publish] Failed to delete section ${sectionDocId}:`, e.message);
+        }
+      }
+    }
+  }
+
+  // 2c. Delete explicitly removed manthras from Strapi (best-effort).
+  // The client tracks removed manthras in deletedStrapiManthraDocIds.
+  // Without this step they remain in Strapi as orphaned duplicates.
+  if (Array.isArray(deletedStrapiManthraDocIds) && deletedStrapiManthraDocIds.length > 0) {
+    console.log(`[publish] Deleting ${deletedStrapiManthraDocIds.length} removed manthras from Strapi: ${deletedStrapiManthraDocIds.join(", ")}`);
+    for (const manthraDocId of deletedStrapiManthraDocIds) {
+      try {
+        await strapiRequest(`/api/manthras/${manthraDocId}`, { method: "DELETE" });
+        console.log(`[publish] Deleted manthra ${manthraDocId}`);
+      } catch (e: any) {
+        // 404 means already gone — that's fine
+        if (e?.status !== 404) {
+          console.error(`[publish] Failed to delete manthra ${manthraDocId}:`, e.message);
         }
       }
     }

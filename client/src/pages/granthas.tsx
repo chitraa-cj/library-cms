@@ -2310,6 +2310,26 @@ export default function GranthasPage() {
     if (target?.strapiDocumentId) {
       setDeletedStrapiManthraDocIds((prev) => [...new Set([...prev, target!.strapiDocumentId!])]);
     }
+
+    // Renumber helper: only decrement the last number in the title for manthras
+    // that appear AFTER the deleted position. This avoids renaming the entire
+    // list from scratch (which would corrupt numbers when duplicates exist).
+    const applyRenumber = (list: ManthraNode[], deletedId: string): ManthraNode[] => {
+      const deletedIdx = list.findIndex((m) => m.id === deletedId);
+      const filtered = list.filter((m) => m.id !== deletedId);
+      if (!renumber) return filtered;
+      return filtered.map((m, idx) => {
+        // Manthras before the deletion point stay exactly as-is
+        if (idx < deletedIdx) return m;
+        // Manthras after the deletion point: decrement the last number by 1
+        return {
+          ...m,
+          order: m.order - 1,
+          title: m.title.replace(/(\d+)$/, (_, d) => String(Number(d) - 1)),
+        };
+      });
+    };
+
     setAdhyayas(
       adhyayas.map((a) => {
         if (a.id !== adhyayaId) return a;
@@ -2322,27 +2342,11 @@ export default function GranthasPage() {
                 ...k,
                 padas: (k.padas ?? []).map((p) => {
                   if (p.id !== padaId) return p;
-                  const filtered = p.manthras.filter((m) => m.id !== manthraId);
-                  if (!renumber) return { ...p, manthras: filtered };
-                  return {
-                    ...p,
-                    manthras: filtered.map((m, idx) => ({
-                      ...m,
-                      title: m.title.replace(/(\d+)$/, String(idx + 1)),
-                    })),
-                  };
+                  return { ...p, manthras: applyRenumber(p.manthras, manthraId) };
                 }),
               };
             }
-            const filtered = k.manthras.filter((m) => m.id !== manthraId);
-            if (!renumber) return { ...k, manthras: filtered };
-            return {
-              ...k,
-              manthras: filtered.map((m, idx) => ({
-                ...m,
-                title: m.title.replace(/(\d+)$/, String(idx + 1)),
-              })),
-            };
+            return { ...k, manthras: applyRenumber(k.manthras, manthraId) };
           }),
         };
       })

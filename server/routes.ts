@@ -701,7 +701,71 @@ async function buildManthraData(
     // so Strapi preserves whatever content it already holds for this manthra.
   }
 
+  // ── SAFETY: Merge OtherTranslations for existing Strapi manthras ──────────────────
+  // Strapi treats OtherTranslations (a repeatable component) as a COMPLETE REPLACEMENT
+  // on every PUT. If the portal dialog loaded with incomplete local state (e.g. during
+  // the period when the populate bug returned null for OtherTranslations), publishing
+  // would send only 1 translation and silently wipe the other 42 from Strapi.
+  //
+  // Fix: for any existing Strapi mantra, fetch the current OtherTranslations and merge:
+  //   - Keep ALL Strapi translations as the base
+  //   - Override any language that the local draft has explicitly edited
+  //   - Append any brand-new languages from the local draft
+  // This means even if local has only Tamil, Strapi keeps all 43 + Tamil is updated.
+  if (isExistingStrapi) {
+    const needsOTMerge =
+      (cleaned.ShlokaManthraEntry && typeof cleaned.ShlokaManthraEntry === "object") ||
+      (cleaned.BhashyamEntry && typeof cleaned.BhashyamEntry === "object");
+    if (needsOTMerge) {
+      try {
+        const strapiDocId = manthra.strapiDocumentId as string;
+        const otUrl =
+          `/api/manthras/${strapiDocId}` +
+          `?populate[ShlokaManthraEntry][populate][OtherTranslations]=*` +
+          `&populate[BhashyamEntry][populate][OtherTranslations]=*`;
+        const otFetched = await strapiRequest(otUrl);
+        for (const key of ["ShlokaManthraEntry", "BhashyamEntry"] as const) {
+          const localEntry = cleaned[key];
+          const strapiOT: any[] = otFetched?.data?.[key]?.OtherTranslations ?? [];
+          if (localEntry && typeof localEntry === "object" && strapiOT.length > 0) {
+            const localOT: any[] = localEntry.OtherTranslations ?? [];
+            if (localOT.length < strapiOT.length) {
+              cleaned[key].OtherTranslations = mergeOtherTranslations(localOT, strapiOT);
+              console.log(
+                `[buildManthraData] Merged ${key} OtherTranslations: ` +
+                `${localOT.length} local + ${strapiOT.length} Strapi → ` +
+                `${cleaned[key].OtherTranslations.length} total`
+              );
+            }
+          }
+        }
+      } catch (e: any) {
+        console.warn(`[buildManthraData] Could not fetch existing OtherTranslations for merge — sending local only: ${e.message}`);
+      }
+    }
+  }
+
   return cleaned;
+}
+
+/** Merge OtherTranslations arrays: Strapi is the base, local overrides by language.
+ * Any language in Strapi that isn't touched by local is preserved.
+ * Any language that local explicitly has is used (overrides Strapi for that language).
+ * Any language that is only in local (not yet in Strapi) is appended.
+ */
+function mergeOtherTranslations(localOT: any[], strapiOT: any[]): any[] {
+  const result = [...strapiOT];
+  for (const localEntry of localOT) {
+    const lang = localEntry.LanguageOfTranslation;
+    if (!lang) continue;
+    const idx = result.findIndex((e) => e.LanguageOfTranslation === lang);
+    if (idx >= 0) {
+      result[idx] = localEntry;
+    } else {
+      result.push(localEntry);
+    }
+  }
+  return result;
 }
 
 // Strapi's sections collection only accepts these values for the `type` field.
@@ -1885,6 +1949,40 @@ async function buildManthraPayloadAsync(
     }
     // else: existing Strapi mantra, empty local teekas → omit Teekas from payload
     // so Strapi preserves whatever content it already holds for this mantra.
+  }
+
+  // ── SAFETY: Merge OtherTranslations for existing Strapi manthras ──────────────────
+  // Same protection as in buildManthraData — see detailed comment there.
+  if (isExistingStrapi) {
+    const needsOTMerge =
+      (payload.ShlokaManthraEntry && typeof payload.ShlokaManthraEntry === "object") ||
+      (payload.BhashyamEntry && typeof payload.BhashyamEntry === "object");
+    if (needsOTMerge) {
+      try {
+        const otUrl =
+          `/api/manthras/${strapiDocumentId}` +
+          `?populate[ShlokaManthraEntry][populate][OtherTranslations]=*` +
+          `&populate[BhashyamEntry][populate][OtherTranslations]=*`;
+        const otFetched = await strapiRequest(otUrl);
+        for (const key of ["ShlokaManthraEntry", "BhashyamEntry"] as const) {
+          const localEntry = payload[key];
+          const strapiOT: any[] = otFetched?.data?.[key]?.OtherTranslations ?? [];
+          if (localEntry && typeof localEntry === "object" && strapiOT.length > 0) {
+            const localOT: any[] = localEntry.OtherTranslations ?? [];
+            if (localOT.length < strapiOT.length) {
+              payload[key].OtherTranslations = mergeOtherTranslations(localOT, strapiOT);
+              console.log(
+                `[buildManthraPayloadAsync] Merged ${key} OtherTranslations: ` +
+                `${localOT.length} local + ${strapiOT.length} Strapi → ` +
+                `${payload[key].OtherTranslations.length} total`
+              );
+            }
+          }
+        }
+      } catch (e: any) {
+        console.warn(`[buildManthraPayloadAsync] Could not fetch existing OtherTranslations for merge — sending local only: ${e.message}`);
+      }
+    }
   }
 
   return payload;

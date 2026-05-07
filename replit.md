@@ -91,11 +91,11 @@ A data feeding website for the Ekatmadham Library that connects to a Strapi CMS 
 - **Note**: Strapi connection uses curl subprocess (execFile) with `-g` flag to handle special characters in query strings. Node.js native fetch/https cannot reach this server from the workflow process.
 - `STRAPI_API_TOKEN` - Strapi API authentication token
 
-## Data Safety: Teeka Merge Logic (CRITICAL)
+## Data Safety: Merge Logic for Repeatable Components (CRITICAL)
 
-Strapi treats a `PUT` with a `Teekas` array as a **complete replacement** of all teekas on that mantra. Sending only one teeka silently wipes every other teeka. Both publish paths now prevent this:
+Strapi treats any repeatable component array (`Teekas`, `OtherTranslations`) as a **complete replacement** on every PUT. Sending a partial array silently wipes everything else. Both publish paths (`buildManthraData` and `buildManthraPayloadAsync`) now apply merge protection to prevent this.
 
-### Fix applied to both publish paths
+### Teeka Merge
 **`buildManthraData`** (used by bulk publish + individual mantra publish):
 1. Resolve local draft teekas via `resolveManthraTeekas`
 2. **Fetch existing Strapi teekas** for this mantra docId
@@ -103,7 +103,18 @@ Strapi treats a `PUT` with a `Teekas` array as a **complete replacement** of all
 4. Send the merged array — no existing teeka is ever wiped
 
 **`buildManthraPayloadAsync`** (used by standalone draft publish):
-- Same merge logic now applied (was missing before — fixed in this session)
+- Same merge logic applied
+
+### OtherTranslations Merge (CRITICAL — added 2026-05-07)
+Same replacement risk applies to `ShlokaManthraEntry.OtherTranslations` and `BhashyamEntry.OtherTranslations`. Root cause of recurring wipe: broken `populate=*` (now fixed with explicit nested populate) returned null → local state had no translations → publish sent `OtherTranslations:[Tamil]` → Strapi replaced all 43 with 1.
+
+**Fix** — both publish paths now:
+1. Detect if the mantra already exists in Strapi (`strapiDocumentId` present)
+2. Fetch current Strapi `ShlokaManthraEntry.OtherTranslations` + `BhashyamEntry.OtherTranslations`
+3. If local has fewer translations than Strapi, merge: Strapi is the base, local overrides by language, new local languages appended
+4. Send merged set — no translation is ever silently wiped
+- Helper: `mergeOtherTranslations(localOT, strapiOT)` in `server/routes.ts`
+- Restore script: `scripts/restore_mandukya_ot.mjs` — restored 81 Mandukya mantras damaged 2026-05-07
 
 ### OtherTranslations field names (CRITICAL)
 Strapi stores multilingual content as:

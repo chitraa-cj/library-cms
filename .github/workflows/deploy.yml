@@ -1,0 +1,32 @@
+name: Deploy CMS Library
+
+on:
+  push:
+    branches:
+      - main
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Deploy to EC2
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: ${{ secrets.EC2_HOST }}
+          username: ${{ secrets.EC2_USER }}
+          key: ${{ secrets.EC2_SSH_KEY }}
+          script: |
+            cd ~/library/library-cms
+
+            git pull origin main
+
+            npm install
+
+            npm run build
+
+            # Only if DB uses a cert Node does not trust; prefer fixing TLS on the DB side.
+            NODE_TLS_REJECT_UNAUTHORIZED=0 npm run db:push
+
+            pm2 restart cms-library --update-env
+
+            pm2 save

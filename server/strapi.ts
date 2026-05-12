@@ -9,6 +9,14 @@ import { join } from "node:path";
 const STRAPI_URL = process.env.STRAPI_URL || "http://13.53.121.15:1337";
 const STRAPI_TOKEN = () => process.env.STRAPI_API_TOKEN || "";
 
+function classifyStrapiError(status?: number, body?: string): string {
+  if (status === 401 || status === 403) return "upstream_auth";
+  if (status === 408 || status === 429) return "upstream_timeout";
+  if (status && status >= 500) return "upstream_server";
+  if (body?.includes("FortiGuard") || body?.includes("Access Blocked")) return "upstream_policy_block";
+  return "upstream_unknown";
+}
+
 function curlRequest(
   url: string,
   method = "GET",
@@ -74,6 +82,7 @@ export async function strapiRequest(
   const url = `${STRAPI_URL}${path}`;
   const method = options.method || "GET";
   let lastErr: any;
+  const requestId = Math.random().toString(36).slice(2, 10);
 
   for (let attempt = 1; attempt <= _maxRetries; attempt++) {
     try {
@@ -82,6 +91,8 @@ export async function strapiRequest(
       if (!res.ok) {
         const err = new Error(`Strapi error ${res.status}: ${res.body.slice(0, 300)}`) as any;
         err.status = res.status;
+        err.code = classifyStrapiError(res.status, res.body);
+        err.requestId = requestId;
 
         // 4xx errors are permanent — do not retry (bad payload, not found, etc.)
         if (res.status >= 400 && res.status < 500) throw err;
@@ -99,12 +110,14 @@ export async function strapiRequest(
                         e?.message?.includes("curl no-status") ||
                         e?.message?.includes("max-time");
       if (!isNetwork) throw e; // propagate non-transient errors immediately
+      e.code = e.code || "upstream_timeout";
+      e.requestId = e.requestId || requestId;
       lastErr = e;
     }
 
     if (attempt < _maxRetries) {
-      const waitMs = attempt * 2000; // 2 s, 4 s
-      console.warn(`[strapi] ${method} ${path} attempt ${attempt}/${_maxRetries} failed — retrying in ${waitMs}ms…`);
+      const waitMs = attempt * 1500; // bounded backoff
+      console.warn(`[strapi][${requestId}] ${method} ${path} attempt ${attempt}/${_maxRetries} failed (${lastErr?.code || "unknown"}) — retrying in ${waitMs}ms…`);
       await new Promise((r) => setTimeout(r, waitMs));
     }
   }

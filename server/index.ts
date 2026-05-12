@@ -3,7 +3,7 @@ import { registerRoutes } from "./routes";
 import { serveStatic } from "./static";
 import { createServer } from "http";
 import { db } from "./db";
-import { users } from "@shared/schema";
+import { publishJobs, publishJobTasks, users } from "@shared/schema";
 import { eq, sql } from "drizzle-orm";
 
 const app = express();
@@ -82,6 +82,28 @@ app.use((req, res, next) => {
     console.error("[startup] Admin seed error:", e);
   }
 
+  // Reconcile orphaned publish jobs from previous crashes/restarts.
+  try {
+    await db
+      .update(publishJobs)
+      .set({
+        status: "failed_recoverable",
+        error: "Server restarted during publish; safe to retry.",
+        updatedAt: new Date(),
+      })
+      .where(eq(publishJobs.status, "running"));
+    await db
+      .update(publishJobTasks)
+      .set({
+        status: "queued",
+        error: "Requeued after server restart.",
+        updatedAt: new Date(),
+      })
+      .where(eq(publishJobTasks.status, "running"));
+  } catch (e) {
+    console.error("[startup] Publish job reconcile error:", e);
+  }
+
   await registerRoutes(httpServer, app);
 
   app.use((err: any, _req: Request, res: Response, next: NextFunction) => {
@@ -116,7 +138,6 @@ app.use((req, res, next) => {
     {
       port,
       host: "0.0.0.0",
-      reusePort: true,
     },
     () => {
       log(`serving on port ${port}`);

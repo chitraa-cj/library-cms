@@ -3,10 +3,13 @@ import { type Server } from "http";
 import { setupAuth, requireAuth, requireAdmin, hashPassword } from "./auth";
 import { createStrapiRouter, strapiRequest, strapiRequestLarge } from "./strapi";
 import { createMigrateRouter } from "./migrate-vivekachudamani";
+import { activityLogger } from "./activity-log";
+import { readLatestDraftSnapshot, writeDraftSnapshot } from "./data-safety";
 import { storage } from "./storage";
 import Database from "better-sqlite3";
 import type { User } from "@shared/schema";
 import { gzipSync, gunzipSync } from "node:zlib";
+import { createHash } from "node:crypto";
 
 /** Compress a snapshot payload for DB storage (gzip + base64 wrapper). */
 function compressBackupData(data: any): any {
@@ -25,17 +28,130 @@ function decompressBackupData(raw: any): any {
   return raw; // legacy uncompressed backups
 }
 
+function normalizeSnapshotPayload(input: any): any {
+  if (!input || typeof input !== "object") return null;
+
+  // Compressed wrapper format: { _compressed: true, data: "<base64-gzip>" }
+  if (input._compressed === true && typeof input.data === "string") {
+    return decompressBackupData(input);
+  }
+
+  // Common export wrapper formats: { data: {...} } or nested wrappers.
+  if (input.data && typeof input.data === "object") {
+    const nested = normalizeSnapshotPayload(input.data);
+    if (nested) return nested;
+  }
+
+  // Canonical snapshot payload shape.
+  const hasCollections =
+    Array.isArray(input.granthas) ||
+    Array.isArray(input.sections) ||
+    Array.isArray(input.manthras);
+  if (hasCollections) {
+    return {
+      ...input,
+      granthas: Array.isArray(input.granthas) ? input.granthas : [],
+      sections: Array.isArray(input.sections) ? input.sections : [],
+      manthras: Array.isArray(input.manthras) ? input.manthras : [],
+    };
+  }
+
+  return null;
+}
+
 const STRAPI_INTERNAL_KEYS = new Set(["id", "_id", "__component", "createdAt", "updatedAt", "publishedAt", "documentId", "locale"]);
 
 // ─── Background publish job store ────────────────────────────────────────────
 interface PublishJob {
-  status: "running" | "done" | "failed";
+  status: "running" | "done" | "failed" | "failed_recoverable";
   progress: { done: number; total: number; current: string };
   result?: any;
   error?: string;
   startedAt: Date;
 }
 const publishJobs = new Map<string, PublishJob>();
+const draftOperationQueues = new Map<number, Promise<void>>();
+
+async function withDraftLock<T>(draftId: number, op: () => Promise<T>): Promise<T> {
+  const previous = draftOperationQueues.get(draftId) ?? Promise.resolve();
+  const running = previous.then(op, op);
+  const settled = running.then(() => undefined, () => undefined);
+  draftOperationQueues.set(draftId, settled);
+  try {
+    return await running;
+  } finally {
+    if (draftOperationQueues.get(draftId) === settled) {
+      draftOperationQueues.delete(draftId);
+    }
+  }
+}
+
+function jsonEqual(a: unknown, b: unknown): boolean {
+  return JSON.stringify(a) === JSON.stringify(b);
+}
+
+function isRetryablePublishError(error: any): boolean {
+  const code = error?.code;
+  const status = error?.status;
+  if (code === "upstream_timeout" || code === "upstream_server") return true;
+  if (typeof status === "number" && (status === 408 || status === 429 || status >= 500)) return true;
+  return false;
+}
+
+async function withPublishRetries<T>(op: () => Promise<T>, maxAttempts = 3): Promise<T> {
+  let lastError: unknown;
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    try {
+      return await op();
+    } catch (error) {
+      lastError = error;
+      if (!isRetryablePublishError(error) || attempt === maxAttempts) break;
+      await new Promise((resolve) => setTimeout(resolve, 750 * attempt));
+    }
+  }
+  throw lastError;
+}
+
+function requestHash(input: unknown): string {
+  return createHash("sha256").update(JSON.stringify(input ?? null)).digest("hex");
+}
+
+async function loadOrReplayIdempotency(req: any, route: string) {
+  const key = req.get?.("Idempotency-Key") || req.get?.("idempotency-key");
+  if (!key || typeof key !== "string") return null;
+  const hash = requestHash(req.body ?? {});
+  const existing = await storage.getIdempotencyRecord(key);
+  if (existing) {
+    if (existing.route !== route || existing.requestHash !== hash) {
+      const err: any = new Error("Idempotency key reused with different request payload");
+      err.status = 409;
+      throw err;
+    }
+    return { replay: true as const, status: existing.responseStatus, body: existing.responseBody };
+  }
+  return { replay: false as const, key, hash };
+}
+
+async function persistIdempotency(
+  key: string,
+  route: string,
+  hash: string,
+  userId: string | null,
+  draftId: number | null,
+  responseStatus: number,
+  responseBody: unknown,
+) {
+  await storage.upsertIdempotencyRecord({
+    key,
+    route,
+    requestHash: hash,
+    responseStatus,
+    responseBody: responseBody as any,
+    userId: userId ?? null,
+    draftId: draftId ?? null,
+    expiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000),
+  });
+}
 function cleanOldPublishJobs() {
   const now = Date.now();
   // Completed/failed jobs: clean after 15 min (user has had time to read the result).
@@ -1191,6 +1307,7 @@ async function createOrUpdateManthra(
 
 async function publishGranthaWithHierarchy(
   draft: any,
+  jobId?: string,
   onProgress?: (done: number, total: number, current: string) => void
 ): Promise<any> {
   const rawData = draft.data as Record<string, any>;
@@ -1439,7 +1556,7 @@ async function publishGranthaWithHierarchy(
   const publishManthra = async (
     manthra: any,
     sectionDocId: string | undefined
-  ): Promise<void> => {
+  ): Promise<boolean> => {
     try {
       const mData = await buildManthraData(manthra, sectionDocId, granthaDocId, teekaNameToDocId);
 
@@ -1468,7 +1585,7 @@ async function publishGranthaWithHierarchy(
       if (storedDocId && !hasLocalContent) {
         console.log(`[publish] Manthra "${manthra.title}" — Strapi-only node (no local content), skipping PUT, syncing docId`);
         if (manthra.id) manthraIdToDocId.set(manthra.id, storedDocId);
-        return;
+        return true;
       }
 
       console.log(`[publish] Manthra payload:`, JSON.stringify(mData).slice(0, 300));
@@ -1496,32 +1613,104 @@ async function publishGranthaWithHierarchy(
       if (returnedDocId && manthra.id) {
         manthraIdToDocId.set(manthra.id, returnedDocId);
       }
+      return true;
     } catch (e: any) {
       const label = manthra.ShlokaManthraNumber || manthra.title || "(unknown)";
       const msg = strapiErrorMessage(e);
       console.error(`[publish] Manthra "${label}" failed:`, e?.message || e);
       publishFailures.push({ manthra: label, error: msg });
+      return false;
     }
   };
 
-  // Publish a list of manthras under the same section concurrently (CONCURRENCY at a
-  // time). Manthras within a section are independent — they all link to the same
-  // sectionDocId and do not depend on each other — so concurrent publishing is safe.
-  // Running 3 in parallel gives ~3x throughput vs the old sequential loop.
-  // 3 (not 5) keeps the remote Strapi server from getting overwhelmed and timing out.
-  const MANTHRA_CONCURRENCY = 3; // keep Strapi load manageable to reduce timeouts
-  const publishManthrasBatch = async (
-    manthras: any[],
-    sectionDocId: string | undefined
-  ): Promise<void> => {
-    for (let i = 0; i < manthras.length; i += MANTHRA_CONCURRENCY) {
-      const batch = manthras.slice(i, i + MANTHRA_CONCURRENCY);
-      await Promise.all(
-        batch.map(async (m) => {
-          await publishManthra(m, sectionDocId);
-          reportProgress(m.title || m.id);
-        })
-      );
+  // Queue-based worker publish for manthras:
+  // - tasks are durable in Postgres (publish_job_tasks)
+  // - workers claim queued tasks and publish with bounded concurrency
+  // - keeps fan-out explicit and resumable
+  const MANTHRA_CONCURRENCY = 4;
+  const publishManthrasBatch = async (manthras: any[], sectionDocId: string | undefined): Promise<void> => {
+    if (!jobId) {
+      for (let i = 0; i < manthras.length; i += MANTHRA_CONCURRENCY) {
+        const batch = manthras.slice(i, i + MANTHRA_CONCURRENCY);
+        await Promise.all(
+          batch.map(async (m) => {
+            await publishManthra(m, sectionDocId);
+            reportProgress(m.title || m.id);
+          }),
+        );
+      }
+      return;
+    }
+
+    for (const manthra of manthras) {
+      await storage.enqueuePublishJobTask({
+        jobId,
+        draftId: draft.id,
+        taskType: "publish_manthra",
+        status: "queued",
+        attemptCount: 0,
+        payload: {
+          sectionDocId,
+          manthra,
+        },
+        result: null,
+        error: null,
+      } as any);
+    }
+
+    const workers = Array.from({ length: MANTHRA_CONCURRENCY }).map(async () => {
+      while (true) {
+        const claimed = await storage.claimNextPublishJobTask(jobId);
+        if (!claimed) {
+          const remainingQueued = await storage.listPublishJobTasks(jobId, ["queued"]);
+          if (remainingQueued.length === 0) break;
+          await new Promise((resolve) => setTimeout(resolve, 50));
+          continue;
+        }
+        const payload = (claimed.payload as any) ?? {};
+        const qManthra = payload.manthra;
+        const qSectionDocId = payload.sectionDocId;
+        let terminal = false;
+        try {
+          const ok = await publishManthra(qManthra, qSectionDocId);
+          if (ok) {
+            await storage.completePublishJobTask(claimed.id, { ok: true });
+            terminal = true;
+          } else if ((claimed.attemptCount ?? 0) < 3) {
+            await storage.updatePublishJobTask(claimed.id, {
+              status: "queued",
+              error: "retrying after failed publish attempt",
+            } as any);
+          } else {
+            await storage.failPublishJobTask(claimed.id, "manthra publish failed after retries");
+            terminal = true;
+          }
+        } catch (e: any) {
+          if ((claimed.attemptCount ?? 0) < 3) {
+            await storage.updatePublishJobTask(claimed.id, {
+              status: "queued",
+              error: e?.message || "retrying task",
+            } as any);
+          } else {
+            await storage.failPublishJobTask(claimed.id, e?.message || "Task failed");
+            terminal = true;
+          }
+        } finally {
+          if (terminal) {
+            reportProgress(qManthra?.title || qManthra?.id || "manthra");
+          }
+        }
+      }
+    });
+
+    await Promise.all(workers);
+    const failedTasks = await storage.listPublishJobTasks(jobId, ["failed"]);
+    if (failedTasks.length > 0) {
+      for (const ft of failedTasks) {
+        const p = (ft.payload as any) ?? {};
+        const label = p?.manthra?.ShlokaManthraNumber || p?.manthra?.title || `task-${ft.id}`;
+        publishFailures.push({ manthra: label, error: ft.error || "manthra publish task failed" });
+      }
     }
   };
 
@@ -1694,6 +1883,13 @@ async function publishGranthaWithHierarchy(
     console.warn(`[publish] ${publishFailures.length} manthra(s) failed to publish:`,
       publishFailures.map(f => `"${f.manthra}": ${f.error}`).join("; ")
     );
+  }
+  const hardFailures = publishFailures.filter((f) => !String(f.error || "").startsWith("[WARNING]"));
+  if (hardFailures.length > 0) {
+    const err: any = new Error(`Integrity guard: ${hardFailures.length} publish task(s) failed. Draft not marked as fully published.`);
+    err.code = "publish_integrity_guard";
+    err.failures = hardFailures;
+    throw err;
   }
 
   return { strapiResult, updatedHierarchy, publishFailures };
@@ -2076,6 +2272,7 @@ export async function registerRoutes(
   app: Express
 ): Promise<Server> {
   setupAuth(app);
+  app.use(activityLogger);
 
   const strapiRouter = createStrapiRouter();
   app.use("/api/strapi", strapiRouter);
@@ -2132,6 +2329,15 @@ export async function registerRoutes(
         status: "draft",
         createdBy: user.id,
       });
+      void writeDraftSnapshot({
+        event: "draft.create",
+        draftId: draft.id,
+        userId: user.id,
+        title: draft.title,
+        status: draft.status,
+        strapiDocumentId: draft.strapiDocumentId,
+        data: draft.data,
+      });
       res.status(201).json(draft);
     } catch (error: any) {
       res.status(500).json({ message: error.message || "Failed to create draft" });
@@ -2143,16 +2349,199 @@ export async function registerRoutes(
       const user = req.user as User;
       const id = parseInt(req.params.id);
       if (isNaN(id)) return res.status(400).json({ message: "Invalid draft ID" });
-      const { title, data } = req.body;
-      const draft = await storage.updateDraft(id, user.id, {
-        ...(title && { title }),
-        ...(data && { data }),
-        status: "draft",
+      const idem = await loadOrReplayIdempotency(req, `/api/drafts/${id}`);
+      if (idem?.replay) return res.status(idem.status).json(idem.body);
+      await withDraftLock(id, async () => {
+        const { title, data, expectedUpdatedAt } = req.body;
+        const before = await storage.getDraft(id, user.id);
+        if (!before) {
+          res.status(404).json({ message: "Draft not found" });
+          return;
+        }
+
+        const nextTitle = title ?? before.title;
+        const nextData = data ?? before.data;
+        if (nextTitle === before.title && jsonEqual(nextData, before.data) && before.status === "draft") {
+          res.json(before);
+          return;
+        }
+
+        void writeDraftSnapshot({
+          event: "draft.update.before",
+          draftId: before.id,
+          userId: user.id,
+          title: before.title,
+          status: before.status,
+          strapiDocumentId: before.strapiDocumentId,
+          data: before.data,
+        });
+        const draft = expectedUpdatedAt
+          ? await storage.updateDraftIfVersion(
+              id,
+              user.id,
+              new Date(expectedUpdatedAt),
+              {
+                ...(title && { title }),
+                ...(data && { data }),
+                status: "draft",
+              }
+            )
+          : await storage.updateDraft(id, user.id, {
+              ...(title && { title }),
+              ...(data && { data }),
+              status: "draft",
+            });
+        if (!draft) {
+          const latest = await storage.getDraft(id, user.id);
+          if (latest) {
+            res.status(409).json({ message: "Draft was updated elsewhere. Please refresh and retry.", latest });
+          } else {
+            res.status(404).json({ message: "Draft not found" });
+          }
+          return;
+        }
+        void writeDraftSnapshot({
+          event: "draft.update.after",
+          draftId: draft.id,
+          userId: user.id,
+          title: draft.title,
+          status: draft.status,
+          strapiDocumentId: draft.strapiDocumentId,
+          data: draft.data,
+        });
+        if (idem && !idem.replay) {
+          await persistIdempotency(idem.key, `/api/drafts/${id}`, idem.hash, user.id, id, 200, draft);
+        }
+        res.json(draft);
       });
-      if (!draft) return res.status(404).json({ message: "Draft not found" });
-      res.json(draft);
     } catch (error: any) {
+      if (error?.status) return res.status(error.status).json({ message: error.message });
       res.status(500).json({ message: error.message || "Failed to update draft" });
+    }
+  });
+
+  // Fast-path draft save for mantra modal edits.
+  // Updates only one mantra node inside hierarchy to avoid sending full draft payload
+  // from the browser on every modal save/close.
+  app.patch("/api/drafts/:id/manthra", requireAuth, async (req, res) => {
+    try {
+      const user = req.user as User;
+      const id = parseInt(req.params.id);
+      if (isNaN(id)) return res.status(400).json({ message: "Invalid draft ID" });
+      const idem = await loadOrReplayIdempotency(req, `/api/drafts/${id}/manthra`);
+      if (idem?.replay) return res.status(idem.status).json(idem.body);
+      await withDraftLock(id, async () => {
+        const { title, adhyayaId, khandaId, padaId, manthraId, manthraData, expectedUpdatedAt } = req.body ?? {};
+        if (!adhyayaId || !khandaId || !manthraId || !manthraData || typeof manthraData !== "object") {
+          res.status(400).json({ message: "adhyayaId, khandaId, manthraId and manthraData are required" });
+          return;
+        }
+
+        const draft = await storage.getDraft(id, user.id);
+        if (!draft) {
+          res.status(404).json({ message: "Draft not found" });
+          return;
+        }
+        void writeDraftSnapshot({
+          event: "draft.manthra-patch.before",
+          draftId: draft.id,
+          userId: user.id,
+          title: draft.title,
+          status: draft.status,
+          strapiDocumentId: draft.strapiDocumentId,
+          data: draft.data,
+        });
+
+        const draftData = (draft.data && typeof draft.data === "object") ? draft.data as any : {};
+        const hierarchy = Array.isArray(draftData.hierarchy) ? draftData.hierarchy : [];
+
+        let updatedNode = false;
+        const updatedHierarchy = hierarchy.map((a: any) => {
+          if (a?.id !== adhyayaId) return a;
+          return {
+            ...a,
+            khandas: (a.khandas || []).map((k: any) => {
+              if (k?.id !== khandaId) return k;
+              if (padaId) {
+                return {
+                  ...k,
+                  padas: (k.padas || []).map((p: any) => {
+                    if (p?.id !== padaId) return p;
+                    return {
+                      ...p,
+                      manthras: (p.manthras || []).map((m: any) => {
+                        if (m?.id !== manthraId) return m;
+                        updatedNode = true;
+                        return { ...m, ...manthraData, id: m.id };
+                      }),
+                    };
+                  }),
+                };
+              }
+              return {
+                ...k,
+                manthras: (k.manthras || []).map((m: any) => {
+                  if (m?.id !== manthraId) return m;
+                  updatedNode = true;
+                  return { ...m, ...manthraData, id: m.id };
+                }),
+              };
+            }),
+          };
+        });
+
+        if (!updatedNode) {
+          res.status(404).json({ message: "Manthra not found in draft hierarchy" });
+          return;
+        }
+
+        if (jsonEqual(updatedHierarchy, hierarchy) && (!title || title === draft.title) && draft.status === "draft") {
+          res.json(draft);
+          return;
+        }
+
+        const updated = expectedUpdatedAt
+          ? await storage.updateDraftIfVersion(
+              id,
+              user.id,
+              new Date(expectedUpdatedAt),
+              {
+                ...(title ? { title } : {}),
+                data: { ...draftData, hierarchy: updatedHierarchy },
+                status: "draft",
+              }
+            )
+          : await storage.updateDraft(id, user.id, {
+              ...(title ? { title } : {}),
+              data: { ...draftData, hierarchy: updatedHierarchy },
+              status: "draft",
+            });
+        if (!updated) {
+          const latest = await storage.getDraft(id, user.id);
+          if (latest) {
+            res.status(409).json({ message: "Draft was updated elsewhere. Please refresh and retry.", latest });
+          } else {
+            res.status(404).json({ message: "Draft not found" });
+          }
+          return;
+        }
+        void writeDraftSnapshot({
+          event: "draft.manthra-patch.after",
+          draftId: updated.id,
+          userId: user.id,
+          title: updated.title,
+          status: updated.status,
+          strapiDocumentId: updated.strapiDocumentId,
+          data: updated.data,
+        });
+        if (idem && !idem.replay) {
+          await persistIdempotency(idem.key, `/api/drafts/${id}/manthra`, idem.hash, user.id, id, 200, updated);
+        }
+        res.json(updated);
+      });
+    } catch (error: any) {
+      if ((error as any)?.status) return res.status((error as any).status).json({ message: (error as any).message });
+      res.status(500).json({ message: error.message || "Failed to patch mantra draft" });
     }
   });
 
@@ -2161,11 +2550,49 @@ export async function registerRoutes(
       const user = req.user as User;
       const id = parseInt(req.params.id);
       if (isNaN(id)) return res.status(400).json({ message: "Invalid draft ID" });
+      const before = await storage.getDraft(id, user.id);
+      if (before) {
+        void writeDraftSnapshot({
+          event: "draft.delete.before",
+          draftId: before.id,
+          userId: user.id,
+          title: before.title,
+          status: before.status,
+          strapiDocumentId: before.strapiDocumentId,
+          data: before.data,
+        });
+      }
       const success = await storage.deleteDraft(id, user.id);
       if (!success) return res.status(404).json({ message: "Draft not found" });
       res.json({ message: "Draft deleted" });
     } catch (error: any) {
       res.status(500).json({ message: error.message || "Failed to delete draft" });
+    }
+  });
+
+  // Recover draft payload from the latest server-side snapshot.
+  app.post("/api/drafts/:id/recover-latest", requireAuth, async (req, res) => {
+    try {
+      const user = req.user as User;
+      const id = parseInt(req.params.id);
+      if (isNaN(id)) return res.status(400).json({ message: "Invalid draft ID" });
+      const draft = await storage.getDraft(id, user.id);
+      if (!draft) return res.status(404).json({ message: "Draft not found" });
+
+      const snapshot = await readLatestDraftSnapshot(id, user.id);
+      if (!snapshot?.data) {
+        return res.status(404).json({ message: "No snapshot found for this draft" });
+      }
+
+      const recovered = await storage.updateDraft(id, user.id, {
+        title: snapshot.title || draft.title,
+        data: snapshot.data,
+        status: "draft",
+      });
+      if (!recovered) return res.status(404).json({ message: "Draft not found" });
+      res.json({ draft: recovered, recoveredFrom: snapshot.ts || null });
+    } catch (error: any) {
+      res.status(500).json({ message: error.message || "Failed to recover draft" });
     }
   });
 
@@ -2186,8 +2613,18 @@ export async function registerRoutes(
 
       const draft = await storage.getDraft(id, user.id);
       if (!draft) return res.status(404).json({ message: "Draft not found" });
+      void writeDraftSnapshot({
+        event: "draft.publish-manthra.before",
+        draftId: draft.id,
+        userId: user.id,
+        title: draft.title,
+        status: draft.status,
+        strapiDocumentId: draft.strapiDocumentId,
+        data: draft.data,
+        metadata: { adhyayaId, khandaId, padaId: padaId ?? null, manthraId },
+      });
 
-      const granthaDocId: string | undefined = draft.strapiDocumentId;
+      const granthaDocId: string | undefined = draft.strapiDocumentId ?? undefined;
       if (!granthaDocId) {
         return res.status(400).json({ message: "The grantha must be published to Strapi first before publishing individual mantras. Use 'Save & Publish' on the grantha to publish it, then try again." });
       }
@@ -2272,7 +2709,10 @@ export async function registerRoutes(
       }
 
       // L3: Pada (if applicable)
-      let sectionDocId = khandaDocId;
+      if (!khandaDocId) {
+        return res.status(500).json({ message: "Could not resolve khanda section in Strapi" });
+      }
+      let sectionDocId: string | undefined = khandaDocId;
       if (levelThreeEnabled && padaId && padaNode) {
         sectionDocId = await resolveSection(
           padaNode.documentId, padaNode.title, L3type, padaNode.order ?? undefined, granthaDocId, khandaDocId
@@ -2280,6 +2720,9 @@ export async function registerRoutes(
         if (!sectionDocId) {
           return res.status(500).json({ message: `Could not resolve section "${padaNode.title}" in Strapi` });
         }
+      }
+      if (!sectionDocId) {
+        return res.status(500).json({ message: "Could not resolve target section in Strapi" });
       }
 
       // Build and publish the single manthra
@@ -2364,32 +2807,60 @@ export async function registerRoutes(
       const user = req.user as User;
       const id = parseInt(req.params.id);
       if (isNaN(id)) return res.status(400).json({ message: "Invalid draft ID" });
-      let draft = await storage.getDraft(id, user.id);
-      if (!draft) return res.status(404).json({ message: "Draft not found" });
-      if (draft.status === "published") {
-        // Allow re-publishing: reset to "draft" so the publish route proceeds.
-        // This handles the race window where the UI still shows the Publish button
-        // after a successful publish (stale cache) and the user clicks again.
-        const reset = await storage.updateDraft(id, user.id, { status: "draft" });
-        if (reset) draft = reset;
-      }
+      const idem = await loadOrReplayIdempotency(req, `/api/drafts/${id}/publish`);
+      if (idem?.replay) return res.status(idem.status).json(idem.body);
+      await withDraftLock(id, async () => {
+        const existingJob = await storage.getRunningPublishJobForDraft(id);
+        if (existingJob) {
+          const runningResponse = { jobId: existingJob.id, async: true, message: "Publish already running" };
+          if (idem && !idem.replay) {
+            await persistIdempotency(idem.key, `/api/drafts/${id}/publish`, idem.hash, user.id, id, 200, runningResponse);
+          }
+          res.json(runningResponse);
+          return;
+        }
 
-      if (STRAPI_UNROUTED_TYPES.has(draft.contentType)) {
-        return res.status(501).json({
-          message: `Cannot publish ${draft.contentType} directly to Strapi — the REST API route for this collection type is not enabled on the Strapi server. Please create or edit this record in the Strapi Content Manager: http://13.53.121.15:1337/admin`,
+        let draft = await storage.getDraft(id, user.id);
+        if (!draft) {
+          res.status(404).json({ message: "Draft not found" });
+          return;
+        }
+        void writeDraftSnapshot({
+          event: "draft.publish.before",
+          draftId: draft.id,
+          userId: user.id,
+          title: draft.title,
+          status: draft.status,
+          strapiDocumentId: draft.strapiDocumentId,
+          data: draft.data,
+          metadata: { contentType: draft.contentType },
         });
-      }
+        if (draft.status === "published") {
+          // Allow re-publishing: reset to "draft" so the publish route proceeds.
+          // This handles the race window where the UI still shows the Publish button
+          // after a successful publish (stale cache) and the user clicks again.
+          const reset = await storage.updateDraft(id, user.id, { status: "draft" });
+          if (reset) draft = reset;
+        }
 
-      const strapiPlural = CONTENT_TYPE_MAP[draft.contentType];
-      if (!strapiPlural) {
-        return res.status(400).json({ message: `Unknown content type: ${draft.contentType}` });
-      }
+        if (STRAPI_UNROUTED_TYPES.has(draft.contentType)) {
+          res.status(501).json({
+            message: `Cannot publish ${draft.contentType} directly to Strapi — the REST API route for this collection type is not enabled on the Strapi server. Please create or edit this record in the Strapi Content Manager: http://13.53.121.15:1337/admin`,
+          });
+          return;
+        }
+
+        const strapiPlural = CONTENT_TYPE_MAP[draft.contentType];
+        if (!strapiPlural) {
+          res.status(400).json({ message: `Unknown content type: ${draft.contentType}` });
+          return;
+        }
 
       let strapiResult: any;
       let updatedHierarchy: any[] | undefined;
       let publishFailures: Array<{ manthra: string; error: string }> | undefined;
 
-      if (draft.contentType === "granthas") {
+        if (draft.contentType === "granthas") {
         // Granthas publish can take several minutes (hundreds of Strapi API calls).
         // Run it in a background job so the HTTP request returns immediately and the
         // Replit proxy doesn't time it out. The client polls /publish-status for progress.
@@ -2400,15 +2871,40 @@ export async function registerRoutes(
           startedAt: new Date(),
         };
         publishJobs.set(jobId, job);
+        await storage.createPublishJob({
+          id: jobId,
+          draftId: id,
+          userId: user.id,
+          status: "running",
+          progressDone: 0,
+          progressTotal: 0,
+          progressCurrent: "Starting…",
+          result: null,
+          error: null,
+        });
         cleanOldPublishJobs();
 
         // Respond immediately so the client connection is freed
-        res.json({ jobId, async: true, message: "Publish started in background" });
+        const startedResponse = { jobId, async: true, message: "Publish started in background" };
+        if (idem && !idem.replay) {
+          await persistIdempotency(idem.key, `/api/drafts/${id}/publish`, idem.hash, user.id, id, 200, startedResponse);
+        }
+        res.json(startedResponse);
 
         // Background: run the actual publish (don't await here)
-        publishGranthaWithHierarchy(draft, (done, total, current) => {
-          job.progress = { done, total, current };
-        })
+        withPublishRetries(
+          () =>
+            publishGranthaWithHierarchy(draft, jobId, (done, total, current) => {
+              job.progress = { done, total, current };
+              void storage.updatePublishJob(jobId, {
+                status: "running",
+                progressDone: done,
+                progressTotal: total,
+                progressCurrent: current,
+              });
+            }),
+          3,
+        )
           .then(async (result) => {
             // Sync Strapi documentIds back into the draft hierarchy
             if (result.updatedHierarchy) {
@@ -2420,21 +2916,50 @@ export async function registerRoutes(
             const newDocumentId =
               result.strapiResult?.data?.documentId || draft.strapiDocumentId;
             const updated = await storage.markDraftPublished(id, user.id, newDocumentId);
+            if (updated) {
+              void writeDraftSnapshot({
+                event: "draft.publish.after",
+                draftId: updated.id,
+                userId: user.id,
+                title: updated.title,
+                status: updated.status,
+                strapiDocumentId: updated.strapiDocumentId,
+                data: updated.data,
+                metadata: { background: true, contentType: draft.contentType },
+              });
+            }
             const responseBody: Record<string, any> = { draft: updated, strapi: result.strapiResult };
             if (result.publishFailures && result.publishFailures.length > 0) {
               responseBody.warnings = result.publishFailures;
             }
             job.status = "done";
             job.result = responseBody;
+            await storage.updatePublishJob(jobId, {
+              status: "done",
+              progressDone: job.progress.done,
+              progressTotal: job.progress.total,
+              progressCurrent: job.progress.current,
+              result: responseBody,
+              error: null,
+            });
           })
           .catch((err: any) => {
             console.error(`[publish-bg] Job ${jobId} failed:`, err.message);
-            job.status = "failed";
+            const recoverable = isRetryablePublishError(err) || err?.code === "publish_integrity_guard";
+            job.status = recoverable ? "failed_recoverable" : "failed";
             job.error = err.message || "Publish failed";
+            void storage.updatePublishJob(jobId, {
+              status: recoverable ? "failed_recoverable" : "failed",
+              progressDone: job.progress.done,
+              progressTotal: job.progress.total,
+              progressCurrent: job.progress.current,
+              error: job.error,
+              result: err?.failures ? { failures: err.failures } : null,
+            });
           });
 
         return; // Response already sent
-      } else {
+        } else {
         const cleanedData =
           draft.contentType === "manthras"
             ? await buildManthraPayloadAsync(draft.data as Record<string, any>, draft.strapiDocumentId ?? undefined)
@@ -2464,22 +2989,39 @@ export async function registerRoutes(
 
       // Sync Strapi documentIds back into the draft hierarchy so subsequent
       // publishes skip dedup API lookups and do direct PUTs for known manthras.
-      if (updatedHierarchy) {
+        if (updatedHierarchy) {
         const existingData = (draft.data as Record<string, any>) ?? {};
         await storage.updateDraft(id, user.id, {
           data: { ...existingData, hierarchy: updatedHierarchy },
         });
       }
 
-      const newDocumentId = strapiResult?.data?.documentId || draft.strapiDocumentId;
-      const updated = await storage.markDraftPublished(id, user.id, newDocumentId);
-
-      const responseBody: Record<string, any> = { draft: updated, strapi: strapiResult };
-      if (publishFailures && publishFailures.length > 0) {
-        responseBody.warnings = publishFailures;
+        const newDocumentId = strapiResult?.data?.documentId || draft.strapiDocumentId;
+        const updated = await storage.markDraftPublished(id, user.id, newDocumentId);
+      if (updated) {
+        void writeDraftSnapshot({
+          event: "draft.publish.after",
+          draftId: updated.id,
+          userId: user.id,
+          title: updated.title,
+          status: updated.status,
+          strapiDocumentId: updated.strapiDocumentId,
+          data: updated.data,
+          metadata: { background: false, contentType: draft.contentType },
+        });
       }
-      res.json(responseBody);
+
+        const responseBody: Record<string, any> = { draft: updated, strapi: strapiResult };
+        if (publishFailures && publishFailures.length > 0) {
+          responseBody.warnings = publishFailures;
+        }
+        if (idem && !idem.replay) {
+          await persistIdempotency(idem.key, `/api/drafts/${id}/publish`, idem.hash, user.id, id, 200, responseBody);
+        }
+        res.json(responseBody);
+      });
     } catch (error: any) {
+      if ((error as any)?.status) return res.status((error as any).status).json({ message: (error as any).message });
       res.status(500).json({ message: error.message || "Failed to publish draft" });
     }
   });
@@ -2487,20 +3029,31 @@ export async function registerRoutes(
   // ── Background publish status polling ──────────────────────────────────────
   // Client polls this endpoint while a grantha publish job is running.
   // Returns { status, progress: { done, total, current }, result?, error? }
-  app.get("/api/drafts/:id/publish-status", requireAuth, (req, res) => {
+  app.get("/api/drafts/:id/publish-status", requireAuth, async (req, res) => {
     const { jobId } = req.query;
     if (!jobId || typeof jobId !== "string") {
       return res.status(400).json({ message: "jobId query param required" });
     }
-    const job = publishJobs.get(jobId);
-    if (!job) {
-      return res.status(404).json({ message: "Job not found (may have expired)" });
+    const memJob = publishJobs.get(jobId);
+    if (memJob) {
+      return res.json({
+        status: memJob.status,
+        progress: memJob.progress,
+        ...(memJob.result ? { result: memJob.result } : {}),
+        ...(memJob.error ? { error: memJob.error } : {}),
+      });
     }
+    const dbJob = await storage.getPublishJob(jobId);
+    if (!dbJob) return res.status(404).json({ message: "Job not found (may have expired)" });
     res.json({
-      status: job.status,
-      progress: job.progress,
-      ...(job.result ? { result: job.result } : {}),
-      ...(job.error ? { error: job.error } : {}),
+      status: dbJob.status,
+      progress: {
+        done: dbJob.progressDone ?? 0,
+        total: dbJob.progressTotal ?? 0,
+        current: dbJob.progressCurrent ?? "Starting…",
+      },
+      ...(dbJob.result ? { result: dbJob.result } : {}),
+      ...(dbJob.error ? { error: dbJob.error } : {}),
     });
   });
 
@@ -2747,12 +3300,25 @@ export async function registerRoutes(
     try {
       const { label, granthaCount, sectionCount, manthraCount, data } = req.body;
       if (!data || typeof data !== "object") return res.status(400).json({ message: "Missing data payload" });
+
+      const normalized = normalizeSnapshotPayload(data);
+      if (!normalized) {
+        return res.status(400).json({
+          message:
+            "Invalid snapshot JSON format. Expected granthas/sections/manthras arrays (optionally wrapped in data or _compressed payload).",
+        });
+      }
+
+      const effectiveGranthaCount = Number(granthaCount ?? normalized.granthas?.length ?? 0);
+      const effectiveSectionCount = Number(sectionCount ?? normalized.sections?.length ?? 0);
+      const effectiveManthraCount = Number(manthraCount ?? normalized.manthras?.length ?? 0);
+
       const backup = await storage.createBackup(
         label ?? new Date().toISOString(),
-        compressBackupData(data),
-        Number(granthaCount ?? 0),
-        Number(sectionCount ?? 0),
-        Number(manthraCount ?? 0),
+        compressBackupData(normalized),
+        effectiveGranthaCount,
+        effectiveSectionCount,
+        effectiveManthraCount,
       );
       res.status(201).json({ id: backup.id, label: backup.label });
     } catch (e: any) {

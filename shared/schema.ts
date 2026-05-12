@@ -48,6 +48,51 @@ export const insertDraftSchema = createInsertSchema(contentDrafts).omit({
 export type InsertDraft = z.infer<typeof insertDraftSchema>;
 export type Draft = typeof contentDrafts.$inferSelect;
 
+export const publishJobs = pgTable("cms_publish_jobs", {
+  id: varchar("id").primaryKey(),
+  draftId: integer("draft_id").notNull().references(() => contentDrafts.id),
+  userId: varchar("user_id").references(() => users.id),
+  status: text("status").notNull().default("queued"), // queued|running|done|failed|cancelled|failed_recoverable
+  progressDone: integer("progress_done").notNull().default(0),
+  progressTotal: integer("progress_total").notNull().default(0),
+  progressCurrent: text("progress_current").notNull().default("Starting…"),
+  result: jsonb("result"),
+  error: text("error"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+});
+
+export const idempotencyKeys = pgTable("cms_idempotency_keys", {
+  key: text("key").primaryKey(),
+  route: text("route").notNull(),
+  requestHash: text("request_hash").notNull(),
+  responseStatus: integer("response_status").notNull(),
+  responseBody: jsonb("response_body"),
+  userId: varchar("user_id").references(() => users.id),
+  draftId: integer("draft_id").references(() => contentDrafts.id),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  expiresAt: timestamp("expires_at").notNull(),
+});
+
+export const publishJobTasks = pgTable("cms_publish_job_tasks", {
+  id: serial("id").primaryKey(),
+  jobId: varchar("job_id").notNull().references(() => publishJobs.id),
+  draftId: integer("draft_id").notNull().references(() => contentDrafts.id),
+  taskType: text("task_type").notNull().default("publish_manthra"),
+  status: text("status").notNull().default("queued"), // queued|running|done|failed
+  attemptCount: integer("attempt_count").notNull().default(0),
+  payload: jsonb("payload").notNull(),
+  result: jsonb("result"),
+  error: text("error"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+});
+
+export type PublishJobRecord = typeof publishJobs.$inferSelect;
+export type InsertPublishJobRecord = typeof publishJobs.$inferInsert;
+export type IdempotencyKeyRecord = typeof idempotencyKeys.$inferSelect;
+export type PublishJobTaskRecord = typeof publishJobTasks.$inferSelect;
+
 export const granthaBackups = pgTable("grantha_backups", {
   id: serial("id").primaryKey(),
   label: text("label").notNull(),

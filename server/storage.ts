@@ -1,6 +1,6 @@
-import { type User, type InsertUser, type Draft, type InsertDraft, users, contentDrafts, granthaBackups, type GranthaBackup, type GranthaBackupMeta, granthaLocks, type GranthaLock } from "@shared/schema";
+import { type User, type InsertUser, type Draft, type InsertDraft, users, contentDrafts, granthaBackups, type GranthaBackup, type GranthaBackupMeta, granthaLocks, type GranthaLock, publishJobs, type PublishJobRecord, idempotencyKeys, type IdempotencyKeyRecord, publishJobTasks, type PublishJobTaskRecord } from "@shared/schema";
 import { db } from "./db";
-import { eq, and, desc } from "drizzle-orm";
+import { eq, and, desc, sql, inArray } from "drizzle-orm";
 
 export interface IStorage {
   getUser(id: string): Promise<User | undefined>;
@@ -16,6 +16,7 @@ export interface IStorage {
   getDraftByStrapiDocId(strapiDocumentId: string): Promise<Draft | undefined>;
   createDraft(draft: InsertDraft): Promise<Draft>;
   updateDraft(id: number, userId: string, data: Partial<InsertDraft>): Promise<Draft | undefined>;
+  updateDraftIfVersion(id: number, userId: string, expectedUpdatedAt: Date, data: Partial<InsertDraft>): Promise<Draft | undefined>;
   deleteDraft(id: number, userId: string): Promise<boolean>;
   deleteDraftById(id: number): Promise<boolean>;
   markDraftPublished(id: number, userId: string, strapiDocumentId?: string): Promise<Draft | undefined>;
@@ -26,6 +27,19 @@ export interface IStorage {
   getGranthaLock(granthaDocId: string): Promise<GranthaLock | null>;
   lockGrantha(granthaDocId: string, granthaName: string | undefined, userId: string, username: string, reason?: string): Promise<GranthaLock>;
   unlockGrantha(granthaDocId: string): Promise<boolean>;
+  createPublishJob(job: Omit<PublishJobRecord, "createdAt" | "updatedAt">): Promise<PublishJobRecord>;
+  getPublishJob(id: string): Promise<PublishJobRecord | null>;
+  getRunningPublishJobForDraft(draftId: number): Promise<PublishJobRecord | null>;
+  updatePublishJob(id: string, patch: Partial<PublishJobRecord>): Promise<PublishJobRecord | null>;
+  upsertIdempotencyRecord(record: Omit<IdempotencyKeyRecord, "createdAt">): Promise<IdempotencyKeyRecord>;
+  getIdempotencyRecord(key: string): Promise<IdempotencyKeyRecord | null>;
+  enqueuePublishJobTask(task: Omit<PublishJobTaskRecord, "id" | "createdAt" | "updatedAt">): Promise<PublishJobTaskRecord>;
+  listPublishJobTasks(jobId: string, statuses?: string[]): Promise<PublishJobTaskRecord[]>;
+  claimNextPublishJobTask(jobId: string): Promise<PublishJobTaskRecord | null>;
+  claimPublishJobTask(taskId: number): Promise<PublishJobTaskRecord | null>;
+  updatePublishJobTask(taskId: number, patch: Partial<PublishJobTaskRecord>): Promise<PublishJobTaskRecord | null>;
+  completePublishJobTask(taskId: number, result?: unknown): Promise<PublishJobTaskRecord | null>;
+  failPublishJobTask(taskId: number, error: string): Promise<PublishJobTaskRecord | null>;
 }
 
 export class DatabaseStorage implements IStorage {
@@ -96,6 +110,21 @@ export class DatabaseStorage implements IStorage {
       .update(contentDrafts)
       .set({ ...data, updatedAt: new Date() })
       .where(and(eq(contentDrafts.id, id), eq(contentDrafts.createdBy, userId)))
+      .returning();
+    return updated;
+  }
+
+  async updateDraftIfVersion(id: number, userId: string, expectedUpdatedAt: Date, data: Partial<InsertDraft>): Promise<Draft | undefined> {
+    const [updated] = await db
+      .update(contentDrafts)
+      .set({ ...data, updatedAt: new Date() })
+      .where(
+        and(
+          eq(contentDrafts.id, id),
+          eq(contentDrafts.createdBy, userId),
+          sql`${contentDrafts.updatedAt} = ${expectedUpdatedAt}`
+        )
+      )
       .returning();
     return updated;
   }
@@ -185,6 +214,139 @@ export class DatabaseStorage implements IStorage {
   async unlockGrantha(granthaDocId: string): Promise<boolean> {
     const result = await db.delete(granthaLocks).where(eq(granthaLocks.granthaDocId, granthaDocId)).returning();
     return result.length > 0;
+  }
+
+  async createPublishJob(job: Omit<PublishJobRecord, "createdAt" | "updatedAt">): Promise<PublishJobRecord> {
+    const [created] = await db.insert(publishJobs).values(job).returning();
+    return created;
+  }
+
+  async getPublishJob(id: string): Promise<PublishJobRecord | null> {
+    const [job] = await db.select().from(publishJobs).where(eq(publishJobs.id, id));
+    return job ?? null;
+  }
+
+  async getRunningPublishJobForDraft(draftId: number): Promise<PublishJobRecord | null> {
+    const [job] = await db
+      .select()
+      .from(publishJobs)
+      .where(and(eq(publishJobs.draftId, draftId), eq(publishJobs.status, "running")))
+      .orderBy(desc(publishJobs.updatedAt));
+    return job ?? null;
+  }
+
+  async updatePublishJob(id: string, patch: Partial<PublishJobRecord>): Promise<PublishJobRecord | null> {
+    const [updated] = await db
+      .update(publishJobs)
+      .set({ ...patch, updatedAt: new Date() })
+      .where(eq(publishJobs.id, id))
+      .returning();
+    return updated ?? null;
+  }
+
+  async upsertIdempotencyRecord(record: Omit<IdempotencyKeyRecord, "createdAt">): Promise<IdempotencyKeyRecord> {
+    const [saved] = await db
+      .insert(idempotencyKeys)
+      .values(record)
+      .onConflictDoUpdate({
+        target: idempotencyKeys.key,
+        set: {
+          route: record.route,
+          requestHash: record.requestHash,
+          responseStatus: record.responseStatus,
+          responseBody: record.responseBody,
+          userId: record.userId,
+          draftId: record.draftId,
+          expiresAt: record.expiresAt,
+        },
+      })
+      .returning();
+    return saved;
+  }
+
+  async getIdempotencyRecord(key: string): Promise<IdempotencyKeyRecord | null> {
+    const [record] = await db.select().from(idempotencyKeys).where(eq(idempotencyKeys.key, key));
+    if (!record) return null;
+    if (record.expiresAt && new Date(record.expiresAt) < new Date()) return null;
+    return record;
+  }
+
+  async enqueuePublishJobTask(task: Omit<PublishJobTaskRecord, "id" | "createdAt" | "updatedAt">): Promise<PublishJobTaskRecord> {
+    const [created] = await db.insert(publishJobTasks).values(task as any).returning();
+    return created;
+  }
+
+  async listPublishJobTasks(jobId: string, statuses?: string[]): Promise<PublishJobTaskRecord[]> {
+    const base = db.select().from(publishJobTasks).where(eq(publishJobTasks.jobId, jobId)).orderBy(publishJobTasks.id);
+    if (!statuses || statuses.length === 0) return base;
+    return db
+      .select()
+      .from(publishJobTasks)
+      .where(and(eq(publishJobTasks.jobId, jobId), inArray(publishJobTasks.status, statuses as any)))
+      .orderBy(publishJobTasks.id);
+  }
+
+  async claimPublishJobTask(taskId: number): Promise<PublishJobTaskRecord | null> {
+    const [claimed] = await db
+      .update(publishJobTasks)
+      .set({
+        status: "running",
+        attemptCount: sql`${publishJobTasks.attemptCount} + 1`,
+        updatedAt: new Date(),
+      })
+      .where(and(eq(publishJobTasks.id, taskId), eq(publishJobTasks.status, "queued")))
+      .returning();
+    return claimed ?? null;
+  }
+
+  async claimNextPublishJobTask(jobId: string): Promise<PublishJobTaskRecord | null> {
+    const result = await db.execute(sql`
+      with next_task as (
+        select id
+        from ${publishJobTasks}
+        where job_id = ${jobId}
+          and status = 'queued'
+        order by id
+        limit 1
+        for update skip locked
+      )
+      update ${publishJobTasks} t
+      set status = 'running',
+          attempt_count = t.attempt_count + 1,
+          updated_at = now()
+      from next_task
+      where t.id = next_task.id
+      returning t.*;
+    `);
+    const rows = (result as any)?.rows as PublishJobTaskRecord[] | undefined;
+    return rows?.[0] ?? null;
+  }
+
+  async updatePublishJobTask(taskId: number, patch: Partial<PublishJobTaskRecord>): Promise<PublishJobTaskRecord | null> {
+    const [updated] = await db
+      .update(publishJobTasks)
+      .set({ ...patch, updatedAt: new Date() })
+      .where(eq(publishJobTasks.id, taskId))
+      .returning();
+    return updated ?? null;
+  }
+
+  async completePublishJobTask(taskId: number, result?: unknown): Promise<PublishJobTaskRecord | null> {
+    const [done] = await db
+      .update(publishJobTasks)
+      .set({ status: "done", result: (result ?? null) as any, error: null, updatedAt: new Date() })
+      .where(eq(publishJobTasks.id, taskId))
+      .returning();
+    return done ?? null;
+  }
+
+  async failPublishJobTask(taskId: number, error: string): Promise<PublishJobTaskRecord | null> {
+    const [failed] = await db
+      .update(publishJobTasks)
+      .set({ status: "failed", error, updatedAt: new Date() })
+      .where(eq(publishJobTasks.id, taskId))
+      .returning();
+    return failed ?? null;
   }
 }
 

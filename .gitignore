@@ -4,3 +4,12 @@ dist
 server/public
 vite.config.ts.*
 *.tar.gz
+
+# Local / machine-only (never push — GitHub rejects >100MB)
+.local/
+logs/
+
+# Secrets — use server env or CI secrets only
+.env
+.env.*
+!.env.example

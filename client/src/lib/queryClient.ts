@@ -1,9 +1,31 @@
 import { QueryClient, QueryFunction } from "@tanstack/react-query";
 
+export class ApiError extends Error {
+  status: number;
+  body: unknown;
+
+  constructor(message: string, status: number, body: unknown) {
+    super(message);
+    this.name = "ApiError";
+    this.status = status;
+    this.body = body;
+  }
+}
+
 async function throwIfResNotOk(res: Response) {
   if (!res.ok) {
-    const text = (await res.text()) || res.statusText;
-    throw new Error(`${res.status}: ${text}`);
+    const raw = await res.text();
+    let parsed: unknown = null;
+    try {
+      parsed = raw ? JSON.parse(raw) : null;
+    } catch {
+      parsed = raw;
+    }
+    const message =
+      (parsed && typeof parsed === "object" && "message" in (parsed as any) && typeof (parsed as any).message === "string"
+        ? (parsed as any).message
+        : raw) || res.statusText || `HTTP ${res.status}`;
+    throw new ApiError(message, res.status, parsed);
   }
 }
 
@@ -11,10 +33,14 @@ export async function apiRequest(
   method: string,
   url: string,
   data?: unknown | undefined,
+  options?: { headers?: Record<string, string> },
 ): Promise<Response> {
   const res = await fetch(url, {
     method,
-    headers: data ? { "Content-Type": "application/json" } : {},
+    headers: {
+      ...(data ? { "Content-Type": "application/json" } : {}),
+      ...(options?.headers ?? {}),
+    },
     body: data ? JSON.stringify(data) : undefined,
     credentials: "include",
   });

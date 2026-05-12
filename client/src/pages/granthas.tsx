@@ -764,6 +764,7 @@ export default function GranthasPage() {
     manthraId: string;
     strapiDocumentId?: string; // set if this mantra is already published to Strapi
   } | null>(null);
+  const [manthraDialogDirty, setManthraDialogDirty] = useState(false);
   const [manthraLoading, setManthraLoading] = useState(false);
   const [editingGranthaSectionsLoading, setEditingGranthaSectionsLoading] = useState(false);
   const [pendingRemove, setPendingRemove] = useState<{ adhyayaId: string; khandaId: string; manthraId: string; padaId?: string; title: string } | null>(null);
@@ -842,6 +843,11 @@ export default function GranthasPage() {
     return () => { cancelled = true; };
   }, [editingManthra?.manthraId, editingManthra?.strapiDocumentId]); // eslint-disable-line react-hooks/exhaustive-deps
 
+  // Reset dirty flag when opening a mantra for view/edit.
+  useEffect(() => {
+    if (editingManthra) setManthraDialogDirty(false);
+  }, [editingManthra?.adhyayaId, editingManthra?.khandaId, editingManthra?.padaId, editingManthra?.manthraId]);
+
   // Data
   const { data, isLoading } = useQuery<StrapiResponse<StrapiGrantha>>({
     queryKey: ["/api/strapi", "granthas"],
@@ -857,7 +863,23 @@ export default function GranthasPage() {
     publishDraft,
     publishProgress,
     deleteDraft,
+    recoverDraft,
   } = useDrafts("granthas");
+
+  const saveManthraPatchMutation = useMutation({
+    mutationFn: async (params: {
+      draftId: number;
+      title: string;
+      adhyayaId: string;
+      khandaId: string;
+      padaId?: string;
+      manthraId: string;
+      manthraData: ManthraNode;
+    }) => {
+      const res = await apiRequest("PATCH", `/api/drafts/${params.draftId}/manthra`, params);
+      return res.json();
+    },
+  });
 
   const deleteStrapiMutation = useMutation({
     mutationFn: async (documentId: string) => {
@@ -939,7 +961,14 @@ export default function GranthasPage() {
     },
     onSuccess: (data: any, params) => {
       if (data.strapiDocumentId) {
-        updateManthraContent(params.adhyayaId, params.khandaId, params.manthraId, { strapiDocumentId: data.strapiDocumentId }, params.padaId);
+        updateManthraContent(
+          params.adhyayaId,
+          params.khandaId,
+          params.manthraId,
+          { strapiDocumentId: data.strapiDocumentId },
+          params.padaId,
+          { markDirty: false }
+        );
       }
       const warnCount = data.warnings?.length ?? 0;
       track("manthra_published", {
@@ -2385,8 +2414,10 @@ export default function GranthasPage() {
     khandaId: string,
     manthraId: string,
     updates: Partial<ManthraNode>,
-    padaId?: string
+    padaId?: string,
+    options?: { markDirty?: boolean }
   ) {
+    if (options?.markDirty !== false) setManthraDialogDirty(true);
     setAdhyayas(
       adhyayas.map((a) => {
         if (a.id !== adhyayaId) return a;
@@ -2636,6 +2667,53 @@ export default function GranthasPage() {
       toast({ variant: "destructive", title: "Grantha Name is required" });
       return;
     }
+    if (!editingManthra || !currentManthra) {
+      toast({ variant: "destructive", title: "No mantra selected" });
+      return;
+    }
+
+    // Fast path: patch only the edited mantra node into the existing draft.
+    if (editingDraftId) {
+      saveManthraPatchMutation.mutate(
+        {
+          draftId: editingDraftId,
+          title: formData.GranthaName,
+          adhyayaId: editingManthra.adhyayaId,
+          khandaId: editingManthra.khandaId,
+          padaId: editingManthra.padaId,
+          manthraId: editingManthra.manthraId,
+          manthraData: currentManthra,
+        },
+        {
+          onSuccess: () => {
+            setManthraDialogDirty(false);
+            toast({ title: "Draft saved", description: "Content saved to database." });
+            onDone?.();
+          },
+          onError: () => {
+            // Fallback to full draft save to guarantee no data loss if patch path fails.
+            const payload = buildSavePayload();
+            const strapiDocId =
+              editingItem && !editingItem._isDraft
+                ? editingItem.documentId
+                : editingItem?._strapiDocId || undefined;
+            saveDraft.mutate(
+              { title: formData.GranthaName, data: payload, strapiDocumentId: strapiDocId, draftId: editingDraftId },
+              {
+                onSuccess: (saved: any) => {
+                  if (!editingDraftId && saved?.id) setEditingDraftId(saved.id);
+                  setManthraDialogDirty(false);
+                  toast({ title: "Draft saved", description: "Content saved to database." });
+                  onDone?.();
+                },
+              }
+            );
+          },
+        }
+      );
+      return;
+    }
+
     const payload = buildSavePayload();
     const strapiDocId =
       editingItem && !editingItem._isDraft
@@ -2646,6 +2724,7 @@ export default function GranthasPage() {
       {
         onSuccess: (saved: any) => {
           if (!editingDraftId && saved?.id) setEditingDraftId(saved.id);
+          setManthraDialogDirty(false);
           toast({ title: "Draft saved", description: "Content saved to database." });
           onDone?.();
         },
@@ -2654,24 +2733,11 @@ export default function GranthasPage() {
   }
 
   // Auto-save the draft silently then close the mantra dialog.
-  // Called whenever the dialog closes — whether via the Close button, clicking outside,
-  // or pressing Escape — so edits are never lost just because the user forgot to Save.
+  // Closing the dialog should NEVER persist data implicitly.
+  // Draft persistence is allowed only via explicit Save / Save & Publish actions.
   function closeMantraDialog() {
     setEditingManthra(null);
-    if (!formData.GranthaName.trim() || saveDraft.isPending || publishMantraMutation.isPending) return;
-    const payload = buildSavePayload();
-    const strapiDocId =
-      editingItem && !editingItem._isDraft
-        ? editingItem.documentId
-        : editingItem?._strapiDocId || undefined;
-    saveDraft.mutate(
-      { title: formData.GranthaName, data: payload, strapiDocumentId: strapiDocId, draftId: editingDraftId ?? undefined },
-      {
-        onSuccess: (saved: any) => {
-          if (!editingDraftId && saved?.id) setEditingDraftId(saved.id);
-        },
-      }
-    );
+    setManthraDialogDirty(false);
   }
 
   // Save the draft then publish just the currently open manthra to Strapi
@@ -2681,6 +2747,48 @@ export default function GranthasPage() {
       toast({ variant: "destructive", title: "Grantha Name is required" });
       return;
     }
+    const runPublish = (draftId: number) => {
+      publishMantraMutation.mutate({
+        draftId,
+        adhyayaId: editingManthra.adhyayaId,
+        khandaId: editingManthra.khandaId,
+        padaId: editingManthra.padaId,
+        manthraId: editingManthra.manthraId,
+      });
+    };
+
+    // Fast path: patch only edited mantra, then publish that mantra.
+    if (editingDraftId && currentManthra) {
+      saveManthraPatchMutation.mutate(
+        {
+          draftId: editingDraftId,
+          title: formData.GranthaName,
+          adhyayaId: editingManthra.adhyayaId,
+          khandaId: editingManthra.khandaId,
+          padaId: editingManthra.padaId,
+          manthraId: editingManthra.manthraId,
+          manthraData: currentManthra,
+        },
+        {
+          onSuccess: () => runPublish(editingDraftId),
+          onError: () => {
+            const payload = buildSavePayload();
+            const strapiDocId =
+              editingItem && !editingItem._isDraft
+                ? editingItem.documentId
+                : editingItem?._strapiDocId || undefined;
+            saveDraft.mutate(
+              { title: formData.GranthaName, data: payload, strapiDocumentId: strapiDocId, draftId: editingDraftId },
+              {
+                onSuccess: () => runPublish(editingDraftId),
+              }
+            );
+          },
+        }
+      );
+      return;
+    }
+
     const payload = buildSavePayload();
     const strapiDocId =
       editingItem && !editingItem._isDraft
@@ -2696,13 +2804,7 @@ export default function GranthasPage() {
             toast({ variant: "destructive", title: "Could not determine draft ID" });
             return;
           }
-          publishMantraMutation.mutate({
-            draftId: resolvedDraftId,
-            adhyayaId: editingManthra.adhyayaId,
-            khandaId: editingManthra.khandaId,
-            padaId: editingManthra.padaId,
-            manthraId: editingManthra.manthraId,
-          });
+          runPublish(resolvedDraftId);
         },
       }
     );
@@ -4051,6 +4153,17 @@ export default function GranthasPage() {
                   {(saveDraft.isPending || publishDraft.isPending) && <Loader2 className="w-4 h-4 mr-2 animate-spin" />}
                   {publishDraft.isPending ? "Publishing…" : "Save & Publish"}
                 </Button>
+                {editingDraftId && (
+                  <Button
+                    variant="secondary"
+                    onClick={() => recoverDraft.mutate(editingDraftId)}
+                    disabled={recoverDraft.isPending || saveDraft.isPending || publishDraft.isPending}
+                    data-testid="button-recover-latest-snapshot"
+                  >
+                    {recoverDraft.isPending && <Loader2 className="w-4 h-4 mr-2 animate-spin" />}
+                    Recover Snapshot
+                  </Button>
+                )}
                 {publishDraft.isPending && publishProgress && publishProgress.total > 0 && (
                   <div className="absolute bottom-full mb-2 right-0 bg-popover border rounded-md shadow-md p-3 min-w-[260px] text-sm z-50" data-testid="publish-progress-box">
                     <div className="flex items-center gap-2 mb-1 text-muted-foreground">
@@ -4390,7 +4503,7 @@ export default function GranthasPage() {
 
                     // Rebuild the full Teekas array with the updated entry merged in
                     function buildUpdated(updated: ManthraTeekaEntry): ManthraTeekaEntry[] {
-                      const existing = currentManthra.Teekas ?? [];
+                      const existing = currentManthra?.Teekas ?? [];
                       if (existingIdx >= 0) {
                         return existing.map((t, i) => (i === existingIdx ? updated : t));
                       }
@@ -4522,7 +4635,7 @@ export default function GranthasPage() {
                   variant="outline"
                   onClick={() => closeMantraDialog()}
                   data-testid="button-manthra-close"
-                  disabled={saveDraft.isPending || publishMantraMutation.isPending}
+                  disabled={saveDraft.isPending || saveManthraPatchMutation.isPending || publishMantraMutation.isPending}
                 >
                   Close
                 </Button>
@@ -4530,15 +4643,15 @@ export default function GranthasPage() {
                   <Button
                     variant="secondary"
                     onClick={() => handleSaveManthra()}
-                    disabled={saveDraft.isPending || publishMantraMutation.isPending}
+                    disabled={saveDraft.isPending || saveManthraPatchMutation.isPending || publishMantraMutation.isPending}
                     data-testid="button-manthra-save"
                   >
-                    {saveDraft.isPending && !publishMantraMutation.isPending && <Loader2 className="w-4 h-4 mr-2 animate-spin" />}
+                    {(saveDraft.isPending || saveManthraPatchMutation.isPending) && !publishMantraMutation.isPending && <Loader2 className="w-4 h-4 mr-2 animate-spin" />}
                     Save
                   </Button>
                   <Button
                     onClick={handleSaveAndPublishManthra}
-                    disabled={saveDraft.isPending || publishMantraMutation.isPending}
+                    disabled={saveDraft.isPending || saveManthraPatchMutation.isPending || publishMantraMutation.isPending}
                     data-testid="button-manthra-save-publish"
                   >
                     {publishMantraMutation.isPending && <Loader2 className="w-4 h-4 mr-2 animate-spin" />}

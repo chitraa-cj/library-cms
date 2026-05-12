@@ -96,7 +96,7 @@ export default function BackupsPage() {
     e.target.value = "";
     setImporting(true);
     try {
-      const text = await file.text();
+      const text = (await file.text()).replace(/^\uFEFF/, "");
       const data = JSON.parse(text);
 
       // Accept either raw data blob or a wrapped export with metadata

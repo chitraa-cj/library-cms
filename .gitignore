@@ -9,6 +9,9 @@ vite.config.ts.*
 .local/
 logs/
 
+# Cursor / IDE local narrative (not application source)
+.specstory/
+
 # Secrets — use server env or CI secrets only
 .env
 .env.*

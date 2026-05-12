@@ -222,7 +222,9 @@ export default function SectionsPage() {
         const full = resp.data ?? resp;
         setManthraDetailsCache((prev) => ({ ...prev, [docId]: full }));
       })
-      .catch(() => {})
+      .catch((err) => {
+        console.warn(`[sections] Failed to load mantra details for ${docId}:`, err);
+      })
       .finally(() => setFetchingManthraId(null));
   }
 

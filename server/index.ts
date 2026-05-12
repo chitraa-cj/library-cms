@@ -53,8 +53,14 @@ app.use((req, res, next) => {
     const duration = Date.now() - start;
     if (path.startsWith("/api")) {
       let logLine = `${req.method} ${path} ${res.statusCode} in ${duration}ms`;
-      if (capturedJsonResponse) {
-        logLine += ` :: ${JSON.stringify(capturedJsonResponse)}`;
+      if (capturedJsonResponse !== undefined) {
+        // Avoid logging multi‑MB bodies or leaking full draft payloads to stdout (accountability + I/O).
+        const snippet = JSON.stringify(capturedJsonResponse);
+        const max = 1200;
+        logLine +=
+          snippet.length > max
+            ? ` :: ${snippet.slice(0, max)}…[truncated:${snippet.length - max}]`
+            : ` :: ${snippet}`;
       }
 
       log(logLine);

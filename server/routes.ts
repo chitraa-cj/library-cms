@@ -729,7 +729,7 @@ async function buildManthraData(
   // that mantra. If the user only edited one teeka (e.g. "Upanishad Brahmendra") and we
   // send only that one, Strapi silently deletes every other teeka that was there (e.g.
   // "Kathopanishad"). To prevent this, for existing Strapi manthras we:
-  //   1. Fetch the current teekas already stored in Strapi.
+  //   1. Fetch the current mantra once (teekas + Shloka + Bhashyam populated).
   //   2. Build a merged array: keep every existing Strapi entry UNLESS the local draft
   //      has updated content for that same teeka; add any brand-new local entries.
   //   3. Send the merged array — so no existing teeka is ever silently wiped.
@@ -740,35 +740,35 @@ async function buildManthraData(
   const rawTeekas = manthra.Teekas;
   const isExistingStrapi =
     typeof manthra.strapiDocumentId === "string" && manthra.strapiDocumentId.length >= 10;
+  const strapiDocId = manthra.strapiDocumentId as string;
+
+  let resolvedTeekas: any[] = [];
+  if (Array.isArray(rawTeekas) && rawTeekas.length > 0) {
+    resolvedTeekas = await resolveManthraTeekas(rawTeekas, granthaDocId, teekaNameToDocId);
+  }
+
+  const needsStrapiSnapshot =
+    isExistingStrapi && (resolvedTeekas.length > 0 || mantraTextMergeNeeded(cleaned));
+
+  let strapiMantraSnapshot: any = null;
+  if (needsStrapiSnapshot) {
+    try {
+      strapiMantraSnapshot =
+        (await strapiRequest(`/api/manthras/${strapiDocId}${MANTRA_EXISTING_MERGE_QUERY}`))?.data ?? null;
+      if (resolvedTeekas.length > 0) {
+        const n = strapiMantraSnapshot?.Teekas?.length ?? 0;
+        console.log(`[buildManthraData] Fetched Strapi mantra snapshot (${n} teeka row(s)) for merge`);
+      }
+    } catch (e: any) {
+      console.warn(`[buildManthraData] Could not fetch existing Strapi mantra for merge — ${e.message}`);
+    }
+  }
+
   if (Array.isArray(rawTeekas)) {
     if (rawTeekas.length > 0) {
-      const resolvedTeekas = await resolveManthraTeekas(rawTeekas, granthaDocId, teekaNameToDocId);
-
       if (resolvedTeekas.length > 0 && isExistingStrapi) {
-        // ── MERGE with existing Strapi teekas ─────────────────────────────────
-        // Fetch the current Strapi teekas for this mantra so we can keep all
-        // existing entries and only overwrite the ones the user actually edited.
-        let existingTeekas: any[] = [];
-        try {
-          const strapiDocId = manthra.strapiDocumentId as string;
-          const fetchUrl =
-            `/api/manthras/${strapiDocId}` +
-            `?populate[Teekas][populate][TeekaEntry][populate]=*` +
-            `&populate[Teekas][populate][teeka][fields][0]=TeekaName` +
-            `&populate[Teekas][populate][teeka][fields][1]=documentId`;
-          const fetched = await strapiRequest(fetchUrl);
-          existingTeekas = fetched?.data?.Teekas ?? [];
-          console.log(`[buildManthraData] Fetched ${existingTeekas.length} existing Strapi teeka(s) for merge`);
-        } catch (e: any) {
-          console.warn(`[buildManthraData] Could not fetch existing teekas for merge — sending local only: ${e.message}`);
-        }
-
-        // Map existing entries by their teeka documentId so we can look them up fast.
-        const existingByTeekaDocId = new Map<string, any>();
-        for (const et of existingTeekas) {
-          const tDocId = et.teeka?.documentId;
-          if (tDocId) existingByTeekaDocId.set(tDocId, et);
-        }
+        // ── MERGE with existing Strapi teekas (snapshot from single GET above) ─────
+        const existingTeekas: any[] = strapiMantraSnapshot?.Teekas ?? [];
 
         // Map local resolved entries by their teeka documentId.
         const localByTeekaDocId = new Map<string, any>();
@@ -789,8 +789,12 @@ async function buildManthraData(
           if (!tDocId) continue;
           const local = localByTeekaDocId.get(tDocId);
           if (local) {
-            // Use local content; preserve component instance id for in-place update.
-            mergedTeekas.push({ id: et.id, teeka: tDocId, TeekaEntry: local.TeekaEntry });
+            // Use local edits merged into Strapi so partial draft never wipes OtherTranslations.
+            mergedTeekas.push({
+              id: et.id,
+              teeka: tDocId,
+              TeekaEntry: mergeTeekaEntryForPut(et.TeekaEntry, local.TeekaEntry),
+            });
             localByTeekaDocId.delete(tDocId); // mark as handled
           } else {
             // No local edit — keep existing content unchanged.
@@ -803,7 +807,9 @@ async function buildManthraData(
           mergedTeekas.push(lt);
         }
 
-        console.log(`[buildManthraData] Merged teekas: ${existingTeekas.length} existing + ${resolvedTeekas.length} local → ${mergedTeekas.length} total`);
+        console.log(
+          `[buildManthraData] Merged teekas: ${existingTeekas.length} existing + ${resolvedTeekas.length} local → ${mergedTeekas.length} total`
+        );
         cleaned.Teekas = mergedTeekas;
       } else {
         // New mantra or nothing resolved — send as-is.
@@ -817,57 +823,32 @@ async function buildManthraData(
     // so Strapi preserves whatever content it already holds for this manthra.
   }
 
-  // ── SAFETY: Merge OtherTranslations for existing Strapi manthras ──────────────────
-  // Strapi treats OtherTranslations (a repeatable component) as a COMPLETE REPLACEMENT
-  // on every PUT. If the portal dialog loaded with incomplete local state (e.g. during
-  // the period when the populate bug returned null for OtherTranslations), publishing
-  // would send only 1 translation and silently wipe the other 42 from Strapi.
-  //
-  // Fix: for any existing Strapi mantra, fetch the current OtherTranslations and merge:
-  //   - Keep ALL Strapi translations as the base
-  //   - Override any language that the local draft has explicitly edited
-  //   - Append any brand-new languages from the local draft
-  // This means even if local has only Tamil, Strapi keeps all 43 + Tamil is updated.
-  if (isExistingStrapi) {
-    const needsOTMerge =
-      (cleaned.ShlokaManthraEntry && typeof cleaned.ShlokaManthraEntry === "object") ||
-      (cleaned.BhashyamEntry && typeof cleaned.BhashyamEntry === "object");
-    if (needsOTMerge) {
-      try {
-        const strapiDocId = manthra.strapiDocumentId as string;
-        const otUrl =
-          `/api/manthras/${strapiDocId}` +
-          `?populate[ShlokaManthraEntry][populate][OtherTranslations]=*` +
-          `&populate[BhashyamEntry][populate][OtherTranslations]=*`;
-        const otFetched = await strapiRequest(otUrl);
-        for (const key of ["ShlokaManthraEntry", "BhashyamEntry"] as const) {
-          const localEntry = cleaned[key];
-          const strapiOT: any[] = otFetched?.data?.[key]?.OtherTranslations ?? [];
-          if (localEntry && typeof localEntry === "object" && strapiOT.length > 0) {
-            const localOT: any[] = localEntry.OtherTranslations ?? [];
-            if (localOT.length < strapiOT.length) {
-              cleaned[key].OtherTranslations = mergeOtherTranslations(localOT, strapiOT);
-              console.log(
-                `[buildManthraData] Merged ${key} OtherTranslations: ` +
-                `${localOT.length} local + ${strapiOT.length} Strapi → ` +
-                `${cleaned[key].OtherTranslations.length} total`
-              );
-            }
-          }
-        }
-      } catch (e: any) {
-        console.warn(`[buildManthraData] Could not fetch existing OtherTranslations for merge — sending local only: ${e.message}`);
-      }
-    }
+  // ── SAFETY: Merge ShlokaManthraEntry + BhashyamEntry (same snapshot when possible) ──
+  if (isExistingStrapi && strapiMantraSnapshot) {
+    applyMantraTextMergeFromStrapiData(cleaned, strapiMantraSnapshot);
+  } else if (isExistingStrapi && mantraTextMergeNeeded(cleaned) && !strapiMantraSnapshot) {
+    await mergeMantraTextComponentsFromStrapi(cleaned, strapiDocId);
   }
 
+  sanitizeStrapiTextComponentsOnManthraLikePayload(cleaned);
   return cleaned;
+}
+
+/** Drop Strapi row identity from draft rows so merges never overwrite a valid instance id
+ *  with undefined or a stale id from another entity. */
+function omitTranslationComponentIdentity(row: Record<string, any>): Record<string, any> {
+  const { id, documentId, ...rest } = row;
+  return rest;
 }
 
 /** Merge OtherTranslations arrays: Strapi is the base, local overrides by language.
  * Any language in Strapi that isn't touched by local is preserved.
  * Any language that local explicitly has is used (overrides Strapi for that language).
  * Any language that is only in local (not yet in Strapi) is appended.
+ *
+ * When updating an existing language row, **merge onto the Strapi object** — do not replace
+ * the whole row with the draft-only object. Strapi v5 rejects PUTs where repeatable component
+ * entries lose their instance id ("not related to the entity").
  */
 function mergeOtherTranslations(localOT: any[], strapiOT: any[]): any[] {
   const result = [...strapiOT];
@@ -875,13 +856,260 @@ function mergeOtherTranslations(localOT: any[], strapiOT: any[]): any[] {
     const lang = localEntry.LanguageOfTranslation;
     if (!lang) continue;
     const idx = result.findIndex((e) => e.LanguageOfTranslation === lang);
+    const localFields = omitTranslationComponentIdentity(localEntry);
     if (idx >= 0) {
-      result[idx] = localEntry;
+      result[idx] = { ...result[idx], ...localFields };
     } else {
-      result.push(localEntry);
+      result.push({ ...localFields });
     }
   }
   return result;
+}
+
+/** When updating an existing Strapi grantha, merge repeatable translations so PUT never replaces
+ *  Strapi-only languages with a partial draft list (same pattern as mantra OtherTranslations). */
+function mergeGranthaPayloadWithExistingStrapiTranslations(
+  granthaPayload: Record<string, any>,
+  existing: any | null | undefined
+): void {
+  if (!existing || typeof existing !== "object") return;
+
+  const strapiGT = existing.GranthaNameTranslations;
+  const localGT = granthaPayload.GranthaNameTranslations;
+  if (Array.isArray(strapiGT) && strapiGT.length > 0 && Array.isArray(localGT) && localGT.length > 0) {
+    granthaPayload.GranthaNameTranslations = mergeOtherTranslations(localGT, strapiGT);
+  }
+
+  const localBH = granthaPayload.BhashyakaraIntroduction;
+  const strapiBH = existing.BhashyakaraIntroduction;
+  if (localBH && typeof localBH === "object" && strapiBH && typeof strapiBH === "object") {
+    granthaPayload.BhashyakaraIntroduction = mergeTeekaEntryForPut(strapiBH, localBH);
+  }
+}
+
+/** Remove Strapi admin / relation noise from rich text trees while preserving block shape.
+ *  Does **not** strip `__component` — Strapi blocks/components may require it on write. */
+function deepSanitizeStrapiRichValue(v: any): any {
+  if (v == null) return v;
+  if (Array.isArray(v)) return v.map(deepSanitizeStrapiRichValue);
+  if (typeof v !== "object") return v;
+  const STRIP = new Set([
+    "id",
+    "documentId",
+    "createdAt",
+    "updatedAt",
+    "publishedAt",
+    "locale",
+    "localizations",
+    "createdBy",
+    "updatedBy",
+  ]);
+  const o: Record<string, any> = {};
+  for (const [k, val] of Object.entries(v)) {
+    if (STRIP.has(k)) continue;
+    if (k.startsWith("_") && k !== "__component") continue;
+    o[k] = deepSanitizeStrapiRichValue(val);
+  }
+  return o;
+}
+
+/** Rebuild `shared.text-and-translation` for Strapi PUT: only accepted fields, no `populate=*` cruft. */
+function rebuildTextAndTranslationForStrapiPut(src: Record<string, any> | null | undefined): Record<string, any> | null {
+  if (!src || typeof src !== "object") return null;
+  const out: Record<string, any> = {};
+  for (const field of ["SanskritTextEntry", "EnglishTranslationText", "IASTTransliteration"] as const) {
+    const v = src[field];
+    if (Array.isArray(v) && v.length > 0) {
+      const san = deepSanitizeStrapiRichValue(v);
+      if (Array.isArray(san) && san.length > 0) {
+        out[field] = sanitizeBlocksField(san);
+      }
+    }
+  }
+  const ot = src.OtherTranslations;
+  if (Array.isArray(ot) && ot.length > 0) {
+    const rows = ot
+      .map((row: any) => {
+        const lang = typeof row?.LanguageOfTranslation === "string" ? row.LanguageOfTranslation.trim() : "";
+        if (!lang) return null;
+        const tt = row.TranslationText;
+        if (!Array.isArray(tt) || tt.length === 0) {
+          return {
+            LanguageOfTranslation: lang,
+            TranslationText: [{ type: "paragraph", children: [{ type: "text", text: "" }] }],
+          };
+        }
+        const san = deepSanitizeStrapiRichValue(tt);
+        const blocks = Array.isArray(san) && san.length > 0 ? sanitizeBlocksField(san) : [{ type: "paragraph", children: [{ type: "text", text: "" }] }];
+        return { LanguageOfTranslation: lang, TranslationText: blocks };
+      })
+      .filter(Boolean) as any[];
+    if (rows.length > 0) out.OtherTranslations = rows;
+  }
+  return Object.keys(out).length > 0 ? out : null;
+}
+
+/** Strapi v5 rejects merged GET snapshots that still send nested component `id` / `documentId`
+ *  ("Some of the provided components … are not related to the entity"). The merge step
+ *  intentionally preserves those keys for in-memory merge logic — strip them again before PUT. */
+function scrubMergedGranthaRepeatableComponents(granthaPayload: Record<string, any>): void {
+  const bh = granthaPayload.BhashyakaraIntroduction;
+  if (bh && typeof bh === "object") {
+    const built = rebuildTextAndTranslationForStrapiPut(bh as Record<string, any>);
+    if (built && Object.keys(built).length > 0) {
+      granthaPayload.BhashyakaraIntroduction = built;
+    } else {
+      delete granthaPayload.BhashyakaraIntroduction;
+    }
+  }
+  const gnt = granthaPayload.GranthaNameTranslations;
+  if (Array.isArray(gnt) && gnt.length > 0) {
+    granthaPayload.GranthaNameTranslations = gnt
+      .map((row: any) => {
+        const lang = typeof row?.LanguageOfTranslation === "string" ? row.LanguageOfTranslation.trim() : "";
+        if (!lang) return null;
+        const tt = row.TranslationText;
+        if (!Array.isArray(tt) || tt.length === 0) {
+          return {
+            LanguageOfTranslation: lang,
+            TranslationText: [{ type: "paragraph", children: [{ type: "text", text: "" }] }],
+          };
+        }
+        const san = deepSanitizeStrapiRichValue(tt);
+        const blocks =
+          Array.isArray(san) && san.length > 0
+            ? sanitizeBlocksField(san)
+            : [{ type: "paragraph", children: [{ type: "text", text: "" }] }];
+        return { LanguageOfTranslation: lang, TranslationText: blocks };
+      })
+      .filter(Boolean) as any[];
+  }
+}
+
+/** Rebuild every `shared.text-and-translation` on a Manthra/Chapter payload after Strapi merges.
+ *  Covers unchanged `TeekaEntry` rows that never went through mergeTeekaEntryForPut. */
+const MANTHRA_TEXT_COMPONENT_KEYS = ["ShlokaManthraEntry", "BhashyamEntry", "BhashyamForShlokaManthra"] as const;
+
+function sanitizeStrapiTextComponentsOnManthraLikePayload(m: Record<string, any>): void {
+  for (const key of MANTHRA_TEXT_COMPONENT_KEYS) {
+    const v = m[key];
+    if (v && typeof v === "object" && !Array.isArray(v)) {
+      const rebuilt = rebuildTextAndTranslationForStrapiPut(v as Record<string, any>);
+      if (rebuilt && Object.keys(rebuilt).length > 0) m[key] = rebuilt;
+      else delete m[key];
+    }
+  }
+  if (!Array.isArray(m.Teekas)) return;
+  m.Teekas = m.Teekas.map((row: any) => {
+    if (!row || typeof row !== "object") return row;
+    const te = row.TeekaEntry;
+    if (!te || typeof te !== "object") return row;
+    const rebuilt = rebuildTextAndTranslationForStrapiPut(te as Record<string, any>);
+    if (rebuilt && Object.keys(rebuilt).length > 0) {
+      return { ...row, TeekaEntry: rebuilt };
+    }
+    const { TeekaEntry: _omit, ...rest } = row;
+    return rest;
+  });
+}
+
+async function fetchGranthaTranslationsForMerge(documentId: string): Promise<any | null> {
+  try {
+    const qs = [
+      "populate[BhashyakaraIntroduction][populate]=*",
+      "populate[GranthaNameTranslations]=*",
+    ].join("&");
+    const res = await strapiRequest(`/api/granthas/${documentId}?${qs}`);
+    return res?.data ?? null;
+  } catch (e: any) {
+    console.warn(`[publish] Could not fetch existing grantha translations for merge: ${e.message}`);
+    return null;
+  }
+}
+
+function hasPublishableBlocks(v: any): boolean {
+  if (!v) return false;
+  if (typeof v === "string") return v.trim().length > 0;
+  if (!Array.isArray(v)) return false;
+  return v.some(
+    (block: any) =>
+      Array.isArray(block?.children) &&
+      block.children.some((c: any) => typeof c?.text === "string" && c.text.trim().length > 0),
+  );
+}
+
+/** Merge draft TextAndTranslation onto Strapi (same shape for TeekaEntry, ShlokaManthraEntry, BhashyamEntry).
+ *  Strapi is the base; each blocks field is replaced only when the draft has publishable content there.
+ *  OtherTranslations are merged by language so Strapi-only rows are never dropped.
+ *  Return value is always rebuilt for Strapi REST (strips nested ids / relations from populate=*). */
+function mergeTeekaEntryForPut(strapiEntry: any | null | undefined, localEntry: any | null | undefined): any {
+  if (!localEntry || typeof localEntry !== "object") {
+    if (strapiEntry && typeof strapiEntry === "object") {
+      const norm = normalizeTextAndTranslation({ ...strapiEntry });
+      return rebuildTextAndTranslationForStrapiPut(norm as Record<string, any>) ?? norm;
+    }
+    return strapiEntry ?? null;
+  }
+  if (!strapiEntry || typeof strapiEntry !== "object") {
+    const norm = normalizeTextAndTranslation({ ...localEntry });
+    return rebuildTextAndTranslationForStrapiPut(norm as Record<string, any>) ?? norm;
+  }
+  const s = normalizeTextAndTranslation({ ...strapiEntry });
+  const d = normalizeTextAndTranslation({ ...localEntry });
+  const strapiOT: any[] = Array.isArray(s.OtherTranslations) ? s.OtherTranslations : [];
+  const draftOT: any[] = Array.isArray(d.OtherTranslations) ? d.OtherTranslations : [];
+  const mergedOT =
+    strapiOT.length === 0 && draftOT.length === 0
+      ? undefined
+      : mergeOtherTranslations(draftOT, strapiOT);
+
+  const out: Record<string, any> = { ...s };
+  if (hasPublishableBlocks(d.SanskritTextEntry)) out.SanskritTextEntry = d.SanskritTextEntry;
+  if (hasPublishableBlocks(d.EnglishTranslationText)) out.EnglishTranslationText = d.EnglishTranslationText;
+  if (hasPublishableBlocks(d.IASTTransliteration)) out.IASTTransliteration = d.IASTTransliteration;
+  if (mergedOT !== undefined) out.OtherTranslations = mergedOT;
+  return rebuildTextAndTranslationForStrapiPut(out) ?? out;
+}
+
+/** One Strapi GET for existing-mantra publish: teekas + Shloka + Bhashyam (avoids duplicate round-trips). */
+const MANTRA_EXISTING_MERGE_QUERY =
+  "?populate[Teekas][populate][TeekaEntry][populate]=*" +
+  "&populate[Teekas][populate][teeka][fields][0]=TeekaName" +
+  "&populate[Teekas][populate][teeka][fields][1]=documentId" +
+  "&populate[ShlokaManthraEntry][populate]=*" +
+  "&populate[BhashyamEntry][populate]=*";
+
+function mantraTextMergeNeeded(target: Record<string, any>): boolean {
+  const keys = ["ShlokaManthraEntry", "BhashyamEntry"] as const;
+  return keys.some((k) => target[k] && typeof target[k] === "object" && !Array.isArray(target[k]));
+}
+
+/** Apply Strapi-backed merge for Shloka/Bhashyam using a mantra `data` object already fetched from Strapi. */
+function applyMantraTextMergeFromStrapiData(target: Record<string, any>, strapiData: any): void {
+  if (!strapiData || typeof strapiData !== "object") return;
+  const keys = ["ShlokaManthraEntry", "BhashyamEntry"] as const;
+  for (const key of keys) {
+    const localEntry = target[key];
+    if (!localEntry || typeof localEntry !== "object") continue;
+    const strapiEntry = strapiData[key];
+    if (strapiEntry && typeof strapiEntry === "object") {
+      target[key] = mergeTeekaEntryForPut(strapiEntry, localEntry);
+    }
+  }
+}
+
+/** Fallback when no snapshot: fetch Strapi Shloka/Bhashyam only (used after failed combined fetch). */
+async function mergeMantraTextComponentsFromStrapi(
+  target: Record<string, any>,
+  strapiDocumentId: string
+): Promise<void> {
+  if (!mantraTextMergeNeeded(target)) return;
+  try {
+    const fetched = await strapiRequest(`/api/manthras/${strapiDocumentId}${MANTRA_EXISTING_MERGE_QUERY}`);
+    applyMantraTextMergeFromStrapiData(target, fetched?.data);
+  } catch (e: any) {
+    console.warn(`[mergeMantraTextComponentsFromStrapi] Fetch/merge failed — sending local fields only: ${e.message}`);
+  }
 }
 
 // Strapi's sections collection only accepts these values for the `type` field.
@@ -1108,8 +1336,20 @@ async function strapiManthraRequest(
       let currentTeekas: any[] = [];
       try {
         const existing = await strapiRequest(`${putEndpoint}?populate[Teekas][populate]=*`, { method: "GET" });
-        currentTeekas = existing?.data?.Teekas ?? [];
-      } catch { /* if fetch fails, start fresh */ }
+        const raw = existing?.data?.Teekas ?? [];
+        currentTeekas = raw.map((t: any) => {
+          if (!t?.TeekaEntry || typeof t.TeekaEntry !== "object") return t;
+          const rb = rebuildTextAndTranslationForStrapiPut(t.TeekaEntry as Record<string, any>);
+          if (rb && Object.keys(rb).length > 0) return { ...t, TeekaEntry: rb };
+          const { TeekaEntry: _omit, ...rest } = t;
+          return rest;
+        });
+      } catch (fetchErr: any) {
+        console.warn(
+          `[publish] Teekas chunk: could not GET existing teekas for merge (${label}) — continuing with empty baseline:`,
+          fetchErr?.message || fetchErr
+        );
+      }
 
       let warnedTeekaOtherTr = false;
       for (let i = 0; i < (Teekas as any[]).length; i++) {
@@ -1305,11 +1545,25 @@ async function createOrUpdateManthra(
   return createdDocId;
 }
 
+/** Admin grantha lock: block Strapi publish while locked (matches portal view-only behaviour). */
+async function assertGranthaPublishNotLocked(strapiGranthaDocId: string | null | undefined): Promise<void> {
+  if (!strapiGranthaDocId || strapiGranthaDocId.length < 10) return;
+  const lock = await storage.getGranthaLock(strapiGranthaDocId);
+  if (!lock) return;
+  const err: any = new Error(
+    "This grantha is locked for editing by an administrator. Publishing is disabled until the lock is removed."
+  );
+  err.status = 403;
+  err.code = "grantha_locked";
+  throw err;
+}
+
 async function publishGranthaWithHierarchy(
   draft: any,
   jobId?: string,
   onProgress?: (done: number, total: number, current: string) => void
 ): Promise<any> {
+  await assertGranthaPublishNotLocked(draft.strapiDocumentId);
   const rawData = draft.data as Record<string, any>;
   // Strip wizard-only / local-format fields from the Grantha payload
   const {
@@ -1322,6 +1576,7 @@ async function publishGranthaWithHierarchy(
     granthaNameTranslations: granthaNameTranslationsLocal,
     deletedStrapiSectionDocIds,
     deletedStrapiManthraDocIds,
+    deletedStrapiTeekaDocIds,
     ...granthaDataRaw
   } = rawData;
   const granthaPayload = cleanPayloadForStrapi(granthaDataRaw);
@@ -1389,6 +1644,17 @@ async function publishGranthaWithHierarchy(
   // 1. Create or update the Grantha record
   let strapiResult: any;
   if (draft.strapiDocumentId) {
+    const existingG = await fetchGranthaTranslationsForMerge(draft.strapiDocumentId);
+    mergeGranthaPayloadWithExistingStrapiTranslations(granthaPayload, existingG);
+    scrubMergedGranthaRepeatableComponents(granthaPayload);
+    if (
+      granthaPayload.BhashyakaraIntroduction &&
+      !granthaPayload.BhashyakaraIntroduction.SanskritTextEntry
+    ) {
+      granthaPayload.BhashyakaraIntroduction.SanskritTextEntry = [
+        { type: "paragraph", children: [{ type: "text", text: "" }] },
+      ];
+    }
     // We already know the Strapi record — update it
     strapiResult = await strapiRequest(`/api/granthas/${draft.strapiDocumentId}`, {
       method: "PUT",
@@ -1414,6 +1680,17 @@ async function publishGranthaWithHierarchy(
     }
 
     if (existingDocId) {
+      const existingG = await fetchGranthaTranslationsForMerge(existingDocId);
+      mergeGranthaPayloadWithExistingStrapiTranslations(granthaPayload, existingG);
+      scrubMergedGranthaRepeatableComponents(granthaPayload);
+      if (
+        granthaPayload.BhashyakaraIntroduction &&
+        !granthaPayload.BhashyakaraIntroduction.SanskritTextEntry
+      ) {
+        granthaPayload.BhashyakaraIntroduction.SanskritTextEntry = [
+          { type: "paragraph", children: [{ type: "text", text: "" }] },
+        ];
+      }
       strapiResult = await strapiRequest(`/api/granthas/${existingDocId}`, {
         method: "PUT",
         body: JSON.stringify({ data: granthaPayload }),
@@ -1849,6 +2126,25 @@ async function publishGranthaWithHierarchy(
     }
   }
 
+  // 2d. Delete Teeka collection entries removed in Teeka Management (best-effort).
+  // Runs after mantra publish so merged mantra payloads are written first. Strapi may
+  // reject DELETE if relations still point at the teeka — log non-404 errors only.
+  if (Array.isArray(deletedStrapiTeekaDocIds) && deletedStrapiTeekaDocIds.length > 0) {
+    console.log(
+      `[publish] Deleting ${deletedStrapiTeekaDocIds.length} removed teeka(s) from Strapi: ${deletedStrapiTeekaDocIds.join(", ")}`
+    );
+    for (const teekaDocId of deletedStrapiTeekaDocIds) {
+      try {
+        await strapiRequest(`/api/teekas/${teekaDocId}`, { method: "DELETE" });
+        console.log(`[publish] Deleted teeka ${teekaDocId}`);
+      } catch (e: any) {
+        if (e?.status !== 404) {
+          console.error(`[publish] Failed to delete teeka ${teekaDocId}:`, e.message);
+        }
+      }
+    }
+  }
+
   // Sync ALL Strapi documentIds (sections at every level + manthras) back into the
   // hierarchy so the next publish uses the fast-path for every known record.
   // Always generate updatedHierarchy (even when no new IDs were obtained) so the
@@ -2067,14 +2363,14 @@ async function buildManthraPayloadAsync(
     else delete payload.order;
   }
 
-  // Resolve and merge teekas — mirrors the same safe-merge logic in buildManthraData.
+  // Resolve and merge teekas — mirrors buildManthraData (single Strapi GET when possible).
   //
   // SAFETY RULE — always merge with existing Strapi teeka content:
   // Strapi treats a PUT with a Teekas array as a COMPLETE REPLACEMENT of all teekas on
   // that mantra. If the user only edited one teeka (e.g. "Upanishad Brahmendra") and we
   // send only that one, Strapi silently deletes every other teeka that was there (e.g.
   // "Kathopanishad"). To prevent this, for existing Strapi manthras we:
-  //   1. Fetch the current teekas already stored in Strapi.
+  //   1. Fetch the current mantra once (teekas + Shloka + Bhashyam populated).
   //   2. Build a merged array: keep every existing Strapi entry UNLESS the local draft
   //      has updated content for that same teeka; add any brand-new local entries.
   //   3. Send the merged array — so no existing teeka is ever silently wiped.
@@ -2082,31 +2378,34 @@ async function buildManthraPayloadAsync(
   // When the local draft has NO teeka entries and the manthra already exists in Strapi
   // we OMIT Teekas from the payload so Strapi preserves whatever content it holds.
   const isExistingStrapi = typeof strapiDocumentId === "string" && strapiDocumentId.length >= 10;
+
+  let resolvedTeekas: any[] = [];
+  if (Array.isArray(rawTeekas) && rawTeekas.length > 0) {
+    resolvedTeekas = await resolveManthraTeekas(rawTeekas);
+  }
+
+  const needsStrapiSnapshot =
+    isExistingStrapi && (resolvedTeekas.length > 0 || mantraTextMergeNeeded(payload));
+
+  let strapiMantraSnapshot: any = null;
+  if (needsStrapiSnapshot && strapiDocumentId) {
+    try {
+      strapiMantraSnapshot =
+        (await strapiRequest(`/api/manthras/${strapiDocumentId}${MANTRA_EXISTING_MERGE_QUERY}`))?.data ?? null;
+      if (resolvedTeekas.length > 0) {
+        const n = strapiMantraSnapshot?.Teekas?.length ?? 0;
+        console.log(`[buildManthraPayloadAsync] Fetched Strapi mantra snapshot (${n} teeka row(s)) for merge`);
+      }
+    } catch (e: any) {
+      console.warn(`[buildManthraPayloadAsync] Could not fetch existing Strapi mantra for merge — ${e.message}`);
+    }
+  }
+
   if (Array.isArray(rawTeekas)) {
     if (rawTeekas.length > 0) {
-      const resolvedTeekas = await resolveManthraTeekas(rawTeekas);
-
       if (resolvedTeekas.length > 0 && isExistingStrapi) {
-        // ── MERGE with existing Strapi teekas ─────────────────────────────────
-        let existingTeekas: any[] = [];
-        try {
-          const fetchUrl =
-            `/api/manthras/${strapiDocumentId}` +
-            `?populate[Teekas][populate][TeekaEntry][populate]=*` +
-            `&populate[Teekas][populate][teeka][fields][0]=TeekaName` +
-            `&populate[Teekas][populate][teeka][fields][1]=documentId`;
-          const fetched = await strapiRequest(fetchUrl);
-          existingTeekas = fetched?.data?.Teekas ?? [];
-          console.log(`[buildManthraPayloadAsync] Fetched ${existingTeekas.length} existing Strapi teeka(s) for merge`);
-        } catch (e: any) {
-          console.warn(`[buildManthraPayloadAsync] Could not fetch existing teekas for merge — sending local only: ${e.message}`);
-        }
-
-        const existingByTeekaDocId = new Map<string, any>();
-        for (const et of existingTeekas) {
-          const tDocId = et.teeka?.documentId;
-          if (tDocId) existingByTeekaDocId.set(tDocId, et);
-        }
+        // ── MERGE with existing Strapi teekas (single GET above) ─────────────────
+        const existingTeekas: any[] = strapiMantraSnapshot?.Teekas ?? [];
 
         const localByTeekaDocId = new Map<string, any>();
         for (const lt of resolvedTeekas) {
@@ -2121,7 +2420,11 @@ async function buildManthraPayloadAsync(
           if (!tDocId) continue;
           const local = localByTeekaDocId.get(tDocId);
           if (local) {
-            mergedTeekas.push({ id: et.id, teeka: tDocId, TeekaEntry: local.TeekaEntry });
+            mergedTeekas.push({
+              id: et.id,
+              teeka: tDocId,
+              TeekaEntry: mergeTeekaEntryForPut(et.TeekaEntry, local.TeekaEntry),
+            });
             localByTeekaDocId.delete(tDocId);
           } else {
             mergedTeekas.push({ id: et.id, teeka: tDocId, TeekaEntry: et.TeekaEntry ?? null });
@@ -2133,7 +2436,9 @@ async function buildManthraPayloadAsync(
           mergedTeekas.push(lt);
         }
 
-        console.log(`[buildManthraPayloadAsync] Merged teekas: ${existingTeekas.length} existing + ${resolvedTeekas.length} local → ${mergedTeekas.length} total`);
+        console.log(
+          `[buildManthraPayloadAsync] Merged teekas: ${existingTeekas.length} existing + ${resolvedTeekas.length} local → ${mergedTeekas.length} total`
+        );
         payload.Teekas = mergedTeekas;
       } else {
         // New mantra or nothing resolved — send as-is
@@ -2147,40 +2452,13 @@ async function buildManthraPayloadAsync(
     // so Strapi preserves whatever content it already holds for this mantra.
   }
 
-  // ── SAFETY: Merge OtherTranslations for existing Strapi manthras ──────────────────
-  // Same protection as in buildManthraData — see detailed comment there.
-  if (isExistingStrapi) {
-    const needsOTMerge =
-      (payload.ShlokaManthraEntry && typeof payload.ShlokaManthraEntry === "object") ||
-      (payload.BhashyamEntry && typeof payload.BhashyamEntry === "object");
-    if (needsOTMerge) {
-      try {
-        const otUrl =
-          `/api/manthras/${strapiDocumentId}` +
-          `?populate[ShlokaManthraEntry][populate][OtherTranslations]=*` +
-          `&populate[BhashyamEntry][populate][OtherTranslations]=*`;
-        const otFetched = await strapiRequest(otUrl);
-        for (const key of ["ShlokaManthraEntry", "BhashyamEntry"] as const) {
-          const localEntry = payload[key];
-          const strapiOT: any[] = otFetched?.data?.[key]?.OtherTranslations ?? [];
-          if (localEntry && typeof localEntry === "object" && strapiOT.length > 0) {
-            const localOT: any[] = localEntry.OtherTranslations ?? [];
-            if (localOT.length < strapiOT.length) {
-              payload[key].OtherTranslations = mergeOtherTranslations(localOT, strapiOT);
-              console.log(
-                `[buildManthraPayloadAsync] Merged ${key} OtherTranslations: ` +
-                `${localOT.length} local + ${strapiOT.length} Strapi → ` +
-                `${payload[key].OtherTranslations.length} total`
-              );
-            }
-          }
-        }
-      } catch (e: any) {
-        console.warn(`[buildManthraPayloadAsync] Could not fetch existing OtherTranslations for merge — sending local only: ${e.message}`);
-      }
-    }
+  if (isExistingStrapi && strapiDocumentId && strapiMantraSnapshot) {
+    applyMantraTextMergeFromStrapiData(payload, strapiMantraSnapshot);
+  } else if (isExistingStrapi && strapiDocumentId && mantraTextMergeNeeded(payload) && !strapiMantraSnapshot) {
+    await mergeMantraTextComponentsFromStrapi(payload, strapiDocumentId);
   }
 
+  sanitizeStrapiTextComponentsOnManthraLikePayload(payload);
   return payload;
 }
 
@@ -2264,6 +2542,7 @@ async function buildChapterPayload(data: Record<string, any>): Promise<Record<st
     }
   }
 
+  sanitizeStrapiTextComponentsOnManthraLikePayload(payload);
   return payload;
 }
 
@@ -2570,8 +2849,8 @@ export async function registerRoutes(
     }
   });
 
-  // Recover draft payload from the latest server-side snapshot.
-  app.post("/api/drafts/:id/recover-latest", requireAuth, async (req, res) => {
+  // Recover draft payload from the latest server-side snapshot (admin-only — overwrites current draft).
+  app.post("/api/drafts/:id/recover-latest", requireAuth, requireAdmin, async (req, res) => {
     try {
       const user = req.user as User;
       const id = parseInt(req.params.id);

@@ -174,23 +174,22 @@ function mergeEntry(draft: any | undefined, fromStrapi: any | undefined): any | 
   if (!fromStrapi) return draft;
   if (!draft) return fromStrapi;
 
-  // OtherTranslations merge: Strapi is authoritative base when it has more entries.
-  // This prevents a draft with 1 language (e.g. Tamil) from wiping 43 Strapi translations.
+  // OtherTranslations: whenever Strapi has rows, Strapi is always the base and the draft
+  // only overlays languages the user edited. Never prefer draft-by-length alone — after
+  // repopulate / partial API the draft can have the same count as Strapi but a different
+  // subset of languages, which used to wipe the rest when a new teeka was added.
   const draftOT: any[] = Array.isArray(draft.OtherTranslations) ? draft.OtherTranslations : [];
   const strapiOT: any[] = Array.isArray(fromStrapi.OtherTranslations) ? fromStrapi.OtherTranslations : [];
   let mergedOT: any[] | undefined;
-  if (draftOT.length === 0) {
-    mergedOT = strapiOT.length > 0 ? strapiOT : undefined;
-  } else if (draftOT.length >= strapiOT.length) {
-    // Draft has equal or more entries — user added languages, keep draft
+  if (strapiOT.length === 0 && draftOT.length === 0) {
+    mergedOT = undefined;
+  } else if (strapiOT.length === 0) {
     mergedOT = draftOT;
   } else {
-    // Strapi has more entries — use Strapi as base, overlay draft edits by language
     const merged = strapiOT.map((sOT: any) => {
       const match = draftOT.find((d: any) => d.LanguageOfTranslation === sOT.LanguageOfTranslation);
       return match ?? sOT;
     });
-    // Append any draft languages not present in Strapi
     for (const dOT of draftOT) {
       if (!merged.some((m: any) => m.LanguageOfTranslation === dOT.LanguageOfTranslation)) {
         merged.push(dOT);
@@ -206,6 +205,16 @@ function mergeEntry(draft: any | undefined, fromStrapi: any | undefined): any | 
     ...(draft.IASTTransliteration && { IASTTransliteration: draft.IASTTransliteration }),
     ...(mergedOT !== undefined && { OtherTranslations: mergedOT }),
   };
+}
+
+/** Draft-only teeka row worth keeping when Strapi list does not include it yet. */
+function teekaEntryHasMergeableContent(entry: any): boolean {
+  if (!entry || typeof entry !== "object") return false;
+  if (hasBlocks(entry.SanskritTextEntry) || hasBlocks(entry.EnglishTranslationText)) return true;
+  if (hasBlocks(entry.IASTTransliteration)) return true;
+  const ot = entry.OtherTranslations;
+  if (Array.isArray(ot) && ot.length > 0) return true;
+  return !!(entry.LanguageOfTranslation && entry.OtherLanguagesTranslation);
 }
 
 function mergeTeekas(draftTeekas: ManthraTeekaEntry[] | undefined, strapiTeekas: any[]): ManthraTeekaEntry[] {
@@ -237,13 +246,94 @@ function mergeTeekas(draftTeekas: ManthraTeekaEntry[] | undefined, strapiTeekas:
     for (let i = 0; i < draftTeekas.length; i++) {
       if (!matchedDraftIndices.has(i)) {
         const d = draftTeekas[i];
-        if (d.TeekaEntry && (hasBlocks(d.TeekaEntry.SanskritTextEntry) || hasBlocks(d.TeekaEntry.EnglishTranslationText))) {
+        if (d.TeekaEntry && teekaEntryHasMergeableContent(d.TeekaEntry)) {
           result.push({ ...d });
         }
       }
     }
   }
   return result;
+}
+
+function normLangKey(l: string | undefined): string {
+  return (l || "").trim().toLowerCase();
+}
+
+/** Strapi base + draft overlay by language (portal `otherTranslations` shape). */
+function mergeBhashyakaraPortalOtherTranslations(
+  draftRows: OtherTranslationEntry[],
+  strapiBH: any | undefined
+): OtherTranslationEntry[] {
+  const strapiOT = Array.isArray(strapiBH?.OtherTranslations) ? strapiBH.OtherTranslations : [];
+  const strapiAsPortal: OtherTranslationEntry[] = strapiOT.map((t: any) => ({
+    id: uid(),
+    language: t.LanguageOfTranslation || "",
+    text:
+      (Array.isArray(t.TranslationText) ? t.TranslationText : t.OtherLanguagesTranslation) || [],
+  }));
+  if (strapiAsPortal.length === 0) {
+    return (draftRows || []).map((t) => ({ ...t, text: t.text || [] }));
+  }
+  const draftList = draftRows || [];
+  const merged: OtherTranslationEntry[] = strapiAsPortal.map((row) => {
+    const match = draftList.find((d) => normLangKey(d.language) === normLangKey(row.language));
+    if (match && (hasBlocks(match.text) || (match.language && match.language.trim()))) {
+      return {
+        ...row,
+        id: match.id,
+        language: match.language || row.language,
+        text: hasBlocks(match.text) ? match.text : row.text,
+      };
+    }
+    return row;
+  });
+  for (const d of draftList) {
+    if (!normLangKey(d.language)) continue;
+    if (!merged.some((m) => normLangKey(m.language) === normLangKey(d.language))) {
+      merged.push({ ...d, text: d.text || [] });
+    }
+  }
+  return merged;
+}
+
+/** Strapi base + draft overlay by language (portal `granthaNameTranslations` shape). */
+function mergeGranthaNameTranslationsPortal(
+  draftRows: GranthaNameTranslationEntry[],
+  strapiRows: any[] | undefined
+): GranthaNameTranslationEntry[] {
+  const strapiList = Array.isArray(strapiRows) ? strapiRows : [];
+  const strapiAsPortal: GranthaNameTranslationEntry[] = strapiList.map((t: any) => ({
+    id: uid(),
+    language: t.LanguageOfTranslation || "",
+    name:
+      (Array.isArray(t.TranslationText) ? blocksToText(t.TranslationText) : null) ||
+      t.GranthaNameTranslation ||
+      t.name ||
+      "",
+  }));
+  if (strapiAsPortal.length === 0) {
+    return (draftRows || []).map((t) => ({ ...t, name: t.name || "" }));
+  }
+  const draftList = draftRows || [];
+  const merged: GranthaNameTranslationEntry[] = strapiAsPortal.map((row) => {
+    const match = draftList.find((d) => normLangKey(d.language) === normLangKey(row.language));
+    if (match && ((match.name || "").trim() || (match.language || "").trim())) {
+      return {
+        ...row,
+        id: match.id,
+        language: match.language || row.language,
+        name: (match.name || "").trim() ? match.name : row.name,
+      };
+    }
+    return row;
+  });
+  for (const d of draftList) {
+    if (!normLangKey(d.language)) continue;
+    if (!merged.some((m) => normLangKey(m.language) === normLangKey(d.language))) {
+      merged.push({ ...d, name: d.name || "" });
+    }
+  }
+  return merged;
 }
 
 /**
@@ -755,6 +845,9 @@ export default function GranthasPage() {
   // Tracks Strapi manthra documentIds that were explicitly removed from the hierarchy.
   // Used to prevent enrichHierarchy from re-adding them from Strapi on every reload.
   const [deletedStrapiManthraDocIds, setDeletedStrapiManthraDocIds] = useState<string[]>([]);
+  // Teeka rows removed in Teeka Management whose Strapi Teeka documentId must not be
+  // re-supplemented from /teekas/by-grantha on reload, and removed from Strapi on publish.
+  const [deletedStrapiTeekaDocIds, setDeletedStrapiTeekaDocIds] = useState<string[]>([]);
 
   // Manthra content dialog
   const [editingManthra, setEditingManthra] = useState<{
@@ -1053,6 +1146,7 @@ export default function GranthasPage() {
     setViewOnly(false);
     setDeletedStrapiSectionDocIds([]);
     setDeletedStrapiManthraDocIds([]);
+    setDeletedStrapiTeekaDocIds([]);
   }
 
   function openAdd() {
@@ -1105,6 +1199,9 @@ export default function GranthasPage() {
         }))
       );
       setGranthaNameTranslations(d.granthaNameTranslations || []);
+      setDeletedStrapiTeekaDocIds(
+        Array.isArray(d.deletedStrapiTeekaDocIds) ? d.deletedStrapiTeekaDocIds : []
+      );
       const rawCfg1 = d.structureConfig;
       const migratedCfg1 = migrateStructureConfig(rawCfg1);
       setStructureConfig(migratedCfg1);
@@ -1127,6 +1224,13 @@ export default function GranthasPage() {
     let localDeletedSectionDocIds: string[] = [];
     // Local copy of deleted manthra docIds — used synchronously inside enrichHierarchy.
     let localDeletedManthraDocIds: string[] = [];
+    // Local copy: Strapi Teeka documentIds removed in Teeka Management — skip Strapi supplement.
+    let localDeletedTeekaDocIds: string[] = [];
+    // Bhashyakara / grantha-name translations: merged after Strapi grantha fetch (Strapi base + draft overlay).
+    let mergeDraftOther: OtherTranslationEntry[] = [];
+    let mergeDraftName: GranthaNameTranslationEntry[] = [];
+    let mergeStrapiBHForFallback: any = undefined;
+    let mergeStrapiGTForFallback: any[] | undefined = undefined;
 
     if (item._isDraft) {
       // Local draft that is editing an existing Strapi grantha.
@@ -1147,13 +1251,11 @@ export default function GranthasPage() {
         introVideoTitle: d.introVideoTitle || "",
       });
       setTeekas(d.teekas || []);
-      setOtherTranslations(
-        (d.otherTranslations || []).map((t: any) => ({
-          ...t,
-          text: t.text || [],
-        }))
-      );
-      setGranthaNameTranslations(d.granthaNameTranslations || []);
+      mergeDraftOther = (d.otherTranslations || []).map((t: any) => ({
+        ...t,
+        text: t.text || [],
+      }));
+      mergeDraftName = d.granthaNameTranslations || [];
       rawCfg2 = d.structureConfig;
       rawHierForEnrich = d.hierarchy || [];
       if (Array.isArray(d.deletedStrapiSectionDocIds) && d.deletedStrapiSectionDocIds.length > 0) {
@@ -1163,6 +1265,12 @@ export default function GranthasPage() {
       if (Array.isArray(d.deletedStrapiManthraDocIds) && d.deletedStrapiManthraDocIds.length > 0) {
         localDeletedManthraDocIds = d.deletedStrapiManthraDocIds;
         setDeletedStrapiManthraDocIds(d.deletedStrapiManthraDocIds);
+      }
+      if (Array.isArray(d.deletedStrapiTeekaDocIds) && d.deletedStrapiTeekaDocIds.length > 0) {
+        localDeletedTeekaDocIds = d.deletedStrapiTeekaDocIds;
+        setDeletedStrapiTeekaDocIds(d.deletedStrapiTeekaDocIds);
+      } else {
+        setDeletedStrapiTeekaDocIds([]);
       }
       // Only block the Strapi fetch when the draft actually has teekas configured.
       // An empty array means teekas were never set in this draft — fall through to fetch.
@@ -1210,43 +1318,24 @@ export default function GranthasPage() {
         introVideoTitle: item.introVideoTitle || "",
       });
 
-      // OtherTranslations (Bhashyakara): prefer draft (portal format) if non-empty
-      if (hasDraft && Array.isArray(savedData.otherTranslations) && savedData.otherTranslations.length > 0) {
-        setOtherTranslations(savedData.otherTranslations.map((t: any) => ({
-          id: t.id || uid(),
-          language: t.language || "",
-          text: t.text || [],
-        })));
-      } else {
-        setOtherTranslations(
-          Array.isArray(item.BhashyakaraIntroduction?.OtherTranslations)
-            ? item.BhashyakaraIntroduction.OtherTranslations.map((t: any) => ({
-                id: uid(),
-                language: t.LanguageOfTranslation || "",
-                text: t.TranslationText ?? t.OtherLanguagesTranslation ?? [],
-              }))
-            : []
-        );
-      }
-
-      // GranthaNameTranslations: prefer draft (portal format) if non-empty
-      if (hasDraft && Array.isArray(savedData.granthaNameTranslations) && savedData.granthaNameTranslations.length > 0) {
-        setGranthaNameTranslations(savedData.granthaNameTranslations.map((t: any) => ({
-          id: t.id || uid(),
-          language: t.language || "",
-          name: t.name || "",
-        })));
-      } else {
-        setGranthaNameTranslations(
-          Array.isArray(item.GranthaNameTranslations)
-            ? item.GranthaNameTranslations.map((t: any) => ({
-                id: uid(),
-                language: t.LanguageOfTranslation || "",
-                name: (Array.isArray(t.TranslationText) ? blocksToText(t.TranslationText) : null) || t.GranthaNameTranslation || t.name || "",
-              }))
-            : []
-        );
-      }
+      mergeDraftOther =
+        hasDraft && Array.isArray(savedData.otherTranslations)
+          ? savedData.otherTranslations.map((t: any) => ({
+              id: t.id || uid(),
+              language: t.language || "",
+              text: t.text || [],
+            }))
+          : [];
+      mergeDraftName =
+        hasDraft && Array.isArray(savedData.granthaNameTranslations)
+          ? savedData.granthaNameTranslations.map((t: any) => ({
+              id: t.id || uid(),
+              language: t.language || "",
+              name: t.name || "",
+            }))
+          : [];
+      mergeStrapiBHForFallback = item.BhashyakaraIntroduction;
+      mergeStrapiGTForFallback = item.GranthaNameTranslations;
 
       rawCfg2 = savedData?.structureConfig;
       rawHierForEnrich = savedData?.hierarchy || [];
@@ -1258,18 +1347,31 @@ export default function GranthasPage() {
         localDeletedManthraDocIds = savedData.deletedStrapiManthraDocIds;
         setDeletedStrapiManthraDocIds(savedData.deletedStrapiManthraDocIds);
       }
+      if (Array.isArray(savedData?.deletedStrapiTeekaDocIds) && savedData.deletedStrapiTeekaDocIds.length > 0) {
+        localDeletedTeekaDocIds = savedData.deletedStrapiTeekaDocIds;
+        setDeletedStrapiTeekaDocIds(savedData.deletedStrapiTeekaDocIds);
+      } else {
+        setDeletedStrapiTeekaDocIds([]);
+      }
       hasSavedTeekas = Array.isArray(savedData?.teekas) && savedData.teekas.length > 0;
       hasInlineTeekas = Array.isArray(item.teekas) && item.teekas.length > 0;
       // Set teekas synchronously when available; otherwise they'll be fetched below.
       if (hasSavedTeekas) {
         setTeekas(savedData.teekas);
       } else if (hasInlineTeekas) {
+        const teekaDel = new Set(localDeletedTeekaDocIds);
         setTeekas(
-          item.teekas.map((t: any) => ({
-            id: t.documentId || uid(),
-            TeekaName: t.TeekaName || "",
-            TeekaAuthor: t.TeekaAuthor || "",
-          }))
+          item.teekas
+            .filter((t: any) => {
+              const docId =
+                t.documentId || (typeof t.id === "string" && t.id.length >= 10 ? t.id : "");
+              return !docId || !teekaDel.has(docId);
+            })
+            .map((t: any) => ({
+              id: t.documentId || (typeof t.id === "string" && t.id.length >= 10 ? t.id : uid()),
+              TeekaName: t.TeekaName || "",
+              TeekaAuthor: t.TeekaAuthor || "",
+            }))
         );
       }
     }
@@ -1283,11 +1385,22 @@ export default function GranthasPage() {
     // Always fetch teekas from Strapi so new ones added after the last draft save are picked up.
     setEditingGranthaSectionsLoading(true);
     let fetchedSections: any[] = [];
+    let strapiGranthaOne: any = null;
     try {
-      const [sectionsRes, teekasRes] = await Promise.all([
+      const [sectionsRes, teekasRes, granthaRes] = await Promise.all([
         fetch(`/api/strapi/sections/by-grantha/${effectiveDocId}`, { credentials: "include" }),
         fetch(`/api/strapi/teekas/by-grantha/${effectiveDocId}`, { credentials: "include" }),
+        fetch(`/api/strapi/granthas/${effectiveDocId}`, { credentials: "include" }),
       ]);
+
+      if (granthaRes.ok) {
+        try {
+          const gj = await granthaRes.json();
+          strapiGranthaOne = gj?.data ?? null;
+        } catch {
+          strapiGranthaOne = null;
+        }
+      }
 
       if (sectionsRes.ok) {
         const sectionsData = await sectionsRes.json();
@@ -1299,22 +1412,28 @@ export default function GranthasPage() {
         const strapiTeekas: any[] = teekasData?.data || [];
 
         if (!hasSavedTeekas && !hasInlineTeekas) {
-          // No draft teekas at all — use Strapi list directly.
+          // No draft teekas at all — use Strapi list directly (minus rows user removed from management).
+          const teekaDeletedSet = new Set(localDeletedTeekaDocIds);
           setTeekas(
-            strapiTeekas.map((t: any) => ({
-              id: t.documentId || uid(),
-              TeekaName: t.TeekaName || "",
-              TeekaAuthor: t.TeekaAuthor || "",
-            }))
+            strapiTeekas
+              .filter((t: any) => !t.documentId || !teekaDeletedSet.has(t.documentId))
+              .map((t: any) => ({
+                id: t.documentId || uid(),
+                TeekaName: t.TeekaName || "",
+                TeekaAuthor: t.TeekaAuthor || "",
+              }))
           );
         } else {
           // Draft already has teekas — supplement with any new ones added to Strapi since last save.
           // Preserve draft teeka order/data; append only teekas not already present (match by TeekaName or documentId).
+          // Never re-append teekas the user explicitly removed (deletedStrapiTeekaDocIds).
           setTeekas((prev) => {
+            const teekaDeletedSet = new Set(localDeletedTeekaDocIds);
             const existingNames = new Set(prev.map((t) => (t.TeekaName || "").trim().toLowerCase()));
             const existingDocIds = new Set(prev.map((t) => t.id));
             const newTeekas = strapiTeekas
               .filter((t: any) => {
+                if (t.documentId && teekaDeletedSet.has(t.documentId)) return false;
                 const name = (t.TeekaName || "").trim().toLowerCase();
                 const docId = t.documentId || "";
                 return !existingDocIds.has(docId) && !existingNames.has(name);
@@ -1330,7 +1449,16 @@ export default function GranthasPage() {
       } else if (!hasSavedTeekas && !hasInlineTeekas) {
         setTeekas([]);
       }
-    } catch { if (!hasSavedTeekas && !hasInlineTeekas) setTeekas([]); }
+    } catch (e) {
+      console.warn("[granthas] openEdit: sections/teekas/grantha fetch failed:", e);
+      if (!hasSavedTeekas && !hasInlineTeekas) setTeekas([]);
+    }
+
+    const bhMergeSource = strapiGranthaOne?.BhashyakaraIntroduction ?? mergeStrapiBHForFallback;
+    const gtMergeSource = strapiGranthaOne?.GranthaNameTranslations ?? mergeStrapiGTForFallback;
+    setOtherTranslations(mergeBhashyakaraPortalOtherTranslations(mergeDraftOther, bhMergeSource));
+    setGranthaNameTranslations(mergeGranthaNameTranslationsPortal(mergeDraftName, gtMergeSource));
+
     setEditingGranthaSectionsLoading(false);
 
     // Hierarchy: prefer portal draft (or linked-draft hierarchy); fall back to reconstructing from Strapi sections.
@@ -1530,8 +1658,12 @@ export default function GranthasPage() {
                   // No order remap available. Keep the node if it has local content that
                   // has not yet reached Strapi — clearing the stale docId forces a fresh
                   // POST on the next publish instead of a failing PUT.
-                  const hasLocalDraftContent = !!(m.ShlokaManthraEntry || m.BhashyamForShlokaManthra ||
-                    (Array.isArray(m.Teekas) && m.Teekas.some((t) => t.TeekaEntry)));
+                  const hasLocalDraftContent = !!(
+                    m.ShlokaManthraEntry ||
+                    m.BhashyamForShlokaManthra ||
+                    (Array.isArray(m.Teekas) &&
+                      m.Teekas.some((t) => teekaEntryHasMergeableContent(t.TeekaEntry)))
+                  );
                   if (hasLocalDraftContent) {
                     return { docId: undefined }; // keep visible, clear stale docId
                   }
@@ -1924,7 +2056,11 @@ export default function GranthasPage() {
   function removeTeeka(id: string) {
     const removed = teekas.find((t) => t.id === id);
     track("teeka_removed", { grantha_name: formData.GranthaName, teeka_name: removed?.TeekaName || "" });
-    setTeekas(teekas.filter((t) => t.id !== id));
+    // Strapi v5 documentIds are long alphanumeric strings; portal rows use short nanoid ids.
+    if (removed?.id && removed.id.length >= 10) {
+      setDeletedStrapiTeekaDocIds((prev) => [...new Set([...prev, removed.id])]);
+    }
+    setTeekas((prev) => prev.filter((t) => t.id !== id));
   }
 
   // ---------- OtherTranslations handlers ----------
@@ -2511,6 +2647,7 @@ export default function GranthasPage() {
       hierarchy: adhyayas,
       deletedStrapiSectionDocIds: deletedStrapiSectionDocIds.length > 0 ? deletedStrapiSectionDocIds : undefined,
       deletedStrapiManthraDocIds: deletedStrapiManthraDocIds.length > 0 ? deletedStrapiManthraDocIds : undefined,
+      deletedStrapiTeekaDocIds: deletedStrapiTeekaDocIds.length > 0 ? deletedStrapiTeekaDocIds : undefined,
     };
 
     if (formData.slug.trim()) payload.slug = formData.slug.trim();
@@ -2645,6 +2782,7 @@ export default function GranthasPage() {
                 // Sections that were deleted are now gone from Strapi — clear the list
                 // so a re-publish doesn't attempt to DELETE already-removed sections.
                 setDeletedStrapiSectionDocIds([]);
+                setDeletedStrapiTeekaDocIds([]);
               },
               onError: (err: any) => {
                 track("publish_failed", {
@@ -3253,6 +3391,7 @@ export default function GranthasPage() {
                       onValueChange={(docId) => {
                         const t = allStrapiTeekas.find((x: any) => x.documentId === docId);
                         if (!t) return;
+                        setDeletedStrapiTeekaDocIds((prev) => prev.filter((x) => x !== docId));
                         setTeekas((prev) => [
                           ...prev,
                           { id: (t as any).documentId || uid(), TeekaName: (t as any).TeekaName || "", TeekaAuthor: (t as any).TeekaAuthor || "" },
@@ -4153,7 +4292,7 @@ export default function GranthasPage() {
                   {(saveDraft.isPending || publishDraft.isPending) && <Loader2 className="w-4 h-4 mr-2 animate-spin" />}
                   {publishDraft.isPending ? "Publishing…" : "Save & Publish"}
                 </Button>
-                {editingDraftId && (
+                {isAdmin && editingDraftId && (
                   <Button
                     variant="secondary"
                     onClick={() => recoverDraft.mutate(editingDraftId)}

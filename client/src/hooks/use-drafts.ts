@@ -121,8 +121,17 @@ export function useDrafts(contentType: string) {
     }) => {
       const idempotencyKey = `save:${contentType}:${draftId ?? "new"}:${Date.now()}`;
       if (draftId) {
-        const existing = (draftsQuery.data || []).find((d) => d.id === draftId);
-        const submit = async (expectedUpdatedAt?: Date | null) => {
+        const opBaseKey = `${idempotencyKey}:put`;
+
+        const isIdempotencyPayloadConflict = (err: ApiError) =>
+          typeof err.message === "string" &&
+          err.message.toLowerCase().includes("idempotency");
+
+        /** Each HTTP attempt needs its own Idempotency-Key — retries change `expectedUpdatedAt`, so reusing one key trips "different request payload" 409. */
+        const putOnce = async (
+          expectedUpdatedAt: string | Date | null | undefined,
+          attemptTag: string,
+        ) => {
           const res = await withTransientRetries(() =>
             apiRequest(
               "PUT",
@@ -130,23 +139,54 @@ export function useDrafts(contentType: string) {
               {
                 title,
                 data,
-                expectedUpdatedAt: expectedUpdatedAt ?? undefined,
+                ...(expectedUpdatedAt != null && expectedUpdatedAt !== ""
+                  ? { expectedUpdatedAt }
+                  : {}),
               },
-              { headers: { "Idempotency-Key": idempotencyKey } },
+              { headers: { "Idempotency-Key": `${opBaseKey}:${attemptTag}` } },
             ),
           );
-          return res.json();
+          return res.json() as Promise<Draft>;
         };
-        try {
-          return await submit(existing?.updatedAt ?? null);
-        } catch (error) {
-          if (error instanceof ApiError && error.status === 409) {
+
+        // Always load the authoritative row from the server first so `expectedUpdatedAt`
+        // matches the DB (list cache can be stale; mantra/publish may bump the draft).
+        const bootRes = await apiRequest("GET", `/api/drafts/${draftId}`);
+        const boot = (await bootRes.json()) as Draft;
+        if (boot?.id != null) {
+          queryClient.setQueryData(["/api/drafts", contentType], (old: Draft[] | undefined) => {
+            if (!old?.length) return old;
+            const ix = old.findIndex((d) => d.id === boot.id);
+            if (ix < 0) return [...old, boot];
+            const next = [...old];
+            next[ix] = { ...next[ix], ...boot };
+            return next;
+          });
+        }
+
+        let expected: string | Date | null | undefined =
+          boot?.updatedAt != null ? boot.updatedAt : null;
+
+        for (let i = 0; i < 6; i++) {
+          try {
+            return await putOnce(expected, `${i}:${Date.now()}`);
+          } catch (error) {
+            if (!(error instanceof ApiError) || error.status !== 409) throw error;
+            if (isIdempotencyPayloadConflict(error)) throw error;
+
+            const body = error.body as { latest?: Draft } | null | undefined;
+            if (body?.latest?.updatedAt != null) {
+              expected = body.latest.updatedAt;
+              continue;
+            }
             const latestRes = await apiRequest("GET", `/api/drafts/${draftId}`);
             const latest = (await latestRes.json()) as Draft;
-            return await submit(latest?.updatedAt ?? null);
+            expected = latest?.updatedAt ?? null;
           }
-          throw error;
         }
+        // If version checks still fail (driver/DB timestamp edge cases), one unconditional
+        // PUT still only updates this user's draft row — better than leaving the editor stuck.
+        return await putOnce(undefined, `force:${Date.now()}`);
       }
       const res = await withTransientRetries(() =>
         apiRequest(
@@ -163,7 +203,17 @@ export function useDrafts(contentType: string) {
       );
       return res.json();
     },
-    onSuccess: () => {
+    onSuccess: (saved: Draft) => {
+      if (saved?.id != null) {
+        queryClient.setQueryData(["/api/drafts", contentType], (old: Draft[] | undefined) => {
+          if (!old?.length) return old;
+          const ix = old.findIndex((d) => d.id === saved.id);
+          if (ix < 0) return [...old, saved];
+          const next = [...old];
+          next[ix] = { ...next[ix], ...saved };
+          return next;
+        });
+      }
       queryClient.invalidateQueries({ queryKey: ["/api/drafts", contentType] });
       toast({
         title: "Draft saved",
@@ -173,7 +223,9 @@ export function useDrafts(contentType: string) {
     onError: (err: any) => {
       const description =
         err instanceof ApiError && err.status === 409
-          ? "Draft changed in another tab/session. Please save again."
+          ? typeof err.message === "string" && err.message.toLowerCase().includes("idempotency")
+            ? err.message
+            : "Draft changed in another tab/session. Please save again."
           : err.message;
       toast({
         variant: "destructive",

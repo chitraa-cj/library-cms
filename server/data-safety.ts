@@ -72,7 +72,8 @@ export async function readLatestDraftSnapshot(draftId: number, userId?: string |
       }
     }
     return null;
-  } catch {
+  } catch (err) {
+    console.warn("[data-safety] readLatestDraftSnapshot failed:", err);
     return null;
   }
 }

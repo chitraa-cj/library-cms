@@ -1,6 +1,6 @@
 import { type User, type InsertUser, type Draft, type InsertDraft, users, contentDrafts, granthaBackups, type GranthaBackup, type GranthaBackupMeta, granthaLocks, type GranthaLock, publishJobs, type PublishJobRecord, idempotencyKeys, type IdempotencyKeyRecord, publishJobTasks, type PublishJobTaskRecord } from "@shared/schema";
 import { db } from "./db";
-import { eq, and, desc, sql, inArray } from "drizzle-orm";
+import { eq, and, desc, sql, inArray, gte, lte } from "drizzle-orm";
 
 export interface IStorage {
   getUser(id: string): Promise<User | undefined>;
@@ -115,6 +115,14 @@ export class DatabaseStorage implements IStorage {
   }
 
   async updateDraftIfVersion(id: number, userId: string, expectedUpdatedAt: Date, data: Partial<InsertDraft>): Promise<Draft | undefined> {
+    // Avoid exact `updated_at = $1` (JSON ISO vs driver/DB precision). Require `updated_at`
+    // to lie within a narrow window around the client's token so concurrent stale saves
+    // (seconds/minutes behind) still fail, while normal round-trips succeed.
+    const tolMs = 750;
+    const t = expectedUpdatedAt.getTime();
+    if (Number.isNaN(t)) return undefined;
+    const low = new Date(t - tolMs);
+    const high = new Date(t + tolMs);
     const [updated] = await db
       .update(contentDrafts)
       .set({ ...data, updatedAt: new Date() })
@@ -122,7 +130,8 @@ export class DatabaseStorage implements IStorage {
         and(
           eq(contentDrafts.id, id),
           eq(contentDrafts.createdBy, userId),
-          sql`${contentDrafts.updatedAt} = ${expectedUpdatedAt}`
+          gte(contentDrafts.updatedAt, low),
+          lte(contentDrafts.updatedAt, high)
         )
       )
       .returning();

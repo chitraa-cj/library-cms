@@ -8,6 +8,7 @@ on:
 jobs:
   deploy:
     runs-on: ubuntu-latest
+
     steps:
       - name: Deploy to EC2
         uses: appleboy/ssh-action@v1.2.0
@@ -18,15 +19,24 @@ jobs:
           script: |
             cd ~/library/library-cms
 
-            git pull origin main
+            echo "Fetching latest code..."
+            git fetch origin main
 
+            echo "Resetting local changes..."
+            git reset --hard origin/main
+            git clean -fd
+
+            echo "Installing dependencies..."
             npm install
 
+            echo "Building project..."
             npm run build
 
-            # Only if DB uses a cert Node does not trust; prefer fixing TLS on the DB side.
+            echo "Running DB push..."
             NODE_TLS_REJECT_UNAUTHORIZED=0 npm run db:push
 
+            echo "Restarting PM2..."
             pm2 restart cms-library --update-env
-
             pm2 save
+
+            echo "Deployment complete."

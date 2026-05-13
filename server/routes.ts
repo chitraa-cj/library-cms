@@ -3188,8 +3188,14 @@ export async function registerRoutes(
             // Sync Strapi documentIds back into the draft hierarchy
             if (result.updatedHierarchy) {
               const existingData = (draft.data as Record<string, any>) ?? {};
+              const {
+                deletedStrapiSectionDocIds: _ds,
+                deletedStrapiManthraDocIds: _dm,
+                deletedStrapiTeekaDocIds: _dt,
+                ...restDraft
+              } = existingData;
               await storage.updateDraft(id, user.id, {
-                data: { ...existingData, hierarchy: result.updatedHierarchy },
+                data: { ...restDraft, hierarchy: result.updatedHierarchy },
               });
             }
             const newDocumentId =

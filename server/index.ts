@@ -1,3 +1,5 @@
+import "./env";
+
 import express, { type Request, Response, NextFunction } from "express";
 import { registerRoutes } from "./routes";
 import { serveStatic } from "./static";
@@ -140,6 +142,17 @@ app.use((req, res, next) => {
   // this serves both the API and the client.
   // It is the only port that is not firewalled.
   const port = parseInt(process.env.PORT || "5000", 10);
+
+  httpServer.on("error", (err: NodeJS.ErrnoException) => {
+    if (err.code === "EADDRINUSE") {
+      console.error(
+        `[express] Port ${port} is already in use. Stop the other dev server (e.g. find the process: lsof -i :${port}) or set PORT in .env to a free port.`,
+      );
+      process.exit(1);
+    }
+    throw err;
+  });
+
   httpServer.listen(
     {
       port,

@@ -49,6 +49,13 @@ import StrapiSyncBar from "@/components/strapi-sync-bar";
 import { STRAPI_POLL_INTERVAL } from "@/hooks/use-strapi-sync";
 import { blocksToText } from "@/lib/strapi-blocks";
 import {
+  sortNodesByOrder,
+  isPublishedStrapiDocId,
+  collectPublishedManthraDocIdsFromKhanda,
+  collectPublishedManthraDocIdsFromAdhyaya,
+  prepareHierarchyForContentStep,
+} from "@/lib/grantha-structure-sync";
+import {
   Loader2,
   Plus,
   Pencil,
@@ -1204,11 +1211,15 @@ export default function GranthasPage() {
       );
       const rawCfg1 = d.structureConfig;
       const migratedCfg1 = migrateStructureConfig(rawCfg1);
-      setStructureConfig(migratedCfg1);
       const rawHier1 = d.hierarchy || [];
-      setAdhyayas(rawCfg1?.leafName === "Khanda"
-        ? migrateHierarchyLeafName(rawHier1, "Khanda", "Mantra")
-        : rawHier1);
+      const hier1 =
+        rawCfg1?.leafName === "Khanda" ? migrateHierarchyLeafName(rawHier1, "Khanda", "Mantra") : rawHier1;
+      const prep1 = prepareHierarchyForContentStep(hier1, migratedCfg1);
+      if (prep1.sectionDocIdsToMarkDeleted.length > 0) {
+        setDeletedStrapiSectionDocIds((prev) => [...new Set([...prev, ...prep1.sectionDocIdsToMarkDeleted])]);
+      }
+      setStructureConfig(migratedCfg1);
+      setAdhyayas(prep1.hierarchy as AdhyayaNode[]);
       setStep(1);
       setView("form");
       return;
@@ -1377,8 +1388,7 @@ export default function GranthasPage() {
     }
 
     // Shared for all cases: Strapi items AND local drafts linked to Strapi.
-    const migratedCfg2 = migrateStructureConfig(rawCfg2);
-    setStructureConfig(migratedCfg2);
+    let effectiveStructureConfig = migrateStructureConfig(rawCfg2);
     const effectiveDocId = item._isDraft ? item._strapiDocId : item.documentId;
 
     // Fetch sections + teekas in parallel.
@@ -1476,8 +1486,8 @@ export default function GranthasPage() {
         const isFlat = hierToUse2.every(
           (a) => a.khandas.length === 1 && a.khandas[0]?.title === "_default"
         );
-        if (isFlat && migratedCfg2.levelTwoEnabled) {
-          setStructureConfig((prev) => ({ ...prev, levelTwoEnabled: false }));
+        if (isFlat && effectiveStructureConfig.levelTwoEnabled) {
+          effectiveStructureConfig = { ...effectiveStructureConfig, levelTwoEnabled: false };
         }
 
         // Auto-detect 3-level granthas (e.g. Brahma Sutra: Adhyaya → Pada → Adhikarana).
@@ -1485,8 +1495,8 @@ export default function GranthasPage() {
         const hasPadas = hierToUse2.some((a) =>
           a.khandas.some((k) => (k.padas?.length ?? 0) > 0)
         );
-        if (hasPadas && !migratedCfg2.levelThreeEnabled) {
-          setStructureConfig((prev) => ({ ...prev, levelThreeEnabled: true }));
+        if (hasPadas && !effectiveStructureConfig.levelThreeEnabled) {
+          effectiveStructureConfig = { ...effectiveStructureConfig, levelThreeEnabled: true };
         }
 
         // Auto-detect L2/L3 display names from section titles when the saved config
@@ -1511,14 +1521,14 @@ export default function GranthasPage() {
         }
 
         // L2 name auto-detect: only when still at default "Khanda"
-        if (migratedCfg2.levelTwoEnabled && migratedCfg2.levelTwoName === "Khanda") {
+        if (effectiveStructureConfig.levelTwoEnabled && effectiveStructureConfig.levelTwoName === "Khanda") {
           const l2Titles = hierToUse2
             .flatMap((a: any) => a.khandas || [])
             .filter((k: any) => k.title && k.title !== "_default")
             .map((k: any) => k.title as string);
           const detected = detectNameFromTitles(l2Titles, L2_KEYWORDS);
           if (detected) {
-            setStructureConfig((prev) => ({ ...prev, levelTwoName: detected }));
+            effectiveStructureConfig = { ...effectiveStructureConfig, levelTwoName: detected };
           }
         }
 
@@ -1526,7 +1536,10 @@ export default function GranthasPage() {
         const hasPadasForName = hierToUse2.some((a: any) =>
           (a.khandas || []).some((k: any) => (k.padas?.length ?? 0) > 0)
         );
-        if ((migratedCfg2.levelThreeEnabled || hasPadasForName) && migratedCfg2.levelThreeName === "Pada") {
+        if (
+          (effectiveStructureConfig.levelThreeEnabled || hasPadasForName) &&
+          effectiveStructureConfig.levelThreeName === "Pada"
+        ) {
           const l3Titles = hierToUse2
             .flatMap((a: any) => a.khandas || [])
             .flatMap((k: any) => k.padas || [])
@@ -1534,7 +1547,7 @@ export default function GranthasPage() {
             .map((p: any) => p.title as string);
           const detected = detectNameFromTitles(l3Titles, L3_KEYWORDS);
           if (detected && detected !== "Pada") {
-            setStructureConfig((prev) => ({ ...prev, levelThreeName: detected }));
+            effectiveStructureConfig = { ...effectiveStructureConfig, levelThreeName: detected };
           }
         }
       }
@@ -1991,9 +2004,14 @@ export default function GranthasPage() {
         ? [...enrichedHier2, ...missingAdhyayas].sort((a, b) => (a.order ?? 0) - (b.order ?? 0))
         : enrichedHier2;
 
-      setAdhyayas(finalHier2);
-    setStep(1);
-    setView("form");
+      const prep = prepareHierarchyForContentStep(finalHier2, effectiveStructureConfig);
+      if (prep.sectionDocIdsToMarkDeleted.length > 0) {
+        setDeletedStrapiSectionDocIds((prev) => [...new Set([...prev, ...prep.sectionDocIdsToMarkDeleted])]);
+      }
+      setStructureConfig(effectiveStructureConfig);
+      setAdhyayas(prep.hierarchy as AdhyayaNode[]);
+      setStep(1);
+      setView("form");
 
     // ── Bulk teeka pre-populate ──
     // After the hierarchy is in state, fetch ALL manthras' teeka data from
@@ -2057,7 +2075,7 @@ export default function GranthasPage() {
     const removed = teekas.find((t) => t.id === id);
     track("teeka_removed", { grantha_name: formData.GranthaName, teeka_name: removed?.TeekaName || "" });
     // Strapi v5 documentIds are long alphanumeric strings; portal rows use short nanoid ids.
-    if (removed?.id && removed.id.length >= 10) {
+    if (removed && isPublishedStrapiDocId(removed.id)) {
       setDeletedStrapiTeekaDocIds((prev) => [...new Set([...prev, removed.id])]);
     }
     setTeekas((prev) => prev.filter((t) => t.id !== id));
@@ -2094,14 +2112,15 @@ export default function GranthasPage() {
   // ---------- Hierarchy handlers ----------
 
   function addAdhyaya() {
-    const n = adhyayas.length + 1;
+    const sorted = sortNodesByOrder(adhyayas);
+    const nextOrder = sorted.reduce((mx, a) => Math.max(mx, a.order ?? 0), 0) + 1;
     const L1 = structureConfig.levelOneName;
     const defaultKhanda = !structureConfig.levelTwoEnabled
       ? [{ id: uid(), title: "_default", order: 1, padas: [], manthras: [], expanded: true }]
       : [];
     setAdhyayas([
       ...adhyayas,
-      { id: uid(), title: `${ordinal(n)} ${L1}`, order: n, khandas: defaultKhanda, expanded: true },
+      { id: uid(), title: `${ordinal(nextOrder)} ${L1}`, order: nextOrder, khandas: defaultKhanda, expanded: true },
     ]);
   }
 
@@ -2119,6 +2138,10 @@ export default function GranthasPage() {
       }
       setDeletedStrapiSectionDocIds((prev) => [...new Set([...prev, ...docIdsToDelete])]);
     }
+    const mantraDocIds = target ? collectPublishedManthraDocIdsFromAdhyaya(target) : [];
+    if (mantraDocIds.length > 0) {
+      setDeletedStrapiManthraDocIds((prev) => [...new Set([...prev, ...mantraDocIds])]);
+    }
     setAdhyayas(adhyayas.filter((a) => a.id !== id));
   }
 
@@ -2131,12 +2154,13 @@ export default function GranthasPage() {
     setAdhyayas(
       adhyayas.map((a) => {
         if (a.id !== adhyayaId) return a;
-        const n = a.khandas.length + 1;
+        const sortedK = sortNodesByOrder(a.khandas);
+        const nextOrder = sortedK.reduce((mx, k) => Math.max(mx, k.order ?? 0), 0) + 1;
         return {
           ...a,
           khandas: [
             ...a.khandas,
-            { id: uid(), title: `${ordinal(n)} ${L2}`, order: n, padas: [], manthras: [], expanded: true },
+            { id: uid(), title: `${ordinal(nextOrder)} ${L2}`, order: nextOrder, padas: [], manthras: [], expanded: true },
           ],
         };
       })
@@ -2153,16 +2177,25 @@ export default function GranthasPage() {
   }
 
   function removeKhanda(adhyayaId: string, khandaId: string) {
+    const a = adhyayas.find((x) => x.id === adhyayaId);
+    const target = a?.khandas.find((k) => k.id === khandaId);
+    if (target?.documentId) {
+      const docIdsToDelete: string[] = [target.documentId];
+      for (const p of target.padas ?? []) {
+        if (p.documentId) docIdsToDelete.push(p.documentId);
+      }
+      setDeletedStrapiSectionDocIds((prev) => [...new Set([...prev, ...docIdsToDelete])]);
+    }
+    if (target) {
+      const mantraDocIds = collectPublishedManthraDocIdsFromKhanda(target);
+      if (mantraDocIds.length > 0) {
+        setDeletedStrapiManthraDocIds((prev) => [...new Set([...prev, ...mantraDocIds])]);
+      }
+    }
     setAdhyayas(
-      adhyayas.map((a) => {
-        if (a.id !== adhyayaId) return a;
-        const target = a.khandas.find((k) => k.id === khandaId);
-        if (target?.documentId) {
-          const docIdsToDelete: string[] = [target.documentId];
-          for (const p of target.padas ?? []) { if (p.documentId) docIdsToDelete.push(p.documentId); }
-          setDeletedStrapiSectionDocIds((prev) => [...new Set([...prev, ...docIdsToDelete])]);
-        }
-        return { ...a, khandas: a.khandas.filter((k) => k.id !== khandaId) };
+      adhyayas.map((ad) => {
+        if (ad.id !== adhyayaId) return ad;
+        return { ...ad, khandas: ad.khandas.filter((k) => k.id !== khandaId) };
       })
     );
   }
@@ -2191,12 +2224,13 @@ export default function GranthasPage() {
           ...a,
           khandas: a.khandas.map((k) => {
             if (k.id !== khandaId) return k;
-            const n = (k.padas ?? []).length + 1;
+            const sortedP = sortNodesByOrder(k.padas ?? []);
+            const nextOrder = sortedP.reduce((mx, p) => Math.max(mx, p.order ?? 0), 0) + 1;
             return {
               ...k,
               padas: [
                 ...(k.padas ?? []),
-                { id: uid(), title: `${ordinal(n)} ${L3}`, order: n, manthras: [], expanded: true },
+                { id: uid(), title: `${ordinal(nextOrder)} ${L3}`, order: nextOrder, manthras: [], expanded: true },
               ],
             };
           }),
@@ -2224,18 +2258,28 @@ export default function GranthasPage() {
   }
 
   function removePada(adhyayaId: string, khandaId: string, padaId: string) {
+    const a = adhyayas.find((x) => x.id === adhyayaId);
+    const k = a?.khandas.find((x) => x.id === khandaId);
+    const target = k?.padas?.find((p) => p.id === padaId);
+    if (target?.documentId) {
+      setDeletedStrapiSectionDocIds((prev) => [...new Set([...prev, target.documentId!])]);
+    }
+    if (target) {
+      const mantraDocIds = (target.manthras ?? [])
+        .filter((m) => isPublishedStrapiDocId(m.strapiDocumentId))
+        .map((m) => m.strapiDocumentId!);
+      if (mantraDocIds.length > 0) {
+        setDeletedStrapiManthraDocIds((prev) => [...new Set([...prev, ...mantraDocIds])]);
+      }
+    }
     setAdhyayas(
-      adhyayas.map((a) => {
-        if (a.id !== adhyayaId) return a;
+      adhyayas.map((ad) => {
+        if (ad.id !== adhyayaId) return ad;
         return {
-          ...a,
-          khandas: a.khandas.map((k) => {
-            if (k.id !== khandaId) return k;
-            const target = (k.padas ?? []).find((p) => p.id === padaId);
-            if (target?.documentId) {
-              setDeletedStrapiSectionDocIds((prev) => [...new Set([...prev, target.documentId!])]);
-            }
-            return { ...k, padas: (k.padas ?? []).filter((p) => p.id !== padaId) };
+          ...ad,
+          khandas: ad.khandas.map((kh) => {
+            if (kh.id !== khandaId) return kh;
+            return { ...kh, padas: (kh.padas ?? []).filter((p) => p.id !== padaId) };
           }),
         };
       })
@@ -2262,12 +2306,22 @@ export default function GranthasPage() {
     );
   }
 
+  function ordinalByOrder<T extends { id: string; order?: number }>(nodes: T[], id: string): number {
+    const sorted = sortNodesByOrder(nodes);
+    const idx = sorted.findIndex((n) => n.id === id);
+    return idx >= 0 ? idx + 1 : 1;
+  }
+
+  function bumpLastNumberInLabel(label: string): string {
+    return label.replace(/(\d+)$/, (_, d) => String(Number(d) + 1));
+  }
+
   // ── Manthra functions (handle L2 and L3 paths) ──
   function addManthra(adhyayaId: string, khandaId: string, padaId?: string) {
     const adhyayaTitle = adhyayas.find((a) => a.id === adhyayaId)?.title || "";
     track("manthra_added", { grantha_name: formData.GranthaName, adhyaya: adhyayaTitle });
-    // Use the adhyaya's 1-indexed position in the sorted array as its section number.
-    const aIdx = adhyayas.findIndex((x) => x.id === adhyayaId) + 1;
+    // Use hierarchy order (not current array position) for numbering.
+    const aIdx = ordinalByOrder(adhyayas, adhyayaId);
     const leaf = structureConfig.leafName;
     setAdhyayas(
       adhyayas.map((a) => {
@@ -2280,7 +2334,7 @@ export default function GranthasPage() {
         const targetKhanda = a.khandas.find((x) => x.id === khandaId);
         const isDefaultKhanda = targetKhanda?.title === "_default";
         const kIdx = structureConfig.levelTwoEnabled && !isDefaultKhanda
-          ? a.khandas.findIndex((x) => x.id === khandaId) + 1
+          ? ordinalByOrder(a.khandas, khandaId)
           : aIdx;
         return {
           ...a,
@@ -2292,11 +2346,8 @@ export default function GranthasPage() {
                 ...k,
                 padas: (k.padas ?? []).map((p) => {
                   if (p.id !== padaId) return p;
-                  const pIdx = (k.padas ?? []).findIndex((x) => x.id === padaId) + 1;
-                  const maxMIdx = p.manthras.reduce((mx, m) => {
-                    const n = parseInt((m.title?.split(".") ?? []).slice(-1)[0] ?? "0", 10);
-                    return isNaN(n) ? mx : Math.max(mx, n);
-                  }, 0);
+                  const pIdx = ordinalByOrder(k.padas ?? [], padaId);
+                  const maxMIdx = p.manthras.reduce((mx, m) => Math.max(mx, m.order ?? 0), 0);
                   const mIdx = Math.max(maxMIdx, p.manthras.length) + 1;
                   const newManthra: ManthraNode = {
                     id: uid(),
@@ -2307,15 +2358,15 @@ export default function GranthasPage() {
                     order: mIdx,
                     Teekas: teekas.map((t) => ({ TeekaName: t.TeekaName, TeekaAuthor: t.TeekaAuthor })),
                   };
-                  return { ...p, manthras: [...p.manthras, newManthra] };
+                  return {
+                    ...p,
+                    manthras: sortNodesByOrder([...p.manthras, newManthra]),
+                  };
                 }),
               };
             }
             // Add manthra directly inside Khanda (L3 disabled)
-            const maxMIdx2 = k.manthras.reduce((mx, m) => {
-              const n = parseInt((m.title?.split(".") ?? []).slice(-1)[0] ?? "0", 10);
-              return isNaN(n) ? mx : Math.max(mx, n);
-            }, 0);
+            const maxMIdx2 = k.manthras.reduce((mx, m) => Math.max(mx, m.order ?? 0), 0);
             const mIdx = Math.max(maxMIdx2, k.manthras.length) + 1;
             const newManthra: ManthraNode = {
               id: uid(),
@@ -2328,7 +2379,7 @@ export default function GranthasPage() {
               order: mIdx,
               Teekas: teekas.map((t) => ({ TeekaName: t.TeekaName, TeekaAuthor: t.TeekaAuthor })),
             };
-            return { ...k, manthras: [...k.manthras, newManthra] };
+            return { ...k, manthras: sortNodesByOrder([...k.manthras, newManthra]) };
           }),
         };
       })
@@ -2350,12 +2401,10 @@ export default function GranthasPage() {
       const m = title.match(/^(.+?)\s+[\d.]+$/);
       return m ? m[1] : leaf;
     };
-    const bumpLast = (title: string) => title.replace(/(\d+)$/, (_, d) => String(Number(d) + 1));
-
     setAdhyayas(
       adhyayas.map((a) => {
         if (a.id !== adhyayaId) return a;
-        const aIdx = adhyayas.findIndex((x) => x.id === adhyayaId) + 1;
+        const aIdx = ordinalByOrder(adhyayas, adhyayaId);
         return {
           ...a,
           khandas: a.khandas.map((k) => {
@@ -2363,7 +2412,7 @@ export default function GranthasPage() {
             const isDefaultKhanda = k.title === "_default";
             const kIdx =
               structureConfig.levelTwoEnabled && !isDefaultKhanda
-                ? a.khandas.findIndex((x) => x.id === khandaId) + 1
+                ? ordinalByOrder(a.khandas, khandaId)
                 : aIdx;
 
             if (structureConfig.levelThreeEnabled && padaId) {
@@ -2371,7 +2420,7 @@ export default function GranthasPage() {
                 ...k,
                 padas: (k.padas ?? []).map((p) => {
                   if (p.id !== padaId) return p;
-                  const pIdx = (k.padas ?? []).findIndex((x) => x.id === padaId) + 1;
+                  const pIdx = ordinalByOrder(k.padas ?? [], padaId);
                   const afterManthra = p.manthras.find((m) => m.id === afterManthraId);
                   if (!afterManthra) return p;
                   const pfx = titlePrefix(afterManthra.title);
@@ -2399,7 +2448,7 @@ export default function GranthasPage() {
                     manthras: [
                       ...p.manthras.map((m) =>
                         needsBump && m.order >= newOrder
-                          ? { ...m, order: m.order + 1, title: bumpLast(m.title) }
+                          ? { ...m, order: m.order + 1, title: bumpLastNumberInLabel(m.title) }
                           : m
                       ),
                       newManthra,
@@ -2437,7 +2486,7 @@ export default function GranthasPage() {
               manthras: [
                 ...k.manthras.map((m) =>
                   needsBump && m.order >= newOrder
-                    ? { ...m, order: m.order + 1, title: bumpLast(m.title) }
+                    ? { ...m, order: m.order + 1, title: bumpLastNumberInLabel(m.title) }
                     : m
                 ),
                 newManthra,
@@ -2446,42 +2495,6 @@ export default function GranthasPage() {
           }),
         };
       }),
-    );
-  }
-  function removeManthra(adhyayaId: string, khandaId: string, manthraId: string, padaId?: string) {
-    const a = adhyayas.find((x) => x.id === adhyayaId);
-    const k = a?.khandas.find((x) => x.id === khandaId);
-    let target: ManthraNode | undefined;
-    if (padaId) {
-      const p = k?.padas?.find((x) => x.id === padaId);
-      target = p?.manthras.find((x) => x.id === manthraId);
-    } else {
-      target = k?.manthras.find((x) => x.id === manthraId);
-    }
-    if (target?.strapiDocumentId) {
-      setDeletedStrapiManthraDocIds((prev) => [...new Set([...prev, target!.strapiDocumentId!])]);
-    }
-    setAdhyayas(
-      adhyayas.map((a) => {
-        if (a.id !== adhyayaId) return a;
-        return {
-          ...a,
-          khandas: a.khandas.map((k) => {
-            if (k.id !== khandaId) return k;
-            if (padaId) {
-              return {
-                ...k,
-                padas: (k.padas ?? []).map((p) =>
-                  p.id === padaId
-                    ? { ...p, manthras: p.manthras.filter((m) => m.id !== manthraId) }
-                    : p
-                ),
-              };
-            }
-            return { ...k, manthras: k.manthras.filter((m) => m.id !== manthraId) };
-          }),
-        };
-      })
     );
   }
 
@@ -2502,22 +2515,39 @@ export default function GranthasPage() {
       setDeletedStrapiManthraDocIds((prev) => [...new Set([...prev, target!.strapiDocumentId!])]);
     }
 
-    // Renumber helper: only decrement the last number in the title for manthras
-    // that appear AFTER the deleted position. This avoids renaming the entire
-    // list from scratch (which would corrupt numbers when duplicates exist).
-    const applyRenumber = (list: ManthraNode[], deletedId: string): ManthraNode[] => {
-      const deletedIdx = list.findIndex((m) => m.id === deletedId);
-      const filtered = list.filter((m) => m.id !== deletedId);
+    const leaf = structureConfig.leafName;
+    const titlePrefix = (title: string): string => {
+      const m = title.match(/^(.+?)\s+[\d.]+$/);
+      return m ? m[1] : leaf;
+    };
+    const aIdx = ordinalByOrder(adhyayas, adhyayaId);
+    const applyRenumber = (
+      list: ManthraNode[],
+      deletedId: string,
+      ctx: {
+        kIdx: number;
+        pIdx?: number;
+        isDefaultKhanda: boolean;
+        padaPath: boolean;
+      },
+    ): ManthraNode[] => {
+      const filtered = sortNodesByOrder(list.filter((m) => m.id !== deletedId));
       if (!renumber) return filtered;
       return filtered.map((m, idx) => {
-        // Manthras before the deletion point stay exactly as-is
-        if (idx < deletedIdx) return m;
-        // Manthras after the deletion point: decrement the last number by 1
-        return {
-          ...m,
-          order: m.order - 1,
-          title: m.title.replace(/(\d+)$/, (_, d) => String(Number(d) - 1)),
-        };
+        const orderNum = idx + 1;
+        const pfx = titlePrefix(m.title);
+        let title: string;
+        if (ctx.padaPath && ctx.pIdx != null) {
+          title = ctx.isDefaultKhanda
+            ? `${pfx} ${aIdx}.${ctx.pIdx}.${orderNum}`
+            : `${pfx} ${aIdx}.${ctx.kIdx}.${ctx.pIdx}.${orderNum}`;
+        } else {
+          title =
+            structureConfig.levelTwoEnabled && !ctx.isDefaultKhanda
+              ? `${pfx} ${aIdx}.${ctx.kIdx}.${orderNum}`
+              : `${pfx} ${aIdx}.${orderNum}`;
+        }
+        return { ...m, order: orderNum, title };
       });
     };
 
@@ -2528,16 +2558,37 @@ export default function GranthasPage() {
           ...a,
           khandas: a.khandas.map((k) => {
             if (k.id !== khandaId) return k;
+            const isDefaultKhanda = k.title === "_default";
+            const kIdx =
+              structureConfig.levelTwoEnabled && !isDefaultKhanda
+                ? ordinalByOrder(a.khandas, khandaId)
+                : aIdx;
             if (padaId) {
+              const pIdx = ordinalByOrder(k.padas ?? [], padaId);
               return {
                 ...k,
                 padas: (k.padas ?? []).map((p) => {
                   if (p.id !== padaId) return p;
-                  return { ...p, manthras: applyRenumber(p.manthras, manthraId) };
+                  return {
+                    ...p,
+                    manthras: applyRenumber(p.manthras, manthraId, {
+                      kIdx,
+                      pIdx,
+                      isDefaultKhanda,
+                      padaPath: true,
+                    }),
+                  };
                 }),
               };
             }
-            return { ...k, manthras: applyRenumber(k.manthras, manthraId) };
+            return {
+              ...k,
+              manthras: applyRenumber(k.manthras, manthraId, {
+                kIdx,
+                isDefaultKhanda,
+                padaPath: false,
+              }),
+            };
           }),
         };
       })
@@ -2554,8 +2605,8 @@ export default function GranthasPage() {
     options?: { markDirty?: boolean }
   ) {
     if (options?.markDirty !== false) setManthraDialogDirty(true);
-    setAdhyayas(
-      adhyayas.map((a) => {
+    setAdhyayas((prev) =>
+      prev.map((a) => {
         if (a.id !== adhyayaId) return a;
         return {
           ...a,
@@ -2601,15 +2652,18 @@ export default function GranthasPage() {
 
   // ---------- Validation ----------
 
-  function validateSectionTitles(): string[] {
+  function validateSectionTitles(
+    nodes: AdhyayaNode[] = adhyayas,
+    cfg: typeof structureConfig = structureConfig,
+  ): string[] {
     const errors: string[] = [];
-    const L1name = structureConfig?.levelOneName || "Adhyaya";
-    const L2name = structureConfig?.levelTwoName || "Khanda";
-    const L3name = structureConfig?.levelThreeName || "Pada";
-    const levelTwoEnabled = structureConfig?.levelTwoEnabled !== false;
-    const levelThreeEnabled = !!structureConfig?.levelThreeEnabled;
+    const L1name = cfg?.levelOneName || "Adhyaya";
+    const L2name = cfg?.levelTwoName || "Khanda";
+    const L3name = cfg?.levelThreeName || "Pada";
+    const levelTwoEnabled = cfg?.levelTwoEnabled !== false;
+    const levelThreeEnabled = !!cfg?.levelThreeEnabled;
 
-    adhyayas.forEach((a, ai) => {
+    nodes.forEach((a, ai) => {
       if (!a.title?.trim()) {
         errors.push(`${L1name} #${ai + 1} has no title`);
       }
@@ -2783,6 +2837,7 @@ export default function GranthasPage() {
                 // so a re-publish doesn't attempt to DELETE already-removed sections.
                 setDeletedStrapiSectionDocIds([]);
                 setDeletedStrapiTeekaDocIds([]);
+                setDeletedStrapiManthraDocIds([]);
               },
               onError: (err: any) => {
                 track("publish_failed", {
@@ -3852,7 +3907,11 @@ export default function GranthasPage() {
             </Button>
             <Button
               onClick={() => {
-                const errs = validateSectionTitles();
+                const { hierarchy: prepared, sectionDocIdsToMarkDeleted } = prepareHierarchyForContentStep(
+                  adhyayas,
+                  structureConfig,
+                );
+                const errs = validateSectionTitles(prepared, structureConfig);
                 if (errs.length > 0) {
                   toast({
                     variant: "destructive",
@@ -3861,6 +3920,10 @@ export default function GranthasPage() {
                   });
                   return;
                 }
+                if (sectionDocIdsToMarkDeleted.length > 0) {
+                  setDeletedStrapiSectionDocIds((prev) => [...new Set([...prev, ...sectionDocIdsToMarkDeleted])]);
+                }
+                setAdhyayas(prepared);
                 setStep(3);
               }}
               data-testid="button-next-content"

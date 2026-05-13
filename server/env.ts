@@ -1,11 +1,8 @@
 /**
- * Load `.env` from the repository root (parent of `server/`), regardless of `process.cwd()`.
- * This avoids "DATABASE_URL must be set" when the IDE or a script starts the process from another directory.
+ * Load `.env` from the project root (where you run `npm run dev` — normally the repo root).
  */
 import { config } from "dotenv";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
 
-const serverDir = path.dirname(fileURLToPath(import.meta.url));
-const rootDir = path.resolve(serverDir, "..");
+const rootDir = process.cwd();
 config({ path: path.join(rootDir, ".env") });

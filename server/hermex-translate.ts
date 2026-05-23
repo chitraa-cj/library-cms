@@ -1,7 +1,6 @@
 import { spawn } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
 
 export type HermexTranslateJob = {
   sourceText: string;
@@ -37,7 +36,8 @@ export type HermexTranslateResponse = {
   error?: string;
 };
 
-const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+/** Project root — cwd works in the CJS production bundle (dist/index.cjs). Start pm2/npm from repo root. */
+const repoRoot = process.env.CMS_REPO_ROOT || process.cwd();
 
 export function hermexEnabled(): boolean {
   const flag = process.env.HERMEX_ENABLED;

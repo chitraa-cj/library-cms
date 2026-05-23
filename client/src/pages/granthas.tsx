@@ -47,7 +47,12 @@ import {
 } from "@shared/schema";
 import StrapiSyncBar from "@/components/strapi-sync-bar";
 import { STRAPI_POLL_INTERVAL } from "@/hooks/use-strapi-sync";
-import { blocksToText, entryContentCharCount, isPlaceholderVersusCms } from "@/lib/strapi-blocks";
+import {
+  blocksToText,
+  entryContentCharCount,
+  isPlaceholderVersusCms,
+  isStubOrderOrPlaceholderText,
+} from "@/lib/strapi-blocks";
 import {
   sortNodesByOrder,
   isPublishedStrapiDocId,
@@ -62,6 +67,7 @@ import {
   mantrasShareNumberSuffix,
   mantrasShareLeafAndSuffix,
   findStrapiMantraByLeafAndSuffix,
+  pickPreferredStrapiMantraRef,
   resolvePortalMantraToStrapiDoc,
   collectKnownVerseSuffixesForLeaf,
   strapiVerseTakenForConfiguredLeaf,
@@ -228,10 +234,21 @@ function hasBlocks(v: StrapiBlock[] | string | null | undefined): boolean {
 // These are used both by the per-dialog Strapi fetch (useEffect) and by the
 // bulk grantha-load pre-populate so teeka data is ALWAYS in state from open.
 
+function draftTextEntryIsOnlyStubs(entry: any | undefined): boolean {
+  if (!entry || typeof entry !== "object") return false;
+  const sans = blocksToText(entry.SanskritTextEntry).trim();
+  const eng = blocksToText(entry.EnglishTranslationText).trim();
+  const iast = blocksToText(entry.IASTTransliteration).trim();
+  const fields = [sans, eng, iast].filter(Boolean);
+  if (fields.length === 0) return false;
+  return fields.every((t) => isStubOrderOrPlaceholderText(t));
+}
+
 function mergeEntry(draft: any | undefined, fromStrapi: any | undefined): any | undefined {
   if (!fromStrapi && !draft) return undefined;
-  if (!fromStrapi) return draft;
+  if (!fromStrapi) return draftTextEntryIsOnlyStubs(draft) ? undefined : draft;
   if (!draft) return fromStrapi;
+  if (draftTextEntryIsOnlyStubs(draft) && !draftTextEntryIsOnlyStubs(fromStrapi)) return fromStrapi;
 
   // OtherTranslations: whenever Strapi has rows, Strapi is always the base and the draft
   // only overlays languages the user edited. Never prefer draft-by-length alone — after
@@ -1131,15 +1148,8 @@ export default function GranthasPage() {
       if (!primary) return null;
 
       const primaryNum = (primary.ShlokaManthraNumber as string) || "";
-      const labelMismatch =
-        !!localNode?.title &&
-        !!primaryNum &&
-        !mantrasShareLeafAndSuffix(localNode.title, primaryNum, leaf);
       const primaryRich = strapiManthraRowRichness(primary);
-      const needsSectionScan =
-        !!sectionDocId &&
-        !!localNode?.title &&
-        (labelMismatch || primaryRich < 40);
+      const needsSectionScan = !!sectionDocId && !!localNode?.title;
 
       if (!needsSectionScan) {
         return { row: primary, corrected: false };
@@ -1163,21 +1173,20 @@ export default function GranthasPage() {
         mantrasShareLeafAndSuffix(localNode!.title, r.title, leaf),
       );
       const candidateDocIds = new Set<string>([docId]);
-      if (matchingRefs.length > 0) {
-        for (const r of matchingRefs) candidateDocIds.add(r.docId);
-      } else {
-        const byLabel = findStrapiMantraByLeafAndSuffix(refs, localNode!.title, leaf);
-        if (byLabel) candidateDocIds.add(byLabel.docId);
-      }
+      for (const r of matchingRefs) candidateDocIds.add(r.docId);
+      const byLabel = findStrapiMantraByLeafAndSuffix(refs, localNode!.title, leaf, docId);
+      if (byLabel) candidateDocIds.add(byLabel.docId);
 
       let bestRow = primary;
-      let bestScore = primaryRich;
+      let bestScore = mantrasShareLeafAndSuffix(localNode!.title, primaryNum, leaf) ? primaryRich : -1;
       for (const candidateId of candidateDocIds) {
         const row =
           candidateId === (primary.documentId as string)
             ? primary
             : await fetchManthraRow(candidateId);
         if (!row) continue;
+        const rowLabel = String(row.ShlokaManthraNumber ?? "");
+        if (!mantrasShareLeafAndSuffix(localNode!.title, rowLabel, leaf)) continue;
         const score = strapiManthraRowRichness(row);
         if (score > bestScore) {
           bestRow = row;
@@ -1845,7 +1854,6 @@ export default function GranthasPage() {
           const list: { title: string; docId: string; order: number }[] = [];
           for (const m of sec.manthras) {
             if (m.ShlokaManthraNumber && m.documentId) {
-              strapiManthraByShloka.set(m.ShlokaManthraNumber, m.documentId);
               list.push({ title: m.ShlokaManthraNumber, docId: m.documentId, order: m.order ?? 0 });
             }
           }
@@ -1868,6 +1876,16 @@ export default function GranthasPage() {
           seenStrapiMantraDocIds.add(sm.docId);
           allStrapiMantraRefs.push(sm);
         }
+      }
+      const exactTitleRefBuckets = new Map<string, StrapiMantraRef[]>();
+      for (const sm of allStrapiMantraRefs) {
+        const bucket = exactTitleRefBuckets.get(sm.title) ?? [];
+        bucket.push(sm);
+        exactTitleRefBuckets.set(sm.title, bucket);
+      }
+      for (const [title, refs] of exactTitleRefBuckets) {
+        const picked = pickPreferredStrapiMantraRef(refs);
+        if (picked) strapiManthraByShloka.set(title, picked.docId);
       }
       const inferredLeaf = inferLeafNameFromStrapiMantras(
         allStrapiMantraRefs,
@@ -3954,7 +3972,7 @@ export default function GranthasPage() {
       <div className="p-6 lg:p-8 max-w-7xl mx-auto">
         <div className="flex items-center justify-between mb-6">
           <div>
-            <h1 className="text-2xl font-bold tracking-tight">All Granthas</h1>
+            <h1 className="text-2xl font-bold tracking-tight">All the Granthas</h1>
             <p className="text-muted-foreground text-sm mt-1">
               Browse library to update existing content
             </p>

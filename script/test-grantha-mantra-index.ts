@@ -411,6 +411,14 @@ assert.equal(inferLeafNameFromStrapiMantras(shlokaHeavy, "Mantra"), "Shloka");
 assert.equal(inferLeafNameFromStrapiMantras(mantraSparse, "Mantra"), "Mantra");
 
 assert.equal(isPlaceholderVersusCms("4", "uddharedātmanātmānaṃ magnaṃ"), true);
+assert.equal(isPlaceholderVersusCms("4..", ""), true);
+assert.equal(
+  isPlaceholderVersusCms(
+    [{ type: "paragraph", children: [{ type: "text", text: "4.." }] }],
+    [{ type: "paragraph", children: [{ type: "text", text: "उद्धरेदात्मनात्मानं" }] }],
+  ),
+  true,
+);
 assert.equal(
   isPlaceholderVersusCms(
     [{ type: "paragraph", children: [{ type: "text", text: "4" }] }],

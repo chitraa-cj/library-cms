@@ -19,6 +19,14 @@ export function entryContentCharCount(
   return blocksToText(value).trim().length;
 }
 
+/** Order / sequence stubs auto-filled in the editor (e.g. "4", "4.", "4.."). */
+export function isStubOrderOrPlaceholderText(text: string): boolean {
+  const t = text.trim();
+  if (!t) return false;
+  if (/^\d{1,4}(\.\.*)?$/.test(t)) return true;
+  return false;
+}
+
 /** True when a portal draft field is a stub (e.g. order digit "4") and must not mask CMS text. */
 export function isPlaceholderVersusCms(
   draft: StrapiBlock[] | string | undefined | null,
@@ -26,7 +34,9 @@ export function isPlaceholderVersusCms(
 ): boolean {
   const d = blocksToText(draft).trim();
   const s = blocksToText(cms).trim();
-  if (!d || !s || d === s) return false;
+  if (!d) return false;
+  if (isStubOrderOrPlaceholderText(d)) return true;
+  if (!s || d === s) return false;
   if (/^\d{1,3}$/.test(d)) return true;
   if (d.length <= 8 && s.length > 40) return true;
   if (s.length >= 40 && d.length < s.length * 0.2) return true;

@@ -1056,11 +1056,20 @@ function blocksPlainText(v: any): string {
     .trim();
 }
 
-/** Draft stubs (e.g. order digit "4") must not replace full CMS verse text on publish. */
+function isStubOrderOrPlaceholderPlainText(text: string): boolean {
+  const t = text.trim();
+  if (!t) return false;
+  if (/^\d{1,4}(\.\.*)?$/.test(t)) return true;
+  return false;
+}
+
+/** Draft stubs (e.g. order digit "4" or "4..") must not replace full CMS verse text on publish. */
 function isPlaceholderVersusCmsText(draft: any, cms: any): boolean {
   const d = blocksPlainText(draft);
   const s = blocksPlainText(cms);
-  if (!d || !s || d === s) return false;
+  if (!d) return false;
+  if (isStubOrderOrPlaceholderPlainText(d)) return true;
+  if (!s || d === s) return false;
   if (/^\d{1,3}$/.test(d)) return true;
   if (d.length <= 8 && s.length > 40) return true;
   if (s.length >= 40 && d.length < s.length * 0.2) return true;
@@ -1118,7 +1127,7 @@ function manthraTextEntryIsOrderStubOnly(entry: any): boolean {
   const eng = blocksPlainText(entry.EnglishTranslationText);
   if (sans && eng && sans !== eng) return false;
   const t = sans || eng;
-  return /^\d{1,3}$/.test(t);
+  return isStubOrderOrPlaceholderPlainText(t);
 }
 
 /** True when the portal draft has verse/teeka content worth a full Strapi merge PUT. */

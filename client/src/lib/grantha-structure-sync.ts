@@ -200,10 +200,32 @@ export function buildUniqueStrapiOrderMap(manthras: StrapiMantraRef[]): {
   return { byOrder, ambiguousOrders };
 }
 
+/**
+ * When Strapi has multiple rows for the same verse label, pick one row to link/update.
+ * Prefer the portal's stored docId, then the lowest `order` (original row).
+ */
+export function pickPreferredStrapiMantraRef(
+  refs: StrapiMantraRef[],
+  preferredDocId?: string,
+): StrapiMantraRef | undefined {
+  if (refs.length === 0) return undefined;
+  if (preferredDocId) {
+    const pref = refs.find((r) => r.docId === preferredDocId);
+    if (pref) return pref;
+  }
+  return [...refs].sort((a, b) => {
+    const oa = a.order ?? Number.MAX_SAFE_INTEGER;
+    const ob = b.order ?? Number.MAX_SAFE_INTEGER;
+    if (oa !== ob) return oa - ob;
+    return a.docId.localeCompare(b.docId);
+  })[0];
+}
+
 export function findStrapiMantraByLeafAndSuffix(
   mantras: StrapiMantraRef[],
   portalTitle: string | undefined,
   configuredLeaf: string,
+  preferredDocId?: string,
 ): StrapiMantraRef | undefined {
   const leaf = (configuredLeaf || "Mantra").trim();
   let label = (portalTitle ?? "").trim();
@@ -217,7 +239,8 @@ export function findStrapiMantraByLeafAndSuffix(
       mantraNumberSuffix(sm.title) === suffix &&
       titleUsesConfiguredLeaf(sm.title, leaf),
   );
-  return hits.length === 1 ? hits[0] : undefined;
+  if (hits.length === 0) return undefined;
+  return pickPreferredStrapiMantraRef(hits, preferredDocId);
 }
 
 export interface ResolvePortalMantraStrapiOptions {
@@ -244,7 +267,12 @@ export function resolvePortalMantraToStrapiDoc(
   }
 
   const byLeafAndSuffix = portal.title
-    ? findStrapiMantraByLeafAndSuffix(sectionMantras, portal.title, leaf)
+    ? findStrapiMantraByLeafAndSuffix(
+        sectionMantras,
+        portal.title,
+        leaf,
+        portal.strapiDocumentId,
+      )
     : undefined;
 
   if (byLeafAndSuffix) {

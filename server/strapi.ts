@@ -714,11 +714,29 @@ export function createStrapiRouter() {
         return;
       }
 
-      const CONCURRENCY = 6;
+      const CONCURRENCY = 12;
       const results: Array<{ documentId: string; ok: boolean; error?: string }> = [];
 
+      // One Strapi row per verse label — never PUT the same title onto two documentIds.
+      const byLabel = new Map<string, { documentId: string; order: number; ShlokaManthraNumber: string }>();
+      for (const u of updates) {
+        const label = (u.ShlokaManthraNumber ?? "").trim();
+        const key = label.toLowerCase() || (u.documentId ?? "").trim();
+        if (!key) continue;
+        const row = {
+          documentId: u.documentId!.trim(),
+          order: typeof u.order === "number" && !Number.isNaN(u.order) ? u.order : 0,
+          ShlokaManthraNumber: label,
+        };
+        const prev = byLabel.get(key);
+        if (!prev || row.order >= prev.order) {
+          byLabel.set(key, row);
+        }
+      }
+      const dedupedUpdates = [...byLabel.values()];
+
       // Apply higher `order` values first so two rows never briefly share the same slot.
-      const sortedUpdates = [...updates].sort(
+      const sortedUpdates = dedupedUpdates.sort(
         (a, b) => (Number(b?.order) || 0) - (Number(a?.order) || 0),
       );
 

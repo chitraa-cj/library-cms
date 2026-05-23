@@ -3,6 +3,7 @@ import {
   sortNodesByOrder,
   isPublishedStrapiDocId,
   findStrapiMantraByLeafAndSuffix,
+  pickPreferredStrapiMantraRef,
   titleUsesConfiguredLeaf,
   type GranthaStructureConfig,
   type StrapiMantraRef,
@@ -203,6 +204,7 @@ export async function lookupStrapiMantraDocIdByLabel(
   label: string,
   configuredLeaf: string,
   cachedSectionList?: StrapiMantraRef[],
+  preferredDocId?: string,
 ): Promise<string | undefined> {
   const trimmed = label.trim();
   const leaf = (configuredLeaf || "Mantra").trim();
@@ -210,8 +212,9 @@ export async function lookupStrapiMantraDocIdByLabel(
 
   const refs = cachedSectionList ?? (await listStrapiMantrasInSection(sectionDocumentId));
   const exact = refs.filter((r) => r.title.trim().toLowerCase() === trimmed.toLowerCase());
-  if (exact.length === 1) return exact[0].docId;
-  return findStrapiMantraByLeafAndSuffix(refs, trimmed, leaf)?.docId;
+  const exactPick = pickPreferredStrapiMantraRef(exact, preferredDocId);
+  if (exactPick) return exactPick.docId;
+  return findStrapiMantraByLeafAndSuffix(refs, trimmed, leaf, preferredDocId)?.docId;
 }
 
 export type MantraSectionSyncTarget = {
@@ -305,12 +308,16 @@ async function strapiBatchIdentitySync(
   updates: Array<{ documentId: string; order: number; ShlokaManthraNumber: string }>,
 ): Promise<void> {
   if (updates.length === 0) return;
-  const res = await apiRequest("POST", "/api/strapi/manthras/batch-identity-sync", { updates });
-  const json = await res.json().catch(() => ({}));
-  const results: Array<{ ok?: boolean }> = json?.results ?? [];
-  const failed = results.filter((r) => r && r.ok === false).length;
-  if (failed > 0) {
-    throw new Error(`${failed} mantra identity update(s) failed in Strapi`);
+  const CHUNK = 500;
+  for (let i = 0; i < updates.length; i += CHUNK) {
+    const chunk = updates.slice(i, i + CHUNK);
+    const res = await apiRequest("POST", "/api/strapi/manthras/batch-identity-sync", { updates: chunk });
+    const json = await res.json().catch(() => ({}));
+    const results: Array<{ ok?: boolean }> = json?.results ?? [];
+    const failed = results.filter((r) => r && r.ok === false).length;
+    if (failed > 0) {
+      throw new Error(`${failed} mantra identity update(s) failed in Strapi`);
+    }
   }
 }
 
@@ -349,6 +356,7 @@ export async function pushMantraSectionIdentityToStrapi(
         portalLabel,
         leaf,
         sectionList,
+        isPublishedStrapiDocId(m.strapiDocumentId) ? m.strapiDocumentId : undefined,
       );
       if (byLabel) {
         resolved.set(m.id, byLabel);
@@ -393,18 +401,27 @@ export async function pushMantraSectionIdentityToStrapi(
     }
   }
 
-  const updates: Array<{ documentId: string; order: number; ShlokaManthraNumber: string }> = [];
+  const updatesByLabel = new Map<
+    string,
+    { documentId: string; order: number; ShlokaManthraNumber: string }
+  >();
   for (const m of sorted) {
     const documentId = resolved.get(m.id);
     if (!isPublishedStrapiDocId(documentId)) continue;
-    updates.push({
+    const ShlokaManthraNumber = (m.title ?? "").trim();
+    const key = ShlokaManthraNumber.toLowerCase() || documentId!;
+    const row = {
       documentId: documentId!,
       order: m.order,
-      ShlokaManthraNumber: m.title ?? "",
-    });
+      ShlokaManthraNumber,
+    };
+    const prev = updatesByLabel.get(key);
+    if (!prev || row.order >= prev.order) {
+      updatesByLabel.set(key, row);
+    }
   }
 
-  await strapiBatchIdentitySync(updates);
+  await strapiBatchIdentitySync([...updatesByLabel.values()]);
   return patches;
 }
 

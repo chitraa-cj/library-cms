@@ -11,6 +11,7 @@ import {
   mantrasShareNumberSuffix,
   mantrasShareLeafAndSuffix,
   findStrapiMantraByLeafAndSuffix,
+  pickPreferredStrapiMantraRef,
   resolvePortalMantraToStrapiDoc,
   buildUniqueStrapiOrderMap,
   buildMantraDisplayTitle,
@@ -153,6 +154,23 @@ assert.equal(
   "doc-aaaa1111111111",
 );
 assert.equal(findStrapiMantraByLeafAndSuffix(sectionRefs, "Shloka 1.1.5", "Mantra")?.docId, undefined);
+
+const dupRefs = [
+  { title: "Shloka 1.1.119", docId: "doc-empty119xxxxxx", order: 119 },
+  { title: "Shloka 1.1.119", docId: "doc-full119xxxxxxxx", order: 119 },
+];
+assert.equal(
+  pickPreferredStrapiMantraRef(dupRefs, "doc-full119xxxxxxxx")?.docId,
+  "doc-full119xxxxxxxx",
+);
+assert.equal(
+  pickPreferredStrapiMantraRef(dupRefs)?.docId,
+  "doc-empty119xxxxxx",
+);
+assert.equal(
+  findStrapiMantraByLeafAndSuffix(dupRefs, "Shloka 1.1.119", "Shloka", "doc-full119xxxxxxxx")?.docId,
+  "doc-full119xxxxxxxx",
+);
 
 const flat: MantraTitleCtx = {
   leaf: "Shloka",

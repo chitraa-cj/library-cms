@@ -13,24 +13,33 @@ const DRAFT_LIST_KEYS = [
   ["/api/drafts", "sections"],
 ] as const;
 
+export type SyncGranthaCmsCachesOptions = {
+  /** When false, only invalidate (tabs refresh on next focus/poll). Default true. */
+  refetchActive?: boolean;
+};
+
 /**
- * After grantha publish, mantra publish, section hierarchy sync, or Strapi edits:
- * invalidate all CMS queries and refetch active tab lists so Granthas / Mantras / Sections
- * show the same data without waiting for the poll interval.
+ * After grantha publish or Strapi edits: invalidate CMS queries. Refetch runs in the
+ * background so Save & Publish is not blocked on large Mantras/Sections list downloads.
  */
-export async function syncGranthaCmsCaches(queryClient: QueryClient): Promise<void> {
-  await queryClient.invalidateQueries({ queryKey: ["/api/strapi"] });
-  for (const key of DRAFT_LIST_KEYS) {
-    void queryClient.invalidateQueries({ queryKey: [...key] });
-  }
-  await Promise.all(
-    STRAPI_LIST_KEYS.map((key) =>
-      queryClient.refetchQueries({ queryKey: [...key], type: "active" }),
-    ),
-  );
+export function syncGranthaCmsCaches(
+  queryClient: QueryClient,
+  options?: SyncGranthaCmsCachesOptions,
+): void {
+  const refetchActive = options?.refetchActive !== false;
+  void (async () => {
+    await queryClient.invalidateQueries({ queryKey: ["/api/strapi"] });
+    for (const key of DRAFT_LIST_KEYS) {
+      void queryClient.invalidateQueries({ queryKey: [...key] });
+    }
+    if (!refetchActive) return;
+    for (const key of STRAPI_LIST_KEYS) {
+      void queryClient.refetchQueries({ queryKey: [...key], type: "active" });
+    }
+  })();
 }
 
-/** @deprecated Prefer `syncGranthaCmsCaches` (same behavior; refetches active lists). */
+/** Fast path after bulk publish: invalidate only (no large list refetch). */
 export function invalidateGranthaCmsCaches(queryClient: QueryClient): void {
-  void syncGranthaCmsCaches(queryClient);
+  syncGranthaCmsCaches(queryClient, { refetchActive: false });
 }

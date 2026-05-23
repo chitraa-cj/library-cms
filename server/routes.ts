@@ -715,10 +715,15 @@ async function buildManthraData(
     if (!isNaN(n)) mData.order = n;
   }
   if (sectionDocId) mData.Section = sectionDocId;
-  if (manthra.ShlokaManthraEntry) mData.ShlokaManthraEntry = manthra.ShlokaManthraEntry;
+  if (manthra.ShlokaManthraEntry && textEntryHasPublishableContent(manthra.ShlokaManthraEntry)) {
+    mData.ShlokaManthraEntry = manthra.ShlokaManthraEntry;
+  }
   // BhashyamForShlokaManthra is the hierarchy-builder field name; Strapi's actual field is BhashyamEntry
-  if (manthra.BhashyamForShlokaManthra) mData.BhashyamEntry = manthra.BhashyamForShlokaManthra;
-  else if (manthra.BhashyamEntry) mData.BhashyamEntry = manthra.BhashyamEntry;
+  if (manthra.BhashyamForShlokaManthra && textEntryHasPublishableContent(manthra.BhashyamForShlokaManthra)) {
+    mData.BhashyamEntry = manthra.BhashyamForShlokaManthra;
+  } else if (manthra.BhashyamEntry && textEntryHasPublishableContent(manthra.BhashyamEntry)) {
+    mData.BhashyamEntry = manthra.BhashyamEntry;
+  }
 
   const cleaned = cleanPayloadForStrapi(mData);
 
@@ -757,8 +762,7 @@ async function buildManthraData(
     resolvedTeekas = await resolveManthraTeekas(rawTeekas, granthaDocId, teekaNameToDocId);
   }
 
-  const needsStrapiSnapshot =
-    isExistingStrapi && (resolvedTeekas.length > 0 || mantraTextMergeNeeded(cleaned));
+  const needsStrapiSnapshot = isExistingStrapi;
 
   let strapiMantraSnapshot: any = null;
   if (needsStrapiSnapshot) {
@@ -840,6 +844,7 @@ async function buildManthraData(
     await mergeMantraTextComponentsFromStrapi(cleaned, strapiDocId);
   }
 
+  pruneNonPublishableManthraTextFields(cleaned);
   sanitizeStrapiTextComponentsOnManthraLikePayload(cleaned);
   return cleaned;
 }
@@ -1073,6 +1078,76 @@ function hasPublishableBlocks(v: any): boolean {
   );
 }
 
+function otherTranslationsHavePublishableContent(ot: any): boolean {
+  if (!Array.isArray(ot)) return false;
+  return ot.some((row) => {
+    if (!row || typeof row !== "object") return false;
+    return (
+      hasPublishableBlocks(row.TranslationText) ||
+      hasPublishableBlocks(row.OtherLanguagesTranslation)
+    );
+  });
+}
+
+function textEntryHasPublishableContent(entry: any): boolean {
+  if (!entry || typeof entry !== "object") return false;
+  if (
+    hasPublishableBlocks(entry.SanskritTextEntry) ||
+    hasPublishableBlocks(entry.EnglishTranslationText) ||
+    hasPublishableBlocks(entry.IASTTransliteration)
+  ) {
+    return true;
+  }
+  return otherTranslationsHavePublishableContent(entry.OtherTranslations);
+}
+
+/** Drop empty TextAndTranslation shells so Strapi PUT omits them and keeps CMS content. */
+function pruneNonPublishableManthraTextFields(m: Record<string, any>): void {
+  for (const key of MANTHRA_TEXT_COMPONENT_KEYS) {
+    const v = m[key];
+    if (v && typeof v === "object" && !Array.isArray(v) && !textEntryHasPublishableContent(v)) {
+      delete m[key];
+    }
+  }
+}
+
+/** Draft order stubs (e.g. Sanskrit/English = "4") must not trigger a full content PUT. */
+function manthraTextEntryIsOrderStubOnly(entry: any): boolean {
+  if (!entry || typeof entry !== "object") return false;
+  const sans = blocksPlainText(entry.SanskritTextEntry);
+  const eng = blocksPlainText(entry.EnglishTranslationText);
+  if (sans && eng && sans !== eng) return false;
+  const t = sans || eng;
+  return /^\d{1,3}$/.test(t);
+}
+
+/** True when the portal draft has verse/teeka content worth a full Strapi merge PUT. */
+function manthraHasLocalPublishableContent(manthra: Record<string, any>): boolean {
+  if (textEntryHasPublishableContent(manthra.ShlokaManthraEntry)) {
+    if (manthraTextEntryIsOrderStubOnly(manthra.ShlokaManthraEntry)) return false;
+    return true;
+  }
+  if (textEntryHasPublishableContent(manthra.BhashyamForShlokaManthra)) return true;
+  if (textEntryHasPublishableContent(manthra.BhashyamEntry)) return true;
+  const teekas = manthra.Teekas;
+  if (Array.isArray(teekas) && teekas.some((t) => textEntryHasPublishableContent(t?.TeekaEntry))) {
+    return true;
+  }
+  return Array.isArray(manthra.wordMeanings) && manthra.wordMeanings.length > 0;
+}
+
+async function updateManthraIdentityOnly(
+  strapiDocumentId: string,
+  label: string,
+  order: number | undefined,
+  warnings?: Array<{ manthra: string; error: string }>,
+): Promise<string> {
+  const data: Record<string, any> = { ShlokaManthraNumber: label };
+  if (order != null && !Number.isNaN(order)) data.order = order;
+  await strapiManthraRequest(`/api/manthras/${strapiDocumentId}`, "PUT", data, label, warnings);
+  return strapiDocumentId;
+}
+
 /** Merge draft TextAndTranslation onto Strapi (same shape for TeekaEntry, ShlokaManthraEntry, BhashyamEntry).
  *  Strapi is the base; each blocks field is replaced only when the draft has publishable content there.
  *  OtherTranslations are merged by language so Strapi-only rows are never dropped.
@@ -1140,7 +1215,11 @@ function applyMantraTextMergeFromStrapiData(target: Record<string, any>, strapiD
   const keys = ["ShlokaManthraEntry", "BhashyamEntry"] as const;
   for (const key of keys) {
     const localEntry = target[key];
-    if (!localEntry || typeof localEntry !== "object") continue;
+    if (!localEntry || typeof localEntry !== "object" || !textEntryHasPublishableContent(localEntry)) {
+      // Omit from PUT — Strapi keeps existing CMS text when the field is not sent.
+      delete target[key];
+      continue;
+    }
     const strapiEntry = strapiData[key];
     if (strapiEntry && typeof strapiEntry === "object") {
       target[key] = mergeTeekaEntryForPut(strapiEntry, localEntry);
@@ -1522,20 +1601,40 @@ function mantraLabelsShareNumber(a: string, b: string): boolean {
   return sa === sb;
 }
 
+function pickBestManthraDocIdFromStrapiRows(
+  rows: Array<{ documentId?: string; order?: number }>,
+  preferredDocId?: string,
+): string | undefined {
+  const valid = rows.filter((r) => typeof r.documentId === "string" && r.documentId.length >= 10);
+  if (valid.length === 0) return undefined;
+  if (preferredDocId) {
+    const pref = valid.find((r) => r.documentId === preferredDocId);
+    if (pref?.documentId) return pref.documentId;
+  }
+  const sorted = [...valid].sort((a, b) => {
+    const oa = a.order ?? Number.MAX_SAFE_INTEGER;
+    const ob = b.order ?? Number.MAX_SAFE_INTEGER;
+    if (oa !== ob) return oa - ob;
+    return String(a.documentId).localeCompare(String(b.documentId));
+  });
+  return sorted[0]?.documentId;
+}
+
 /** Find the Strapi manthra in a section whose ShlokaManthraNumber matches the portal label. */
 async function findManthraDocIdByLabelInSection(
   sectionDocId: string,
   label: string,
+  preferredDocId?: string,
 ): Promise<string | undefined> {
   const trimmed = label.trim();
   if (!trimmed || !sectionDocId) return undefined;
   const n = encodeURIComponent(trimmed);
   const s = encodeURIComponent(sectionDocId);
   const existing = await strapiRequest(
-    `/api/manthras?filters[ShlokaManthraNumber][$eqi]=${n}&filters[Section][documentId][$eq]=${s}&fields[0]=documentId&pagination[pageSize]=5`,
+    `/api/manthras?filters[ShlokaManthraNumber][$eqi]=${n}&filters[Section][documentId][$eq]=${s}&fields[0]=documentId&fields[1]=order&pagination[pageSize]=25`,
   );
   const rows: any[] = existing?.data ?? [];
-  return rows[0]?.documentId;
+  return pickBestManthraDocIdFromStrapiRows(rows, preferredDocId);
 }
 
 /**
@@ -1557,7 +1656,11 @@ async function resolveManthraDocIdForPublish(
   if (!sectionDocId) return stored;
 
   if (portalLabel) {
-    const byLabel = await findManthraDocIdByLabelInSection(sectionDocId, portalLabel);
+    const byLabel = await findManthraDocIdByLabelInSection(
+      sectionDocId,
+      portalLabel,
+      manthra.strapiDocumentId,
+    );
     if (byLabel) {
       if (stored && stored !== byLabel) {
         console.warn(
@@ -1598,6 +1701,36 @@ async function publishManthraToStrapi(
   const portalLabel = (manthra.title || manthra.ShlokaManthraNumber || "").trim();
   const prelimData = { ShlokaManthraNumber: portalLabel };
   const targetDocId = await resolveManthraDocIdForPublish(manthra, sectionDocId, prelimData);
+  const label = portalLabel || manthra.title || "(unknown)";
+
+  if (targetDocId && !manthraHasLocalPublishableContent(manthra)) {
+    const order =
+      manthra.order != null && !Number.isNaN(Number(manthra.order)) ? Number(manthra.order) : undefined;
+    try {
+      return await updateManthraIdentityOnly(targetDocId, label, order, publishFailures);
+    } catch (putErr: any) {
+      if (isOrphanedDocError(putErr)) {
+        console.warn(
+          `[publish] Manthra "${label}" identity PUT orphaned (${targetDocId}), recreating`,
+        );
+        await deleteOrphanedManthra(targetDocId, label);
+        const byLabel = sectionDocId
+          ? await findManthraDocIdByLabelInSection(sectionDocId, label, manthra.strapiDocumentId)
+          : undefined;
+        if (byLabel) {
+          return updateManthraIdentityOnly(byLabel, label, order, publishFailures);
+        }
+        return createOrUpdateManthra(
+          { ShlokaManthraNumber: label, order, Section: sectionDocId },
+          label,
+          publishFailures,
+          false,
+        );
+      }
+      throw putErr;
+    }
+  }
+
   const manthraForBuild =
     targetDocId && targetDocId !== manthra.strapiDocumentId
       ? { ...manthra, strapiDocumentId: targetDocId }
@@ -1607,7 +1740,7 @@ async function publishManthraToStrapi(
     mData.ShlokaManthraNumber = portalLabel;
   }
 
-  const label = portalMantraLabel(manthra, mData) || manthra.title || "(unknown)";
+  const fullLabel = portalMantraLabel(manthra, mData) || manthra.title || "(unknown)";
 
   if (targetDocId && Object.keys(mData).length === 0) {
     return targetDocId;
@@ -1615,20 +1748,20 @@ async function publishManthraToStrapi(
 
   if (targetDocId) {
     try {
-      return await updateExistingManthra(targetDocId, mData, label, publishFailures);
+      return await updateExistingManthra(targetDocId, mData, fullLabel, publishFailures);
     } catch (putErr: any) {
       if (isOrphanedDocError(putErr)) {
         console.warn(
-          `[publish] Manthra "${label}" — PUT ${putErr?.status} orphaned (docId ${targetDocId}), deleting then recreating`,
+          `[publish] Manthra "${fullLabel}" — PUT ${putErr?.status} orphaned (docId ${targetDocId}), deleting then recreating`,
         );
-        await deleteOrphanedManthra(targetDocId, label);
-        return createOrUpdateManthra(mData, label, publishFailures, true);
+        await deleteOrphanedManthra(targetDocId, fullLabel);
+        return createOrUpdateManthra(mData, fullLabel, publishFailures, true);
       }
       throw putErr;
     }
   }
 
-  return createOrUpdateManthra(mData, label, publishFailures);
+  return createOrUpdateManthra(mData, fullLabel, publishFailures);
 }
 
 // Helper: create a manthra in Strapi if one with the same ShlokaManthraNumber+Section doesn't exist.
@@ -1663,9 +1796,9 @@ async function createOrUpdateManthra(
       try {
         const n = encodeURIComponent(number.trim());
         const existing = await strapiRequest(
-          `/api/manthras?filters[ShlokaManthraNumber][$eqi]=${n}&filters[Section][documentId][$eq]=${s}&fields[0]=documentId`
+          `/api/manthras?filters[ShlokaManthraNumber][$eqi]=${n}&filters[Section][documentId][$eq]=${s}&fields[0]=documentId&fields[1]=order&pagination[pageSize]=25`,
         );
-        const existingDocId: string | undefined = existing?.data?.[0]?.documentId;
+        const existingDocId = pickBestManthraDocIdFromStrapiRows(existing?.data ?? [], undefined);
         if (existingDocId) {
           console.log(`[publish] Manthra "${label}" already exists (by name) — updating instead of skipping`);
           try {
@@ -2033,7 +2166,10 @@ async function publishGranthaWithHierarchy(
   // - tasks are durable in Postgres (publish_job_tasks)
   // - workers claim queued tasks and publish with bounded concurrency
   // - keeps fan-out explicit and resumable
-  const MANTHRA_CONCURRENCY = 4;
+  const MANTHRA_CONCURRENCY = Math.min(
+    16,
+    Math.max(4, Number(process.env.PUBLISH_MANTHRA_CONCURRENCY) || 10),
+  );
   const publishManthrasBatch = async (manthras: any[], sectionDocId: string | undefined): Promise<void> => {
     if (!jobId) {
       for (let i = 0; i < manthras.length; i += MANTHRA_CONCURRENCY) {
@@ -2513,8 +2649,7 @@ async function buildManthraPayloadAsync(
     resolvedTeekas = await resolveManthraTeekas(rawTeekas);
   }
 
-  const needsStrapiSnapshot =
-    isExistingStrapi && (resolvedTeekas.length > 0 || mantraTextMergeNeeded(payload));
+  const needsStrapiSnapshot = isExistingStrapi;
 
   let strapiMantraSnapshot: any = null;
   if (needsStrapiSnapshot && strapiDocumentId) {
@@ -2587,6 +2722,7 @@ async function buildManthraPayloadAsync(
     await mergeMantraTextComponentsFromStrapi(payload, strapiDocumentId);
   }
 
+  pruneNonPublishableManthraTextFields(payload);
   sanitizeStrapiTextComponentsOnManthraLikePayload(payload);
   return payload;
 }

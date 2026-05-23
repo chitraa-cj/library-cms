@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { queryClient, apiRequest, ApiError } from "@/lib/queryClient";
-import { syncGranthaCmsCaches } from "@/lib/strapi-cache-sync";
+import { invalidateGranthaCmsCaches, syncGranthaCmsCaches } from "@/lib/strapi-cache-sync";
 import { useToast } from "@/hooks/use-toast";
 import type { Draft } from "@shared/schema";
 
@@ -54,9 +54,9 @@ export function useDrafts(contentType: string) {
   };
 
   const pollPublishJob = async (draftId: number, jobId: string) => {
-    const maxAttempts = 450; // up to 15 minutes, every 2s
+    const maxAttempts = 900; // up to 15 minutes, every 1s
     for (let attempt = 0; attempt < maxAttempts; attempt++) {
-      await new Promise((resolve) => setTimeout(resolve, 2000));
+      await new Promise((resolve) => setTimeout(resolve, 1000));
       try {
         const statusRes = await fetch(
           `/api/drafts/${draftId}/publish-status?jobId=${encodeURIComponent(jobId)}`,
@@ -262,8 +262,10 @@ export function useDrafts(contentType: string) {
       setPublishProgress(null);
       clearPersistedPublishJob();
       queryClient.invalidateQueries({ queryKey: ["/api/drafts", contentType] });
-      if (contentType === "granthas" || contentType === "manthras" || contentType === "sections") {
-        void syncGranthaCmsCaches(queryClient);
+      if (contentType === "granthas") {
+        invalidateGranthaCmsCaches(queryClient);
+      } else if (contentType === "manthras" || contentType === "sections") {
+        syncGranthaCmsCaches(queryClient);
       } else {
         void queryClient.invalidateQueries({ queryKey: ["/api/strapi"] });
       }
@@ -320,10 +322,12 @@ export function useDrafts(contentType: string) {
       void pollPublishJob(parsed.draftId, parsed.jobId)
         .then((result) => {
           queryClient.invalidateQueries({ queryKey: ["/api/drafts", contentType] });
-          if (contentType === "granthas" || contentType === "manthras" || contentType === "sections") {
-            void syncGranthaCmsCaches(queryClient);
+          if (contentType === "granthas") {
+            invalidateGranthaCmsCaches(queryClient);
+          } else if (contentType === "manthras" || contentType === "sections") {
+            syncGranthaCmsCaches(queryClient);
           } else {
-            queryClient.invalidateQueries({ queryKey: ["/api/strapi"] });
+            void queryClient.invalidateQueries({ queryKey: ["/api/strapi"] });
           }
           const allWarnings: Array<{ manthra: string; error: string }> | undefined = result?.warnings;
           if (allWarnings && allWarnings.length > 0) {

@@ -676,7 +676,15 @@ export default function ManthrasPage() {
 
                     // Manthra rows (hidden when section is collapsed)
                     if (!isCollapsed) {
-                      const sorted = [...sManthras].sort((a: any, b: any) => (a.order ?? 999) - (b.order ?? 999));
+                      const sorted = [...sManthras].sort((a: any, b: any) => {
+                        const oa = a.order ?? 999999;
+                        const ob = b.order ?? 999999;
+                        if (oa !== ob) return oa - ob;
+                        const ta = (a.ShlokaManthraNumber ?? "").toLowerCase();
+                        const tb = (b.ShlokaManthraNumber ?? "").toLowerCase();
+                        if (ta !== tb) return ta.localeCompare(tb, undefined, { numeric: true });
+                        return String(a.documentId ?? "").localeCompare(String(b.documentId ?? ""));
+                      });
                       const granthaLocked = lockedDocIds.has(gId);
                       for (let mi = 0; mi < sorted.length; mi++) {
                         const m = sorted[mi];

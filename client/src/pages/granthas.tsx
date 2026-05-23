@@ -80,7 +80,7 @@ import {
   resolveMantraSectionStrapiDocumentId,
   type SnapshotAdhyaya,
 } from "@/lib/grantha-strapi-mantra-sync";
-import { syncGranthaCmsCaches } from "@/lib/strapi-cache-sync";
+import { invalidateGranthaCmsCaches, syncGranthaCmsCaches } from "@/lib/strapi-cache-sync";
 import OtherTranslationsHermex from "@/components/other-translations-hermex";
 import {
   postStrapiSection,
@@ -602,6 +602,56 @@ function hasManthraContent(m: ManthraNode) {
     hasBlocks(m.BhashyamForShlokaManthra?.SanskritTextEntry) ||
     m.Teekas?.some((t) => hasBlocks(t.TeekaEntry?.SanskritTextEntry))
   );
+}
+
+/** After publish, the server returns a structure-only hierarchy; keep loaded verse bodies from memory. */
+function mergePublishedHierarchyPreservingContent(
+  prev: AdhyayaNode[],
+  next: AdhyayaNode[],
+): AdhyayaNode[] {
+  const prevById = new Map<string, ManthraNode>();
+  for (const a of prev) {
+    for (const k of a.khandas ?? []) {
+      for (const m of k.manthras ?? []) prevById.set(m.id, m);
+      for (const p of k.padas ?? []) {
+        for (const m of p.manthras ?? []) prevById.set(m.id, m);
+      }
+    }
+  }
+
+  const mergeManthra = (m: ManthraNode): ManthraNode => {
+    const prior = prevById.get(m.id);
+    if (!prior) return m;
+    if (!hasManthraContent(m) && hasManthraContent(prior)) {
+      return {
+        ...m,
+        ShlokaManthraEntry: prior.ShlokaManthraEntry,
+        BhashyamForShlokaManthra: prior.BhashyamForShlokaManthra,
+        Teekas: prior.Teekas,
+      };
+    }
+    return {
+      ...m,
+      ShlokaManthraEntry: mergeEntry(m.ShlokaManthraEntry, prior.ShlokaManthraEntry),
+      BhashyamForShlokaManthra: mergeEntry(m.BhashyamForShlokaManthra, prior.BhashyamForShlokaManthra),
+      Teekas:
+        m.Teekas?.length || !prior.Teekas?.length
+          ? m.Teekas
+          : prior.Teekas,
+    };
+  };
+
+  return next.map((a) => ({
+    ...a,
+    khandas: (a.khandas ?? []).map((k) => ({
+      ...k,
+      manthras: (k.manthras ?? []).map(mergeManthra),
+      padas: (k.padas ?? []).map((p) => ({
+        ...p,
+        manthras: (p.manthras ?? []).map(mergeManthra),
+      })),
+    })),
+  }));
 }
 
 // ---------- Grantha Card ----------
@@ -1295,7 +1345,7 @@ export default function GranthasPage() {
         grantha_name: formData.GranthaName,
         warnings: warnCount,
       });
-      void syncGranthaCmsCaches(queryClient);
+      invalidateGranthaCmsCaches(queryClient);
       toast({
         title: "Mantra published to CMS",
         description:
@@ -3103,7 +3153,7 @@ export default function GranthasPage() {
               return merged;
             });
           }
-          void syncGranthaCmsCaches(queryClient);
+          invalidateGranthaCmsCaches(queryClient);
         })
         .catch((e: unknown) => {
           const msg = e instanceof Error ? e.message : String(e);
@@ -3149,7 +3199,7 @@ export default function GranthasPage() {
             return merged;
           });
         }
-        void syncGranthaCmsCaches(queryClient);
+        invalidateGranthaCmsCaches(queryClient);
       })
       .catch((e: unknown) => {
         const msg = e instanceof Error ? e.message : String(e);
@@ -3173,7 +3223,7 @@ export default function GranthasPage() {
     await syncStrapiSectionOrderAndTitles(
       collectAllSectionOrderSyncRowsFromHierarchy(snapshot, cfg),
     );
-    void syncGranthaCmsCaches(queryClient);
+    invalidateGranthaCmsCaches(queryClient);
   }
 
   /** Debounced: mirror full section tree order+titles to Strapi (e.g. after renaming sections). */
@@ -3642,21 +3692,20 @@ export default function GranthasPage() {
                 const granthaSidForFlush =
                   newStrapiDocId ||
                   (editingItem && !editingItem._isDraft ? editingItem.documentId : editingItem?._strapiDocId);
-                const finishPublishSync = async (nh: AdhyayaNode[]) => {
-                  if (isPublishedStrapiDocId(granthaSidForFlush)) {
-                    flushStrapiFullHierarchySectionOrderSyncNow(nh, structureConfig, true);
-                    await flushFullMantraIdentityAlignToStrapiNow(nh, structureConfig);
-                  }
-                  await syncGranthaCmsCaches(queryClient);
-                };
-
+                // Publish already wrote mantra content + labels; skip post-publish
+                // full-grantha identity re-sync (was duplicating 1000+ Strapi PUTs).
                 if (Array.isArray(updatedHierarchy)) {
-                  const nh = withNormalizedHierarchy(updatedHierarchy as AdhyayaNode[], structureConfig);
+                  const merged = mergePublishedHierarchyPreservingContent(
+                    adhyayasRef.current,
+                    updatedHierarchy as AdhyayaNode[],
+                  );
+                  const nh = withNormalizedHierarchy(merged, structureConfig);
                   setAdhyayas(nh);
-                  void finishPublishSync(nh);
-                } else {
-                  void syncGranthaCmsCaches(queryClient);
+                  if (isPublishedStrapiDocId(granthaSidForFlush)) {
+                    void runStrapiFullHierarchySectionOrderSync(nh, structureConfig, true);
+                  }
                 }
+                invalidateGranthaCmsCaches(queryClient);
 
                 // If this was a brand-new grantha (no prior Strapi link), the publish
                 // created a Strapi record. Capture its docId so subsequent saves

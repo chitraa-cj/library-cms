@@ -1,5 +1,11 @@
 import { apiRequest, ApiError } from "@/lib/queryClient";
-import { sortNodesByOrder, isPublishedStrapiDocId, type GranthaStructureConfig } from "@/lib/grantha-structure-sync";
+import {
+  sortNodesByOrder,
+  isPublishedStrapiDocId,
+  findStrapiMantraByNumberSuffix,
+  type GranthaStructureConfig,
+  type StrapiMantraRef,
+} from "@/lib/grantha-structure-sync";
 
 /** Minimal hierarchy snapshot for Strapi section + mantra identity sync. */
 export type ManthraSnap = {
@@ -153,6 +159,123 @@ export async function strapiDeleteMantrasBestEffort(documentIds: string[]): Prom
   return failed;
 }
 
+/** Look up a published manthra in a section by its portal/CMS label. */
+export async function lookupStrapiMantraDocIdByLabel(
+  sectionDocumentId: string,
+  label: string,
+): Promise<string | undefined> {
+  const trimmed = label.trim();
+  if (!trimmed || !isPublishedStrapiDocId(sectionDocumentId)) return undefined;
+
+  const res = await apiRequest(
+    "GET",
+    `/api/strapi/manthras?filters[Section][documentId][$eq]=${encodeURIComponent(sectionDocumentId)}&filters[ShlokaManthraNumber][$eqi]=${encodeURIComponent(trimmed)}&fields[0]=documentId&fields[1]=ShlokaManthraNumber&pagination[pageSize]=5`,
+  );
+  const json = await res.json().catch(() => ({}));
+  const rows = (json?.data ?? []) as Array<{ documentId?: string; ShlokaManthraNumber?: string }>;
+  if (rows.length === 1) return rows[0].documentId;
+  if (rows.length > 1) return rows[0].documentId;
+
+  const listRes = await apiRequest(
+    "GET",
+    `/api/strapi/manthras?filters[Section][documentId][$eq]=${encodeURIComponent(sectionDocumentId)}&fields[0]=documentId&fields[1]=ShlokaManthraNumber&fields[2]=order&pagination[pageSize]=250`,
+  );
+  const listJson = await listRes.json().catch(() => ({}));
+  const refs: StrapiMantraRef[] = (listJson?.data ?? [])
+    .filter((r: { documentId?: string }) => typeof r.documentId === "string")
+    .map((r: { documentId: string; ShlokaManthraNumber?: string; order?: number }) => ({
+      title: String(r.ShlokaManthraNumber ?? ""),
+      docId: r.documentId,
+      order: typeof r.order === "number" ? r.order : 0,
+    }));
+  return findStrapiMantraByNumberSuffix(refs, trimmed)?.docId;
+}
+
+export type MantraSectionSyncTarget = {
+  adhyayaId: string;
+  khandaId: string;
+  padaId?: string;
+};
+
+export type MantraDocIdPatch = MantraSectionSyncTarget & {
+  manthraId: string;
+  strapiDocumentId: string;
+};
+
+/** Every section in the hierarchy that owns a published mantra list. */
+export function collectMantraSectionSyncTargets(
+  snapshot: SnapshotAdhyaya[],
+  cfg: GranthaStructureConfig,
+): MantraSectionSyncTarget[] {
+  const targets: MantraSectionSyncTarget[] = [];
+  const seenSectionDocIds = new Set<string>();
+
+  for (const a of snapshot) {
+    for (const k of a.khandas ?? []) {
+      const levelThree = !!cfg.levelThreeEnabled && (k.padas?.length ?? 0) > 0;
+      if (levelThree) {
+        for (const p of k.padas ?? []) {
+          const secId = resolveMantraSectionStrapiDocumentId(snapshot, a.id, k.id, p.id, cfg);
+          if (!secId || seenSectionDocIds.has(secId)) continue;
+          seenSectionDocIds.add(secId);
+          targets.push({ adhyayaId: a.id, khandaId: k.id, padaId: p.id });
+        }
+      } else {
+        const secId = resolveMantraSectionStrapiDocumentId(snapshot, a.id, k.id, undefined, cfg);
+        if (!secId || seenSectionDocIds.has(secId)) continue;
+        seenSectionDocIds.add(secId);
+        targets.push({ adhyayaId: a.id, khandaId: k.id });
+      }
+    }
+  }
+  return targets;
+}
+
+export function applyMantraDocIdPatches<T extends SnapshotAdhyaya>(
+  snapshot: T[],
+  patches: MantraDocIdPatch[],
+): T[] {
+  let result = snapshot;
+  const bySection = new Map<string, MantraDocIdPatch[]>();
+  for (const p of patches) {
+    const key = `${p.adhyayaId}\0${p.khandaId}\0${p.padaId ?? ""}`;
+    if (!bySection.has(key)) bySection.set(key, []);
+    bySection.get(key)!.push(p);
+  }
+  for (const group of bySection.values()) {
+    const first = group[0];
+    result = mergeMantraStrapiDocumentIds(
+      result,
+      first.adhyayaId,
+      first.khandaId,
+      first.padaId,
+      group.map((g) => ({ manthraId: g.manthraId, strapiDocumentId: g.strapiDocumentId })),
+    );
+  }
+  return result;
+}
+
+/** Mirror every mantra section in the grantha to Strapi (labels + order + docId links). */
+export async function syncAllMantraSectionsInGrantha(
+  snapshot: SnapshotAdhyaya[],
+  cfg: GranthaStructureConfig,
+): Promise<MantraDocIdPatch[]> {
+  const all: MantraDocIdPatch[] = [];
+  for (const ctx of collectMantraSectionSyncTargets(snapshot, cfg)) {
+    const patches = await pushMantraSectionIdentityToStrapi(
+      snapshot,
+      ctx.adhyayaId,
+      ctx.khandaId,
+      ctx.padaId,
+      cfg,
+    );
+    for (const p of patches) {
+      all.push({ ...ctx, ...p });
+    }
+  }
+  return all;
+}
+
 async function strapiBatchIdentitySync(
   updates: Array<{ documentId: string; order: number; ShlokaManthraNumber: string }>,
 ): Promise<void> {
@@ -189,6 +312,19 @@ export async function pushMantraSectionIdentityToStrapi(
   // call insert-between on the row directly above — never duplicate or skip a slot.
   for (let i = 0; i < sorted.length; i++) {
     const m = sorted[i];
+    const portalLabel = (m.title ?? "").trim();
+
+    if (portalLabel) {
+      const byLabel = await lookupStrapiMantraDocIdByLabel(sectionDocumentId, portalLabel);
+      if (byLabel) {
+        resolved.set(m.id, byLabel);
+        if (!isPublishedStrapiDocId(m.strapiDocumentId) || m.strapiDocumentId !== byLabel) {
+          patches.push({ manthraId: m.id, strapiDocumentId: byLabel });
+        }
+        continue;
+      }
+    }
+
     if (isPublishedStrapiDocId(m.strapiDocumentId)) {
       resolved.set(m.id, m.strapiDocumentId!);
       continue;

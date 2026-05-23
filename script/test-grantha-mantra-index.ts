@@ -7,6 +7,10 @@ import {
   reindexMantrasContiguous,
   reindexMantrasInListOrder,
   titlePrefixFromMantraTitle,
+  mantraNumberSuffix,
+  mantrasShareNumberSuffix,
+  resolvePortalMantraToStrapiDoc,
+  buildUniqueStrapiOrderMap,
   buildMantraDisplayTitle,
   ordinalIndexInSortedOrder,
   normalizeEditorHierarchy,
@@ -99,6 +103,28 @@ assert.equal(ordinalIndexInSortedOrder(siblings, "second"), 2);
 
 assert.equal(titlePrefixFromMantraTitle("Shloka 1.1.23", "Shloka"), "Shloka");
 assert.equal(titlePrefixFromMantraTitle("", "Mantra"), "Mantra");
+assert.equal(titlePrefixFromMantraTitle("Mantra 1.1.1", "Shloka"), "Shloka");
+assert.equal(titlePrefixFromMantraTitle("Manthra 1.2", "Shloka"), "Shloka");
+
+assert.equal(mantraNumberSuffix("Mantra 1.1.5"), "1.1.5");
+assert.equal(mantrasShareNumberSuffix("Shloka 1.1.5", "Mantra 1.1.5"), true);
+
+const sectionRefs = [
+  { title: "Mantra 1.1.5", docId: "doc-aaaa1111111111", order: 5 },
+  { title: "Mantra 1.1.6", docId: "doc-bbbb2222222222", order: 6 },
+  { title: "Mantra 1.1.4", docId: "doc-cccc3333333333", order: 4 },
+  { title: "Mantra 1.1.4", docId: "doc-dddd4444444444", order: 4 },
+];
+const { byOrder, ambiguousOrders } = buildUniqueStrapiOrderMap(sectionRefs);
+assert(ambiguousOrders.has(4));
+assert.equal(byOrder.get(5)?.docId, "doc-aaaa1111111111");
+
+const byExact = new Map<string, string>([["Mantra 1.1.5", "doc-aaaa1111111111"]]);
+const remap = resolvePortalMantraToStrapiDoc(
+  { title: "Mantra 1.1.5", order: 5, strapiDocumentId: "doc-bbbb2222222222" },
+  { byExactTitle: byExact, sectionMantras: sectionRefs, byOrder, ambiguousOrders },
+);
+assert.equal(remap?.docId, "doc-aaaa1111111111");
 
 const flat: MantraTitleCtx = {
   leaf: "Shloka",
@@ -108,6 +134,22 @@ const flat: MantraTitleCtx = {
   padaPath: false,
   levelTwoEnabled: false,
 };
+
+const mantraLabeled = [
+  { id: "m1", title: "Mantra 1.1", order: 1 },
+  { id: "m2", title: "Mantra 1.2", order: 2 },
+];
+const afterMantraStyleInsert = reindexMantrasInListOrder(
+  assignContiguousMantraOrders([
+    mantraLabeled[0],
+    { id: "new", title: "", order: 0 },
+    mantraLabeled[1],
+  ]),
+  flat,
+);
+assert.equal(afterMantraStyleInsert.find((m) => m.id === "new")?.title, "Shloka 1.2");
+assert.equal(afterMantraStyleInsert.find((m) => m.id === "m1")?.title, "Shloka 1.1");
+assert.equal(afterMantraStyleInsert.find((m) => m.id === "m2")?.title, "Shloka 1.3");
 
 const drifted = [
   { id: "a", title: "Shloka 1.23", order: 23, note: "first row" },

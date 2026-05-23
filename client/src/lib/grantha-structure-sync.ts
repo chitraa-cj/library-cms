@@ -39,10 +39,140 @@ export interface MantraTitleCtx {
   levelTwoEnabled: boolean;
 }
 
+/** Leaf labels offered in the grantha wizard — titles using these prefixes follow `structureConfig.leafName`. */
+export const PORTAL_SELECTABLE_LEAF_NAMES = [
+  "Mantra",
+  "Manthra",
+  "Shloka",
+  "Sutra",
+  "Anuvaka",
+  "Pada",
+  "Tirtha",
+  "Utsava",
+  "Vivarana",
+] as const;
+
+/** Strapi mantra row used when linking portal hierarchy nodes to CMS documentIds. */
+export type StrapiMantraRef = { title: string; docId: string; order: number };
+
+/** Trailing numeric segment, e.g. `"Mantra 1.1.5"` → `"1.1.5"`. */
+export function mantraNumberSuffix(title: string | undefined): string | null {
+  const t = (title ?? "").trim();
+  if (!t) return null;
+  const m = t.match(/(\d+(?:\.\d+)+)\s*$/);
+  return m ? m[1] : null;
+}
+
+export function mantrasShareNumberSuffix(a: string | undefined, b: string | undefined): boolean {
+  const sa = mantraNumberSuffix(a);
+  const sb = mantraNumberSuffix(b);
+  if (!sa || !sb) return (a ?? "").trim() === (b ?? "").trim();
+  return sa === sb;
+}
+
+/** `order` keys with more than one Strapi row are excluded (unsafe for remapping). */
+export function buildUniqueStrapiOrderMap(manthras: StrapiMantraRef[]): {
+  byOrder: Map<number, StrapiMantraRef>;
+  ambiguousOrders: Set<number>;
+} {
+  const byOrder = new Map<number, StrapiMantraRef>();
+  const ambiguousOrders = new Set<number>();
+  for (const sm of mantras) {
+    if (sm.order == null || Number.isNaN(sm.order)) continue;
+    if (byOrder.has(sm.order)) {
+      ambiguousOrders.add(sm.order);
+      byOrder.delete(sm.order);
+    } else if (!ambiguousOrders.has(sm.order)) {
+      byOrder.set(sm.order, sm);
+    }
+  }
+  return { byOrder, ambiguousOrders };
+}
+
+export function findStrapiMantraByNumberSuffix(
+  mantras: StrapiMantraRef[],
+  portalTitle: string | undefined,
+): StrapiMantraRef | undefined {
+  const suffix = mantraNumberSuffix(portalTitle);
+  if (!suffix) return undefined;
+  const hits = mantras.filter((sm) => mantraNumberSuffix(sm.title) === suffix);
+  return hits.length === 1 ? hits[0] : undefined;
+}
+
+export interface ResolvePortalMantraStrapiOptions {
+  byExactTitle: Map<string, string>;
+  sectionMantras: StrapiMantraRef[];
+  byOrder: Map<number, StrapiMantraRef>;
+  ambiguousOrders: Set<number>;
+}
+
+/**
+ * Map a portal mantra node to the correct Strapi documentId.
+ * Number suffix (1.1.5) wins over a stale stored docId; order fallback is skipped when ambiguous.
+ */
+export function resolvePortalMantraToStrapiDoc(
+  portal: { title?: string; order?: number; strapiDocumentId?: string },
+  opts: ResolvePortalMantraStrapiOptions,
+): { docId: string | undefined; strapiTitle?: string } | undefined {
+  const { byExactTitle, sectionMantras, byOrder, ambiguousOrders } = opts;
+
+  const bySuffix = portal.title
+    ? findStrapiMantraByNumberSuffix(sectionMantras, portal.title)
+    : undefined;
+
+  if (bySuffix) {
+    if (!portal.strapiDocumentId || portal.strapiDocumentId !== bySuffix.docId) {
+      return { docId: bySuffix.docId, strapiTitle: bySuffix.title };
+    }
+    return { docId: bySuffix.docId };
+  }
+
+  if (portal.title && byExactTitle.has(portal.title)) {
+    return { docId: byExactTitle.get(portal.title)! };
+  }
+
+  if (portal.strapiDocumentId) {
+    const sm = sectionMantras.find((s) => s.docId === portal.strapiDocumentId);
+    if (sm) {
+      if (!portal.title || mantrasShareNumberSuffix(portal.title, sm.title)) {
+        return { docId: portal.strapiDocumentId };
+      }
+      return { docId: undefined };
+    }
+    if (
+      portal.order != null &&
+      !ambiguousOrders.has(portal.order) &&
+      byOrder.has(portal.order)
+    ) {
+      const remapped = byOrder.get(portal.order)!;
+      return { docId: remapped.docId, strapiTitle: remapped.title };
+    }
+    return { docId: undefined };
+  }
+
+  if (
+    portal.order != null &&
+    !ambiguousOrders.has(portal.order) &&
+    byOrder.has(portal.order)
+  ) {
+    const sm = byOrder.get(portal.order)!;
+    return { docId: sm.docId, strapiTitle: sm.title };
+  }
+
+  return undefined;
+}
+
 export function titlePrefixFromMantraTitle(title: string | undefined, leaf: string): string {
+  const configuredLeaf = (leaf ?? "Mantra").trim() || "Mantra";
   const t = title ?? "";
+  if (!t.trim()) return configuredLeaf;
   const m = t.match(/^(.+?)\s+[\d.]+$/);
-  return m ? m[1] : leaf;
+  if (!m) return configuredLeaf;
+  const prefix = m[1].trim();
+  const isPortalAutoLeaf = PORTAL_SELECTABLE_LEAF_NAMES.some(
+    (name) => name.toLowerCase() === prefix.toLowerCase(),
+  );
+  return isPortalAutoLeaf ? configuredLeaf : prefix;
 }
 
 export function buildMantraDisplayTitle(pfx: string, orderNum: number, ctx: MantraTitleCtx): string {

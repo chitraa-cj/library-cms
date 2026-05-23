@@ -706,8 +706,9 @@ async function buildManthraData(
   granthaDocId?: string,
   teekaNameToDocId?: Map<string, string>
 ): Promise<Record<string, any>> {
+  // Portal `title` is what the user sees in the hierarchy; it must win over any stale CMS field.
   const mData: Record<string, any> = {
-    ShlokaManthraNumber: manthra.ShlokaManthraNumber || manthra.title || "",
+    ShlokaManthraNumber: (manthra.title || manthra.ShlokaManthraNumber || "").trim(),
   };
   if (manthra.order != null) {
     const n = Number(manthra.order);
@@ -1465,6 +1466,129 @@ async function deleteOrphanedManthra(docId: string, label: string): Promise<void
   }
 }
 
+function portalMantraLabel(manthra: Record<string, any>, mData?: Record<string, any>): string {
+  return String(mData?.ShlokaManthraNumber ?? manthra.title ?? manthra.ShlokaManthraNumber ?? "").trim();
+}
+
+function mantraNumericSuffix(label: string): string | null {
+  const m = label.match(/(\d+(?:\.\d+)+)\s*$/);
+  return m ? m[1] : null;
+}
+
+function mantraLabelsShareNumber(a: string, b: string): boolean {
+  const sa = mantraNumericSuffix(a);
+  const sb = mantraNumericSuffix(b);
+  if (!sa || !sb) return a.trim().toLowerCase() === b.trim().toLowerCase();
+  return sa === sb;
+}
+
+/** Find the Strapi manthra in a section whose ShlokaManthraNumber matches the portal label. */
+async function findManthraDocIdByLabelInSection(
+  sectionDocId: string,
+  label: string,
+): Promise<string | undefined> {
+  const trimmed = label.trim();
+  if (!trimmed || !sectionDocId) return undefined;
+  const n = encodeURIComponent(trimmed);
+  const s = encodeURIComponent(sectionDocId);
+  const existing = await strapiRequest(
+    `/api/manthras?filters[ShlokaManthraNumber][$eqi]=${n}&filters[Section][documentId][$eq]=${s}&fields[0]=documentId&pagination[pageSize]=5`,
+  );
+  const rows: any[] = existing?.data ?? [];
+  return rows[0]?.documentId;
+}
+
+/**
+ * Resolve which Strapi document should receive a publish PUT.
+ * The portal hierarchy `title` (e.g. "Shloka 1.1.5") is authoritative — never write content
+ * to a stored docId whose ShlokaManthraNumber points at a different verse.
+ */
+async function resolveManthraDocIdForPublish(
+  manthra: Record<string, any>,
+  sectionDocId: string | undefined,
+  mData: Record<string, any>,
+): Promise<string | undefined> {
+  const portalLabel = portalMantraLabel(manthra, mData);
+  const stored =
+    typeof manthra.strapiDocumentId === "string" && manthra.strapiDocumentId.length >= 10
+      ? manthra.strapiDocumentId
+      : undefined;
+
+  if (!sectionDocId) return stored;
+
+  if (portalLabel) {
+    const byLabel = await findManthraDocIdByLabelInSection(sectionDocId, portalLabel);
+    if (byLabel) {
+      if (stored && stored !== byLabel) {
+        console.warn(
+          `[publish] Portal "${portalLabel}" → Strapi doc ${byLabel}; ignoring stale strapiDocumentId ${stored}`,
+        );
+      }
+      return byLabel;
+    }
+  }
+
+  if (!stored) return undefined;
+
+  if (!portalLabel) return stored;
+
+  try {
+    const row = (await strapiRequest(`/api/manthras/${stored}?fields[0]=ShlokaManthraNumber`))?.data;
+    const strapiNum = String(row?.ShlokaManthraNumber ?? "").trim();
+    if (!strapiNum || mantraLabelsShareNumber(portalLabel, strapiNum)) return stored;
+    console.warn(
+      `[publish] Stored doc ${stored} is "${strapiNum}" but portal shows "${portalLabel}" — will upsert by label`,
+    );
+    return undefined;
+  } catch {
+    return stored;
+  }
+}
+
+/** Publish one mantra: content + order + ShlokaManthraNumber always match the portal row label. */
+async function publishManthraToStrapi(
+  manthra: Record<string, any>,
+  sectionDocId: string | undefined,
+  granthaDocId: string | undefined,
+  teekaNameToDocId: Map<string, string> | undefined,
+  publishFailures: Array<{ manthra: string; error: string }>,
+): Promise<string | undefined> {
+  const portalLabel = (manthra.title || manthra.ShlokaManthraNumber || "").trim();
+  const prelimData = { ShlokaManthraNumber: portalLabel };
+  const targetDocId = await resolveManthraDocIdForPublish(manthra, sectionDocId, prelimData);
+  const manthraForBuild =
+    targetDocId && targetDocId !== manthra.strapiDocumentId
+      ? { ...manthra, strapiDocumentId: targetDocId }
+      : manthra;
+  const mData = await buildManthraData(manthraForBuild, sectionDocId, granthaDocId, teekaNameToDocId);
+  if (portalLabel) {
+    mData.ShlokaManthraNumber = portalLabel;
+  }
+
+  const label = portalMantraLabel(manthra, mData) || manthra.title || "(unknown)";
+
+  if (targetDocId && Object.keys(mData).length === 0) {
+    return targetDocId;
+  }
+
+  if (targetDocId) {
+    try {
+      return await updateExistingManthra(targetDocId, mData, label, publishFailures);
+    } catch (putErr: any) {
+      if (isOrphanedDocError(putErr)) {
+        console.warn(
+          `[publish] Manthra "${label}" — PUT ${putErr?.status} orphaned (docId ${targetDocId}), deleting then recreating`,
+        );
+        await deleteOrphanedManthra(targetDocId, label);
+        return createOrUpdateManthra(mData, label, publishFailures, true);
+      }
+      throw putErr;
+    }
+  }
+
+  return createOrUpdateManthra(mData, label, publishFailures);
+}
+
 // Helper: create a manthra in Strapi if one with the same ShlokaManthraNumber+Section doesn't exist.
 // If one IS found, UPDATE it so that content changes (teeka entries, shloka text, etc.)
 // are never silently discarded.  A manthra can end up here without a stored strapiDocumentId
@@ -1521,8 +1645,8 @@ async function createOrUpdateManthra(
       }
     }
 
-    // 2) Order match — same position → likely the same manthra entered under a slightly different label
-    if (mData.order != null) {
+    // 2) Order match — only when the portal did not supply a verse label (avoid writing to the wrong row).
+    if (!number?.trim() && mData.order != null) {
       try {
         const o = encodeURIComponent(String(mData.order));
         const existingByOrder = await strapiRequest(
@@ -1837,57 +1961,19 @@ async function publishGranthaWithHierarchy(
     sectionDocId: string | undefined
   ): Promise<boolean> => {
     try {
-      const mData = await buildManthraData(manthra, sectionDocId, granthaDocId, teekaNameToDocId);
-
-      // ── Sanitise stored Strapi documentId ────────────────────────────────────
-      // Strapi v5 documentIds are 20+ characters (e.g. "nljnhc539t2q4z7im448nznm").
-      // Portal-generated UIDs (e.g. "k2tz7vh" — 7 chars) are local IDs that were
-      // accidentally stored as strapiDocumentId due to a data-corruption bug.
-      // Reject any stored ID shorter than 10 chars so we never fire a doomed PUT
-      // and never perpetuate the wrong ID in the draft.
-      const storedDocId =
-        manthra.strapiDocumentId && manthra.strapiDocumentId.length >= 10
-          ? manthra.strapiDocumentId
-          : undefined;
-      if (!storedDocId && manthra.strapiDocumentId) {
+      if (manthra.strapiDocumentId && manthra.strapiDocumentId.length < 10) {
         console.warn(
-          `[publish] Manthra "${manthra.ShlokaManthraNumber || manthra.title}" — strapiDocumentId "${manthra.strapiDocumentId}" looks like a local portal UID (too short), ignoring it and using create-or-update`
+          `[publish] Manthra "${manthra.title}" — strapiDocumentId "${manthra.strapiDocumentId}" looks like a local portal UID (too short), ignoring it`,
         );
       }
 
-      // ── Payload guard ─────────────────────────────────────────────────────────
-      // Strapi v5 PUT merges fields — omitted fields stay on the record (see `strapiManthraRequest`).
-      // Always send `order` + `ShlokaManthraNumber` when present so insert/delete renumbering in
-      // the draft reaches Strapi on publish, even if the user never opened that mantra locally.
-      // Only skip when `buildManthraData` produced nothing left after cleaning (rare).
-      if (storedDocId && Object.keys(mData).length === 0) {
-        console.log(`[publish] Manthra "${manthra.title}" — empty Strapi payload after clean, skipping PUT, syncing docId`);
-        if (manthra.id) manthraIdToDocId.set(manthra.id, storedDocId);
-        return true;
-      }
-
-      console.log(`[publish] Manthra payload:`, JSON.stringify(mData).slice(0, 300));
-      let returnedDocId: string | undefined;
-      if (storedDocId) {
-        try {
-          returnedDocId = await updateExistingManthra(storedDocId, mData, manthra.title, publishFailures);
-        } catch (putErr: any) {
-          if (isOrphanedDocError(putErr)) {
-            // The stored Strapi docId is orphaned (manthra deleted or locale=null).
-            // DELETE it from Strapi so the subsequent POST has no duplicate conflict,
-            // then recreate with skipLookup=true to bypass the dedup search.
-            console.warn(
-              `[publish] Manthra "${manthra.ShlokaManthraNumber || manthra.title}" — PUT ${putErr?.status} orphaned (docId ${storedDocId}), deleting then recreating`
-            );
-            await deleteOrphanedManthra(storedDocId, manthra.ShlokaManthraNumber || manthra.title);
-            returnedDocId = await createOrUpdateManthra(mData, manthra.title, publishFailures, true);
-          } else {
-            throw putErr;
-          }
-        }
-      } else {
-        returnedDocId = await createOrUpdateManthra(mData, manthra.title, publishFailures);
-      }
+      const returnedDocId = await publishManthraToStrapi(
+        manthra,
+        sectionDocId,
+        granthaDocId,
+        teekaNameToDocId,
+        publishFailures,
+      );
       if (returnedDocId && manthra.id) {
         manthraIdToDocId.set(manthra.id, returnedDocId);
       }
@@ -3061,29 +3147,14 @@ export async function registerRoutes(
         return res.status(500).json({ message: "Could not resolve target section in Strapi" });
       }
 
-      // Build and publish the single manthra
       const publishFailures: Array<{ manthra: string; error: string }> = [];
-      const mData = await buildManthraData(manthraNode, sectionDocId, granthaDocId, teekaNameToDocId);
-
-      const storedDocId = manthraNode.strapiDocumentId && manthraNode.strapiDocumentId.length >= 10
-        ? manthraNode.strapiDocumentId : undefined;
-
-      let returnedDocId: string | undefined;
-      if (storedDocId) {
-        try {
-          returnedDocId = await updateExistingManthra(storedDocId, mData, manthraNode.title, publishFailures);
-        } catch (putErr: any) {
-          if (isOrphanedDocError(putErr)) {
-            console.warn(`[publish-manthra] PUT ${putErr?.status} — orphaned docId ${storedDocId}, deleting then recreating`);
-            await deleteOrphanedManthra(storedDocId, manthraNode.ShlokaManthraNumber || manthraNode.title);
-            returnedDocId = await createOrUpdateManthra(mData, manthraNode.title, publishFailures, true);
-          } else {
-            throw putErr;
-          }
-        }
-      } else {
-        returnedDocId = await createOrUpdateManthra(mData, manthraNode.title, publishFailures);
-      }
+      const returnedDocId = await publishManthraToStrapi(
+        manthraNode,
+        sectionDocId,
+        granthaDocId,
+        teekaNameToDocId,
+        publishFailures,
+      );
 
       // Update the draft hierarchy with the new strapiDocumentId so the next save persists it
       if (returnedDocId && manthraNode.id) {

@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { queryClient, apiRequest, ApiError } from "@/lib/queryClient";
+import { invalidateGranthaCmsCaches } from "@/lib/strapi-cache-sync";
 import { useToast } from "@/hooks/use-toast";
 import type { Draft } from "@shared/schema";
 
@@ -261,7 +262,11 @@ export function useDrafts(contentType: string) {
       setPublishProgress(null);
       clearPersistedPublishJob();
       queryClient.invalidateQueries({ queryKey: ["/api/drafts", contentType] });
-      queryClient.invalidateQueries({ queryKey: ["/api/strapi"] });
+      if (contentType === "granthas" || contentType === "manthras" || contentType === "sections") {
+        invalidateGranthaCmsCaches(queryClient);
+      } else {
+        queryClient.invalidateQueries({ queryKey: ["/api/strapi"] });
+      }
 
       const allWarnings: Array<{ manthra: string; error: string }> | undefined = data?.warnings;
       if (allWarnings && allWarnings.length > 0) {
@@ -315,7 +320,11 @@ export function useDrafts(contentType: string) {
       void pollPublishJob(parsed.draftId, parsed.jobId)
         .then((result) => {
           queryClient.invalidateQueries({ queryKey: ["/api/drafts", contentType] });
-          queryClient.invalidateQueries({ queryKey: ["/api/strapi"] });
+          if (contentType === "granthas" || contentType === "manthras" || contentType === "sections") {
+            invalidateGranthaCmsCaches(queryClient);
+          } else {
+            queryClient.invalidateQueries({ queryKey: ["/api/strapi"] });
+          }
           const allWarnings: Array<{ manthra: string; error: string }> | undefined = result?.warnings;
           if (allWarnings && allWarnings.length > 0) {
             toast({

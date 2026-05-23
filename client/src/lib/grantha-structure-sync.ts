@@ -10,8 +10,106 @@ export function isPublishedStrapiDocId(id: string | undefined): id is string {
   return typeof id === "string" && id.length >= STRAPI_DOCUMENT_ID_MIN_LENGTH;
 }
 
-export function sortNodesByOrder<T extends { order?: number }>(nodes: T[]): T[] {
-  return [...nodes].sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
+export function sortNodesByOrder<T extends { order?: number; id?: string }>(nodes: T[]): T[] {
+  return [...nodes].sort((a, b) => {
+    const d = (a.order ?? 0) - (b.order ?? 0);
+    if (d !== 0) return d;
+    return String(a.id ?? "").localeCompare(String(b.id ?? ""));
+  });
+}
+
+/** 1-based index of `id` in `sortNodesByOrder(nodes)` — use for titles that must match sorted hierarchy. */
+export function ordinalIndexInSortedOrder<T extends { id: string; order?: number }>(
+  nodes: T[] | undefined,
+  id: string,
+): number {
+  const sorted = sortNodesByOrder(nodes ?? []);
+  const i = sorted.findIndex((n) => n.id === id);
+  return i >= 0 ? i + 1 : 1;
+}
+
+/** Context for rebuilding mantra display titles and contiguous `order` after insert/delete. */
+export interface MantraTitleCtx {
+  leaf: string;
+  aIdx: number;
+  kIdx: number;
+  pIdx?: number;
+  isDefaultKhanda: boolean;
+  padaPath: boolean;
+  levelTwoEnabled: boolean;
+}
+
+export function titlePrefixFromMantraTitle(title: string | undefined, leaf: string): string {
+  const t = title ?? "";
+  const m = t.match(/^(.+?)\s+[\d.]+$/);
+  return m ? m[1] : leaf;
+}
+
+export function buildMantraDisplayTitle(pfx: string, orderNum: number, ctx: MantraTitleCtx): string {
+  if (ctx.padaPath && ctx.pIdx != null) {
+    return ctx.isDefaultKhanda
+      ? `${pfx} ${ctx.aIdx}.${ctx.pIdx}.${orderNum}`
+      : `${pfx} ${ctx.aIdx}.${ctx.kIdx}.${ctx.pIdx}.${orderNum}`;
+  }
+  if (ctx.levelTwoEnabled && !ctx.isDefaultKhanda) {
+    return `${pfx} ${ctx.aIdx}.${ctx.kIdx}.${orderNum}`;
+  }
+  return `${pfx} ${ctx.aIdx}.${orderNum}`;
+}
+
+function assignContiguousOrderAndTitles<T extends { id: string; title: string; order: number }>(
+  manthrasInDisplayOrder: T[],
+  ctx: MantraTitleCtx,
+): T[] {
+  return manthrasInDisplayOrder.map((m, idx) => {
+    const orderNum = idx + 1;
+    const pfx = titlePrefixFromMantraTitle(m.title, ctx.leaf);
+    return {
+      ...m,
+      order: orderNum,
+      title: buildMantraDisplayTitle(pfx, orderNum, ctx),
+    };
+  });
+}
+
+/**
+ * Sort by `order`, then assign contiguous `order` 1…n and titles from hierarchy + position.
+ * Preserves each row's `id` and all other fields — only `order` and `title` change.
+ */
+export function reindexMantrasContiguous<T extends { id: string; title: string; order: number }>(
+  manthras: T[],
+  ctx: MantraTitleCtx,
+): T[] {
+  return assignContiguousOrderAndTitles(sortNodesByOrder(manthras), ctx);
+}
+
+/**
+ * Same as `reindexMantrasContiguous` but uses the **array order** of `manthras` as display order
+ * (no sort). Use after insert/append when items are already in the correct sequence.
+ */
+export function reindexMantrasInListOrder<T extends { id: string; title: string; order: number }>(
+  manthrasInDisplayOrder: T[],
+  ctx: MantraTitleCtx,
+): T[] {
+  return assignContiguousOrderAndTitles(manthrasInDisplayOrder, ctx);
+}
+
+/**
+ * Sort by `order`, assign contiguous `order` 1…n, **without** changing `title`.
+ * Use after delete when the user chose not to renumber verse labels but Strapi/UI still need a clean `order` sequence.
+ */
+export function reindexMantraOrdersPreservingTitles<T extends { id: string; title: string; order: number }>(
+  manthras: T[] | undefined,
+): T[] {
+  return sortNodesByOrder(manthras ?? []).map((m, idx) => ({
+    ...m,
+    order: idx + 1,
+  }));
+}
+
+/** Assign `order` 1…n in the given list sequence (use after splice insert/delete before normalize). */
+export function assignContiguousMantraOrders<T extends { order: number }>(manthrasInDisplayOrder: T[]): T[] {
+  return manthrasInDisplayOrder.map((m, idx) => ({ ...m, order: idx + 1 }));
 }
 
 /** Subset of portal `structureConfig` used for sync logic */
@@ -58,6 +156,109 @@ export interface SyncAdhyayaNode {
   khandas: SyncKhandaNode[];
   expanded: boolean;
   documentId?: string;
+}
+
+/**
+ * Sanskrit ordinals used for default section labels in the portal editor.
+ * Keep in sync with `ORDINALS` in `client/src/pages/granthas.tsx`.
+ */
+const PORTAL_SECTION_ORDINALS = [
+  "Prathama",
+  "Dvitiya",
+  "Tritiya",
+  "Chaturtha",
+  "Panchama",
+  "Shashthi",
+  "Saptama",
+  "Ashtama",
+  "Navama",
+  "Dashama",
+] as const;
+
+export function editorOrdinalLabel(n: number): string {
+  return (PORTAL_SECTION_ORDINALS[n - 1] as string | undefined) ?? `${n}`;
+}
+
+function escapeRegExp(s: string): string {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+/**
+ * If `currentTitle` looks like the portal's auto pattern `{ordinal} {levelName}`, rewrite the
+ * ordinal to match `position1Based`. Otherwise return `currentTitle` unchanged (custom names).
+ */
+export function syncPortalSectionTitle(
+  currentTitle: string | undefined,
+  levelName: string | undefined,
+  position1Based: number,
+): string {
+  const t = (currentTitle ?? "").trim();
+  if (t === "_default") return t;
+  const name = (levelName ?? "").trim();
+  if (!name) return t;
+  const ordAlt = PORTAL_SECTION_ORDINALS.join("|");
+  const re = new RegExp(`^(?:${ordAlt}|\\d+)\\s+${escapeRegExp(name)}\\s*$`, "i");
+  if (!re.test(t)) return t;
+  return `${editorOrdinalLabel(position1Based)} ${name}`;
+}
+
+/**
+ * Single pass: sort adhyayas → khandas → padas by `order`, assign contiguous sibling `order`,
+ * sync auto-style section titles, then reindex every mantra list (titles + contiguous `order`)
+ * so editor state matches the UI immediately after structural edits.
+ */
+export function normalizeEditorHierarchy<T extends SyncAdhyayaNode>(list: T[], cfg: GranthaStructureConfig): T[] {
+  const levelTwo = cfg.levelTwoEnabled !== false;
+  const levelThree = !!cfg.levelThreeEnabled;
+  const leaf = cfg.leafName ?? "Mantra";
+  const L1 = (cfg.levelOneName ?? "Adhyaya").trim() || "Adhyaya";
+  const L2 = (cfg.levelTwoName ?? "Khanda").trim() || "Khanda";
+  const L3 = (cfg.levelThreeName ?? "Pada").trim() || "Pada";
+
+  return sortNodesByOrder(list).map((a, ai) => {
+    const aIdx = ai + 1;
+    const adhyayaTitle = syncPortalSectionTitle(a.title, L1, aIdx);
+    const sortedK = sortNodesByOrder(a.khandas ?? []);
+
+    const khandas = sortedK.map((k, ki) => {
+      const isDefaultKhanda = k.title === "_default";
+      const kIdx = levelTwo && !isDefaultKhanda ? ki + 1 : aIdx;
+      const khandaTitle = isDefaultKhanda ? k.title : syncPortalSectionTitle(k.title, L2, ki + 1);
+
+      if (levelThree) {
+        const sortedP = sortNodesByOrder(k.padas ?? []);
+        const padas = sortedP.map((p, pi) => {
+          const pIdx = pi + 1;
+          const padaTitle = syncPortalSectionTitle(p.title, L3, pIdx);
+          const ctx: MantraTitleCtx = {
+            leaf,
+            aIdx,
+            kIdx,
+            pIdx,
+            isDefaultKhanda,
+            padaPath: true,
+            levelTwoEnabled: levelTwo,
+          };
+          const manthras = reindexMantrasInListOrder(sortNodesByOrder(p.manthras ?? []), ctx);
+          return { ...p, order: pIdx, title: padaTitle, manthras };
+        });
+        return { ...k, order: ki + 1, title: khandaTitle, padas, manthras: [] };
+      }
+
+      const ctx: MantraTitleCtx = {
+        leaf,
+        aIdx,
+        kIdx,
+        isDefaultKhanda,
+        padaPath: false,
+        levelTwoEnabled: levelTwo,
+      };
+      const manthras = reindexMantrasInListOrder(sortNodesByOrder(k.manthras ?? []), ctx);
+      return { ...k, order: ki + 1, title: khandaTitle, padas: [], manthras };
+    });
+
+    return { ...a, order: aIdx, title: adhyayaTitle, khandas } as T;
+  });
 }
 
 function newLocalId(): string {

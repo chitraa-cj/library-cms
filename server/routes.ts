@@ -10,6 +10,14 @@ import Database from "better-sqlite3";
 import type { User } from "@shared/schema";
 import { gzipSync, gunzipSync } from "node:zlib";
 import { createHash } from "node:crypto";
+import { z } from "zod";
+import {
+  hermexEnabled,
+  hermexPythonBin,
+  hermexTranslateScriptPath,
+  runHermexTranslate,
+} from "./hermex-translate";
+import { otherTranslationLanguages } from "@shared/schema";
 
 /** Compress a snapshot payload for DB storage (gzip + base64 wrapper). */
 function compressBackupData(data: any): any {
@@ -381,9 +389,10 @@ function buildSqliteFromBackup(data: any): Buffer {
   // mutations mid-pagination).  Keep only the last occurrence per documentId so the
   // plain INSERT INTO translations / manthra_teekas statements can't produce
   // duplicate rows even if the manthras array has repeated documentIds.
-  function dedupeByDocId<T extends { documentId?: any; id?: any }>(arr: T[]): T[] {
-    const seen = new Map<string, T>();
-    for (const item of (arr ?? [])) {
+  /** Snapshot rows are loosely typed Strapi shapes; avoid generic inference to `{ id, documentId }` only. */
+  function dedupeByDocId(arr: any[]): any[] {
+    const seen = new Map<string, any>();
+    for (const item of arr ?? []) {
       const key = item.documentId ?? String(item.id ?? Math.random());
       seen.set(key, item);
     }
@@ -1821,13 +1830,6 @@ async function publishGranthaWithHierarchy(
   // Each entry: { manthra: string (number/title), error: string }
   const publishFailures: Array<{ manthra: string; error: string }> = [];
 
-  // Keys that carry no rich content — only identify/position the manthra.
-  // A cleaned mData that only has these keys is a "Strapi-only" node: the user
-  // never entered any content for it in the portal (it was supplemented from Strapi
-  // to show context). Publishing a PUT on such a node would overwrite a collaborator's
-  // content with an empty payload, so we skip the update entirely.
-  const IDENTITY_ONLY_KEYS = new Set(["ShlokaManthraNumber", "order", "Section"]);
-
   // const (not function declaration) so it is NOT hoisted — any accidental call
   // before this line would TDZ on `publishManthra` itself, not on a closed-over variable.
   const publishManthra = async (
@@ -1853,14 +1855,13 @@ async function publishGranthaWithHierarchy(
         );
       }
 
-      // ── Collaborative-publish guard ──────────────────────────────────────────
-      // If this manthra has a valid Strapi docId but the cleaned payload has NO
-      // content beyond identity/position fields, the current user never edited it
-      // locally. Skip the PUT so we don't silently erase another collaborator's work.
-      // We still record the docId so the next draft open can reference it directly.
-      const hasLocalContent = Object.keys(mData).some((k) => !IDENTITY_ONLY_KEYS.has(k));
-      if (storedDocId && !hasLocalContent) {
-        console.log(`[publish] Manthra "${manthra.title}" — Strapi-only node (no local content), skipping PUT, syncing docId`);
+      // ── Payload guard ─────────────────────────────────────────────────────────
+      // Strapi v5 PUT merges fields — omitted fields stay on the record (see `strapiManthraRequest`).
+      // Always send `order` + `ShlokaManthraNumber` when present so insert/delete renumbering in
+      // the draft reaches Strapi on publish, even if the user never opened that mantra locally.
+      // Only skip when `buildManthraData` produced nothing left after cleaning (rare).
+      if (storedDocId && Object.keys(mData).length === 0) {
+        console.log(`[publish] Manthra "${manthra.title}" — empty Strapi payload after clean, skipping PUT, syncing docId`);
         if (manthra.id) manthraIdToDocId.set(manthra.id, storedDocId);
         return true;
       }
@@ -2558,6 +2559,62 @@ export async function registerRoutes(
 
   const migrateRouter = createMigrateRouter();
   app.use("/api/strapi/migrate", migrateRouter);
+
+  const hermexTranslateBodySchema = z.object({
+    sourceText: z.string().min(1).max(120_000),
+    sourceLanguage: z.enum(["English", "Sanskrit"]),
+    targetLanguages: z.array(z.string()).min(1).max(50),
+    context: z.string().max(500).optional(),
+    chunkSize: z.number().int().min(1).max(10).optional(),
+    headless: z.boolean().optional(),
+    queryTimeoutSec: z.number().int().min(60).max(900).optional(),
+  });
+
+  app.get("/api/hermex/status", requireAuth, (_req, res) => {
+    res.json({
+      enabled: hermexEnabled(),
+      python: hermexPythonBin(),
+      script: hermexTranslateScriptPath(),
+      otherTranslationLanguageCount: otherTranslationLanguages.length,
+      otherTranslationLanguages: [...otherTranslationLanguages],
+      sourceLanguages: ["English", "Sanskrit"],
+    });
+  });
+
+  app.post("/api/hermex/translate", requireAuth, async (req, res) => {
+    if (!hermexEnabled()) {
+      return res.status(503).json({
+        message:
+          "Hermex translation is disabled. Set HERMEX_ENABLED=true and install Python deps (see docs/HERMEX.md).",
+      });
+    }
+    try {
+      const parsed = hermexTranslateBodySchema.safeParse(req.body);
+      if (!parsed.success) {
+        return res.status(400).json({ message: parsed.error.errors.map((e) => e.message).join("; ") });
+      }
+      const allowed = new Set<string>(otherTranslationLanguages as readonly string[]);
+      const invalid = parsed.data.targetLanguages.filter((l) => !allowed.has(l));
+      if (invalid.length) {
+        return res.status(400).json({
+          message: `Invalid target language(s): ${invalid.join(", ")}. Must be one of the ${allowed.size} OtherTranslations languages.`,
+        });
+      }
+      const result = await runHermexTranslate(parsed.data);
+      res.json({
+        translations: (result.translations ?? []).map((row) => ({
+          LanguageOfTranslation: row.language,
+          TranslationText: row.text,
+          isAiTranslated: true,
+        })),
+      });
+    } catch (error: any) {
+      console.error("[hermex] translate failed:", error?.message || error);
+      res.status(500).json({
+        message: error?.message || "Hermex translation failed",
+      });
+    }
+  });
 
   const VALID_CONTENT_TYPES = [...Object.keys(CONTENT_TYPE_MAP), ...Array.from(STRAPI_UNROUTED_TYPES)];
 

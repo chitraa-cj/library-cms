@@ -1,0 +1,675 @@
+/**
+ * Shared Hermex → Strapi sync for any grantha (merge-safe OtherTranslations).
+ */
+import fs from "node:fs";
+import path from "node:path";
+import { strapiRequest } from "../../server/strapi";
+import { runHermexTranslate, type HermexTranslationRow } from "../../server/hermex-translate";
+import { otherTranslationLanguages } from "@shared/schema";
+
+export const MANTRA_FULL_QUERY =
+  "?populate[Teekas][populate][TeekaEntry][populate]=*" +
+  "&populate[Teekas][populate][teeka][fields][0]=TeekaName" +
+  "&populate[Teekas][populate][teeka][fields][1]=documentId" +
+  "&populate[ShlokaManthraEntry][populate]=*" +
+  "&populate[BhashyamEntry][populate]=*";
+
+export type FieldKind = "ShlokaManthraEntry" | "BhashyamEntry" | "teeka";
+
+export type MantraRef = {
+  documentId: string;
+  label: string;
+};
+
+export type TranslateJob = {
+  mantraDocId: string;
+  mantraLabel: string;
+  context: string;
+  field: FieldKind;
+  teekaIndex?: number;
+  sourceText: string;
+  sourceLanguage: "English" | "Sanskrit";
+  targetLanguages: string[];
+};
+
+export type RunOptions = {
+  headless: boolean;
+  chunkSize: number;
+  chunkDelayMs: number;
+  maxRetries: number;
+  dryRun: boolean;
+  checkpointPath: string;
+  resetCheckpoint: boolean;
+};
+
+export type CheckpointFile = {
+  granthaDocumentId: string;
+  granthaName: string;
+  updatedAt: string;
+  completedChunks: string[];
+  failedChunks: Record<string, string>;
+  stats: { ok: number; fail: number; mantrasDone: number };
+};
+
+export function slugify(name: string): string {
+  return name
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-|-$/g, "")
+    .slice(0, 80);
+}
+
+export function chunkKey(job: TranslateJob, langs: string[]): string {
+  const teeka = job.teekaIndex ?? -1;
+  return `${job.mantraDocId}|${job.field}|${teeka}|${langs.join(",")}`;
+}
+
+export function loadCheckpoint(filePath: string): CheckpointFile | null {
+  if (!fs.existsSync(filePath)) return null;
+  try {
+    return JSON.parse(fs.readFileSync(filePath, "utf8")) as CheckpointFile;
+  } catch {
+    return null;
+  }
+}
+
+export function saveCheckpoint(filePath: string, data: CheckpointFile): void {
+  fs.mkdirSync(path.dirname(filePath), { recursive: true });
+  data.updatedAt = new Date().toISOString();
+  fs.writeFileSync(filePath, JSON.stringify(data, null, 2));
+}
+
+export function blocksToText(blocks: unknown): string {
+  if (!blocks) return "";
+  if (typeof blocks === "string") return blocks.trim();
+  if (!Array.isArray(blocks)) return "";
+  return blocks
+    .map((b: any) => (b.children || []).map((c: any) => c.text || "").join(""))
+    .join("\n")
+    .trim();
+}
+
+export function textToBlocks(text: string): any[] {
+  if (!text.trim()) return [];
+  return text.split("\n").map((line) => ({
+    type: "paragraph",
+    children: [{ type: "text", text: line }],
+  }));
+}
+
+function omitId(row: Record<string, any>): Record<string, any> {
+  const { id, documentId, ...rest } = row;
+  return rest;
+}
+
+export function mergeOtherTranslations(localOT: any[], strapiOT: any[]): any[] {
+  const result = [...strapiOT];
+  for (const localEntry of localOT) {
+    const lang = localEntry.LanguageOfTranslation;
+    if (!lang) continue;
+    const idx = result.findIndex((e) => e.LanguageOfTranslation === lang);
+    const localFields = omitId(localEntry);
+    if (idx >= 0) {
+      result[idx] = { ...result[idx], ...localFields };
+    } else {
+      result.push({ ...localFields });
+    }
+  }
+  return result;
+}
+
+export function mergeTeekaEntry(strapiEntry: any, patch: any): any {
+  const s = { ...(strapiEntry ?? {}) };
+  const strapiOT: any[] = Array.isArray(s.OtherTranslations) ? s.OtherTranslations : [];
+  const localOT: any[] = Array.isArray(patch.OtherTranslations) ? patch.OtherTranslations : [];
+  const mergedOT =
+    strapiOT.length === 0 && localOT.length === 0
+      ? undefined
+      : mergeOtherTranslations(localOT, strapiOT);
+  const out = { ...s };
+  if (patch.SanskritTextEntry) out.SanskritTextEntry = patch.SanskritTextEntry;
+  if (patch.EnglishTranslationText) out.EnglishTranslationText = patch.EnglishTranslationText;
+  if (patch.IASTTransliteration) out.IASTTransliteration = patch.IASTTransliteration;
+  if (mergedOT !== undefined) out.OtherTranslations = mergedOT;
+  return out;
+}
+
+export function stripEntryForPut(entry: any): any {
+  if (!entry || typeof entry !== "object") return null;
+  const out: Record<string, any> = {};
+  for (const f of ["SanskritTextEntry", "EnglishTranslationText", "IASTTransliteration"]) {
+    if (Array.isArray(entry[f]) && entry[f].length > 0) out[f] = entry[f];
+  }
+  const ot = entry.OtherTranslations;
+  if (Array.isArray(ot) && ot.length > 0) {
+    out.OtherTranslations = ot
+      .filter((r: any) => r?.LanguageOfTranslation?.trim())
+      .map((r: any) => ({
+        LanguageOfTranslation: r.LanguageOfTranslation.trim(),
+        TranslationText: Array.isArray(r.TranslationText)
+          ? r.TranslationText
+          : textToBlocks(blocksToText(r.TranslationText)),
+        isAiTranslated: r.isAiTranslated ?? true,
+      }));
+  }
+  return Object.keys(out).length > 0 ? out : null;
+}
+
+/** Strapi row language — canonical field plus legacy import names. */
+export function rowLanguage(row: any): string {
+  return (row?.LanguageOfTranslation ?? row?.Language ?? row?.language ?? "").trim();
+}
+
+export function rowTranslationContent(row: any): unknown {
+  return row?.TranslationText ?? row?.Translation ?? row?.OtherLanguagesTranslation;
+}
+
+export function getTextEntryForJob(mantra: any, job: TranslateJob): any {
+  if (job.field === "teeka" && job.teekaIndex != null) {
+    return mantra.Teekas?.[job.teekaIndex]?.TeekaEntry;
+  }
+  return mantra[job.field];
+}
+
+export function filledLangs(entry: any): Set<string> {
+  const set = new Set<string>();
+  for (const row of entry?.OtherTranslations ?? []) {
+    const lang = rowLanguage(row);
+    if (lang && blocksToText(rowTranslationContent(row))) set.add(lang);
+  }
+  return set;
+}
+
+export function missingLangs(entry: any): string[] {
+  const have = filledLangs(entry);
+  return otherTranslationLanguages.filter((l) => !have.has(l));
+}
+
+function hermexRowsToOtherTranslations(rows: HermexTranslationRow[]): any[] {
+  return rows.map((r) => ({
+    LanguageOfTranslation: r.language,
+    TranslationText: textToBlocks(r.text),
+    isAiTranslated: true,
+  }));
+}
+
+export function chunkArray<T>(arr: T[], size: number): T[][] {
+  const out: T[][] = [];
+  for (let i = 0; i < arr.length; i += size) out.push(arr.slice(i, i + size));
+  return out;
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((r) => setTimeout(r, ms));
+}
+
+/** Strapi/FortiGuard sometimes returns 403 HTML mid-batch — backoff and retry. */
+export async function strapiWithRetry<T>(
+  label: string,
+  fn: () => Promise<T>,
+  maxAttempts = 6,
+): Promise<T> {
+  let last: unknown;
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    try {
+      return await fn();
+    } catch (e: unknown) {
+      last = e;
+      const err = e as { status?: number; code?: string };
+      const retriable =
+        err?.status === 403 ||
+        err?.status === 429 ||
+        err?.status === 408 ||
+        err?.code === "upstream_policy_block" ||
+        err?.code === "upstream_timeout" ||
+        (typeof err?.status === "number" && err.status >= 500);
+      if (!retriable || attempt >= maxAttempts) {
+        if (err?.status === 403) {
+          console.error(
+            `[strapi] ${label}: persistent 403 — check STRAPI_API_TOKEN in .env or wait (WAF/rate limit).`,
+          );
+        }
+        throw e;
+      }
+      const waitMs = Math.min(90_000, attempt * 12_000);
+      console.warn(
+        `[strapi] ${label} failed (${err.status ?? err.code ?? "error"}) — retry ${attempt}/${maxAttempts} in ${waitMs}ms`,
+      );
+      await sleep(waitMs);
+    }
+  }
+  throw last;
+}
+
+export function isHermexRetryableError(err: unknown): boolean {
+  const msg = (err instanceof Error ? err.message : String(err)).toLowerCase();
+  return (
+    msg.includes("chrome") ||
+    msg.includes("chromedriver") ||
+    msg.includes("window") ||
+    msg.includes("webview") ||
+    msg.includes("timeout") ||
+    msg.includes("hermex") ||
+    msg.includes("empty gemini") ||
+    msg.includes("could not parse") ||
+    msg.includes("delimiter") ||
+    msg.includes("json") ||
+    msg.includes("no such window") ||
+    msg.includes("session not created") ||
+    msg.includes("did not reach state") ||
+    msg.includes("state.idle") ||
+    msg.includes("neither text") ||
+    msg.includes("textnor image") ||
+    msg.includes("empty gemini response") ||
+    msg.includes("click intercepted") ||
+    msg.includes("not clickable at point")
+  );
+}
+
+export function queryTimeoutForSource(sourceLen: number, baseSec = 900): number {
+  return Math.min(3600, Math.max(baseSec, 900 + Math.floor(sourceLen / 4)));
+}
+
+/** Long Teeka/Bhashyam breaks Gemini JSON — translate fewer languages per request. */
+export function effectiveChunkSizeForSource(sourceLen: number, defaultSize: number): number {
+  if (sourceLen > 3500) return 1;
+  if (sourceLen > 1500) return Math.min(defaultSize, 2);
+  return defaultSize;
+}
+
+export async function runHermexWithRetry(
+  req: Parameters<typeof runHermexTranslate>[0],
+  maxRetries: number,
+  chunkDelayMs: number,
+): Promise<Awaited<ReturnType<typeof runHermexTranslate>>> {
+  let lastErr: unknown;
+  for (let attempt = 1; attempt <= maxRetries; attempt++) {
+    try {
+      return await runHermexTranslate(req);
+    } catch (e) {
+      lastErr = e;
+      if (attempt >= maxRetries || !isHermexRetryableError(e)) throw e;
+      const wait = chunkDelayMs * attempt;
+      console.log(`[retry] attempt ${attempt + 1}/${maxRetries} in ${wait}ms — ${e instanceof Error ? e.message.slice(0, 120) : e}`);
+      await sleep(wait);
+    }
+  }
+  throw lastErr;
+}
+
+export async function resolveGranthaByName(name: string): Promise<{ documentId: string; GranthaName: string }> {
+  const q = encodeURIComponent(name.trim());
+  const res = await strapiRequest(
+    `/api/granthas?filters[GranthaName][$containsi]=${q}&pagination[pageSize]=20&fields[0]=documentId&fields[1]=GranthaName`,
+  );
+  const list: any[] = res?.data ?? [];
+  if (!list.length) {
+    throw new Error(`No grantha found matching "${name}"`);
+  }
+  const exact = list.find((g) => (g.GranthaName ?? "").toLowerCase() === name.trim().toLowerCase());
+  const pick = exact ?? list[0];
+  if (list.length > 1 && !exact) {
+    console.warn(
+      `[warn] Multiple granthas match "${name}" — using "${pick.GranthaName}" (${pick.documentId}). Others: ${list
+        .filter((g) => g.documentId !== pick.documentId)
+        .map((g) => g.GranthaName)
+        .join(", ")}`,
+    );
+  }
+  return { documentId: pick.documentId, GranthaName: pick.GranthaName };
+}
+
+export async function listMantrasForGrantha(granthaDocId: string): Promise<MantraRef[]> {
+  const out: MantraRef[] = [];
+  for (let page = 1; page <= 200; page++) {
+    const res = await strapiRequest(
+      `/api/manthras?filters[Section][grantha][documentId][$eq]=${granthaDocId}` +
+        `&fields[0]=documentId&fields[1]=ShlokaManthraNumber&fields[2]=order` +
+        `&sort[0]=order:asc&pagination[page]=${page}&pagination[pageSize]=100`,
+    );
+    const items: any[] = res?.data ?? [];
+    for (const m of items) {
+      if (!m.documentId) continue;
+      const label = (m.ShlokaManthraNumber ?? m.documentId).toString();
+      out.push({ documentId: m.documentId, label });
+    }
+    const pageCount = res?.meta?.pagination?.pageCount ?? 1;
+    if (page >= pageCount) break;
+  }
+  out.sort((a, b) => a.label.localeCompare(b.label, undefined, { numeric: true }));
+  return out;
+}
+
+export async function fetchMantraFull(mantraDocId: string): Promise<any> {
+  return strapiWithRetry(`fetch mantra ${mantraDocId}`, async () => {
+    return (await strapiRequest(`/api/manthras/${mantraDocId}${MANTRA_FULL_QUERY}`))?.data;
+  });
+}
+
+export function buildJobsForMantra(mantra: any, mantraLabel: string, granthaName: string): TranslateJob[] {
+  const jobs: TranslateJob[] = [];
+  const base = `${granthaName} — ${mantraLabel}`;
+
+  for (const field of ["ShlokaManthraEntry", "BhashyamEntry"] as const) {
+    const entry = mantra[field];
+    const missing = missingLangs(entry);
+    const english = blocksToText(entry?.EnglishTranslationText);
+    if (missing.length === 0 || !english) continue;
+    jobs.push({
+      mantraDocId: mantra.documentId,
+      mantraLabel,
+      context: `${base} — ${field}`,
+      field,
+      sourceText: english,
+      sourceLanguage: "English",
+      targetLanguages: missing,
+    });
+  }
+
+  for (let i = 0; i < (mantra.Teekas ?? []).length; i++) {
+    const t = mantra.Teekas[i];
+    const entry = t.TeekaEntry;
+    const missing = missingLangs(entry);
+    const english = blocksToText(entry?.EnglishTranslationText);
+    const name = t.teeka?.TeekaName ?? `Teeka ${i + 1}`;
+    if (missing.length === 0 || !english) continue;
+    jobs.push({
+      mantraDocId: mantra.documentId,
+      mantraLabel,
+      context: `${base} — Teeka ${name}`,
+      field: "teeka",
+      teekaIndex: i,
+      sourceText: english,
+      sourceLanguage: "English",
+      targetLanguages: missing,
+    });
+  }
+
+  return jobs;
+}
+
+async function putManthraField(mantraDocId: string, field: "ShlokaManthraEntry" | "BhashyamEntry", mergedEntry: any): Promise<void> {
+  const payload = stripEntryForPut(mergedEntry);
+  if (!payload) return;
+  try {
+    await strapiRequest(`/api/manthras/${mantraDocId}`, {
+      method: "PUT",
+      body: JSON.stringify({ data: { [field]: payload } }),
+    });
+  } catch (e: any) {
+    if (e?.status !== 413) throw e;
+    const { OtherTranslations, ...core } = payload;
+    if (Object.keys(core).length > 0) {
+      await strapiRequest(`/api/manthras/${mantraDocId}`, {
+        method: "PUT",
+        body: JSON.stringify({ data: { [field]: core } }),
+      });
+    }
+    const rows: any[] = OtherTranslations ?? [];
+    for (let i = 0; i < rows.length; i += 6) {
+      const batch = rows.slice(i, i + 6);
+      const snap = (await strapiRequest(`/api/manthras/${mantraDocId}?populate[${field}][populate]=*`))?.data;
+      const current = snap?.[field] ?? {};
+      const currentOT: any[] = Array.isArray(current.OtherTranslations) ? current.OtherTranslations : [];
+      const mergedOT = mergeOtherTranslations(batch, currentOT);
+      const next = mergeTeekaEntry(current, { OtherTranslations: mergedOT });
+      await strapiRequest(`/api/manthras/${mantraDocId}`, {
+        method: "PUT",
+        body: JSON.stringify({ data: { [field]: stripEntryForPut(next) } }),
+      });
+    }
+  }
+}
+
+async function putTeekas(mantraDocId: string, teekas: any[]): Promise<void> {
+  const stripped = teekas.map((t) => {
+    const te = stripEntryForPut(t.TeekaEntry);
+    const row: any = { teeka: t.teeka?.documentId ?? t.teeka };
+    if (t.id) row.id = t.id;
+    if (te) row.TeekaEntry = te;
+    return row;
+  });
+  try {
+    await strapiRequest(`/api/manthras/${mantraDocId}`, {
+      method: "PUT",
+      body: JSON.stringify({ data: { Teekas: stripped } }),
+    });
+  } catch (e: any) {
+    if (e?.status !== 413) throw e;
+    const existing = (await fetchMantraFull(mantraDocId))?.Teekas ?? [];
+    for (let i = 0; i < stripped.length; i++) {
+      const updated = [
+        ...existing.slice(0, i).map((et: any) => ({ id: et.id, teeka: et.teeka?.documentId })),
+        stripped[i],
+        ...existing.slice(i + 1).map((et: any) => ({ id: et.id, teeka: et.teeka?.documentId })),
+      ];
+      await strapiRequest(`/api/manthras/${mantraDocId}`, {
+        method: "PUT",
+        body: JSON.stringify({ data: { Teekas: updated } }),
+      });
+    }
+  }
+}
+
+/** Re-read Strapi so we never call Gemini for languages already on this field. */
+export async function filterLangsStillMissing(job: TranslateJob, langs: string[]): Promise<string[]> {
+  const mantra = await fetchMantraFull(job.mantraDocId);
+  if (!mantra) return langs;
+  const entry = getTextEntryForJob(mantra, job);
+  const have = filledLangs(entry);
+  return langs.filter((l) => !have.has(l));
+}
+
+export async function syncJobToStrapi(job: TranslateJob, newRows: HermexTranslationRow[]): Promise<void> {
+  if (newRows.length === 0) return;
+  const langs = newRows.map((r) => r.language).join(", ");
+  await strapiWithRetry(`sync ${job.context} (${langs})`, async () => {
+    const fresh = await fetchMantraFull(job.mantraDocId);
+    if (!fresh) throw new Error(`Mantra ${job.mantraDocId} not found during sync`);
+
+    const newOT = hermexRowsToOtherTranslations(newRows);
+
+    if (job.field === "teeka" && job.teekaIndex != null) {
+      const teekasOut = [...(fresh.Teekas ?? [])];
+      const t = teekasOut[job.teekaIndex];
+      const merged = mergeTeekaEntry(t.TeekaEntry, { OtherTranslations: newOT });
+      teekasOut[job.teekaIndex] = { ...t, TeekaEntry: merged };
+      await putTeekas(job.mantraDocId, teekasOut);
+    } else {
+      const strapiEntry = fresh[job.field] ?? {};
+      const merged = mergeTeekaEntry(strapiEntry, { OtherTranslations: newOT });
+      await putManthraField(job.mantraDocId, job.field, merged);
+    }
+  });
+}
+
+export async function translateJobIncremental(
+  job: TranslateJob,
+  opts: RunOptions,
+  checkpoint: CheckpointFile,
+): Promise<{ ok: number; fail: number }> {
+  let ok = 0;
+  let fail = 0;
+  const effChunk = effectiveChunkSizeForSource(job.sourceText.length, opts.chunkSize);
+  const chunks = chunkArray(job.targetLanguages, effChunk);
+
+  console.log(
+    `\n[job] ${job.context} | ${job.targetLanguages.length} langs | ${chunks.length} chunks (size ${effChunk}, ${job.sourceText.length} chars source) | headless=${opts.headless}`,
+  );
+
+  for (let i = 0; i < chunks.length; i++) {
+    const plannedLangs = chunks[i];
+    const key = chunkKey(job, plannedLangs);
+    const chunkId = `${job.context} chunk ${i + 1}/${chunks.length}`;
+
+    let langs = await filterLangsStillMissing(job, plannedLangs);
+    const alreadyInStrapi = plannedLangs.filter((l) => !langs.includes(l));
+    if (alreadyInStrapi.length > 0) {
+      console.log(`[skip] ${chunkId} | already in Strapi (${job.field}): ${alreadyInStrapi.join(", ")}`);
+      ok += alreadyInStrapi.length;
+      if (langs.length === 0 && !checkpoint.completedChunks.includes(key)) {
+        checkpoint.completedChunks.push(key);
+        saveCheckpoint(opts.checkpointPath, checkpoint);
+      }
+    }
+    if (langs.length === 0) continue;
+
+    if (checkpoint.completedChunks.includes(key)) {
+      const stillMissing = langs.length;
+      if (stillMissing === 0) {
+        console.log(`[skip] ${chunkId} | checkpoint OK, Strapi complete`);
+        continue;
+      }
+      console.log(
+        `[warn] ${chunkId} | checkpoint marked done but Strapi still missing: ${langs.join(", ")} — re-translating`,
+      );
+    }
+
+    if (opts.dryRun) {
+      console.log(`[dry-run] would translate ${chunkId}: ${langs.join(", ")}`);
+      continue;
+    }
+
+    let rows: HermexTranslationRow[] = [];
+    let chunkFailed = false;
+    let lastError = "";
+
+    try {
+      const result = await runHermexWithRetry(
+        {
+          sourceText: job.sourceText,
+          sourceLanguage: job.sourceLanguage,
+          targetLanguages: langs,
+          context: job.context,
+          chunkSize: langs.length,
+          headless: opts.headless,
+          queryTimeoutSec: queryTimeoutForSource(job.sourceText.length),
+          chunkDelaySec: opts.chunkDelayMs / 1000,
+          maxRetries: 2,
+        },
+        opts.maxRetries,
+        opts.chunkDelayMs,
+      );
+      rows = result.translations ?? [];
+      const got = new Set(rows.map((r) => r.language));
+      for (const lang of langs) {
+        if (got.has(lang)) ok++;
+        else {
+          fail++;
+          chunkFailed = true;
+          console.log(`[translate] FAIL ${chunkId} | ${lang} | not in Gemini response`);
+        }
+      }
+      if (rows.length > 0) {
+        try {
+          await syncJobToStrapi(job, rows);
+          console.log(`[strapi] OK ${chunkId} | synced: ${rows.map((r) => r.language).join(", ")}`);
+        } catch (syncErr: unknown) {
+          const sm = syncErr instanceof Error ? syncErr.message : String(syncErr);
+          chunkFailed = true;
+          lastError = sm;
+          for (const r of rows) {
+            if (got.has(r.language)) ok = Math.max(0, ok - 1);
+            fail++;
+          }
+          console.log(
+            `[strapi] FAIL ${chunkId} | Gemini OK but Strapi save failed: ${rows.map((r) => r.language).join(", ")} | ${sm.slice(0, 120)}`,
+          );
+          console.log(`[strapi] Re-run the job to retry save only (translations may be re-fetched from Gemini).`);
+          rows = [];
+        }
+        if (chunkFailed) {
+          console.log(
+            `[translate] partial ${chunkId} | saved ${rows.length}/${langs.length} — retry missing langs on next run`,
+          );
+        }
+      } else if (!chunkFailed) {
+        chunkFailed = true;
+        lastError = "no rows parsed";
+        console.log(`[translate] FAIL ${chunkId} | no rows parsed`);
+      }
+    } catch (e: unknown) {
+      const msg = e instanceof Error ? e.message : String(e);
+      lastError = msg;
+      const parseFailed =
+        msg.toLowerCase().includes("json") ||
+        msg.toLowerCase().includes("delimiter") ||
+        msg.toLowerCase().includes("could not parse");
+
+      if (parseFailed && langs.length > 1) {
+        console.log(`[translate] JSON parse failed — retrying ${langs.length} languages one at a time`);
+        for (const lang of langs) {
+          try {
+            const single = await runHermexWithRetry(
+              {
+                sourceText: job.sourceText,
+                sourceLanguage: job.sourceLanguage,
+                targetLanguages: [lang],
+                context: job.context,
+                chunkSize: 1,
+                headless: opts.headless,
+                queryTimeoutSec: queryTimeoutForSource(job.sourceText.length),
+                chunkDelaySec: opts.chunkDelayMs / 1000,
+                maxRetries: 2,
+              },
+              opts.maxRetries,
+              opts.chunkDelayMs,
+            );
+            const oneRows = single.translations ?? [];
+            if (oneRows.length > 0) {
+              await syncJobToStrapi(job, oneRows);
+              console.log(`[strapi] OK ${chunkId} | ${lang} (single-lang retry)`);
+              ok++;
+              chunkFailed = false;
+            } else {
+              fail++;
+              console.log(`[translate] FAIL ${chunkId} | ${lang} | single-lang retry empty`);
+            }
+          } catch (singleErr: unknown) {
+            fail++;
+            const sm = singleErr instanceof Error ? singleErr.message : String(singleErr);
+            console.log(`[translate] FAIL ${chunkId} | ${lang} | single-lang: ${sm}`);
+          }
+          if (opts.chunkDelayMs > 0) await sleep(opts.chunkDelayMs);
+        }
+      } else {
+        fail += langs.length;
+        chunkFailed = true;
+        console.log(`[translate] FAIL ${chunkId} | [${langs.join(", ")}] | ${msg}`);
+      }
+    }
+
+    let stillMissingAfter = plannedLangs;
+    try {
+      stillMissingAfter = await filterLangsStillMissing(job, plannedLangs);
+    } catch (verifyErr: unknown) {
+      const vm = verifyErr instanceof Error ? verifyErr.message : String(verifyErr);
+      console.warn(`[strapi] Could not verify Strapi after ${chunkId}: ${vm.slice(0, 100)}`);
+      const saved = new Set(rows.map((r) => r.language));
+      stillMissingAfter = plannedLangs.filter((l) => !saved.has(l));
+    }
+    if (stillMissingAfter.length === 0) {
+      if (!checkpoint.completedChunks.includes(key)) {
+        checkpoint.completedChunks.push(key);
+      }
+      delete checkpoint.failedChunks[key];
+    } else if (chunkFailed) {
+      checkpoint.failedChunks[key] = lastError || "unknown";
+      console.log(`[warn] ${chunkId} | still missing in Strapi: ${stillMissingAfter.join(", ")}`);
+    }
+    saveCheckpoint(opts.checkpointPath, checkpoint);
+
+    if (i < chunks.length - 1 && opts.chunkDelayMs > 0) {
+      await sleep(opts.chunkDelayMs);
+    }
+  }
+
+  return { ok, fail };
+}
+
+export function printMantraSummary(mantra: any, label: string): void {
+  console.log(`  ${label}: Shloka ${filledLangs(mantra.ShlokaManthraEntry).size}/43, Bhashyam ${filledLangs(mantra.BhashyamEntry).size}/43`);
+  for (const t of mantra.Teekas ?? []) {
+    console.log(`    Teeka ${t.teeka?.TeekaName}: ${filledLangs(t.TeekaEntry).size}/43`);
+  }
+}

@@ -238,6 +238,14 @@ export const translationLanguages = [
   "Egyptian_Arabic",
 ] as const;
 
+/** Languages stored in `OtherTranslations` (excludes Sanskrit + English — separate fields). */
+export const otherTranslationLanguages = translationLanguages.filter(
+  (lang) => lang !== "Sanskrit" && lang !== "English",
+) as readonly Exclude<
+  (typeof translationLanguages)[number],
+  "Sanskrit" | "English"
+>[];
+
 export const teekaAuthors = [
   "Anandagiri",
   "Ananda Gana",

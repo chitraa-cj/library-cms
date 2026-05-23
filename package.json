@@ -8,7 +8,15 @@
     "build": "tsx script/build.ts",
     "start": "NODE_ENV=production node dist/index.cjs",
     "check": "tsc",
-    "db:push": "drizzle-kit push"
+    "test:mantra-index": "tsx script/test-grantha-mantra-index.ts",
+    "test:mantra-order": "tsx script/test-grantha-mantra-index.ts",
+    "db:push": "drizzle-kit push",
+    "hermex:install": "python3 -m venv .venv-hermex && .venv-hermex/bin/pip install -r python/hermex_translate/requirements.txt",
+    "hermex:setup": ".venv-hermex/bin/python3 python/hermex_translate/setup_gemini.py",
+    "hermex:grantha": "tsx script/hermex-grantha-translate.ts",
+    "hermex:chandogya": "tsx script/hermex-grantha-translate.ts -- \"Chandogya Upanishad\"",
+    "hermex:chandogya-1-1-1": "tsx script/hermex-chandogya-1-1-1.ts",
+    "hermex:chandogya-1-1-1:dry": "tsx script/hermex-chandogya-1-1-1.ts --dry-run"
   },
   "dependencies": {
     "@hookform/resolvers": "^3.10.0",

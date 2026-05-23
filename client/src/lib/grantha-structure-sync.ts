@@ -77,7 +77,7 @@ export function buildUniqueStrapiOrderMap(manthras: StrapiMantraRef[]): {
 } {
   const byOrder = new Map<number, StrapiMantraRef>();
   const ambiguousOrders = new Set<number>();
-  for (const sm of mantras) {
+  for (const sm of manthras) {
     if (sm.order == null || Number.isNaN(sm.order)) continue;
     if (byOrder.has(sm.order)) {
       ambiguousOrders.add(sm.order);

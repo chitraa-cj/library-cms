@@ -12,6 +12,7 @@ import {
   resolvePortalMantraToStrapiDoc,
   buildUniqueStrapiOrderMap,
   buildMantraDisplayTitle,
+  type StrapiMantraRef,
   ordinalIndexInSortedOrder,
   normalizeEditorHierarchy,
   syncPortalSectionTitle,
@@ -108,6 +109,12 @@ assert.equal(titlePrefixFromMantraTitle("Manthra 1.2", "Shloka"), "Shloka");
 
 assert.equal(mantraNumberSuffix("Mantra 1.1.5"), "1.1.5");
 assert.equal(mantrasShareNumberSuffix("Shloka 1.1.5", "Mantra 1.1.5"), true);
+
+const orderMapRefs: StrapiMantraRef[] = [
+  { title: "A", docId: "doc-a1111111111111", order: 1 },
+  { title: "B", docId: "doc-b2222222222222", order: 2 },
+];
+assert.equal(buildUniqueStrapiOrderMap(orderMapRefs).byOrder.get(1)?.docId, "doc-a1111111111111");
 
 const sectionRefs = [
   { title: "Mantra 1.1.5", docId: "doc-aaaa1111111111", order: 5 },

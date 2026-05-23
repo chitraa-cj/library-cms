@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { queryClient, apiRequest, ApiError } from "@/lib/queryClient";
-import { invalidateGranthaCmsCaches } from "@/lib/strapi-cache-sync";
+import { syncGranthaCmsCaches } from "@/lib/strapi-cache-sync";
 import { useToast } from "@/hooks/use-toast";
 import type { Draft } from "@shared/schema";
 
@@ -263,9 +263,9 @@ export function useDrafts(contentType: string) {
       clearPersistedPublishJob();
       queryClient.invalidateQueries({ queryKey: ["/api/drafts", contentType] });
       if (contentType === "granthas" || contentType === "manthras" || contentType === "sections") {
-        invalidateGranthaCmsCaches(queryClient);
+        void syncGranthaCmsCaches(queryClient);
       } else {
-        queryClient.invalidateQueries({ queryKey: ["/api/strapi"] });
+        void queryClient.invalidateQueries({ queryKey: ["/api/strapi"] });
       }
 
       const allWarnings: Array<{ manthra: string; error: string }> | undefined = data?.warnings;
@@ -321,7 +321,7 @@ export function useDrafts(contentType: string) {
         .then((result) => {
           queryClient.invalidateQueries({ queryKey: ["/api/drafts", contentType] });
           if (contentType === "granthas" || contentType === "manthras" || contentType === "sections") {
-            invalidateGranthaCmsCaches(queryClient);
+            void syncGranthaCmsCaches(queryClient);
           } else {
             queryClient.invalidateQueries({ queryKey: ["/api/strapi"] });
           }

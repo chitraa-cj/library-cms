@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useIsFetching } from "@tanstack/react-query";
 import { queryClient } from "@/lib/queryClient";
+import { syncGranthaCmsCaches } from "@/lib/strapi-cache-sync";
 
 const STRAPI_QUERY_KEY = "/api/strapi";
 const POLL_INTERVAL_MS = 30_000;
@@ -18,7 +19,7 @@ export function useStrapiSync() {
   }, [isFetching]);
 
   const syncAll = useCallback(async () => {
-    await queryClient.invalidateQueries({ queryKey: [STRAPI_QUERY_KEY] });
+    await syncGranthaCmsCaches(queryClient);
   }, []);
 
   return {

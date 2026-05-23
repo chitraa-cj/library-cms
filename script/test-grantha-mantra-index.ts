@@ -26,6 +26,10 @@ import {
   inferLeafNameFromStrapiMantras,
   type MantraTitleCtx,
 } from "../client/src/lib/grantha-structure-sync.ts";
+import {
+  isPlaceholderVersusCms,
+  entryContentCharCount,
+} from "../client/src/lib/strapi-blocks.ts";
 
 type ManthraRow = { id: string; title: string; order: number; strapiDocumentId?: string };
 
@@ -387,5 +391,15 @@ const shlokaHeavy = Array.from({ length: 30 }, (_, i) => ({
 const mantraSparse = [{ title: "Mantra 1.1.1" }, { title: "Mantra 1.1.2" }];
 assert.equal(inferLeafNameFromStrapiMantras(shlokaHeavy, "Mantra"), "Shloka");
 assert.equal(inferLeafNameFromStrapiMantras(mantraSparse, "Mantra"), "Mantra");
+
+assert.equal(isPlaceholderVersusCms("4", "uddharedātmanātmānaṃ magnaṃ"), true);
+assert.equal(
+  isPlaceholderVersusCms(
+    [{ type: "paragraph", children: [{ type: "text", text: "4" }] }],
+    [{ type: "paragraph", children: [{ type: "text", text: "उद्धरेदात्मनात्मानं" }] }],
+  ),
+  true,
+);
+assert.equal(entryContentCharCount("4"), 1);
 
 console.log("test-grantha-mantra-index: all ok (insert/delete/order)");

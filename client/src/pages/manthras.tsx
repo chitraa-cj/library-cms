@@ -1,7 +1,7 @@
 import { useState, useMemo } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { queryClient, apiRequest } from "@/lib/queryClient";
-import { invalidateGranthaCmsCaches } from "@/lib/strapi-cache-sync";
+import { syncGranthaCmsCaches } from "@/lib/strapi-cache-sync";
 import { useToast } from "@/hooks/use-toast";
 import { useDrafts } from "@/hooks/use-drafts";
 import { useAuth } from "@/hooks/use-auth";
@@ -152,7 +152,7 @@ export default function ManthrasPage() {
       return res.json();
     },
     onSuccess: () => {
-      invalidateGranthaCmsCaches(queryClient);
+      void syncGranthaCmsCaches(queryClient);
       setDeleteTarget(null);
       toast({ title: "Manthra deleted" });
     },
@@ -252,7 +252,7 @@ export default function ManthrasPage() {
       const json = await res.json();
       const newDoc = json?.data;
       setInsertTarget(null);
-      invalidateGranthaCmsCaches(queryClient);
+      void syncGranthaCmsCaches(queryClient);
       toast({ title: `Shloka inserted after ${insertTarget.afterNum}`, description: `${json.shiftedCount ?? 0} subsequent shlokas renumbered.` });
       if (newDoc?.documentId) {
         fetch(`/api/strapi/manthras/${newDoc.documentId}`)

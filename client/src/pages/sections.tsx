@@ -1,7 +1,7 @@
 import { useState, useMemo } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { queryClient, apiRequest } from "@/lib/queryClient";
-import { invalidateGranthaCmsCaches } from "@/lib/strapi-cache-sync";
+import { syncGranthaCmsCaches } from "@/lib/strapi-cache-sync";
 import { useToast } from "@/hooks/use-toast";
 import { useDrafts } from "@/hooks/use-drafts";
 import { useAuth } from "@/hooks/use-auth";
@@ -134,7 +134,7 @@ export default function SectionsPage() {
       return res.json();
     },
     onSuccess: () => {
-      invalidateGranthaCmsCaches(queryClient);
+      void syncGranthaCmsCaches(queryClient);
       setDeleteTarget(null);
       toast({ title: "Section deleted" });
     },

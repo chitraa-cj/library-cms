@@ -13,6 +13,26 @@ export function blocksToText(value: StrapiBlock[] | string | undefined | null): 
   return "";
 }
 
+export function entryContentCharCount(
+  value: StrapiBlock[] | string | undefined | null,
+): number {
+  return blocksToText(value).trim().length;
+}
+
+/** True when a portal draft field is a stub (e.g. order digit "4") and must not mask CMS text. */
+export function isPlaceholderVersusCms(
+  draft: StrapiBlock[] | string | undefined | null,
+  cms: StrapiBlock[] | string | undefined | null,
+): boolean {
+  const d = blocksToText(draft).trim();
+  const s = blocksToText(cms).trim();
+  if (!d || !s || d === s) return false;
+  if (/^\d{1,3}$/.test(d)) return true;
+  if (d.length <= 8 && s.length > 40) return true;
+  if (s.length >= 40 && d.length < s.length * 0.2) return true;
+  return false;
+}
+
 export function textToBlocks(text: string): StrapiBlock[] {
   if (!text.trim()) return [];
   return text.split("\n").map((line) => ({

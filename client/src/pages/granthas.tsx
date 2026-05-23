@@ -47,7 +47,7 @@ import {
 } from "@shared/schema";
 import StrapiSyncBar from "@/components/strapi-sync-bar";
 import { STRAPI_POLL_INTERVAL } from "@/hooks/use-strapi-sync";
-import { blocksToText } from "@/lib/strapi-blocks";
+import { blocksToText, entryContentCharCount, isPlaceholderVersusCms } from "@/lib/strapi-blocks";
 import {
   sortNodesByOrder,
   isPublishedStrapiDocId,
@@ -80,7 +80,7 @@ import {
   resolveMantraSectionStrapiDocumentId,
   type SnapshotAdhyaya,
 } from "@/lib/grantha-strapi-mantra-sync";
-import { invalidateGranthaCmsCaches } from "@/lib/strapi-cache-sync";
+import { syncGranthaCmsCaches } from "@/lib/strapi-cache-sync";
 import OtherTranslationsHermex from "@/components/other-translations-hermex";
 import {
   postStrapiSection,
@@ -257,13 +257,36 @@ function mergeEntry(draft: any | undefined, fromStrapi: any | undefined): any | 
     mergedOT = merged;
   }
 
+  const keepDraftSans =
+    hasBlocks(draft.SanskritTextEntry) &&
+    !isPlaceholderVersusCms(draft.SanskritTextEntry, fromStrapi.SanskritTextEntry);
+  const keepDraftEng =
+    hasBlocks(draft.EnglishTranslationText) &&
+    !isPlaceholderVersusCms(draft.EnglishTranslationText, fromStrapi.EnglishTranslationText);
+
   return {
     ...fromStrapi,
-    ...(hasBlocks(draft.SanskritTextEntry) && { SanskritTextEntry: draft.SanskritTextEntry }),
-    ...(hasBlocks(draft.EnglishTranslationText) && { EnglishTranslationText: draft.EnglishTranslationText }),
+    ...(keepDraftSans && { SanskritTextEntry: draft.SanskritTextEntry }),
+    ...(keepDraftEng && { EnglishTranslationText: draft.EnglishTranslationText }),
     ...(draft.IASTTransliteration && { IASTTransliteration: draft.IASTTransliteration }),
     ...(mergedOT !== undefined && { OtherTranslations: mergedOT }),
   };
+}
+
+function shlokaManthraEntryRichness(entry: unknown): number {
+  if (!entry || typeof entry !== "object") return 0;
+  const e = entry as {
+    SanskritTextEntry?: unknown;
+    EnglishTranslationText?: unknown;
+  };
+  return (
+    entryContentCharCount(e.SanskritTextEntry as any) +
+    entryContentCharCount(e.EnglishTranslationText as any)
+  );
+}
+
+function strapiManthraRowRichness(row: Record<string, unknown>): number {
+  return shlokaManthraEntryRichness(row.ShlokaManthraEntry);
 }
 
 /** Draft-only teeka row worth keeping when Strapi list does not include it yet. */
@@ -558,8 +581,8 @@ function dedupeManthrasForEditor(manthras: ManthraNode[], leaf: string): Manthra
   const configured = (leaf || "Mantra").trim();
   const bySuffix = new Map<string, ManthraNode>();
   const score = (x: ManthraNode) => {
-    let s = 0;
-    if (hasManthraContent(x)) s += 100;
+    let s = shlokaManthraEntryRichness(x.ShlokaManthraEntry);
+    if (hasBlocks(x.BhashyamForShlokaManthra?.SanskritTextEntry)) s += 50;
     if (isPublishedStrapiDocId(x.strapiDocumentId)) s += 1;
     return s;
   };
@@ -574,9 +597,8 @@ function dedupeManthrasForEditor(manthras: ManthraNode[], leaf: string): Manthra
 }
 
 function hasManthraContent(m: ManthraNode) {
-  return !!(
-    hasBlocks(m.ShlokaManthraEntry?.SanskritTextEntry) ||
-    hasBlocks(m.ShlokaManthraEntry?.EnglishTranslationText) ||
+  return (
+    shlokaManthraEntryRichness(m.ShlokaManthraEntry) > 12 ||
     hasBlocks(m.BhashyamForShlokaManthra?.SanskritTextEntry) ||
     m.Teekas?.some((t) => hasBlocks(t.TeekaEntry?.SanskritTextEntry))
   );
@@ -1039,53 +1061,83 @@ export default function GranthasPage() {
       );
     };
 
+    const fetchManthraRow = async (id: string): Promise<Record<string, unknown> | null> => {
+      const res = await fetch(`/api/strapi/manthras/${id}`, { credentials: "include" });
+      const json = await res.json();
+      return (json?.data as Record<string, unknown>) ?? null;
+    };
+
     const loadMantraFromStrapi = async (): Promise<{
       row: Record<string, unknown>;
       corrected: boolean;
     } | null> => {
       const snap = adhyayasRef.current as SnapshotAdhyaya[];
       const cfg = structureConfigRef.current;
+      const leaf = (cfg.leafName ?? "Mantra").trim() || "Mantra";
       const localNode = findManthraInTree(snap as AdhyayaNode[], adhyayaId, khandaId, manthraId, padaId);
       const sectionDocId = resolveMantraSectionStrapiDocumentId(snap, adhyayaId, khandaId, padaId, cfg);
 
-      const primaryRes = await fetch(`/api/strapi/manthras/${docId}`, { credentials: "include" });
-      const primaryJson = await primaryRes.json();
-      const primary = primaryJson?.data as Record<string, unknown> | undefined;
+      const primary = await fetchManthraRow(docId);
       if (!primary) return null;
 
       const primaryNum = (primary.ShlokaManthraNumber as string) || "";
-      if (
-        localNode?.title &&
-        primaryNum &&
-        !mantrasShareLeafAndSuffix(localNode.title, primaryNum, cfg.leafName ?? "Mantra") &&
-        sectionDocId
-      ) {
-        const listRes = await fetch(
-          `/api/strapi/manthras?filters[Section][documentId][$eq]=${encodeURIComponent(sectionDocId)}&pagination[pageSize]=250`,
-          { credentials: "include" },
-        );
-        const listJson = await listRes.json().catch(() => ({}));
-        const rows = (listJson?.data ?? []) as Array<Record<string, unknown>>;
-        const refs: StrapiMantraRef[] = rows
-          .filter((r) => typeof r.documentId === "string")
-          .map((r) => ({
-            title: String(r.ShlokaManthraNumber ?? ""),
-            docId: String(r.documentId),
-            order: typeof r.order === "number" ? r.order : 0,
-          }));
-        const correct = findStrapiMantraByLeafAndSuffix(
-          refs,
-          localNode.title,
-          cfg.leafName ?? "Mantra",
-        );
-        if (correct && correct.docId !== docId) {
-          const fixRes = await fetch(`/api/strapi/manthras/${correct.docId}`, { credentials: "include" });
-          const fixJson = await fixRes.json();
-          const fixed = (fixJson?.data as Record<string, unknown>) ?? primary;
-          return { row: fixed, corrected: true };
+      const labelMismatch =
+        !!localNode?.title &&
+        !!primaryNum &&
+        !mantrasShareLeafAndSuffix(localNode.title, primaryNum, leaf);
+      const primaryRich = strapiManthraRowRichness(primary);
+      const needsSectionScan =
+        !!sectionDocId &&
+        !!localNode?.title &&
+        (labelMismatch || primaryRich < 40);
+
+      if (!needsSectionScan) {
+        return { row: primary, corrected: false };
+      }
+
+      const listRes = await fetch(
+        `/api/strapi/manthras?filters[Section][documentId][$eq]=${encodeURIComponent(sectionDocId!)}&pagination[pageSize]=250`,
+        { credentials: "include" },
+      );
+      const listJson = await listRes.json().catch(() => ({}));
+      const rows = (listJson?.data ?? []) as Array<Record<string, unknown>>;
+      const refs: StrapiMantraRef[] = rows
+        .filter((r) => typeof r.documentId === "string")
+        .map((r) => ({
+          title: String(r.ShlokaManthraNumber ?? ""),
+          docId: String(r.documentId),
+          order: typeof r.order === "number" ? r.order : 0,
+        }));
+
+      const matchingRefs = refs.filter((r) =>
+        mantrasShareLeafAndSuffix(localNode!.title, r.title, leaf),
+      );
+      const candidateDocIds = new Set<string>([docId]);
+      if (matchingRefs.length > 0) {
+        for (const r of matchingRefs) candidateDocIds.add(r.docId);
+      } else {
+        const byLabel = findStrapiMantraByLeafAndSuffix(refs, localNode!.title, leaf);
+        if (byLabel) candidateDocIds.add(byLabel.docId);
+      }
+
+      let bestRow = primary;
+      let bestScore = primaryRich;
+      for (const candidateId of candidateDocIds) {
+        const row =
+          candidateId === (primary.documentId as string)
+            ? primary
+            : await fetchManthraRow(candidateId);
+        if (!row) continue;
+        const score = strapiManthraRowRichness(row);
+        if (score > bestScore) {
+          bestRow = row;
+          bestScore = score;
         }
       }
-      return { row: primary, corrected: false };
+
+      const corrected =
+        (bestRow.documentId as string | undefined) !== docId || bestScore > primaryRich;
+      return { row: bestRow, corrected };
     };
 
     loadMantraFromStrapi()
@@ -1243,13 +1295,13 @@ export default function GranthasPage() {
         grantha_name: formData.GranthaName,
         warnings: warnCount,
       });
-      invalidateGranthaCmsCaches(queryClient);
+      void syncGranthaCmsCaches(queryClient);
       toast({
         title: "Mantra published to CMS",
         description:
           warnCount > 0
-            ? `${warnCount} warning(s) — saved under "${findManthraInTree(adhyayasRef.current, params.adhyayaId, params.khandaId, params.manthraId, params.padaId)?.title ?? "this label"}" in Strapi.`
-            : "Content and verse label are now live in Strapi under the name shown in the editor.",
+            ? `${warnCount} warning(s) — saved under "${findManthraInTree(adhyayasRef.current, params.adhyayaId, params.khandaId, params.manthraId, params.padaId)?.title ?? "this label"}" in Strapi. Mantras and Sections tabs will refresh.`
+            : "Content and verse label are live in Strapi. Mantras and Sections tabs will refresh.",
       });
       setEditingManthra(null);
     },
@@ -3051,7 +3103,7 @@ export default function GranthasPage() {
               return merged;
             });
           }
-          invalidateGranthaCmsCaches(queryClient);
+          void syncGranthaCmsCaches(queryClient);
         })
         .catch((e: unknown) => {
           const msg = e instanceof Error ? e.message : String(e);
@@ -3097,7 +3149,7 @@ export default function GranthasPage() {
             return merged;
           });
         }
-        invalidateGranthaCmsCaches(queryClient);
+        void syncGranthaCmsCaches(queryClient);
       })
       .catch((e: unknown) => {
         const msg = e instanceof Error ? e.message : String(e);
@@ -3121,6 +3173,7 @@ export default function GranthasPage() {
     await syncStrapiSectionOrderAndTitles(
       collectAllSectionOrderSyncRowsFromHierarchy(snapshot, cfg),
     );
+    void syncGranthaCmsCaches(queryClient);
   }
 
   /** Debounced: mirror full section tree order+titles to Strapi (e.g. after renaming sections). */
@@ -3589,17 +3642,20 @@ export default function GranthasPage() {
                 const granthaSidForFlush =
                   newStrapiDocId ||
                   (editingItem && !editingItem._isDraft ? editingItem.documentId : editingItem?._strapiDocId);
+                const finishPublishSync = async (nh: AdhyayaNode[]) => {
+                  if (isPublishedStrapiDocId(granthaSidForFlush)) {
+                    flushStrapiFullHierarchySectionOrderSyncNow(nh, structureConfig, true);
+                    await flushFullMantraIdentityAlignToStrapiNow(nh, structureConfig);
+                  }
+                  await syncGranthaCmsCaches(queryClient);
+                };
+
                 if (Array.isArray(updatedHierarchy)) {
                   const nh = withNormalizedHierarchy(updatedHierarchy as AdhyayaNode[], structureConfig);
                   setAdhyayas(nh);
-                  if (isPublishedStrapiDocId(granthaSidForFlush)) {
-                    flushStrapiFullHierarchySectionOrderSyncNow(nh, structureConfig, true);
-                    void flushFullMantraIdentityAlignToStrapiNow(nh, structureConfig).then(() => {
-                      invalidateGranthaCmsCaches(queryClient);
-                    });
-                  } else {
-                    invalidateGranthaCmsCaches(queryClient);
-                  }
+                  void finishPublishSync(nh);
+                } else {
+                  void syncGranthaCmsCaches(queryClient);
                 }
 
                 // If this was a brand-new grantha (no prior Strapi link), the publish
@@ -5259,8 +5315,8 @@ export default function GranthasPage() {
               {manthraLoading
                 ? "Loading latest content from the CMS…"
                 : editingManthra?.strapiDocumentId
-                  ? "Showing live content from the CMS. Edit here and click Done to update."
-                  : "Enter the Sanskrit text and translations. These fields map directly to the CMS chapter record."}
+                  ? "Showing live content from the CMS. Use Save & Publish to push edits to Strapi (Mantras and Sections tabs update automatically)."
+                  : "Enter the Sanskrit text and translations, then Save & Publish to create the CMS record."}
             </DialogDescription>
           </DialogHeader>
 

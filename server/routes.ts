@@ -1037,6 +1037,31 @@ async function fetchGranthaTranslationsForMerge(documentId: string): Promise<any
   }
 }
 
+function blocksPlainText(v: any): string {
+  if (!v) return "";
+  if (typeof v === "string") return v;
+  if (!Array.isArray(v)) return "";
+  return v
+    .map((block: any) =>
+      (block?.children ?? [])
+        .map((c: any) => (typeof c?.text === "string" ? c.text : ""))
+        .join(""),
+    )
+    .join("\n")
+    .trim();
+}
+
+/** Draft stubs (e.g. order digit "4") must not replace full CMS verse text on publish. */
+function isPlaceholderVersusCmsText(draft: any, cms: any): boolean {
+  const d = blocksPlainText(draft);
+  const s = blocksPlainText(cms);
+  if (!d || !s || d === s) return false;
+  if (/^\d{1,3}$/.test(d)) return true;
+  if (d.length <= 8 && s.length > 40) return true;
+  if (s.length >= 40 && d.length < s.length * 0.2) return true;
+  return false;
+}
+
 function hasPublishableBlocks(v: any): boolean {
   if (!v) return false;
   if (typeof v === "string") return v.trim().length > 0;
@@ -1074,9 +1099,24 @@ function mergeTeekaEntryForPut(strapiEntry: any | null | undefined, localEntry: 
       : mergeOtherTranslations(draftOT, strapiOT);
 
   const out: Record<string, any> = { ...s };
-  if (hasPublishableBlocks(d.SanskritTextEntry)) out.SanskritTextEntry = d.SanskritTextEntry;
-  if (hasPublishableBlocks(d.EnglishTranslationText)) out.EnglishTranslationText = d.EnglishTranslationText;
-  if (hasPublishableBlocks(d.IASTTransliteration)) out.IASTTransliteration = d.IASTTransliteration;
+  if (
+    hasPublishableBlocks(d.SanskritTextEntry) &&
+    !isPlaceholderVersusCmsText(d.SanskritTextEntry, s.SanskritTextEntry)
+  ) {
+    out.SanskritTextEntry = d.SanskritTextEntry;
+  }
+  if (
+    hasPublishableBlocks(d.EnglishTranslationText) &&
+    !isPlaceholderVersusCmsText(d.EnglishTranslationText, s.EnglishTranslationText)
+  ) {
+    out.EnglishTranslationText = d.EnglishTranslationText;
+  }
+  if (
+    hasPublishableBlocks(d.IASTTransliteration) &&
+    !isPlaceholderVersusCmsText(d.IASTTransliteration, s.IASTTransliteration)
+  ) {
+    out.IASTTransliteration = d.IASTTransliteration;
+  }
   if (mergedOT !== undefined) out.OtherTranslations = mergedOT;
   return rebuildTextAndTranslationForStrapiPut(out) ?? out;
 }

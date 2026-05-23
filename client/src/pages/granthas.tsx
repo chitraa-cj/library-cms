@@ -67,6 +67,8 @@ import {
   strapiVerseTakenForConfiguredLeaf,
   titleUsesConfiguredLeaf,
   mantraNumberSuffix,
+  portalMantraTitleForLeaf,
+  inferLeafNameFromStrapiMantras,
   type GranthaStructureConfig,
   type StrapiMantraRef,
 } from "@/lib/grantha-structure-sync";
@@ -982,6 +984,10 @@ export default function GranthasPage() {
     const { adhyayaId, khandaId, manthraId, padaId } = editingManthra;
 
     const applyStrapiMantraToTree = (strapiRow: Record<string, unknown>) => {
+      const configuredLeaf = (structureConfigRef.current.leafName || "Mantra").trim() || "Mantra";
+      const strapiLabel = String(strapiRow.ShlokaManthraNumber ?? "");
+      const applyTitle = (mn: ManthraNode) =>
+        portalMantraTitleForLeaf(mn.title, configuredLeaf, strapiLabel);
       setAdhyayas((prev) =>
           prev.map((a) => {
             if (a.id !== adhyayaId) return a;
@@ -999,10 +1005,7 @@ export default function GranthasPage() {
                         manthras: p.manthras.map((mn) =>
                           mn.id !== manthraId ? mn : {
                             ...mn,
-                            title:
-                              mn.title ||
-                              (strapiRow.ShlokaManthraNumber as string) ||
-                              "",
+                            title: applyTitle(mn),
                             strapiDocumentId: (strapiRow.documentId as string) || mn.strapiDocumentId,
                             ShlokaManthraEntry: mergeEntry(mn.ShlokaManthraEntry, strapiRow.ShlokaManthraEntry as any),
                             BhashyamForShlokaManthra: mergeEntry(mn.BhashyamForShlokaManthra, strapiRow.BhashyamEntry as any),
@@ -1020,10 +1023,7 @@ export default function GranthasPage() {
                   manthras: k.manthras.map((mn) =>
                     mn.id !== manthraId ? mn : {
                       ...mn,
-                      title:
-                        mn.title ||
-                        (strapiRow.ShlokaManthraNumber as string) ||
-                        "",
+                      title: applyTitle(mn),
                       strapiDocumentId: (strapiRow.documentId as string) || mn.strapiDocumentId,
                       ShlokaManthraEntry: mergeEntry(mn.ShlokaManthraEntry, strapiRow.ShlokaManthraEntry as any),
                       BhashyamForShlokaManthra: mergeEntry(mn.BhashyamForShlokaManthra, strapiRow.BhashyamEntry as any),
@@ -1758,6 +1758,23 @@ export default function GranthasPage() {
         }
       }
 
+      const allStrapiMantraRefs: StrapiMantraRef[] = [];
+      const seenStrapiMantraDocIds = new Set<string>();
+      for (const list of strapiMantrasBySecDocId.values()) {
+        for (const sm of list) {
+          if (seenStrapiMantraDocIds.has(sm.docId)) continue;
+          seenStrapiMantraDocIds.add(sm.docId);
+          allStrapiMantraRefs.push(sm);
+        }
+      }
+      const inferredLeaf = inferLeafNameFromStrapiMantras(
+        allStrapiMantraRefs,
+        effectiveStructureConfig.leafName || "Mantra",
+      );
+      if (inferredLeaf !== (effectiveStructureConfig.leafName || "Mantra")) {
+        effectiveStructureConfig = { ...effectiveStructureConfig, leafName: inferredLeaf };
+      }
+
       // Track all shloka numbers already present in the hierarchy so we never duplicate
       function collectKnownShlokas(hier: AdhyayaNode[]): Set<string> {
         const known = new Set<string>();
@@ -1885,6 +1902,7 @@ export default function GranthasPage() {
               const { docId } = resolved;
               acc.push({
                 ...m,
+                title: portalMantraTitleForLeaf(m.title, leafLabel),
                 strapiDocumentId: docId,
               });
               return acc;
@@ -1929,6 +1947,7 @@ export default function GranthasPage() {
                 padaMatchedDocIds.add(resolved.docId);
                 const row = {
                   ...m,
+                  title: portalMantraTitleForLeaf(m.title, leafLabel),
                   strapiDocumentId: resolved.docId,
                 };
                 markStrapiDocsMatchedByLeaf(m.title, padaStrapi, padaMatchedDocIds);

@@ -86,6 +86,60 @@ export function canonicalMantraTitle(
   return `${(configuredLeaf || "Mantra").trim()} ${numericSuffix}`.trim();
 }
 
+/** Portal display label for a verse: always uses the stored/configured leaf + numeric suffix. */
+export function portalMantraTitleForLeaf(
+  portalTitle: string | undefined,
+  configuredLeaf: string,
+  strapiTitle?: string,
+): string {
+  const leaf = (configuredLeaf || "Mantra").trim() || "Mantra";
+  const suffix = mantraNumberSuffix(portalTitle) ?? mantraNumberSuffix(strapiTitle);
+  if (suffix) return canonicalMantraTitle(leaf, suffix);
+  const st = (strapiTitle ?? "").trim();
+  if (st && titleUsesConfiguredLeaf(st, leaf)) return st;
+  const pt = (portalTitle ?? "").trim();
+  if (pt && titleUsesConfiguredLeaf(pt, leaf)) return pt;
+  return pt || canonicalMantraTitle(leaf, "1");
+}
+
+/**
+ * When CMS rows overwhelmingly use one leaf prefix (e.g. Shloka) but the saved draft
+ * still says Mantra, align structure config on open so the editor matches Strapi.
+ */
+export function inferLeafNameFromStrapiMantras(
+  mantras: Iterable<{ title?: string }>,
+  draftLeaf: string,
+): string {
+  const draft = (draftLeaf || "Mantra").trim() || "Mantra";
+  const counts = new Map<string, number>();
+  let total = 0;
+  for (const m of mantras) {
+    const p = mantraTitleLeafPrefix(m.title);
+    if (!p) continue;
+    const canonical = PORTAL_SELECTABLE_LEAF_NAMES.find(
+      (n) => n.toLowerCase() === p.toLowerCase(),
+    );
+    if (!canonical) continue;
+    counts.set(canonical, (counts.get(canonical) ?? 0) + 1);
+    total++;
+  }
+  if (total < 5) return draft;
+  const draftCount =
+    [...counts.entries()].find(([k]) => k.toLowerCase() === draft.toLowerCase())?.[1] ?? 0;
+  let bestLeaf = draft;
+  let bestCount = draftCount;
+  for (const [leaf, n] of counts) {
+    if (n > bestCount) {
+      bestLeaf = leaf;
+      bestCount = n;
+    }
+  }
+  if (bestLeaf.toLowerCase() === draft.toLowerCase()) return draft;
+  if (draftCount > total * 0.25) return draft;
+  if (bestCount < total * 0.5) return draft;
+  return bestLeaf;
+}
+
 export function mantrasShareNumberSuffix(a: string | undefined, b: string | undefined): boolean {
   const sa = mantraNumberSuffix(a);
   const sb = mantraNumberSuffix(b);

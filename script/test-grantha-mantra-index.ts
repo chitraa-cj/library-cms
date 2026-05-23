@@ -22,6 +22,8 @@ import {
   reindexMantraOrdersPreservingTitles,
   assignContiguousMantraOrders,
   sortNodesByOrder,
+  portalMantraTitleForLeaf,
+  inferLeafNameFromStrapiMantras,
   type MantraTitleCtx,
 } from "../client/src/lib/grantha-structure-sync.ts";
 
@@ -372,5 +374,18 @@ assert.deepEqual(
   editor.map((m) => m.title),
   ["Shloka 1.1", "Shloka 1.2", "Shloka 1.3"],
 );
+
+assert.equal(portalMantraTitleForLeaf("Mantra 1.1.5", "Shloka"), "Shloka 1.1.5");
+assert.equal(
+  portalMantraTitleForLeaf("Mantra 1.1.5", "Shloka", "Shloka 1.1.5"),
+  "Shloka 1.1.5",
+);
+
+const shlokaHeavy = Array.from({ length: 30 }, (_, i) => ({
+  title: `Shloka 1.1.${i + 1}`,
+}));
+const mantraSparse = [{ title: "Mantra 1.1.1" }, { title: "Mantra 1.1.2" }];
+assert.equal(inferLeafNameFromStrapiMantras(shlokaHeavy, "Mantra"), "Shloka");
+assert.equal(inferLeafNameFromStrapiMantras(mantraSparse, "Mantra"), "Mantra");
 
 console.log("test-grantha-mantra-index: all ok (insert/delete/order)");

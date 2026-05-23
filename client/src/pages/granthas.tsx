@@ -3830,7 +3830,7 @@ export default function GranthasPage() {
       <div className="p-6 lg:p-8 max-w-7xl mx-auto">
         <div className="flex items-center justify-between mb-6">
           <div>
-            <h1 className="text-2xl font-bold tracking-tight">All Listed Granthas</h1>
+            <h1 className="text-2xl font-bold tracking-tight">All Granthas</h1>
             <p className="text-muted-foreground text-sm mt-1">
               Browse library to update existing content
             </p>

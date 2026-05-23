@@ -2,7 +2,8 @@ import { apiRequest, ApiError } from "@/lib/queryClient";
 import {
   sortNodesByOrder,
   isPublishedStrapiDocId,
-  findStrapiMantraByNumberSuffix,
+  findStrapiMantraByLeafAndSuffix,
+  titleUsesConfiguredLeaf,
   type GranthaStructureConfig,
   type StrapiMantraRef,
 } from "@/lib/grantha-structure-sync";
@@ -159,36 +160,58 @@ export async function strapiDeleteMantrasBestEffort(documentIds: string[]): Prom
   return failed;
 }
 
-/** Look up a published manthra in a section by its portal/CMS label. */
+/** Fetch all mantras in a section (paginated). */
+export async function listStrapiMantrasInSection(sectionDocumentId: string): Promise<StrapiMantraRef[]> {
+  if (!isPublishedStrapiDocId(sectionDocumentId)) return [];
+  const base = [
+    `filters[Section][documentId][$eq]=${encodeURIComponent(sectionDocumentId)}`,
+    "fields[0]=documentId",
+    "fields[1]=ShlokaManthraNumber",
+    "fields[2]=order",
+    "sort[0]=order:asc",
+    "pagination[pageSize]=100",
+  ].join("&");
+
+  const firstRes = await apiRequest("GET", `/api/strapi/manthras?${base}&pagination[page]=1`);
+  const firstJson = await firstRes.json().catch(() => ({}));
+  const total: number = firstJson?.meta?.pagination?.total ?? 0;
+  const pageSize: number = firstJson?.meta?.pagination?.pageSize ?? 100;
+  const pageCount = Math.max(1, Math.ceil(total / pageSize));
+
+  const rows: any[] = [...(firstJson?.data ?? [])];
+  if (pageCount > 1) {
+    const rest = await Promise.all(
+      Array.from({ length: pageCount - 1 }, (_, i) =>
+        apiRequest("GET", `/api/strapi/manthras?${base}&pagination[page]=${i + 2}`).then((r) => r.json()),
+      ),
+    );
+    for (const p of rest) rows.push(...(p?.data ?? []));
+  }
+
+  return rows
+    .filter((r) => typeof r.documentId === "string")
+    .map((r) => ({
+      title: String(r.ShlokaManthraNumber ?? ""),
+      docId: r.documentId as string,
+      order: typeof r.order === "number" ? r.order : 0,
+    }));
+}
+
+/** Look up a published manthra in a section by portal label (exact, then shared verse number). */
 export async function lookupStrapiMantraDocIdByLabel(
   sectionDocumentId: string,
   label: string,
+  configuredLeaf: string,
+  cachedSectionList?: StrapiMantraRef[],
 ): Promise<string | undefined> {
   const trimmed = label.trim();
+  const leaf = (configuredLeaf || "Mantra").trim();
   if (!trimmed || !isPublishedStrapiDocId(sectionDocumentId)) return undefined;
 
-  const res = await apiRequest(
-    "GET",
-    `/api/strapi/manthras?filters[Section][documentId][$eq]=${encodeURIComponent(sectionDocumentId)}&filters[ShlokaManthraNumber][$eqi]=${encodeURIComponent(trimmed)}&fields[0]=documentId&fields[1]=ShlokaManthraNumber&pagination[pageSize]=5`,
-  );
-  const json = await res.json().catch(() => ({}));
-  const rows = (json?.data ?? []) as Array<{ documentId?: string; ShlokaManthraNumber?: string }>;
-  if (rows.length === 1) return rows[0].documentId;
-  if (rows.length > 1) return rows[0].documentId;
-
-  const listRes = await apiRequest(
-    "GET",
-    `/api/strapi/manthras?filters[Section][documentId][$eq]=${encodeURIComponent(sectionDocumentId)}&fields[0]=documentId&fields[1]=ShlokaManthraNumber&fields[2]=order&pagination[pageSize]=250`,
-  );
-  const listJson = await listRes.json().catch(() => ({}));
-  const refs: StrapiMantraRef[] = (listJson?.data ?? [])
-    .filter((r: { documentId?: string }) => typeof r.documentId === "string")
-    .map((r: { documentId: string; ShlokaManthraNumber?: string; order?: number }) => ({
-      title: String(r.ShlokaManthraNumber ?? ""),
-      docId: r.documentId,
-      order: typeof r.order === "number" ? r.order : 0,
-    }));
-  return findStrapiMantraByNumberSuffix(refs, trimmed)?.docId;
+  const refs = cachedSectionList ?? (await listStrapiMantrasInSection(sectionDocumentId));
+  const exact = refs.filter((r) => r.title.trim().toLowerCase() === trimmed.toLowerCase());
+  if (exact.length === 1) return exact[0].docId;
+  return findStrapiMantraByLeafAndSuffix(refs, trimmed, leaf)?.docId;
 }
 
 export type MantraSectionSyncTarget = {
@@ -259,6 +282,7 @@ export function applyMantraDocIdPatches<T extends SnapshotAdhyaya>(
 export async function syncAllMantraSectionsInGrantha(
   snapshot: SnapshotAdhyaya[],
   cfg: GranthaStructureConfig,
+  options?: { allowCreate?: boolean },
 ): Promise<MantraDocIdPatch[]> {
   const all: MantraDocIdPatch[] = [];
   for (const ctx of collectMantraSectionSyncTargets(snapshot, cfg)) {
@@ -268,6 +292,7 @@ export async function syncAllMantraSectionsInGrantha(
       ctx.khandaId,
       ctx.padaId,
       cfg,
+      options,
     );
     for (const p of patches) {
       all.push({ ...ctx, ...p });
@@ -300,13 +325,16 @@ export async function pushMantraSectionIdentityToStrapi(
   khandaId: string,
   padaId: string | undefined,
   cfg: GranthaStructureConfig,
+  options?: { allowCreate?: boolean },
 ): Promise<Array<{ manthraId: string; strapiDocumentId: string }>> {
+  const allowCreate = options?.allowCreate !== false;
   const sectionDocumentId = resolveMantraSectionStrapiDocumentId(snapshot, adhyayaId, khandaId, padaId, cfg);
   if (!sectionDocumentId) return [];
 
   const sorted = getSortedMantrasFromSnapshot(snapshot, adhyayaId, khandaId, padaId, cfg);
   const patches: Array<{ manthraId: string; strapiDocumentId: string }> = [];
   const resolved = new Map<string, string>();
+  const sectionList = await listStrapiMantrasInSection(sectionDocumentId);
 
   // Process in display order so consecutive new rows (insert after 2, then after new 3) each
   // call insert-between on the row directly above — never duplicate or skip a slot.
@@ -315,7 +343,13 @@ export async function pushMantraSectionIdentityToStrapi(
     const portalLabel = (m.title ?? "").trim();
 
     if (portalLabel) {
-      const byLabel = await lookupStrapiMantraDocIdByLabel(sectionDocumentId, portalLabel);
+      const leaf = (cfg.leafName ?? "Mantra").trim() || "Mantra";
+      const byLabel = await lookupStrapiMantraDocIdByLabel(
+        sectionDocumentId,
+        portalLabel,
+        leaf,
+        sectionList,
+      );
       if (byLabel) {
         resolved.set(m.id, byLabel);
         if (!isPublishedStrapiDocId(m.strapiDocumentId) || m.strapiDocumentId !== byLabel) {
@@ -329,6 +363,8 @@ export async function pushMantraSectionIdentityToStrapi(
       resolved.set(m.id, m.strapiDocumentId!);
       continue;
     }
+
+    if (!allowCreate) continue;
 
     const prevWithStrapi = sorted
       .slice(0, i)
@@ -385,6 +421,8 @@ export async function syncMantraSectionAfterStructuralEdits(
   deleteDocumentIds: string[],
 ): Promise<{ patches: Array<{ manthraId: string; strapiDocumentId: string }>; failedDeleteIds: string[] }> {
   const failedDeleteIds = await strapiDeleteMantrasBestEffort(deleteDocumentIds);
-  const patches = await pushMantraSectionIdentityToStrapi(snapshot, adhyayaId, khandaId, padaId, cfg);
+  const patches = await pushMantraSectionIdentityToStrapi(snapshot, adhyayaId, khandaId, padaId, cfg, {
+    allowCreate: true,
+  });
   return { patches, failedDeleteIds };
 }

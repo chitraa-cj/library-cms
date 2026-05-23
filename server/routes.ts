@@ -1535,7 +1535,9 @@ async function resolveManthraDocIdForPublish(
   try {
     const row = (await strapiRequest(`/api/manthras/${stored}?fields[0]=ShlokaManthraNumber`))?.data;
     const strapiNum = String(row?.ShlokaManthraNumber ?? "").trim();
-    if (!strapiNum || mantraLabelsShareNumber(portalLabel, strapiNum)) return stored;
+    if (!strapiNum || portalLabel.trim().toLowerCase() === strapiNum.trim().toLowerCase()) {
+      return stored;
+    }
     console.warn(
       `[publish] Stored doc ${stored} is "${strapiNum}" but portal shows "${portalLabel}" — will upsert by label`,
     );

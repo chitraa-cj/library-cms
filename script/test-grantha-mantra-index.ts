@@ -9,6 +9,8 @@ import {
   titlePrefixFromMantraTitle,
   mantraNumberSuffix,
   mantrasShareNumberSuffix,
+  mantrasShareLeafAndSuffix,
+  findStrapiMantraByLeafAndSuffix,
   resolvePortalMantraToStrapiDoc,
   buildUniqueStrapiOrderMap,
   buildMantraDisplayTitle,
@@ -109,6 +111,8 @@ assert.equal(titlePrefixFromMantraTitle("Manthra 1.2", "Shloka"), "Shloka");
 
 assert.equal(mantraNumberSuffix("Mantra 1.1.5"), "1.1.5");
 assert.equal(mantrasShareNumberSuffix("Shloka 1.1.5", "Mantra 1.1.5"), true);
+assert.equal(mantrasShareLeafAndSuffix("Shloka 1.1.5", "Mantra 1.1.5", "Shloka"), false);
+assert.equal(mantrasShareLeafAndSuffix("Shloka 1.1.5", "Shloka 1.1.5", "Shloka"), true);
 
 const orderMapRefs: StrapiMantraRef[] = [
   { title: "A", docId: "doc-a1111111111111", order: 1 },
@@ -117,8 +121,8 @@ const orderMapRefs: StrapiMantraRef[] = [
 assert.equal(buildUniqueStrapiOrderMap(orderMapRefs).byOrder.get(1)?.docId, "doc-a1111111111111");
 
 const sectionRefs = [
-  { title: "Mantra 1.1.5", docId: "doc-aaaa1111111111", order: 5 },
-  { title: "Mantra 1.1.6", docId: "doc-bbbb2222222222", order: 6 },
+  { title: "Shloka 1.1.5", docId: "doc-aaaa1111111111", order: 5 },
+  { title: "Shloka 1.1.6", docId: "doc-bbbb2222222222", order: 6 },
   { title: "Mantra 1.1.4", docId: "doc-cccc3333333333", order: 4 },
   { title: "Mantra 1.1.4", docId: "doc-dddd4444444444", order: 4 },
 ];
@@ -126,12 +130,23 @@ const { byOrder, ambiguousOrders } = buildUniqueStrapiOrderMap(sectionRefs);
 assert(ambiguousOrders.has(4));
 assert.equal(byOrder.get(5)?.docId, "doc-aaaa1111111111");
 
-const byExact = new Map<string, string>([["Mantra 1.1.5", "doc-aaaa1111111111"]]);
+const byExact = new Map<string, string>([["Shloka 1.1.5", "doc-aaaa1111111111"]]);
 const remap = resolvePortalMantraToStrapiDoc(
-  { title: "Mantra 1.1.5", order: 5, strapiDocumentId: "doc-bbbb2222222222" },
-  { byExactTitle: byExact, sectionMantras: sectionRefs, byOrder, ambiguousOrders },
+  { title: "Shloka 1.1.5", order: 5, strapiDocumentId: "doc-bbbb2222222222" },
+  {
+    configuredLeaf: "Shloka",
+    byExactTitle: byExact,
+    sectionMantras: sectionRefs,
+    byOrder,
+    ambiguousOrders,
+  },
 );
 assert.equal(remap?.docId, "doc-aaaa1111111111");
+assert.equal(
+  findStrapiMantraByLeafAndSuffix(sectionRefs, "Shloka 1.1.5", "Shloka")?.docId,
+  "doc-aaaa1111111111",
+);
+assert.equal(findStrapiMantraByLeafAndSuffix(sectionRefs, "Shloka 1.1.5", "Mantra")?.docId, undefined);
 
 const flat: MantraTitleCtx = {
   leaf: "Shloka",

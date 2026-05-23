@@ -63,11 +63,68 @@ export function mantraNumberSuffix(title: string | undefined): string | null {
   return m ? m[1] : null;
 }
 
+/** Prefix before the numeric segment, e.g. `"Shloka 1.1.5"` → `"Shloka"`. */
+export function mantraTitleLeafPrefix(title: string | undefined): string | null {
+  const t = (title ?? "").trim();
+  if (!t) return null;
+  const m = t.match(/^(.+?)\s+[\d.]+$/);
+  return m ? m[1].trim() : null;
+}
+
+export function titleUsesConfiguredLeaf(title: string | undefined, configuredLeaf: string): boolean {
+  const leaf = (configuredLeaf ?? "").trim();
+  if (!leaf) return true;
+  const prefix = mantraTitleLeafPrefix(title);
+  if (!prefix) return !(title ?? "").trim();
+  return prefix.toLowerCase() === leaf.toLowerCase();
+}
+
+export function canonicalMantraTitle(
+  configuredLeaf: string,
+  numericSuffix: string,
+): string {
+  return `${(configuredLeaf || "Mantra").trim()} ${numericSuffix}`.trim();
+}
+
 export function mantrasShareNumberSuffix(a: string | undefined, b: string | undefined): boolean {
   const sa = mantraNumberSuffix(a);
   const sb = mantraNumberSuffix(b);
   if (!sa || !sb) return (a ?? "").trim() === (b ?? "").trim();
   return sa === sb;
+}
+
+/** Same verse number and same leaf label (Mantra vs Shloka are never treated as the same row). */
+export function mantrasShareLeafAndSuffix(
+  a: string | undefined,
+  b: string | undefined,
+  configuredLeaf: string,
+): boolean {
+  if (!mantrasShareNumberSuffix(a, b)) return false;
+  return titleUsesConfiguredLeaf(a, configuredLeaf) && titleUsesConfiguredLeaf(b, configuredLeaf);
+}
+
+export function collectKnownVerseSuffixesForLeaf(
+  titles: Iterable<string | undefined>,
+  configuredLeaf: string,
+): Set<string> {
+  const known = new Set<string>();
+  for (const t of titles) {
+    if (!titleUsesConfiguredLeaf(t, configuredLeaf)) continue;
+    const suffix = mantraNumberSuffix(t);
+    if (suffix) known.add(suffix);
+  }
+  return known;
+}
+
+/** True when Strapi already has this verse under the configured leaf in the portal tree. */
+export function strapiVerseTakenForConfiguredLeaf(
+  strapiTitle: string | undefined,
+  knownSuffixesForLeaf: Set<string>,
+  configuredLeaf: string,
+): boolean {
+  if (!titleUsesConfiguredLeaf(strapiTitle, configuredLeaf)) return false;
+  const suffix = mantraNumberSuffix(strapiTitle);
+  return suffix != null && knownSuffixesForLeaf.has(suffix);
 }
 
 /** `order` keys with more than one Strapi row are excluded (unsafe for remapping). */
@@ -89,17 +146,28 @@ export function buildUniqueStrapiOrderMap(manthras: StrapiMantraRef[]): {
   return { byOrder, ambiguousOrders };
 }
 
-export function findStrapiMantraByNumberSuffix(
+export function findStrapiMantraByLeafAndSuffix(
   mantras: StrapiMantraRef[],
   portalTitle: string | undefined,
+  configuredLeaf: string,
 ): StrapiMantraRef | undefined {
-  const suffix = mantraNumberSuffix(portalTitle);
+  const leaf = (configuredLeaf || "Mantra").trim();
+  let label = (portalTitle ?? "").trim();
+  const suffix = mantraNumberSuffix(label);
   if (!suffix) return undefined;
-  const hits = mantras.filter((sm) => mantraNumberSuffix(sm.title) === suffix);
+  if (!titleUsesConfiguredLeaf(label, leaf)) {
+    label = canonicalMantraTitle(leaf, suffix);
+  }
+  const hits = mantras.filter(
+    (sm) =>
+      mantraNumberSuffix(sm.title) === suffix &&
+      titleUsesConfiguredLeaf(sm.title, leaf),
+  );
   return hits.length === 1 ? hits[0] : undefined;
 }
 
 export interface ResolvePortalMantraStrapiOptions {
+  configuredLeaf: string;
   byExactTitle: Map<string, string>;
   sectionMantras: StrapiMantraRef[];
   byOrder: Map<number, StrapiMantraRef>;
@@ -108,33 +176,38 @@ export interface ResolvePortalMantraStrapiOptions {
 
 /**
  * Map a portal mantra node to the correct Strapi documentId.
- * Number suffix (1.1.5) wins over a stale stored docId; order fallback is skipped when ambiguous.
+ * Only matches Strapi rows with the same configured leaf + verse number (never Mantra ↔ Shloka).
  */
 export function resolvePortalMantraToStrapiDoc(
   portal: { title?: string; order?: number; strapiDocumentId?: string },
   opts: ResolvePortalMantraStrapiOptions,
-): { docId: string | undefined; strapiTitle?: string } | undefined {
-  const { byExactTitle, sectionMantras, byOrder, ambiguousOrders } = opts;
-
-  const bySuffix = portal.title
-    ? findStrapiMantraByNumberSuffix(sectionMantras, portal.title)
-    : undefined;
-
-  if (bySuffix) {
-    if (!portal.strapiDocumentId || portal.strapiDocumentId !== bySuffix.docId) {
-      return { docId: bySuffix.docId, strapiTitle: bySuffix.title };
-    }
-    return { docId: bySuffix.docId };
-  }
+): { docId: string | undefined } | undefined {
+  const { configuredLeaf, byExactTitle, sectionMantras, byOrder, ambiguousOrders } = opts;
+  const leaf = (configuredLeaf || "Mantra").trim();
 
   if (portal.title && byExactTitle.has(portal.title)) {
     return { docId: byExactTitle.get(portal.title)! };
   }
 
+  const byLeafAndSuffix = portal.title
+    ? findStrapiMantraByLeafAndSuffix(sectionMantras, portal.title, leaf)
+    : undefined;
+
+  if (byLeafAndSuffix) {
+    if (!portal.strapiDocumentId || portal.strapiDocumentId !== byLeafAndSuffix.docId) {
+      return { docId: byLeafAndSuffix.docId };
+    }
+    return { docId: byLeafAndSuffix.docId };
+  }
+
   if (portal.strapiDocumentId) {
     const sm = sectionMantras.find((s) => s.docId === portal.strapiDocumentId);
     if (sm) {
-      if (!portal.title || mantrasShareNumberSuffix(portal.title, sm.title)) {
+      if (
+        !portal.title ||
+        (portal.title.trim().toLowerCase() === sm.title.trim().toLowerCase()) ||
+        mantrasShareLeafAndSuffix(portal.title, sm.title, leaf)
+      ) {
         return { docId: portal.strapiDocumentId };
       }
       return { docId: undefined };
@@ -145,7 +218,10 @@ export function resolvePortalMantraToStrapiDoc(
       byOrder.has(portal.order)
     ) {
       const remapped = byOrder.get(portal.order)!;
-      return { docId: remapped.docId, strapiTitle: remapped.title };
+      if (titleUsesConfiguredLeaf(remapped.title, leaf)) {
+        return { docId: remapped.docId };
+      }
+      return { docId: undefined };
     }
     return { docId: undefined };
   }
@@ -156,7 +232,9 @@ export function resolvePortalMantraToStrapiDoc(
     byOrder.has(portal.order)
   ) {
     const sm = byOrder.get(portal.order)!;
-    return { docId: sm.docId, strapiTitle: sm.title };
+    if (titleUsesConfiguredLeaf(sm.title, leaf)) {
+      return { docId: sm.docId };
+    }
   }
 
   return undefined;

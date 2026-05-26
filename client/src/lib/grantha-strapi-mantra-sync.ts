@@ -284,7 +284,7 @@ export function applyMantraDocIdPatches<T extends SnapshotAdhyaya>(
 
 async function strapiBatchIdentitySync(
   updates: Array<{ documentId: string; order: number; ShlokaManthraNumber: string }>,
-  options?: { sortKeysOnly?: boolean },
+  options?: { sortKeysOnly?: boolean; configuredLeaf?: string },
 ): Promise<void> {
   if (updates.length === 0) return;
   const CHUNK = 500;
@@ -293,12 +293,14 @@ async function strapiBatchIdentitySync(
     const res = await apiRequest("POST", "/api/strapi/manthras/batch-identity-sync", {
       updates: chunk,
       sortKeysOnly: options?.sortKeysOnly === true,
+      configuredLeaf: options?.configuredLeaf,
     });
     const json = await res.json().catch(() => ({}));
-    const results: Array<{ ok?: boolean }> = json?.results ?? [];
-    const failed = results.filter((r) => r && r.ok === false).length;
-    if (failed > 0) {
-      throw new Error(`${failed} mantra identity update(s) failed in Strapi`);
+    const results: Array<{ documentId: string; ok?: boolean; error?: string }> = json?.results ?? [];
+    const failedRows = results.filter((r) => r && r.ok === false);
+    if (failedRows.length > 0) {
+      const detail = failedRows[0]?.error ?? "unknown";
+      throw new Error(`${failedRows.length} mantra identity update(s) failed: ${detail}`);
     }
   }
 }
@@ -388,7 +390,8 @@ export async function syncMantraSectionLabelsToStrapi(
     });
   }
 
-  await strapiBatchIdentitySync(updates, { sortKeysOnly: false });
+  const leaf = (cfg.leafName || "Mantra").trim() || "Mantra";
+  await strapiBatchIdentitySync(updates, { sortKeysOnly: false, configuredLeaf: leaf });
   return updates.length;
 }
 

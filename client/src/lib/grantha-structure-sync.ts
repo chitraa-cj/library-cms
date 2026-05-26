@@ -222,6 +222,17 @@ export function strapiVerseTakenForConfiguredLeaf(
   return suffix != null && knownSuffixesForLeaf.has(suffix);
 }
 
+/** True when any row in the section already uses this verse suffix (any leaf prefix). */
+export function sectionHasVerseSuffixAnyLeaf(
+  mantras: StrapiMantraRef[],
+  suffix: string,
+  excludeDocId?: string,
+): boolean {
+  return mantras.some(
+    (m) => mantraNumberSuffix(m.title) === suffix && (!excludeDocId || m.docId !== excludeDocId),
+  );
+}
+
 /** `order` keys with more than one Strapi row are excluded (unsafe for remapping). */
 export function buildUniqueStrapiOrderMap(manthras: StrapiMantraRef[]): {
   byOrder: Map<number, StrapiMantraRef>;

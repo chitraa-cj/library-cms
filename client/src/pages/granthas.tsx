@@ -75,6 +75,7 @@ import {
   resolvePortalMantraToStrapiDoc,
   collectKnownVerseSuffixesForLeaf,
   strapiVerseTakenForConfiguredLeaf,
+  sectionHasVerseSuffixAnyLeaf,
   titleUsesConfiguredLeaf,
   mantraNumberSuffix,
   portalMantraTitleForLeaf,
@@ -2035,6 +2036,19 @@ export default function GranthasPage() {
         }
       }
 
+      /** Also mark rows with the same verse suffix under any leaf (prevents duplicate supplement rows). */
+      function markStrapiDocsMatchedBySuffix(
+        portalTitle: string | undefined,
+        sectionList: { title: string; docId: string }[],
+        matched: Set<string>,
+      ) {
+        const suffix = mantraNumberSuffix(portalTitle);
+        if (!suffix) return;
+        for (const sm of sectionList) {
+          if (mantraNumberSuffix(sm.title) === suffix) matched.add(sm.docId);
+        }
+      }
+
       function enrichHierarchy(hier: AdhyayaNode[]): AdhyayaNode[] {
         const knownShlokas = collectKnownShlokas(hier);
         const knownSuffixes = collectKnownSuffixes(hier);
@@ -2105,6 +2119,7 @@ export default function GranthasPage() {
               if (resolved.docId) {
                 matchedDocIds.add(resolved.docId);
                 markStrapiDocsMatchedByLeaf(m.title, strapiMantrasForKhanda, matchedDocIds);
+                markStrapiDocsMatchedBySuffix(m.title, strapiMantrasForKhanda, matchedDocIds);
               }
               return resolved;
             }
@@ -2164,6 +2179,7 @@ export default function GranthasPage() {
                   strapiDocumentId: resolved.docId,
                 };
                 markStrapiDocsMatchedByLeaf(m.title, padaStrapi, padaMatchedDocIds);
+                markStrapiDocsMatchedBySuffix(m.title, padaStrapi, padaMatchedDocIds);
                 return row;
               });
               // Supplement: Strapi manthras on this pada not yet in the local list.
@@ -2172,6 +2188,7 @@ export default function GranthasPage() {
               for (const sm of padaStrapi) {
                 const padaSmSuffix = mantraNumberSuffix(sm.title);
                 if (padaSmSuffix && knownSuffixes.has(padaSmSuffix)) continue;
+                if (padaSmSuffix && sectionHasVerseSuffixAnyLeaf(padaStrapi, padaSmSuffix)) continue;
                 if (
                   !padaMatchedDocIds.has(sm.docId) &&
                   !knownShlokas.has(sm.title) &&
@@ -2224,6 +2241,7 @@ export default function GranthasPage() {
             for (const sm of strapiMantrasForKhanda) {
               const smSuffix = mantraNumberSuffix(sm.title);
               if (smSuffix && knownSuffixes.has(smSuffix)) continue;
+              if (smSuffix && sectionHasVerseSuffixAnyLeaf(strapiMantrasForKhanda, smSuffix)) continue;
               if (
                 !matchedDocIds.has(sm.docId) &&
                 !knownShlokas.has(sm.title) &&
@@ -3787,7 +3805,33 @@ export default function GranthasPage() {
             setEditingDraftId(saved.id);
           }
           if (resolvedDraftId) {
-            publishDraft.mutate(resolvedDraftId, {
+            void (async () => {
+              try {
+                const preRes = await apiRequest(
+                  "POST",
+                  `/api/drafts/${resolvedDraftId}/publish-preflight`,
+                );
+                const pre = await preRes.json();
+                if (!pre.ok) {
+                  toast({
+                    variant: "destructive",
+                    title: "Publish blocked — integrity check",
+                    description:
+                      pre.message ||
+                      "Fix verse labels and content issues shown in the draft before publishing.",
+                  });
+                  return;
+                }
+              } catch (e: unknown) {
+                const msg = e instanceof Error ? e.message : String(e);
+                toast({
+                  variant: "destructive",
+                  title: "Publish preflight failed",
+                  description: msg,
+                });
+                return;
+              }
+              publishDraft.mutate(resolvedDraftId, {
               onSuccess: (result: any) => {
                 track("grantha_published", {
                   grantha_name: formData.GranthaName,
@@ -3837,8 +3881,21 @@ export default function GranthasPage() {
                   grantha_name: formData.GranthaName,
                   error: err?.message || "unknown",
                 });
+                const violations = err?.violations as Array<{ message?: string }> | undefined;
+                if (Array.isArray(violations) && violations.length > 0) {
+                  toast({
+                    variant: "destructive",
+                    title: "Publish blocked",
+                    description: violations
+                      .slice(0, 3)
+                      .map((v) => v.message)
+                      .filter(Boolean)
+                      .join(" "),
+                  });
+                }
               },
             });
+            })();
           } else {
             toast({ variant: "destructive", title: "Could not resolve draft ID for publish" });
           }

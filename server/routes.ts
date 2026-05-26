@@ -23,6 +23,14 @@ import {
   sortKeyBetween,
   STRAPI_SORT_GAP,
 } from "@shared/mantra-sort-key";
+import {
+  formatIntegrityFailures,
+  isPublishIntegrityEnabled,
+  plainTextFromManthraEntry,
+  scanGranthaHierarchyMantras,
+  scanMantraForPublish,
+  sectionSuffixCollision,
+} from "@shared/grantha-publish-integrity";
 
 /** Compress a snapshot payload for DB storage (gzip + base64 wrapper). */
 function compressBackupData(data: any): any {
@@ -1640,7 +1648,60 @@ function pickBestManthraDocIdFromStrapiRows(
   return sorted[0]?.documentId;
 }
 
+/** Ensure a stored portal docId targets the grantha/section being published (prevents cross-text PUTs). */
+async function manthraDocIdMatchesPublishContext(
+  documentId: string,
+  granthaDocId: string | undefined,
+  sectionDocId: string | undefined,
+): Promise<boolean> {
+  const r = await strapiRequest(
+    `/api/manthras/${documentId}?fields[0]=documentId&populate[Section][fields][0]=documentId&populate[Section][populate][grantha][fields][0]=documentId`,
+  );
+  const m = r?.data;
+  if (!m) return false;
+  const secId: string | undefined = m.Section?.documentId;
+  const gId: string | undefined = m.Section?.grantha?.documentId;
+  if (granthaDocId && gId && gId !== granthaDocId) return false;
+  if (sectionDocId && secId && secId !== sectionDocId) return false;
+  return true;
+}
+
 /** Find the Strapi manthra in a section whose ShlokaManthraNumber matches the portal label. */
+async function listSectionMantraLabels(
+  sectionDocId: string,
+): Promise<Array<{ documentId: string; label: string }>> {
+  const s = encodeURIComponent(sectionDocId);
+  const all: Array<{ documentId: string; label: string }> = [];
+  let page = 1;
+  while (true) {
+    const r = await strapiRequest(
+      `/api/manthras?filters[Section][documentId][$eq]=${s}&fields[0]=documentId&fields[1]=ShlokaManthraNumber&pagination[pageSize]=100&pagination[page]=${page}`,
+    );
+    for (const row of r.data ?? []) {
+      if (typeof row.documentId === "string") {
+        all.push({
+          documentId: row.documentId,
+          label: String(row.ShlokaManthraNumber ?? "").trim(),
+        });
+      }
+    }
+    if (page >= (r.meta?.pagination?.pageCount ?? 1)) break;
+    page++;
+  }
+  return all;
+}
+
+async function fetchManthraStrapiLabel(documentId: string): Promise<string | undefined> {
+  try {
+    const r = await strapiRequest(
+      `/api/manthras/${documentId}?fields[0]=ShlokaManthraNumber`,
+    );
+    return String(r?.data?.ShlokaManthraNumber ?? "").trim() || undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 async function findManthraDocIdByLabelInSection(
   sectionDocId: string,
   label: string,
@@ -1666,6 +1727,7 @@ async function resolveManthraDocIdForPublish(
   manthra: Record<string, any>,
   sectionDocId: string | undefined,
   mData: Record<string, any>,
+  granthaDocId?: string,
 ): Promise<string | undefined> {
   const portalLabel = portalMantraLabel(manthra, mData);
   const stored =
@@ -1675,12 +1737,14 @@ async function resolveManthraDocIdForPublish(
 
   if (!sectionDocId) return stored;
 
-  // Trust the portal hierarchy link so publish updates the row the editor opened,
-  // not another duplicate that happens to share the verse label after insert/renumber.
+  // Trust the portal hierarchy link — but never publish into another grantha's row.
   if (stored) {
     try {
-      await strapiRequest(`/api/manthras/${stored}?fields[0]=documentId`);
-      return stored;
+      const ok = await manthraDocIdMatchesPublishContext(stored, granthaDocId, sectionDocId);
+      if (ok) return stored;
+      console.warn(
+        `[publish] Ignoring strapiDocumentId ${stored} — mantra belongs to a different grantha/section than this publish`,
+      );
     } catch (e: any) {
       if (!isOrphanedDocError(e)) {
         console.warn(`[publish] Stored doc ${stored} lookup failed:`, e?.message || e);
@@ -1795,11 +1859,21 @@ async function publishManthraToStrapi(
   granthaDocId: string | undefined,
   teekaNameToDocId: Map<string, string> | undefined,
   publishFailures: Array<{ manthra: string; error: string }>,
-  options?: { fastSinglePublish?: boolean; portalSiblings?: PortalManthraSibling[] },
+  options?: {
+    fastSinglePublish?: boolean;
+    portalSiblings?: PortalManthraSibling[];
+    configuredLeaf?: string;
+    granthaName?: string;
+  },
 ): Promise<string | undefined> {
   const portalLabel = (manthra.title || manthra.ShlokaManthraNumber || "").trim();
   const prelimData = { ShlokaManthraNumber: portalLabel };
-  const targetDocId = await resolveManthraDocIdForPublish(manthra, sectionDocId, prelimData);
+  const targetDocId = await resolveManthraDocIdForPublish(
+    manthra,
+    sectionDocId,
+    prelimData,
+    granthaDocId,
+  );
   const label = portalLabel || manthra.title || "(unknown)";
   const publishOrder = await resolvePublishSortKey(manthra, sectionDocId, options);
 
@@ -1850,6 +1924,43 @@ async function publishManthraToStrapi(
 
   const fullLabel = portalMantraLabel(manthra, mData) || manthra.title || "(unknown)";
 
+  if (isPublishIntegrityEnabled()) {
+    const configuredLeaf = (options?.configuredLeaf || "Mantra").trim() || "Mantra";
+    const existingStrapiLabel =
+      targetDocId ? await fetchManthraStrapiLabel(targetDocId) : undefined;
+    const entry = mData.ShlokaManthraEntry ?? manthra.ShlokaManthraEntry;
+    const { sk, en } = plainTextFromManthraEntry(entry);
+    const violations = scanMantraForPublish({
+      portalLabel: fullLabel,
+      configuredLeaf,
+      granthaName: options?.granthaName,
+      targetDocumentId: targetDocId,
+      existingStrapiLabel,
+      sanskritPlain: sk,
+      englishPlain: en,
+    });
+    const hard = violations.filter((v) => v.severity === "error");
+    if (hard.length > 0) {
+      const msg = formatIntegrityFailures(hard);
+      console.warn(`[publish] Integrity block "${fullLabel}": ${msg}`);
+      publishFailures.push({ manthra: fullLabel, error: msg });
+      return undefined;
+    }
+    if (sectionDocId && fullLabel) {
+      const rows = await listSectionMantraLabels(sectionDocId);
+      const collision = sectionSuffixCollision(
+        rows.map((r) => r.label),
+        fullLabel,
+        targetDocId,
+        new Map(rows.map((r) => [r.label, r.documentId])),
+      );
+      if (collision) {
+        publishFailures.push({ manthra: fullLabel, error: collision.message });
+        return undefined;
+      }
+    }
+  }
+
   if (targetDocId && Object.keys(mData).length === 0) {
     return targetDocId;
   }
@@ -1897,6 +2008,22 @@ async function createOrUpdateManthra(
   // null), so we skip the dedup lookups and go straight to POST.
   if (!skipLookup && sectionDocId) {
     const s = encodeURIComponent(sectionDocId);
+
+    if (isPublishIntegrityEnabled() && number?.trim()) {
+      const rows = await listSectionMantraLabels(sectionDocId);
+      const collision = sectionSuffixCollision(
+        rows.map((r) => r.label),
+        number.trim(),
+        undefined,
+        new Map(rows.map((r) => [r.label, r.documentId])),
+      );
+      if (collision) {
+        const msg = collision.message;
+        console.warn(`[publish] Manthra "${label}" blocked: ${msg}`);
+        warnings?.push({ manthra: label, error: msg });
+        return undefined;
+      }
+    }
 
     // 1) ShlokaManthraNumber match within the same section — case-insensitive + trimmed
     //    so "Mantra 1.1.2" and "mantra 1.1.2 " are treated as the same manthra.
@@ -2227,6 +2354,27 @@ async function publishGranthaWithHierarchy(
   console.log(`[publish] Hierarchy: L1=${L1name}→${L1type}, L2=${L2name}→${L2type}, L3=${L3name}→${L3type}, levelTwo=${levelTwoEnabled}, levelThree=${levelThreeEnabled}`);
   console.log(`[publish] Adhyayas count: ${Array.isArray(hierarchy) ? hierarchy.length : 0}`);
 
+  const configuredLeaf = String(structureConfig?.leafName || "Mantra").trim() || "Mantra";
+  const granthaNameForIntegrity = String(granthaPayload.GranthaName || draft.title || "").trim();
+
+  if (isPublishIntegrityEnabled() && Array.isArray(hierarchy)) {
+    const preflight = scanGranthaHierarchyMantras(
+      hierarchy,
+      configuredLeaf,
+      granthaNameForIntegrity,
+      { maxErrors: 30 },
+    );
+    const hard = preflight.filter((v) => v.severity === "error");
+    if (hard.length > 0) {
+      const err: any = new Error(
+        `Publish blocked: ${hard.length} integrity issue(s). ${formatIntegrityFailures(hard)}`,
+      );
+      err.code = "publish_preflight_failed";
+      err.violations = hard;
+      throw err;
+    }
+  }
+
   // manthraIdToDocId: local portal manthra id → Strapi documentId
   // Built during the traversal below; used to sync Strapi docIds back into the
   // draft hierarchy after publish so that the NEXT publish can do a direct PUT
@@ -2257,7 +2405,7 @@ async function publishGranthaWithHierarchy(
         granthaDocId,
         teekaNameToDocId,
         publishFailures,
-        { portalSiblings },
+        { portalSiblings, configuredLeaf, granthaName: granthaNameForIntegrity },
       );
       if (returnedDocId && manthra.id) {
         manthraIdToDocId.set(manthra.id, returnedDocId);
@@ -3362,6 +3510,42 @@ export async function registerRoutes(
     }
   });
 
+  // ── Publish preflight (integrity scan, no Strapi writes) ───────────────────
+  app.post("/api/drafts/:id/publish-preflight", requireAuth, async (req, res) => {
+    try {
+      const user = req.user as User;
+      const id = parseInt(req.params.id, 10);
+      if (Number.isNaN(id)) return res.status(400).json({ message: "Invalid draft ID" });
+
+      const draft = await storage.getDraft(id, user.id);
+      if (!draft) return res.status(404).json({ message: "Draft not found" });
+
+      const data = draft.data as Record<string, any>;
+      const hierarchy: unknown[] = data?.hierarchy ?? [];
+      const structureConfig = data?.structureConfig ?? {};
+      const configuredLeaf = String(structureConfig?.leafName || "Mantra").trim() || "Mantra";
+      const granthaName = String(data?.GranthaName || draft.title || "").trim();
+
+      const violations = isPublishIntegrityEnabled()
+        ? scanGranthaHierarchyMantras(hierarchy, configuredLeaf, granthaName, { maxErrors: 40 })
+        : [];
+
+      const errors = violations.filter((v) => v.severity === "error");
+      res.json({
+        ok: errors.length === 0,
+        violationCount: violations.length,
+        errorCount: errors.length,
+        violations: violations.slice(0, 40),
+        message:
+          errors.length > 0
+            ? formatIntegrityFailures(errors)
+            : "No blocking integrity issues found.",
+      });
+    } catch (error: any) {
+      res.status(500).json({ message: error.message || "Preflight failed" });
+    }
+  });
+
   // ── Per-manthra publish ─────────────────────────────────────────────────────
   // Publishes (or updates) a single manthra from a grantha draft to Strapi.
   // Requires the grantha itself to already have a strapiDocumentId.
@@ -3510,6 +3694,9 @@ export async function registerRoutes(
         .map((m: any) => ({ id: m.id, strapiDocumentId: m.strapiDocumentId, order: m.order }))
         .sort((a: PortalManthraSibling, b: PortalManthraSibling) => (a.order ?? 0) - (b.order ?? 0));
 
+      const configuredLeaf = String(structureConfig?.leafName || "Mantra").trim() || "Mantra";
+      const granthaName = String(data?.GranthaName || draft.title || "").trim();
+
       const publishFailures: Array<{ manthra: string; error: string }> = [];
       const returnedDocId = await publishManthraToStrapi(
         manthraNode,
@@ -3517,7 +3704,12 @@ export async function registerRoutes(
         granthaDocId,
         teekaNameToDocId,
         publishFailures,
-        { fastSinglePublish: true, portalSiblings },
+        {
+          fastSinglePublish: true,
+          portalSiblings,
+          configuredLeaf,
+          granthaName,
+        },
       );
 
       // Update the draft hierarchy with the new strapiDocumentId so the next save persists it
@@ -3722,7 +3914,10 @@ export async function registerRoutes(
           })
           .catch((err: any) => {
             console.error(`[publish-bg] Job ${jobId} failed:`, err.message);
-            const recoverable = isRetryablePublishError(err) || err?.code === "publish_integrity_guard";
+            const recoverable =
+              isRetryablePublishError(err) ||
+              err?.code === "publish_integrity_guard" ||
+              err?.code === "publish_preflight_failed";
             job.status = recoverable ? "failed_recoverable" : "failed";
             job.error = err.message || "Publish failed";
             void storage.updatePublishJob(jobId, {
@@ -3731,7 +3926,10 @@ export async function registerRoutes(
               progressTotal: job.progress.total,
               progressCurrent: job.progress.current,
               error: job.error,
-              result: err?.failures ? { failures: err.failures } : null,
+              result:
+                err?.violations || err?.failures
+                  ? { violations: err.violations, failures: err.failures }
+                  : null,
             });
           });
 

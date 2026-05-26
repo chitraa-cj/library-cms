@@ -1,4 +1,5 @@
 import type { QueryClient } from "@tanstack/react-query";
+import { invalidateManthraCache } from "@/lib/mantra-cms-cache";
 
 const STRAPI_LIST_KEYS = [
   ["/api/strapi", "manthras"],
@@ -26,6 +27,7 @@ export function syncGranthaCmsCaches(
   queryClient: QueryClient,
   options?: SyncGranthaCmsCachesOptions,
 ): void {
+  invalidateManthraCache();
   const refetchActive = options?.refetchActive !== false;
   void (async () => {
     await queryClient.invalidateQueries({ queryKey: ["/api/strapi"] });

@@ -54,7 +54,25 @@ import {
   isStubOrderOrPlaceholderText,
   stripStubTextAndTranslationEntry,
 } from "@/lib/strapi-blocks";
-import { fetchResolvedManthraDetail } from "@/lib/resolve-strapi-mantra-detail";
+import { fetchManthraForGranthaEditor } from "@/lib/resolve-strapi-mantra-detail";
+import { invalidateManthraCache } from "@/lib/mantra-cms-cache";
+import {
+  parsePublishScopeFromDraft,
+  resolveGranthaPublishStrategy,
+  collectManthraPublishTargets,
+} from "@/lib/grantha-publish-scope";
+import {
+  cancelGranthaMantraPrefetch,
+  prefetchGranthaMantrasFromHierarchy,
+  prefetchManthraDocumentId,
+  prefetchManthraNeighbors,
+  setGranthaMantraPrefetchContext,
+} from "@/lib/grantha-mantra-prefetch";
+import {
+  buildMantraShlokaIndexFromSections,
+  hydrateManthraShlokaFromIndex,
+  mantraNodeHasHydratedShloka,
+} from "@/lib/strapi-mantra-hydration";
 import {
   sortNodesByOrder,
   isPublishedStrapiDocId,
@@ -70,7 +88,6 @@ import {
   mantrasShareLeafAndSuffix,
   findStrapiMantraByLeafAndSuffix,
   MANTRA_LINK_MIN_CONTENT_SCORE,
-  pickBestStrapiMantraRefForLink,
   scoreStrapiManthraRowContent,
   resolvePortalMantraToStrapiDoc,
   collectKnownVerseSuffixesForLeaf,
@@ -452,11 +469,9 @@ function mergeGranthaNameTranslationsPortal(
  * (populated via populate[sections][populate][parent]=*) that identifies its
  * parent section, enabling us to reconstruct the nested tree.
  */
-// When Strapi has two records with the same order in a section (e.g. a manually-created
-// "Mantra 1.1.1" and a portal-published "Manthra 1.1.1" both at order=1), keep one row
-// per order. Prefer the entry with the lower numeric Strapi id (earlier publish).
+// When Strapi has two records with the same sort key in a section, keep one row per key.
+// Prefer the row with richer ShlokaManthraEntry (matches editor linking), then lower Strapi id.
 function deduplicateManthrasByOrder(manthras: any[]): any[] {
-  // Build a map from order → best manthra (lower numeric Strapi id wins on duplicate order)
   const best = new Map<number, any>();
   const noOrder: any[] = [];
   for (const m of manthras) {
@@ -468,9 +483,13 @@ function deduplicateManthrasByOrder(manthras: any[]): any[] {
     const existing = best.get(ord);
     if (!existing) {
       best.set(ord, m);
-    } else {
-      // Keep the one with the LOWER numeric id (first-published = portal version).
-      // The portal always publishes before anyone adds a manual duplicate in Strapi.
+      continue;
+    }
+    const existingScore = scoreStrapiManthraRowContent(existing.ShlokaManthraEntry);
+    const candidateScore = scoreStrapiManthraRowContent(m.ShlokaManthraEntry);
+    if (candidateScore > existingScore) {
+      best.set(ord, m);
+    } else if (candidateScore === existingScore) {
       const existingId = typeof existing.id === "number" ? existing.id : Infinity;
       const candidateId = typeof m.id === "number" ? m.id : Infinity;
       if (candidateId < existingId) {
@@ -478,7 +497,7 @@ function deduplicateManthrasByOrder(manthras: any[]): any[] {
       }
     }
   }
-  return [...Array.from(best.values()), ...noOrder];
+  return [...Array.from(best.values()), ...noOrder].sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
 }
 
 function reconstructHierarchyFromStrapi(sections: any[], leafName = "Mantra"): AdhyayaNode[] {
@@ -1037,6 +1056,7 @@ export default function GranthasPage() {
 
   const adhyayasRef = useRef<AdhyayaNode[]>([]);
   const structureConfigRef = useRef(structureConfig);
+  const editingItemRef = useRef<any>(null);
   const formDataRef = useRef(formData);
   const strapiHierarchySyncTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const mantraSyncTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -1056,11 +1076,32 @@ export default function GranthasPage() {
   }, [formData]);
 
   useEffect(() => {
+    editingItemRef.current = editingItem;
+  }, [editingItem]);
+
+  function bindGranthaMantraPrefetchContext(): void {
+    setGranthaMantraPrefetchContext({
+      getGranthaDocId: () => {
+        const item = editingItemRef.current;
+        if (!item) return undefined;
+        const raw = item._isDraft ? item._strapiDocId : item.documentId;
+        return isPublishedStrapiDocId(raw) ? raw : undefined;
+      },
+      getStructureConfig: () => structureConfigRef.current,
+      getAdhyayas: () => adhyayasRef.current,
+    });
+  }
+
+  useEffect(() => {
     return () => {
       if (strapiHierarchySyncTimerRef.current) clearTimeout(strapiHierarchySyncTimerRef.current);
       if (mantraSyncTimerRef.current) clearTimeout(mantraSyncTimerRef.current);
     };
   }, []);
+
+  useEffect(() => {
+    if (view === "form") bindGranthaMantraPrefetchContext();
+  }, [view, adhyayas, structureConfig, editingItem]);
 
   // Manthra content dialog
   const [editingManthra, setEditingManthra] = useState<{
@@ -1071,11 +1112,170 @@ export default function GranthasPage() {
     strapiDocumentId?: string; // set if this mantra is already published to Strapi
   } | null>(null);
   const [manthraDialogDirty, setManthraDialogDirty] = useState(false);
+  const [manthraDialogViewOnly, setManthraDialogViewOnly] = useState(false);
   const [pendingCloseManthra, setPendingCloseManthra] = useState(false);
   const [manthraLoading, setManthraLoading] = useState(false);
+  const mantraFetchGenRef = useRef(0);
+  const openEditLoadGenRef = useRef(0);
+
+  function isCurrentOpenEditLoad(gen: number): boolean {
+    return openEditLoadGenRef.current === gen;
+  }
+
+  const changedManthraIdsRef = useRef(new Set<string>());
+  const requiresFullPublishRef = useRef(false);
+  const granthaMetaDirtyRef = useRef(false);
+  const publishScopeReadyRef = useRef(false);
+
+  function applyPublishScopeFromDraft(data: unknown) {
+    const scope = parsePublishScopeFromDraft(data);
+    changedManthraIdsRef.current = new Set(scope.changedManthraIds);
+    requiresFullPublishRef.current = scope.requiresFullPublish;
+    granthaMetaDirtyRef.current = scope.granthaMetaDirty;
+  }
+
+  function resetPublishScope() {
+    changedManthraIdsRef.current.clear();
+    requiresFullPublishRef.current = false;
+    granthaMetaDirtyRef.current = false;
+  }
+
+  function markManthraContentChanged(manthraId: string) {
+    if (!manthraId) return;
+    changedManthraIdsRef.current.add(manthraId);
+  }
+
+  function markRequiresFullPublish() {
+    requiresFullPublishRef.current = true;
+  }
+
+  function clearManthraFromChangedSet(manthraId: string) {
+    changedManthraIdsRef.current.delete(manthraId);
+  }
+
+  function publishScopeForPayload() {
+    return {
+      changedManthraIds: [...changedManthraIdsRef.current],
+      requiresFullPublish: requiresFullPublishRef.current,
+      granthaMetaDirty: granthaMetaDirtyRef.current,
+    };
+  }
+
+  const publishScopeMetaEffectSkipRef = useRef(true);
+  useEffect(() => {
+    if (!publishScopeReadyRef.current) return;
+    if (publishScopeMetaEffectSkipRef.current) {
+      publishScopeMetaEffectSkipRef.current = false;
+      return;
+    }
+    granthaMetaDirtyRef.current = true;
+  }, [formData, teekas, otherTranslations, granthaNameTranslations, structureConfig]);
+
+  const manthraDialogDirtyRef = useRef(false);
   const [verseLabelSyncPending, setVerseLabelSyncPending] = useState(false);
   const [editingGranthaSectionsLoading, setEditingGranthaSectionsLoading] = useState(false);
   const [pendingRemove, setPendingRemove] = useState<{ adhyayaId: string; khandaId: string; manthraId: string; padaId?: string; title: string } | null>(null);
+
+  useEffect(() => {
+    manthraDialogDirtyRef.current = manthraDialogDirty;
+  }, [manthraDialogDirty]);
+
+  function openManthraEditor(
+    ctx: {
+      adhyayaId: string;
+      khandaId: string;
+      manthraId: string;
+      padaId?: string;
+      strapiDocumentId?: string;
+    },
+    opts?: { viewOnly?: boolean },
+  ) {
+    mantraFetchGenRef.current += 1;
+    manthraDialogDirtyRef.current = false;
+    setManthraDialogDirty(false);
+    setManthraDialogViewOnly(!!opts?.viewOnly);
+    const snap = adhyayasRef.current as AdhyayaNode[];
+    const node = findManthraInTree(snap, ctx.adhyayaId, ctx.khandaId, ctx.manthraId, ctx.padaId);
+    const needsCmsShloka =
+      isPublishedStrapiDocId(ctx.strapiDocumentId) &&
+      !(node && mantraNodeHasHydratedShloka(node));
+    setManthraLoading(needsCmsShloka);
+    setEditingManthra(ctx);
+    prefetchManthraDocumentId(ctx.strapiDocumentId);
+    prefetchManthraNeighbors(adhyayasRef.current as AdhyayaNode[], ctx);
+  }
+
+  function warmManthraOnHover(strapiDocumentId?: string) {
+    prefetchManthraDocumentId(strapiDocumentId);
+  }
+
+  function renderManthraRowActions(params: {
+    adhyayaId: string;
+    khandaId: string;
+    manthraId: string;
+    padaId?: string;
+    manthra: ManthraNode;
+    testIdSuffix: string;
+    onInsertAfter: () => void;
+    onRemove: () => void;
+  }) {
+    const { adhyayaId, khandaId, manthraId, padaId, manthra, testIdSuffix, onInsertAfter, onRemove } =
+      params;
+    const ctx = {
+      adhyayaId,
+      khandaId,
+      manthraId,
+      padaId,
+      strapiDocumentId: manthra.strapiDocumentId,
+    };
+    return (
+      <>
+        <Button
+          size="icon"
+          variant="ghost"
+          className="h-6 w-6 opacity-0 group-hover:opacity-100 transition-opacity text-orange-600 hover:text-orange-700 dark:text-orange-400"
+          onClick={() => openManthraEditor(ctx, { viewOnly: true })}
+          title="View verse content"
+          data-testid={`button-view-manthra-${testIdSuffix}`}
+        >
+          <Eye className="w-3 h-3" />
+        </Button>
+        {!viewOnly && (
+          <>
+            <Button
+              size="icon"
+              variant="ghost"
+              className="h-6 w-6 opacity-0 group-hover:opacity-100 transition-opacity text-muted-foreground hover:text-foreground"
+              onClick={() => openManthraEditor(ctx)}
+              data-testid={`button-edit-manthra-${testIdSuffix}`}
+              title="Edit verse content"
+            >
+              <Pencil className="w-3 h-3" />
+            </Button>
+            <Button
+              size="icon"
+              variant="ghost"
+              className="h-6 w-6 opacity-0 group-hover:opacity-100 transition-opacity text-blue-500 hover:text-blue-700"
+              onClick={onInsertAfter}
+              title={`Insert blank ${(structureConfigRef.current.leafName || "Mantra").trim() || "Mantra"} after this one`}
+              data-testid={`button-insert-after-manthra-${testIdSuffix}`}
+            >
+              <Plus className="w-3 h-3" />
+            </Button>
+            <Button
+              size="icon"
+              variant="ghost"
+              className="h-6 w-6 opacity-0 group-hover:opacity-100 transition-opacity text-destructive hover:text-destructive"
+              onClick={onRemove}
+              data-testid={`button-remove-manthra-${testIdSuffix}`}
+            >
+              <X className="w-3 h-3" />
+            </Button>
+          </>
+        )}
+      </>
+    );
+  }
 
   // When the mantra dialog opens for a published mantra (has strapiDocumentId),
   // fetch the live Strapi content and merge it with any portal-draft edits so
@@ -1101,7 +1301,8 @@ export default function GranthasPage() {
     const docId = editingManthra.strapiDocumentId;
     if (!docId) return;
     // Avoid CMS fetch overwriting in-progress edits (e.g. after a wrong docId link is corrected).
-    if (manthraDialogDirty) return;
+    if (manthraDialogDirtyRef.current) return;
+    const fetchGen = mantraFetchGenRef.current;
     let cancelled = false;
     setManthraLoading(true);
 
@@ -1109,7 +1310,7 @@ export default function GranthasPage() {
 
     const applyStrapiMantraToTree = (
       strapiRow: Record<string, unknown>,
-      opts: { forceDocId?: string } = {},
+      opts: { forceDocId?: string; heavyFieldsOnly?: boolean } = {},
     ) => {
       const configuredLeaf = (structureConfigRef.current.leafName || "Mantra").trim() || "Mantra";
       const strapiLabel = String(strapiRow.ShlokaManthraNumber ?? "");
@@ -1123,12 +1324,15 @@ export default function GranthasPage() {
       const patchManthra = (mn: ManthraNode): ManthraNode => {
         const localRich = shlokaManthraEntryRichness(mn.ShlokaManthraEntry);
         const remoteRich = shlokaManthraEntryRichness(cmsShloka);
-        const mergedShloka = mergeEntry(mn.ShlokaManthraEntry, cmsShloka as any);
-        const mergedRich = shlokaManthraEntryRichness(mergedShloka);
-        const shloka =
-          mergedRich >= localRich || remoteRich >= MANTRA_LINK_MIN_CONTENT_SCORE
-            ? mergedShloka
-            : stripStubTextAndTranslationEntry(mn.ShlokaManthraEntry) ?? mn.ShlokaManthraEntry;
+        let shloka = mn.ShlokaManthraEntry;
+        if (!opts.heavyFieldsOnly) {
+          const mergedShloka = mergeEntry(mn.ShlokaManthraEntry, cmsShloka as any);
+          const mergedRich = shlokaManthraEntryRichness(mergedShloka);
+          shloka =
+            mergedRich >= localRich || remoteRich >= MANTRA_LINK_MIN_CONTENT_SCORE
+              ? mergedShloka
+              : stripStubTextAndTranslationEntry(mn.ShlokaManthraEntry) ?? mn.ShlokaManthraEntry;
+        }
 
         return {
           ...mn,
@@ -1188,15 +1392,44 @@ export default function GranthasPage() {
 
     const granthaDocId = editingGranthaStrapiDocumentId();
     const localRich = shlokaManthraEntryRichness(localNode?.ShlokaManthraEntry);
+    const hasHydratedShloka = mantraNodeHasHydratedShloka(localNode ?? {});
 
-    fetchResolvedManthraDetail({
-      documentId: docId,
-      granthaDocId,
-      sectionDocId,
-      shlokaManthraNumber: localNode?.title,
-    })
+    const runFetch = (background: boolean) =>
+      fetchManthraForGranthaEditor({
+        documentId: docId,
+        granthaDocId,
+        sectionDocId,
+        shlokaManthraNumber: localNode?.title,
+        localContentScore: localRich,
+        background,
+      });
+
+    if (hasHydratedShloka) {
+      setManthraLoading(false);
+      runFetch(true)
+        .then((result) => {
+          if (!result || cancelled || fetchGen !== mantraFetchGenRef.current) return;
+          if (manthraDialogDirtyRef.current) return;
+          applyStrapiMantraToTree(result.data, {
+            forceDocId: result.documentId,
+            heavyFieldsOnly: true,
+          });
+          if (result.corrected) {
+            setEditingManthra((prev) =>
+              prev ? { ...prev, strapiDocumentId: result.documentId } : prev,
+            );
+          }
+        })
+        .catch(console.error);
+      return () => {
+        cancelled = true;
+      };
+    }
+
+    runFetch(false)
       .then((result) => {
-        if (cancelled) return;
+        if (!result || cancelled || fetchGen !== mantraFetchGenRef.current) return;
+        if (manthraDialogDirtyRef.current) return;
         const remoteRich =
           result.contentScore ?? strapiManthraRowRichness(result.data);
 
@@ -1300,9 +1533,12 @@ export default function GranthasPage() {
     editingManthra?.manthraId,
   ]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Reset dirty flag when opening a mantra for view/edit.
+  // Reset dirty flag when opening a different mantra (openManthraEditor also clears this).
   useEffect(() => {
-    if (editingManthra) setManthraDialogDirty(false);
+    if (editingManthra) {
+      setManthraDialogDirty(false);
+      manthraDialogDirtyRef.current = false;
+    }
   }, [editingManthra?.adhyayaId, editingManthra?.khandaId, editingManthra?.padaId, editingManthra?.manthraId]);
 
   // Data
@@ -1335,6 +1571,11 @@ export default function GranthasPage() {
     }) => {
       const res = await apiRequest("PATCH", `/api/drafts/${params.draftId}/manthra`, params);
       return res.json();
+    },
+    onSuccess: (_data, params) => {
+      markManthraContentChanged(params.manthraId);
+      const docId = params.manthraData.strapiDocumentId;
+      if (isPublishedStrapiDocId(docId)) invalidateManthraCache(docId);
     },
   });
 
@@ -1401,6 +1642,40 @@ export default function GranthasPage() {
 
   const isAdmin = user?.role === "admin";
 
+  const publishChangedMantrasMutation = useMutation({
+    mutationFn: async (params: {
+      draftId: number;
+      mantras: Array<{ adhyayaId: string; khandaId: string; padaId?: string; manthraId: string }>;
+    }) => {
+      const res = await apiRequest("POST", `/api/drafts/${params.draftId}/publish-manthras-batch`, {
+        mantras: params.mantras,
+      });
+      return res.json();
+    },
+    onSuccess: (data: any) => {
+      const published = (data?.published ?? []) as Array<{ manthraId: string; strapiDocumentId?: string }>;
+      for (const row of published) {
+        if (row.strapiDocumentId) {
+          clearManthraFromChangedSet(row.manthraId);
+          invalidateManthraCache(row.strapiDocumentId);
+        }
+      }
+      resetPublishScope();
+      syncGranthaCmsCaches(queryClient);
+      const failCount = data?.failureCount ?? 0;
+      toast({
+        title: "Changed verses published",
+        description:
+          failCount > 0
+            ? `Published ${published.length} verse(s); ${failCount} failed. Use full Save & Publish to sync structure or metadata.`
+            : `Published ${published.length} verse(s) to CMS. Other verses were not updated.`,
+      });
+    },
+    onError: (err: any) => {
+      toast({ variant: "destructive", title: "Verse publish failed", description: err.message });
+    },
+  });
+
   // Per-manthra publish mutation
   const publishMantraMutation = useMutation({
     mutationFn: async (params: {
@@ -1421,7 +1696,16 @@ export default function GranthasPage() {
       return res.json();
     },
     onSuccess: (data: any, params) => {
+      clearManthraFromChangedSet(params.manthraId);
+      const priorDocId = params.manthraData.strapiDocumentId;
+      if (isPublishedStrapiDocId(priorDocId)) invalidateManthraCache(priorDocId);
       if (data.strapiDocumentId) {
+        if (
+          isPublishedStrapiDocId(data.strapiDocumentId) &&
+          data.strapiDocumentId !== priorDocId
+        ) {
+          invalidateManthraCache(data.strapiDocumentId);
+        }
         updateManthraContent(
           params.adhyayaId,
           params.khandaId,
@@ -1437,7 +1721,9 @@ export default function GranthasPage() {
         grantha_name: formData.GranthaName,
         warnings: warnCount,
       });
-      invalidateGranthaCmsCaches(queryClient);
+      // Ensure the "live" CMS-backed views update immediately
+      // (avoid stale data that previously required logout/login).
+      syncGranthaCmsCaches(queryClient);
       toast({
         title: "Mantra published to CMS",
         description:
@@ -1508,6 +1794,10 @@ export default function GranthasPage() {
   }
 
   function resetForm() {
+    cancelGranthaMantraPrefetch();
+    invalidateManthraCache();
+    publishScopeReadyRef.current = false;
+    resetPublishScope();
     setFormData(EMPTY_FORM);
     setTeekas([]);
     setOtherTranslations([]);
@@ -1529,6 +1819,12 @@ export default function GranthasPage() {
   }
 
   async function openEdit(item: any) {
+    cancelGranthaMantraPrefetch();
+    invalidateManthraCache();
+    const openEditLoadGen = ++openEditLoadGenRef.current;
+    publishScopeReadyRef.current = false;
+    publishScopeMetaEffectSkipRef.current = true;
+    let publishScopeDraftData: unknown = item._draftData;
     const granthaDocId = item.documentId || item._strapiDocId;
     const isItemLocked = !!(granthaDocId && lockedDocIds.has(granthaDocId));
 
@@ -1586,6 +1882,9 @@ export default function GranthasPage() {
       }
       setStructureConfig(migratedCfg1);
       setAdhyayas(withNormalizedHierarchy(prep1.hierarchy as AdhyayaNode[], migratedCfg1));
+      applyPublishScopeFromDraft(d);
+      publishScopeMetaEffectSkipRef.current = true;
+      publishScopeReadyRef.current = true;
       setStep(1);
       setView("form");
       return;
@@ -1660,6 +1959,7 @@ export default function GranthasPage() {
         (d) => d.strapiDocumentId === item.documentId
       );
       const savedData = matchingDraft?.data as any;
+      publishScopeDraftData = savedData ?? item._draftData;
 
       setEditingDraftId(matchingDraft?.id ?? null);
 
@@ -1757,9 +2057,37 @@ export default function GranthasPage() {
     let effectiveStructureConfig = migrateStructureConfig(rawCfg2);
     const effectiveDocId = item._isDraft ? item._strapiDocId : item.documentId;
 
+    // Show saved hierarchy immediately while CMS sections load in the background.
+    if (rawHierForEnrich.length > 0 && isCurrentOpenEditLoad(openEditLoadGen)) {
+      let hierEarly = rawHierForEnrich;
+      if (rawCfg2?.leafName === "Khanda") {
+        hierEarly = migrateHierarchyLeafName(hierEarly, "Khanda", "Mantra");
+      }
+      const leafEarly = (effectiveStructureConfig.leafName || "Mantra").trim() || "Mantra";
+      for (const oldPrefix of ["Mantra", "Manthra", "Khanda"] as const) {
+        if (oldPrefix !== leafEarly) {
+          hierEarly = migrateHierarchyLeafName(hierEarly, oldPrefix, leafEarly);
+        }
+      }
+      const prepEarly = prepareHierarchyForContentStep(hierEarly, effectiveStructureConfig);
+      if (prepEarly.sectionDocIdsToMarkDeleted.length > 0) {
+        setDeletedStrapiSectionDocIds((prev) =>
+          Array.from(new Set([...prev, ...prepEarly.sectionDocIdsToMarkDeleted])),
+        );
+      }
+      setStructureConfig(effectiveStructureConfig);
+      setAdhyayas(
+        withNormalizedHierarchy(prepEarly.hierarchy as AdhyayaNode[], effectiveStructureConfig),
+      );
+      setStep(1);
+      setView("form");
+    }
+
     // Fetch sections + teekas in parallel.
     // Always fetch teekas from Strapi so new ones added after the last draft save are picked up.
-    setEditingGranthaSectionsLoading(true);
+    if (isCurrentOpenEditLoad(openEditLoadGen)) {
+      setEditingGranthaSectionsLoading(true);
+    }
     let fetchedSections: any[] = [];
     let strapiGranthaOne: any = null;
     try {
@@ -1783,7 +2111,7 @@ export default function GranthasPage() {
         fetchedSections = sectionsData?.data || [];
       }
 
-      if (teekasRes?.ok) {
+      if (teekasRes?.ok && isCurrentOpenEditLoad(openEditLoadGen)) {
         const teekasData = await teekasRes.json();
         const strapiTeekas: any[] = teekasData?.data || [];
 
@@ -1822,20 +2150,25 @@ export default function GranthasPage() {
             return newTeekas.length > 0 ? [...prev, ...newTeekas] : prev;
           });
         }
-      } else if (!hasSavedTeekas && !hasInlineTeekas) {
+      } else if (!hasSavedTeekas && !hasInlineTeekas && isCurrentOpenEditLoad(openEditLoadGen)) {
         setTeekas([]);
       }
     } catch (e) {
       console.warn("[granthas] openEdit: sections/teekas/grantha fetch failed:", e);
-      if (!hasSavedTeekas && !hasInlineTeekas) setTeekas([]);
+      if (isCurrentOpenEditLoad(openEditLoadGen)) {
+        if (!hasSavedTeekas && !hasInlineTeekas) setTeekas([]);
+        setEditingGranthaSectionsLoading(false);
+      }
+    }
+
+    if (!isCurrentOpenEditLoad(openEditLoadGen)) {
+      return;
     }
 
     const bhMergeSource = strapiGranthaOne?.BhashyakaraIntroduction ?? mergeStrapiBHForFallback;
     const gtMergeSource = strapiGranthaOne?.GranthaNameTranslations ?? mergeStrapiGTForFallback;
     setOtherTranslations(mergeBhashyakaraPortalOtherTranslations(mergeDraftOther, bhMergeSource));
     setGranthaNameTranslations(mergeGranthaNameTranslationsPortal(mergeDraftName, gtMergeSource));
-
-    setEditingGranthaSectionsLoading(false);
 
     // Hierarchy: prefer portal draft (or linked-draft hierarchy); fall back to reconstructing from Strapi sections.
     const hierToUse2 =
@@ -1926,10 +2259,6 @@ export default function GranthasPage() {
 
       // Build lookup maps from fetched sections so we can enrich hierarchy nodes
       // with strapiDocumentIds and supplement any Strapi mantras/sections missing from the draft.
-      const strapiManthraByShloka = new Map<string, string>(); // shlokaNr → documentId
-      // Title-based map (kept for flat-grantha adhyaya lookups where titles ARE unique at root level).
-      // NOTE: NOT safe for khanda-level lookups — multiple khandas across different adhyayas can
-      // share the same title (e.g. "Prathama Khanda" under every Mundika in Mundaka Upanishad).
       const strapiMantrasBySecTitle = new Map<string, StrapiMantraRef[]>();
       // DocId-based map: section documentId → its manthras (always unique, preferred over title map).
       const strapiMantrasBySecDocId = new Map<string, StrapiMantraRef[]>();
@@ -1937,6 +2266,22 @@ export default function GranthasPage() {
       const strapiChildSectionsByParentDocId = new Map<string, any[]>();
       // Map: section title → section (for matching draft adhyayas to Strapi adhyayas)
       const strapiSectionByTitle = new Map<string, any>();
+      const shlokaIndex = buildMantraShlokaIndexFromSections(fetchedSections);
+      const mantraNodeFromStrapiRef = (
+        sm: { docId: string; title: string; order?: number },
+        orderFallback?: number,
+      ): ManthraNode =>
+        hydrateManthraShlokaFromIndex(
+          {
+            id: uid(),
+            title: sm.title,
+            order: sm.order ?? orderFallback ?? 0,
+            strapiDocumentId: sm.docId,
+          },
+          shlokaIndex,
+          sm.docId,
+        );
+
       for (const sec of fetchedSections) {
         if (sec.title) strapiSectionByTitle.set(sec.title, sec);
         if (Array.isArray(sec.manthras)) {
@@ -1970,16 +2315,6 @@ export default function GranthasPage() {
           seenStrapiMantraDocIds.add(sm.docId);
           allStrapiMantraRefs.push(sm);
         }
-      }
-      const exactTitleRefBuckets = new Map<string, StrapiMantraRef[]>();
-      for (const sm of allStrapiMantraRefs) {
-        const bucket = exactTitleRefBuckets.get(sm.title) ?? [];
-        bucket.push(sm);
-        exactTitleRefBuckets.set(sm.title, bucket);
-      }
-      for (const [title, refs] of exactTitleRefBuckets) {
-        const picked = pickBestStrapiMantraRefForLink(refs);
-        if (picked) strapiManthraByShloka.set(title, picked.docId);
       }
       const inferredLeaf = inferLeafNameFromStrapiMantras(
         allStrapiMantraRefs,
@@ -2073,8 +2408,7 @@ export default function GranthasPage() {
               // Flat section: the "_default" synthetic khanda maps to the adhyaya itself.
               // Prefer docId-based lookup (survives title renames), fall back to title.
               const kDocId: string | undefined = (a as any).documentId;
-              strapiMantrasForKhanda = (kDocId ? (strapiMantrasBySecDocId.get(kDocId) ?? null) : null)
-                ?? strapiMantrasBySecTitle.get(a.title) ?? [];
+              strapiMantrasForKhanda = kDocId ? (strapiMantrasBySecDocId.get(kDocId) ?? []) : [];
             } else if (adhyaDocId) {
               // Real khanda: find this khanda's specific Strapi section.
               // Try documentId first (most reliable — survives title changes in Strapi),
@@ -2088,8 +2422,8 @@ export default function GranthasPage() {
                 ? (strapiMantrasBySecDocId.get(matchSec.documentId) ?? [])
                 : [];
             } else {
-              // No adhyaya docId available (very rare) — fall back to title-based lookup.
-              strapiMantrasForKhanda = strapiMantrasBySecTitle.get(k.title) ?? [];
+              // No adhyaya docId — cannot scope khanda; skip title-only map (collides across adhyayas).
+              strapiMantrasForKhanda = [];
             }
 
             const { byOrder: strapiByOrder, ambiguousOrders } = buildUniqueStrapiOrderMap(
@@ -2097,7 +2431,6 @@ export default function GranthasPage() {
             );
             const resolveOpts = {
               configuredLeaf: leafLabel,
-              byExactTitle: strapiManthraByShloka,
               sectionMantras: strapiMantrasForKhanda,
               byOrder: strapiByOrder,
               ambiguousOrders,
@@ -2128,11 +2461,17 @@ export default function GranthasPage() {
               const resolved = resolveDocId(m);
               if (!resolved) return acc; // dropped: Strapi record was deleted, no order remap
               const { docId } = resolved;
-              acc.push({
-                ...m,
-                title: portalMantraTitleForLeaf(m.title, leafLabel),
-                strapiDocumentId: docId,
-              });
+              acc.push(
+                hydrateManthraShlokaFromIndex(
+                  {
+                    ...m,
+                    title: portalMantraTitleForLeaf(m.title, leafLabel),
+                    strapiDocumentId: docId,
+                  },
+                  shlokaIndex,
+                  docId,
+                ),
+              );
               return acc;
             }, []);
             // Enrich existing padas (3-level granthas: khanda → pada → manthra).
@@ -2156,14 +2495,11 @@ export default function GranthasPage() {
                       (s: any) => s.title === p.title
                     )?.documentId
                   : undefined);
-              const padaStrapi = padaDocId
-                ? (strapiMantrasBySecDocId.get(padaDocId) ?? [])
-                : (strapiMantrasBySecTitle.get(p.title) ?? []);
+              const padaStrapi = padaDocId ? (strapiMantrasBySecDocId.get(padaDocId) ?? []) : [];
               const { byOrder: padaByOrder, ambiguousOrders: padaAmbiguousOrders } =
                 buildUniqueStrapiOrderMap(padaStrapi);
               const padaResolveOpts = {
                 configuredLeaf: leafLabel,
-                byExactTitle: strapiManthraByShloka,
                 sectionMantras: padaStrapi,
                 byOrder: padaByOrder,
                 ambiguousOrders: padaAmbiguousOrders,
@@ -2173,17 +2509,20 @@ export default function GranthasPage() {
                 const resolved = resolvePortalMantraToStrapiDoc(m, padaResolveOpts);
                 if (!resolved?.docId) return m;
                 padaMatchedDocIds.add(resolved.docId);
-                const row = {
-                  ...m,
-                  title: portalMantraTitleForLeaf(m.title, leafLabel),
-                  strapiDocumentId: resolved.docId,
-                };
+                const row = hydrateManthraShlokaFromIndex(
+                  {
+                    ...m,
+                    title: portalMantraTitleForLeaf(m.title, leafLabel),
+                    strapiDocumentId: resolved.docId,
+                  },
+                  shlokaIndex,
+                  resolved.docId,
+                );
                 markStrapiDocsMatchedByLeaf(m.title, padaStrapi, padaMatchedDocIds);
                 markStrapiDocsMatchedBySuffix(m.title, padaStrapi, padaMatchedDocIds);
                 return row;
               });
               // Supplement: Strapi manthras on this pada not yet in the local list.
-              const usedPadaOrders = new Set(enrichedPadaManthras.map((m) => m.order).filter((o): o is number => o != null));
               const newPadaManthras: ManthraNode[] = [];
               for (const sm of padaStrapi) {
                 const padaSmSuffix = mantraNumberSuffix(sm.title);
@@ -2195,8 +2534,13 @@ export default function GranthasPage() {
                   !strapiVerseTakenForConfiguredLeaf(sm.title, knownSuffixes, leafLabel) &&
                   !deletedManthraDocIdsSet.has(sm.docId)
                 ) {
-                  if (sm.order != null && usedPadaOrders.has(sm.order)) continue;
-                  newPadaManthras.push({ id: uid(), title: sm.title, order: sm.order, strapiDocumentId: sm.docId });
+                  newPadaManthras.push(
+                    hydrateManthraShlokaFromIndex(
+                      { id: uid(), title: sm.title, order: sm.order, strapiDocumentId: sm.docId },
+                      shlokaIndex,
+                      sm.docId,
+                    ),
+                  );
                   knownShlokas.add(sm.title);
                   const suf = mantraNumberSuffix(sm.title);
                   if (suf) knownSuffixes.add(suf);
@@ -2221,22 +2565,28 @@ export default function GranthasPage() {
                 if (padaSec.documentId && padaDeletedDocIdsSet.has(padaSec.documentId)) continue;
                 const padaList = padaSec.documentId
                   ? (strapiMantrasBySecDocId.get(padaSec.documentId) ?? [])
-                  : (strapiMantrasBySecTitle.get(padaSec.title) ?? []);
-                const padaManthras = padaList.sort((x: any, y: any) => (x.order ?? 0) - (y.order ?? 0)).map((sm: any) => ({
-                  id: uid(), title: sm.title, order: sm.order, strapiDocumentId: sm.docId,
-                } as ManthraNode));
+                  : [];
+                const padaManthras = padaList
+                  .sort((x: any, y: any) => (x.order ?? 0) - (y.order ?? 0))
+                  .map(
+                    (sm: any) =>
+                      hydrateManthraShlokaFromIndex(
+                        {
+                          id: uid(),
+                          title: sm.title,
+                          order: sm.order,
+                          strapiDocumentId: sm.docId,
+                        } as ManthraNode,
+                        shlokaIndex,
+                        sm.docId,
+                      ) as ManthraNode,
+                  );
                 supplementPadas.push({ id: uid(), title: padaSec.title, order: padaSec.order ?? 0, expanded: true, documentId: padaSec.documentId || undefined, manthras: padaManthras });
               }
             }
             const finalPadas = [...enrichedPadas, ...supplementPadas].sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
 
             // Supplement: add Strapi mantras that aren't already covered by a local node.
-            // Also skip any whose order is already taken by an enriched local node —
-            // this collapses actual Strapi duplicates (e.g. "Mantra 1.1.1" + "Manthra 1.1.1"
-            // both at order=1 in the same section) without showing phantom entries.
-            const usedOrders = new Set(
-              enrichedManthras.map((m) => m.order).filter((o): o is number => o != null)
-            );
             const newManthras: ManthraNode[] = [];
             for (const sm of strapiMantrasForKhanda) {
               const smSuffix = mantraNumberSuffix(sm.title);
@@ -2248,8 +2598,13 @@ export default function GranthasPage() {
                 !strapiVerseTakenForConfiguredLeaf(sm.title, knownSuffixes, leafLabel) &&
                 !deletedManthraDocIdsSet.has(sm.docId)
               ) {
-                if (sm.order != null && usedOrders.has(sm.order)) continue;
-                newManthras.push({ id: uid(), title: sm.title, order: sm.order, strapiDocumentId: sm.docId });
+                newManthras.push(
+                  hydrateManthraShlokaFromIndex(
+                    { id: uid(), title: sm.title, order: sm.order, strapiDocumentId: sm.docId },
+                    shlokaIndex,
+                    sm.docId,
+                  ),
+                );
                 knownShlokas.add(sm.title);
                 const suf = mantraNumberSuffix(sm.title);
                 if (suf) knownSuffixes.add(suf);
@@ -2302,32 +2657,18 @@ export default function GranthasPage() {
                   order: gc.order ?? 0,
                   expanded: true,
                   documentId: gc.documentId || undefined,
-                  manthras: (gc.documentId
-                    ? (strapiMantrasBySecDocId.get(gc.documentId) ?? strapiMantrasBySecTitle.get(gc.title) ?? [])
-                    : (strapiMantrasBySecTitle.get(gc.title) ?? []))
+                  manthras: (gc.documentId ? (strapiMantrasBySecDocId.get(gc.documentId) ?? []) : [])
                     .sort((x: any, y: any) => (x.order ?? 0) - (y.order ?? 0))
                     .filter((sm: any) => !deletedManthraDocIdsSet.has(sm.docId))
-                    .map((sm: any) => ({
-                      id: uid(),
-                      title: sm.title,
-                      order: sm.order,
-                      strapiDocumentId: sm.docId,
-                    } as ManthraNode)),
+                    .map((sm: any) => mantraNodeFromStrapiRef(sm, sm.order)),
                 } as PadaNode));
               } else {
                 // Level-2: manthras live directly on this khanda section.
-                const secList = sec.documentId
-                  ? (strapiMantrasBySecDocId.get(sec.documentId) ?? [])
-                  : (strapiMantrasBySecTitle.get(sec.title) ?? []);
+                const secList = sec.documentId ? (strapiMantrasBySecDocId.get(sec.documentId) ?? []) : [];
                 supplementManthras = secList
                   .sort((x, y) => (x.order ?? 0) - (y.order ?? 0))
                   .filter((sm) => !deletedManthraDocIdsSet.has(sm.docId))
-                  .map((sm) => ({
-                    id: uid(),
-                    title: sm.title,
-                    order: sm.order,
-                    strapiDocumentId: sm.docId,
-                  } as ManthraNode));
+                  .map((sm) => mantraNodeFromStrapiRef(sm, sm.order));
               }
               supplementKhandas.push({
                 id: uid(),
@@ -2394,17 +2735,10 @@ export default function GranthasPage() {
                 order: gc.order ?? 0,
                 expanded: true,
                 documentId: gc.documentId || undefined,
-                manthras: (gc.documentId
-                  ? (strapiMantrasBySecDocId.get(gc.documentId) ?? strapiMantrasBySecTitle.get(gc.title) ?? [])
-                  : (strapiMantrasBySecTitle.get(gc.title) ?? []))
+                manthras: (gc.documentId ? (strapiMantrasBySecDocId.get(gc.documentId) ?? []) : [])
                   .sort((x: any, y: any) => (x.order ?? 0) - (y.order ?? 0))
                   .filter((sm: any) => !topLevelDeletedManthraDocIdsSet.has(sm.docId))
-                  .map((sm: any, mi: number) => ({
-                    id: uid(),
-                    title: sm.title,
-                    order: sm.order ?? mi + 1,
-                    strapiDocumentId: sm.docId,
-                  } as ManthraNode)),
+                  .map((sm: any, mi: number) => mantraNodeFromStrapiRef(sm, sm.order ?? mi + 1)),
               } as PadaNode));
               return {
                 id: uid(),
@@ -2424,32 +2758,18 @@ export default function GranthasPage() {
               expanded: true,
               documentId: child.documentId || undefined,
               padas: [],
-              manthras: (child.documentId
-                ? (strapiMantrasBySecDocId.get(child.documentId) ?? strapiMantrasBySecTitle.get(child.title) ?? [])
-                : (strapiMantrasBySecTitle.get(child.title) ?? []))
+              manthras: (child.documentId ? (strapiMantrasBySecDocId.get(child.documentId) ?? []) : [])
                 .sort((x: any, y: any) => (x.order ?? 0) - (y.order ?? 0))
                 .filter((sm: any) => !topLevelDeletedManthraDocIdsSet.has(sm.docId))
-                .map((sm: any, mi: number) => ({
-                  id: uid(),
-                  title: sm.title,
-                  order: sm.order ?? mi + 1,
-                  strapiDocumentId: sm.docId,
-                } as ManthraNode)),
+                .map((sm: any, mi: number) => mantraNodeFromStrapiRef(sm, sm.order ?? mi + 1)),
             } as KhandaNode;
           });
         } else {
           // Flat section — create a synthetic "_default" khanda with this section's manthras
-          const manthrasForSec = (sec.documentId
-            ? (strapiMantrasBySecDocId.get(sec.documentId) ?? strapiMantrasBySecTitle.get(sec.title) ?? [])
-            : (strapiMantrasBySecTitle.get(sec.title) ?? []))
+          const manthrasForSec = (sec.documentId ? (strapiMantrasBySecDocId.get(sec.documentId) ?? []) : [])
             .sort((x: any, y: any) => (x.order ?? 0) - (y.order ?? 0))
             .filter((sm: any) => !topLevelDeletedManthraDocIdsSet.has(sm.docId))
-            .map((sm: any, mi: number) => ({
-              id: uid(),
-              title: sm.title,
-              order: sm.order ?? mi + 1,
-              strapiDocumentId: sm.docId,
-            } as ManthraNode));
+            .map((sm: any, mi: number) => mantraNodeFromStrapiRef(sm, sm.order ?? mi + 1));
           khandas = [{
             id: uid(),
             title: "_default",
@@ -2473,17 +2793,26 @@ export default function GranthasPage() {
         : enrichedHier2;
 
       const prep = prepareHierarchyForContentStep(finalHier2, effectiveStructureConfig);
+      if (!isCurrentOpenEditLoad(openEditLoadGen)) {
+        return;
+      }
       if (prep.sectionDocIdsToMarkDeleted.length > 0) {
         setDeletedStrapiSectionDocIds((prev) => Array.from(new Set([...prev, ...prep.sectionDocIdsToMarkDeleted])));
       }
       setStructureConfig(effectiveStructureConfig);
       const normalizedOpen = withNormalizedHierarchy(prep.hierarchy as AdhyayaNode[], effectiveStructureConfig);
       setAdhyayas(normalizedOpen);
+      bindGranthaMantraPrefetchContext();
+      prefetchGranthaMantrasFromHierarchy(normalizedOpen);
       if (isPublishedStrapiDocId(granthaDocId)) {
         flushStrapiFullHierarchySectionOrderSyncNow(normalizedOpen, effectiveStructureConfig, true);
       }
+      applyPublishScopeFromDraft(publishScopeDraftData);
+      publishScopeMetaEffectSkipRef.current = true;
+      publishScopeReadyRef.current = true;
       setStep(1);
       setView("form");
+      setEditingGranthaSectionsLoading(false);
 
     // ── Bulk teeka pre-populate ──
     // After the hierarchy is in state, fetch ALL manthras' teeka data from
@@ -2492,10 +2821,11 @@ export default function GranthasPage() {
     // state from the moment the grantha opens — not just after each dialog
     // is individually opened. Without this, any "Save" before opening every
     // dialog would clear teeka content in the draft.
-    if (granthaDocId) {
+    if (granthaDocId && isCurrentOpenEditLoad(openEditLoadGen)) {
       fetch(`/api/strapi/manthras/teekas-by-grantha/${granthaDocId}`, { credentials: "include" })
         .then((r) => r.ok ? r.json() : null)
         .then((payload) => {
+          if (!isCurrentOpenEditLoad(openEditLoadGen)) return;
           if (!payload?.data || typeof payload.data !== "object") return;
           const teekaMap: Record<string, any[]> = payload.data;
           setAdhyayas((prev) =>
@@ -2592,6 +2922,7 @@ export default function GranthasPage() {
   // ---------- Hierarchy handlers ----------
 
   function addAdhyaya() {
+    markRequiresFullPublish();
     const sorted = sortNodesByOrder(adhyayas);
     const nextOrder = sorted.reduce((mx, a) => Math.max(mx, a.order ?? 0), 0) + 1;
     const L1 = structureConfig.levelOneName;
@@ -2646,11 +2977,13 @@ export default function GranthasPage() {
   }
 
   function updateAdhyaya(id: string, title: string) {
+    markRequiresFullPublish();
     setAdhyayas(adhyayas.map((a) => (a.id === id ? { ...a, title } : a)));
     queueStrapiFullHierarchySectionOrderSync();
   }
 
   function removeAdhyaya(id: string) {
+    markRequiresFullPublish();
     const target = adhyayas.find((a) => a.id === id);
     const mantraDocIds = target ? collectPublishedManthraDocIdsFromAdhyaya(target) : [];
     const sectionDocIdsOrdered = target
@@ -2706,6 +3039,7 @@ export default function GranthasPage() {
   }
 
   function addKhanda(adhyayaId: string) {
+    markRequiresFullPublish();
     const L2 = structureConfig.levelTwoName;
     const newKhandaId = uid();
     const next = withNormalizedHierarchy(
@@ -2776,6 +3110,7 @@ export default function GranthasPage() {
   }
 
   function updateKhanda(adhyayaId: string, khandaId: string, title: string) {
+    markRequiresFullPublish();
     setAdhyayas(
       adhyayas.map((a) => {
         if (a.id !== adhyayaId) return a;
@@ -2786,6 +3121,7 @@ export default function GranthasPage() {
   }
 
   function removeKhanda(adhyayaId: string, khandaId: string) {
+    markRequiresFullPublish();
     const a = adhyayas.find((x) => x.id === adhyayaId);
     const target = a?.khandas.find((k) => k.id === khandaId);
     const mantraDocIds = target ? collectPublishedManthraDocIdsFromKhanda(target) : [];
@@ -2857,6 +3193,7 @@ export default function GranthasPage() {
 
   // ── Level 3 (Pada) functions ──
   function addPada(adhyayaId: string, khandaId: string) {
+    markRequiresFullPublish();
     const L3 = structureConfig.levelThreeName;
     const newPadaId = uid();
     const next = withNormalizedHierarchy(
@@ -3151,6 +3488,7 @@ export default function GranthasPage() {
   }
 
   function removePada(adhyayaId: string, khandaId: string, padaId: string) {
+    markRequiresFullPublish();
     const a = adhyayas.find((x) => x.id === adhyayaId);
     const k = a?.khandas.find((x) => x.id === khandaId);
     const target = k?.padas?.find((p) => p.id === padaId);
@@ -3234,7 +3572,7 @@ export default function GranthasPage() {
 
   /**
    * Debounced + serialized Strapi mantra sync. Coalesces rapid inserts/deletes into one pass:
-   * deletes removed rows first, then insert-between + batch order for the remaining snapshot.
+   * deletes removed rows first, insert-between for new rows, then spaced sort keys for portal order.
    */
   function scheduleStrapiMantraSectionIdentitySync(
     snapshot: AdhyayaNode[],
@@ -3298,6 +3636,7 @@ export default function GranthasPage() {
 
   /** Explicit action: write portal verse titles + spaced CMS sort keys (not run on every + insert). */
   async function handleSyncVerseNumbersToCms() {
+    markRequiresFullPublish();
     if (!editingGranthaStrapiDocumentId()) {
       toast({
         variant: "destructive",
@@ -3310,7 +3649,7 @@ export default function GranthasPage() {
     try {
       const snap = adhyayasRef.current as SnapshotAdhyaya[];
       const n = await syncAllMantraSectionLabelsInGrantha(snap, structureConfigRef.current);
-      invalidateGranthaCmsCaches(queryClient);
+      syncGranthaCmsCaches(queryClient);
       toast({
         title: "Verse numbers synced to CMS",
         description:
@@ -3385,6 +3724,7 @@ export default function GranthasPage() {
   }
 
   function addManthra(adhyayaId: string, khandaId: string, padaId?: string) {
+    markRequiresFullPublish();
     const adhyayaTitle = adhyayas.find((a) => a.id === adhyayaId)?.title || "";
     track("manthra_added", { grantha_name: formData.GranthaName, adhyaya: adhyayaTitle });
     setAdhyayas((prev) => {
@@ -3441,6 +3781,7 @@ export default function GranthasPage() {
     afterManthraId: string,
     padaId?: string,
   ) {
+    markRequiresFullPublish();
     setAdhyayas((prev) => {
       const cfg = structureConfigRef.current;
       const next = withNormalizedHierarchy(
@@ -3504,6 +3845,7 @@ export default function GranthasPage() {
 
   function confirmRemoveManthra(renumber: boolean) {
     if (!pendingRemove) return;
+    markRequiresFullPublish();
     const { adhyayaId, khandaId, manthraId, padaId } = pendingRemove;
     setPendingRemove(null);
 
@@ -3592,7 +3934,10 @@ export default function GranthasPage() {
     padaId?: string,
     options?: { markDirty?: boolean }
   ) {
-    if (options?.markDirty !== false) setManthraDialogDirty(true);
+    if (options?.markDirty !== false) {
+      setManthraDialogDirty(true);
+      markManthraContentChanged(manthraId);
+    }
     setAdhyayas((prev) =>
       prev.map((a) => {
         if (a.id !== adhyayaId) return a;
@@ -3699,6 +4044,7 @@ export default function GranthasPage() {
       deletedStrapiSectionDocIds: deletedStrapiSectionDocIds.length > 0 ? deletedStrapiSectionDocIds : undefined,
       deletedStrapiManthraDocIds: deletedStrapiManthraDocIds.length > 0 ? deletedStrapiManthraDocIds : undefined,
       deletedStrapiTeekaDocIds: deletedStrapiTeekaDocIds.length > 0 ? deletedStrapiTeekaDocIds : undefined,
+      publishScope: publishScopeForPayload(),
     };
 
     if (formData.slug.trim()) payload.slug = formData.slug.trim();
@@ -3831,8 +4177,67 @@ export default function GranthasPage() {
                 });
                 return;
               }
+
+              const strategy = resolveGranthaPublishStrategy(publishScopeForPayload(), {
+                hasPublishedGrantha:
+                  isPublishedStrapiDocId(strapiDocId) || !!editingGranthaStrapiDocumentId(),
+                hasPendingDeletions:
+                  deletedStrapiSectionDocIds.length > 0 ||
+                  deletedStrapiManthraDocIds.length > 0 ||
+                  deletedStrapiTeekaDocIds.length > 0,
+              });
+
+              if (strategy === "none") {
+                toast({
+                  title: "Draft saved",
+                  description: "No tracked changes to publish to CMS since the last publish.",
+                });
+                return;
+              }
+
+              if (strategy === "incremental") {
+                const targets = collectManthraPublishTargets(
+                  adhyayasRef.current,
+                  changedManthraIdsRef.current,
+                );
+                if (targets.length === 0) {
+                  toast({
+                    variant: "destructive",
+                    title: "Could not resolve changed verses",
+                    description: "Use full Save & Publish to sync the grantha.",
+                  });
+                  return;
+                }
+                publishChangedMantrasMutation.mutate(
+                  { draftId: resolvedDraftId, mantras: targets },
+                  {
+                    onSuccess: (batch: any) => {
+                      track("grantha_incremental_publish", {
+                        grantha_name: formData.GranthaName,
+                        published_count: batch?.publishedCount ?? 0,
+                      });
+                      for (const row of batch?.published ?? []) {
+                        if (!row?.manthraId || !row?.strapiDocumentId) continue;
+                        const t = targets.find((x) => x.manthraId === row.manthraId);
+                        if (!t) continue;
+                        updateManthraContent(
+                          t.adhyayaId,
+                          t.khandaId,
+                          t.manthraId,
+                          { strapiDocumentId: row.strapiDocumentId, _isNewLocal: false },
+                          t.padaId,
+                          { markDirty: false },
+                        );
+                      }
+                    },
+                  },
+                );
+                return;
+              }
+
               publishDraft.mutate(resolvedDraftId, {
               onSuccess: (result: any) => {
+                resetPublishScope();
                 track("grantha_published", {
                   grantha_name: formData.GranthaName,
                   grantha_type: formData.GranthaType,
@@ -3861,7 +4266,9 @@ export default function GranthasPage() {
                     void runStrapiFullHierarchySectionOrderSync(nh, structureConfig, true);
                   }
                 }
-                invalidateGranthaCmsCaches(queryClient);
+                // Ensure list/metadata and any CMS-backed tabs reflect the
+                // newly published version without requiring logout/login.
+                syncGranthaCmsCaches(queryClient);
 
                 // If this was a brand-new grantha (no prior Strapi link), the publish
                 // created a Strapi record. Capture its docId so subsequent saves
@@ -3981,12 +4388,15 @@ export default function GranthasPage() {
   function closeMantraDialog() {
     setEditingManthra(null);
     setManthraDialogDirty(false);
+    setManthraDialogViewOnly(false);
     setPendingCloseManthra(false);
   }
 
   function requestCloseMantraDialog() {
     const node = currentManthra;
-    const needsConfirm = manthraDialogDirty || isNewLocalManthra(node ?? ({} as ManthraNode));
+    const needsConfirm =
+      !manthraDialogViewOnly &&
+      (manthraDialogDirty || isNewLocalManthra(node ?? ({} as ManthraNode)));
     if (needsConfirm) {
       setPendingCloseManthra(true);
       return;
@@ -4732,6 +5142,12 @@ export default function GranthasPage() {
       ) : step === 2 ? (
         /* ====== STEP 2: Book Structure ====== */
         <div className="space-y-6">
+          {editingGranthaSectionsLoading ? (
+            <div className="flex items-center gap-2 rounded-lg border border-border bg-muted/40 px-3 py-2 text-sm text-muted-foreground">
+              <Loader2 className="h-4 w-4 shrink-0 animate-spin" />
+              <span>Syncing structure and verses from CMS…</span>
+            </div>
+          ) : null}
           <div>
             <h2 className="text-xl font-semibold">Book Structure</h2>
             <p className="text-sm text-muted-foreground mt-1">
@@ -4989,6 +5405,12 @@ export default function GranthasPage() {
       ) : (
         /* ====== STEP 3: Build Content ====== */
         <div className="space-y-6">
+          {editingGranthaSectionsLoading ? (
+            <div className="flex items-center gap-2 rounded-lg border border-border bg-muted/40 px-3 py-2 text-sm text-muted-foreground">
+              <Loader2 className="h-4 w-4 shrink-0 animate-spin" />
+              <span>Syncing structure and verses from CMS…</span>
+            </div>
+          ) : null}
           <div>
             <h2 className="text-xl font-semibold">
               {formData.GranthaName || "Grantha"} — Content
@@ -5095,7 +5517,11 @@ export default function GranthasPage() {
                       ).map((manthra, mIdx) => {
                         const hasContent = hasManthraContent(manthra);
                         return (
-                          <div key={manthra.id} className={manthraListRowClassName(manthra)}>
+                          <div
+                            key={manthra.id}
+                            className={manthraListRowClassName(manthra)}
+                            onMouseEnter={() => warmManthraOnHover(manthra.strapiDocumentId)}
+                          >
                             <Hash className="w-3.5 h-3.5 text-muted-foreground shrink-0" />
                             <span className="text-sm flex-1">{manthra.title}</span>
                             {isNewLocalManthra(manthra) && (
@@ -5104,35 +5530,27 @@ export default function GranthasPage() {
                               </Badge>
                             )}
                             {hasContent && <FileText className="w-3.5 h-3.5 text-primary" />}
-                            {!viewOnly && (
-                              <>
-                                <Button
-                                  size="icon" variant="ghost"
-                                  className="h-6 w-6 opacity-0 group-hover:opacity-100 transition-opacity text-muted-foreground hover:text-foreground"
-                                  onClick={() => setEditingManthra({ adhyayaId: adhyaya.id, khandaId: flatFirstKhanda.id, manthraId: manthra.id, strapiDocumentId: manthra.strapiDocumentId })}
-                                  data-testid={`button-edit-manthra-${aIdx}-0-${mIdx}`}
-                                >
-                                  <Pencil className="w-3 h-3" />
-                                </Button>
-                                <Button
-                                  size="icon" variant="ghost"
-                                  className="h-6 w-6 opacity-0 group-hover:opacity-100 transition-opacity text-blue-500 hover:text-blue-700"
-                                  onClick={() => { insertManthraAfter(adhyaya.id, flatFirstKhanda.id, manthra.id); toast({ title: `${leaf} inserted`, description: `A new blank ${leaf} was added after "${manthra.title}".` }); }}
-                                  title={`Insert blank ${leaf} after this one`}
-                                  data-testid={`button-insert-after-manthra-${aIdx}-0-${mIdx}`}
-                                >
-                                  <Plus className="w-3 h-3" />
-                                </Button>
-                                <Button
-                                  size="icon" variant="ghost"
-                                  className="h-6 w-6 opacity-0 group-hover:opacity-100 transition-opacity text-destructive hover:text-destructive"
-                                  onClick={() => setPendingRemove({ adhyayaId: adhyaya.id, khandaId: flatFirstKhanda.id, manthraId: manthra.id, title: manthra.title })}
-                                  data-testid={`button-remove-manthra-${aIdx}-0-${mIdx}`}
-                                >
-                                  <X className="w-3 h-3" />
-                                </Button>
-                              </>
-                            )}
+                            {renderManthraRowActions({
+                              adhyayaId: adhyaya.id,
+                              khandaId: flatFirstKhanda.id,
+                              manthraId: manthra.id,
+                              manthra,
+                              testIdSuffix: `${aIdx}-0-${mIdx}`,
+                              onInsertAfter: () => {
+                                insertManthraAfter(adhyaya.id, flatFirstKhanda.id, manthra.id);
+                                toast({
+                                  title: `${leaf} inserted`,
+                                  description: `A new blank ${leaf} was added after "${manthra.title}".`,
+                                });
+                              },
+                              onRemove: () =>
+                                setPendingRemove({
+                                  adhyayaId: adhyaya.id,
+                                  khandaId: flatFirstKhanda.id,
+                                  manthraId: manthra.id,
+                                  title: manthra.title,
+                                }),
+                            })}
                           </div>
                         );
                       })}
@@ -5284,7 +5702,11 @@ export default function GranthasPage() {
                                       {dedupeManthrasForEditor(sortNodesByOrder(pada.manthras), leaf).map((manthra, mIdx) => {
                                         const hasContent = hasManthraContent(manthra);
                                         return (
-                                          <div key={manthra.id} className={manthraListRowClassName(manthra)}>
+                                          <div
+                                            key={manthra.id}
+                                            className={manthraListRowClassName(manthra)}
+                                            onMouseEnter={() => warmManthraOnHover(manthra.strapiDocumentId)}
+                                          >
                                             <Hash className="w-3.5 h-3.5 text-muted-foreground shrink-0" />
                                             <span className="text-sm flex-1">{manthra.title}</span>
                                             {isNewLocalManthra(manthra) && (
@@ -5293,35 +5715,29 @@ export default function GranthasPage() {
                                               </Badge>
                                             )}
                                             {hasContent && <FileText className="w-3.5 h-3.5 text-primary" />}
-                                            {!viewOnly && (
-                                              <>
-                                                <Button
-                                                  size="icon" variant="ghost"
-                                                  className="h-6 w-6 opacity-0 group-hover:opacity-100 transition-opacity text-muted-foreground hover:text-foreground"
-                                                  onClick={() => setEditingManthra({ adhyayaId: adhyaya.id, khandaId: khanda.id, padaId: pada.id, manthraId: manthra.id, strapiDocumentId: manthra.strapiDocumentId })}
-                                                  data-testid={`button-edit-manthra-${aIdx}-${kIdx}-${pIdx}-${mIdx}`}
-                                                >
-                                                  <Pencil className="w-3 h-3" />
-                                                </Button>
-                                                <Button
-                                                  size="icon" variant="ghost"
-                                                  className="h-6 w-6 opacity-0 group-hover:opacity-100 transition-opacity text-blue-500 hover:text-blue-700"
-                                                  onClick={() => { insertManthraAfter(adhyaya.id, khanda.id, manthra.id, pada.id); toast({ title: `${leaf} inserted`, description: `A new blank ${leaf} was added after "${manthra.title}".` }); }}
-                                                  title={`Insert blank ${leaf} after this one`}
-                                                  data-testid={`button-insert-after-manthra-${aIdx}-${kIdx}-${pIdx}-${mIdx}`}
-                                                >
-                                                  <Plus className="w-3 h-3" />
-                                                </Button>
-                                                <Button
-                                                  size="icon" variant="ghost"
-                                                  className="h-6 w-6 opacity-0 group-hover:opacity-100 transition-opacity text-destructive hover:text-destructive"
-                                                  onClick={() => setPendingRemove({ adhyayaId: adhyaya.id, khandaId: khanda.id, manthraId: manthra.id, padaId: pada.id, title: manthra.title })}
-                                                  data-testid={`button-remove-manthra-${aIdx}-${kIdx}-${pIdx}-${mIdx}`}
-                                                >
-                                                  <X className="w-3 h-3" />
-                                                </Button>
-                                              </>
-                                            )}
+                                            {renderManthraRowActions({
+                                              adhyayaId: adhyaya.id,
+                                              khandaId: khanda.id,
+                                              padaId: pada.id,
+                                              manthraId: manthra.id,
+                                              manthra,
+                                              testIdSuffix: `${aIdx}-${kIdx}-${pIdx}-${mIdx}`,
+                                              onInsertAfter: () => {
+                                                insertManthraAfter(adhyaya.id, khanda.id, manthra.id, pada.id);
+                                                toast({
+                                                  title: `${leaf} inserted`,
+                                                  description: `A new blank ${leaf} was added after "${manthra.title}".`,
+                                                });
+                                              },
+                                              onRemove: () =>
+                                                setPendingRemove({
+                                                  adhyayaId: adhyaya.id,
+                                                  khandaId: khanda.id,
+                                                  manthraId: manthra.id,
+                                                  padaId: pada.id,
+                                                  title: manthra.title,
+                                                }),
+                                            })}
                                           </div>
                                         );
                                       })}
@@ -5365,7 +5781,11 @@ export default function GranthasPage() {
                               {dedupeManthrasForEditor(sortNodesByOrder(khanda.manthras), leaf).map((manthra, mIdx) => {
                                 const hasContent = hasManthraContent(manthra);
                                 return (
-                                  <div key={manthra.id} className={manthraListRowClassName(manthra)}>
+                                  <div
+                                    key={manthra.id}
+                                    className={manthraListRowClassName(manthra)}
+                                    onMouseEnter={() => warmManthraOnHover(manthra.strapiDocumentId)}
+                                  >
                                     <Hash className="w-3.5 h-3.5 text-muted-foreground shrink-0" />
                                     <span className="text-sm flex-1">{manthra.title}</span>
                                     {isNewLocalManthra(manthra) && (
@@ -5378,36 +5798,27 @@ export default function GranthasPage() {
                                         <FileText className="w-3.5 h-3.5" />
                                       </span>
                                     )}
-                                    {!viewOnly && (
-                                      <>
-                                        <Button
-                                          size="icon" variant="ghost"
-                                          className="h-6 w-6 opacity-0 group-hover:opacity-100 transition-opacity text-muted-foreground hover:text-foreground"
-                                          onClick={() => setEditingManthra({ adhyayaId: adhyaya.id, khandaId: khanda.id, manthraId: manthra.id, strapiDocumentId: manthra.strapiDocumentId })}
-                                          data-testid={`button-edit-manthra-${aIdx}-${kIdx}-${mIdx}`}
-                                          title="Enter text content"
-                                        >
-                                          <Pencil className="w-3 h-3" />
-                                        </Button>
-                                        <Button
-                                          size="icon" variant="ghost"
-                                          className="h-6 w-6 opacity-0 group-hover:opacity-100 transition-opacity text-blue-500 hover:text-blue-700"
-                                          onClick={() => { insertManthraAfter(adhyaya.id, khanda.id, manthra.id); toast({ title: `${leaf} inserted`, description: `A new blank ${leaf} was added after "${manthra.title}".` }); }}
-                                          title={`Insert blank ${leaf} after this one`}
-                                          data-testid={`button-insert-after-manthra-${aIdx}-${kIdx}-${mIdx}`}
-                                        >
-                                          <Plus className="w-3 h-3" />
-                                        </Button>
-                                        <Button
-                                          size="icon" variant="ghost"
-                                          className="h-6 w-6 opacity-0 group-hover:opacity-100 transition-opacity text-destructive hover:text-destructive"
-                                          onClick={() => setPendingRemove({ adhyayaId: adhyaya.id, khandaId: khanda.id, manthraId: manthra.id, title: manthra.title })}
-                                          data-testid={`button-remove-manthra-${aIdx}-${kIdx}-${mIdx}`}
-                                        >
-                                          <X className="w-3 h-3" />
-                                        </Button>
-                                      </>
-                                    )}
+                                    {renderManthraRowActions({
+                                      adhyayaId: adhyaya.id,
+                                      khandaId: khanda.id,
+                                      manthraId: manthra.id,
+                                      manthra,
+                                      testIdSuffix: `${aIdx}-${kIdx}-${mIdx}`,
+                                      onInsertAfter: () => {
+                                        insertManthraAfter(adhyaya.id, khanda.id, manthra.id);
+                                        toast({
+                                          title: `${leaf} inserted`,
+                                          description: `A new blank ${leaf} was added after "${manthra.title}".`,
+                                        });
+                                      },
+                                      onRemove: () =>
+                                        setPendingRemove({
+                                          adhyayaId: adhyaya.id,
+                                          khandaId: khanda.id,
+                                          manthraId: manthra.id,
+                                          title: manthra.title,
+                                        }),
+                                    })}
                                   </div>
                                 );
                               })}
@@ -5545,26 +5956,37 @@ export default function GranthasPage() {
         <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2">
-              {currentManthra?.title ?? "Manthra"}
+              {manthraDialogViewOnly ? "View" : "Edit"}: {currentManthra?.title ?? "Manthra"}
               {manthraLoading && <Loader2 className="w-4 h-4 animate-spin text-muted-foreground" />}
             </DialogTitle>
             <DialogDescription>
-              {manthraLoading && editingManthra?.strapiDocumentId
-                ? "Loading verse from the CMS…"
-                : currentManthra?._isNewLocal
-                  ? "New verse — edit here, then Save & Publish so it appears correctly in the Mantras tab."
-                  : editingManthra?.strapiDocumentId
-                    ? "Showing live content from the CMS. Use Save & Publish to push edits to Strapi."
-                    : "Enter the Sanskrit text and translations, then Save & Publish to create the CMS record."}
+              {manthraDialogViewOnly
+                ? manthraLoading && editingManthra?.strapiDocumentId
+                  ? "Loading verse from the CMS…"
+                  : "Read-only preview of this verse (draft and CMS content). Nothing is saved until you use Edit, then Save or Save & Publish."
+                : manthraLoading && editingManthra?.strapiDocumentId
+                  ? "Loading verse from the CMS…"
+                  : currentManthra?._isNewLocal
+                    ? "New verse — edit here, then Save & Publish so it appears correctly in the Mantras tab."
+                    : editingManthra?.strapiDocumentId
+                      ? "Showing live content from the CMS. Use Save & Publish to push edits to Strapi."
+                      : "Enter the Sanskrit text and translations, then Save & Publish to create the CMS record."}
             </DialogDescription>
           </DialogHeader>
 
-          {manthraLoading && editingManthra?.strapiDocumentId ? (
-            <div className="flex flex-col items-center justify-center py-16 gap-3" aria-busy="true">
-              <Loader2 className="w-8 h-8 animate-spin text-muted-foreground" />
-            </div>
-          ) : currentManthra && editingManthra ? (
-            <div className="space-y-5 pt-1">
+          {currentManthra && editingManthra ? (
+            <fieldset
+              disabled={manthraDialogViewOnly || (manthraLoading && !!editingManthra.strapiDocumentId)}
+              className={`relative space-y-5 pt-1 border-0 p-0 m-0 min-w-0${manthraLoading && editingManthra.strapiDocumentId ? " pointer-events-none" : ""}`}
+            >
+              {manthraLoading && editingManthra.strapiDocumentId ? (
+                <div
+                  className="absolute inset-0 z-10 flex items-center justify-center rounded-md bg-background/70 pointer-events-auto"
+                  aria-busy="true"
+                >
+                  <Loader2 className="w-8 h-8 animate-spin text-muted-foreground" />
+                </div>
+              ) : null}
               {/* Shloka / Manthra Text */}
               <section className="space-y-3">
                 <h4 className="text-sm font-semibold flex items-center gap-2">
@@ -5575,7 +5997,7 @@ export default function GranthasPage() {
                 <div>
                   <Label className="text-xs">Sanskrit (Devanagari)</Label>
                   <RichTextEditor
-                    key={`shloka-sans-${editingManthra.manthraId}-${editingManthra.strapiDocumentId ?? "new"}`}
+                    key={`shloka-sans-${editingManthra.manthraId}`}
                     value={currentManthra.ShlokaManthraEntry?.SanskritTextEntry}
                     onChange={(v) =>
                       updateManthraContent(
@@ -5595,7 +6017,7 @@ export default function GranthasPage() {
                 <div>
                   <Label className="text-xs">English Translation</Label>
                   <RichTextEditor
-                    key={`shloka-eng-${editingManthra.manthraId}-${editingManthra.strapiDocumentId ?? "new"}`}
+                    key={`shloka-eng-${editingManthra.manthraId}`}
                     value={currentManthra.ShlokaManthraEntry?.EnglishTranslationText}
                     onChange={(v) =>
                       updateManthraContent(
@@ -6046,32 +6468,66 @@ export default function GranthasPage() {
                   variant="outline"
                   onClick={() => requestCloseMantraDialog()}
                   data-testid="button-manthra-close"
-                  disabled={saveDraft.isPending || saveManthraPatchMutation.isPending || publishMantraMutation.isPending}
+                  disabled={
+                    !manthraDialogViewOnly &&
+                    (saveDraft.isPending ||
+                      saveManthraPatchMutation.isPending ||
+                      publishMantraMutation.isPending)
+                  }
                 >
                   Close
                 </Button>
-                <div className="flex gap-2">
-                  <Button
-                    variant="secondary"
-                    onClick={() => handleSaveManthra()}
-                    disabled={saveDraft.isPending || saveManthraPatchMutation.isPending || publishMantraMutation.isPending}
-                    data-testid="button-manthra-save"
-                  >
-                    {(saveDraft.isPending || saveManthraPatchMutation.isPending) && !publishMantraMutation.isPending && <Loader2 className="w-4 h-4 mr-2 animate-spin" />}
-                    Save
-                  </Button>
-                  <Button
-                    onClick={handleSaveAndPublishManthra}
-                    disabled={saveDraft.isPending || saveManthraPatchMutation.isPending || publishMantraMutation.isPending}
-                    data-testid="button-manthra-save-publish"
-                  >
-                    {publishMantraMutation.isPending && <Loader2 className="w-4 h-4 mr-2 animate-spin" />}
-                    <Send className="w-4 h-4 mr-2" />
-                    Save & Publish
-                  </Button>
-                </div>
+                {manthraDialogViewOnly ? (
+                  !viewOnly && (
+                    <Button
+                      onClick={() => {
+                        setManthraDialogViewOnly(false);
+                        manthraDialogDirtyRef.current = false;
+                        setManthraDialogDirty(false);
+                      }}
+                      data-testid="button-manthra-switch-to-edit"
+                    >
+                      <Pencil className="w-4 h-4 mr-2" />
+                      Edit
+                    </Button>
+                  )
+                ) : (
+                  <div className="flex gap-2">
+                    <Button
+                      variant="secondary"
+                      onClick={() => handleSaveManthra()}
+                      disabled={
+                        saveDraft.isPending ||
+                        saveManthraPatchMutation.isPending ||
+                        publishMantraMutation.isPending
+                      }
+                      data-testid="button-manthra-save"
+                    >
+                      {(saveDraft.isPending || saveManthraPatchMutation.isPending) &&
+                        !publishMantraMutation.isPending && (
+                          <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                        )}
+                      Save
+                    </Button>
+                    <Button
+                      onClick={handleSaveAndPublishManthra}
+                      disabled={
+                        saveDraft.isPending ||
+                        saveManthraPatchMutation.isPending ||
+                        publishMantraMutation.isPending
+                      }
+                      data-testid="button-manthra-save-publish"
+                    >
+                      {publishMantraMutation.isPending && (
+                        <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                      )}
+                      <Send className="w-4 h-4 mr-2" />
+                      Save & Publish
+                    </Button>
+                  </div>
+                )}
               </div>
-            </div>
+            </fieldset>
           ) : null}
         </DialogContent>
       </Dialog>

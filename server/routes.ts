@@ -2056,15 +2056,17 @@ async function createOrUpdateManthra(
     }
 
     // 2) Order match — only when the portal did not supply a verse label (avoid writing to the wrong row).
-    if (!number?.trim() && mData.order != null) {
+    // Portal display order is 1..n; Strapi uses fractional sort keys (1000+). Never match raw portal index to CMS order.
+    const portalOrderNum = mData.order != null ? Number(mData.order) : NaN;
+    if (!number?.trim() && !Number.isNaN(portalOrderNum) && portalOrderNum >= STRAPI_SORT_GAP) {
       try {
-        const o = encodeURIComponent(String(mData.order));
+        const o = encodeURIComponent(String(portalOrderNum));
         const existingByOrder = await strapiRequest(
           `/api/manthras?filters[order][$eq]=${o}&filters[Section][documentId][$eq]=${s}&fields[0]=documentId`
         );
         const existingDocId: string | undefined = existingByOrder?.data?.[0]?.documentId;
         if (existingDocId) {
-          console.log(`[publish] Manthra "${label}" already exists (by order=${mData.order}) — updating instead of skipping`);
+          console.log(`[publish] Manthra "${label}" already exists (by order=${portalOrderNum}) — updating instead of skipping`);
           try {
             return await updateExistingManthra(existingDocId, mData, label + " [auto-update by order]", warnings);
           } catch (updateErr: any) {
@@ -3510,6 +3512,242 @@ export async function registerRoutes(
     }
   });
 
+  /** Publish one mantra row from a grantha draft (shared by single + batch endpoints). */
+  async function publishOneManthraFromGranthaDraft(
+    draftId: number,
+    userId: string,
+    loc: { adhyayaId: string; khandaId: string; padaId?: string; manthraId: string },
+    manthraData?: Record<string, any>,
+  ): Promise<{
+    returnedDocId?: string;
+    publishFailures: Array<{ manthra: string; error: string }>;
+    hierarchy: any[];
+    data: any;
+  }> {
+    const draft = await storage.getDraft(draftId, userId);
+    if (!draft) {
+      const err: any = new Error("Draft not found");
+      err.status = 404;
+      throw err;
+    }
+
+    const granthaDocId: string | undefined = draft.strapiDocumentId ?? undefined;
+    if (!granthaDocId) {
+      const err: any = new Error(
+        "The grantha must be published to Strapi first before publishing individual mantras. Use 'Save & Publish' on the grantha to publish it, then try again.",
+      );
+      err.status = 400;
+      throw err;
+    }
+
+    let data = draft.data as any;
+    let hierarchy: any[] = data?.hierarchy || [];
+    const structureConfig = data?.structureConfig || {};
+    const teekaDefinitions: any[] = data?.teekas || [];
+    const { adhyayaId, khandaId, padaId, manthraId } = loc;
+
+    if (manthraData && typeof manthraData === "object") {
+      const merged = patchManthraInHierarchy(hierarchy, loc, manthraData, true);
+      if (merged.updated) {
+        hierarchy = merged.hierarchy;
+        data = { ...data, hierarchy };
+        await storage.updateDraft(draftId, userId, { data, status: "draft" });
+      }
+    }
+
+    const adhyaya = hierarchy.find((a: any) => a.id === adhyayaId);
+    if (!adhyaya) {
+      const err: any = new Error("Adhyaya not found in draft");
+      err.status = 404;
+      throw err;
+    }
+    const khanda = (adhyaya.khandas || []).find((k: any) => k.id === khandaId);
+    if (!khanda) {
+      const err: any = new Error("Khanda not found in draft");
+      err.status = 404;
+      throw err;
+    }
+
+    let manthraNode: any;
+    let padaNode: any;
+    if (padaId) {
+      padaNode = (khanda.padas || []).find((p: any) => p.id === padaId);
+      if (!padaNode) {
+        const err: any = new Error("Pada not found in draft");
+        err.status = 404;
+        throw err;
+      }
+      manthraNode = (padaNode.manthras || []).find((m: any) => m.id === manthraId);
+    } else {
+      manthraNode = (khanda.manthras || []).find((m: any) => m.id === manthraId);
+    }
+    if (!manthraNode) {
+      const err: any = new Error("Manthra not found in draft");
+      err.status = 404;
+      throw err;
+    }
+
+    const neededTeekaNames = new Set<string>();
+    for (const t of manthraNode.Teekas ?? []) {
+      const n = String(t?.TeekaName ?? "").trim().toLowerCase();
+      if (n) neededTeekaNames.add(n);
+    }
+
+    const teekaNameToDocId: Map<string, string> = new Map();
+    for (const teeka of teekaDefinitions) {
+      const validAuthor = teeka.TeekaAuthor && STRAPI_TEEKA_AUTHORS.has(teeka.TeekaAuthor)
+        ? teeka.TeekaAuthor
+        : undefined;
+      const effectiveName = (teeka.TeekaName || "").trim() || (validAuthor ? `${validAuthor} Teeka` : "");
+      if (!effectiveName) continue;
+      if (neededTeekaNames.size > 0 && !neededTeekaNames.has(effectiveName.toLowerCase())) continue;
+      if (teeka.documentId && teeka.documentId.length >= 10) {
+        teekaNameToDocId.set(effectiveName.toLowerCase(), teeka.documentId);
+        continue;
+      }
+      try {
+        const tName = encodeURIComponent(effectiveName);
+        const tGrantha = encodeURIComponent(granthaDocId);
+        const existing = await strapiRequest(
+          `/api/teekas?filters[TeekaName][$eqi]=${tName}&filters[grantha][documentId][$eq]=${tGrantha}&fields[0]=documentId`,
+        );
+        const existingDocId: string | undefined = existing?.data?.[0]?.documentId;
+        if (existingDocId) teekaNameToDocId.set(effectiveName.toLowerCase(), existingDocId);
+      } catch (e: any) {
+        console.warn(`[publish-manthra] Teeka "${effectiveName}" lookup failed:`, e.message);
+      }
+    }
+
+    const L1name: string = structureConfig?.levelOneName || "Adhyaya";
+    const L2name: string = structureConfig?.levelTwoName || "Khanda";
+    const L3name: string = structureConfig?.levelThreeName || "Pada";
+    const levelTwoEnabled: boolean = structureConfig?.levelTwoEnabled !== false;
+    const levelThreeEnabled: boolean = !!structureConfig?.levelThreeEnabled;
+    const L1type = mapSectionType(L1name);
+    const L2type = mapSectionType(L2name);
+    const L3type = mapSectionType(L3name);
+
+    const knownSectionId = (id: unknown): string | undefined =>
+      typeof id === "string" && id.length >= 10 ? id : undefined;
+
+    let adhyayaDocId = knownSectionId(adhyaya.documentId);
+    if (!adhyayaDocId) {
+      adhyayaDocId = await resolveSection(
+        adhyaya.documentId,
+        adhyaya.title,
+        L1type,
+        adhyaya.order ?? undefined,
+        granthaDocId,
+        undefined,
+      );
+    }
+    if (!adhyayaDocId) {
+      const err: any = new Error(`Could not resolve section "${adhyaya.title}" in Strapi`);
+      err.status = 500;
+      throw err;
+    }
+
+    const isDefaultKhanda = khanda.title === "_default" || !levelTwoEnabled;
+    let khandaDocId: string | undefined = isDefaultKhanda ? adhyayaDocId : knownSectionId(khanda.documentId);
+    if (!khandaDocId && !isDefaultKhanda) {
+      khandaDocId = await resolveSection(
+        khanda.documentId,
+        khanda.title,
+        L2type,
+        khanda.order ?? undefined,
+        granthaDocId,
+        adhyayaDocId,
+      );
+    }
+    if (!khandaDocId) {
+      const err: any = new Error(`Could not resolve section "${khanda.title}" in Strapi`);
+      err.status = 500;
+      throw err;
+    }
+
+    let sectionDocId: string | undefined = khandaDocId;
+    if (levelThreeEnabled && padaId && padaNode) {
+      sectionDocId = knownSectionId(padaNode.documentId);
+      if (!sectionDocId) {
+        sectionDocId = await resolveSection(
+          padaNode.documentId,
+          padaNode.title,
+          L3type,
+          padaNode.order ?? undefined,
+          granthaDocId,
+          khandaDocId,
+        );
+      }
+      if (!sectionDocId) {
+        const err: any = new Error(`Could not resolve section "${padaNode.title}" in Strapi`);
+        err.status = 500;
+        throw err;
+      }
+    }
+    if (!sectionDocId) {
+      const err: any = new Error("Could not resolve target section in Strapi");
+      err.status = 500;
+      throw err;
+    }
+
+    const portalSiblings = (padaId && padaNode ? padaNode.manthras : khanda.manthras ?? [])
+      .map((m: any) => ({ id: m.id, strapiDocumentId: m.strapiDocumentId, order: m.order }))
+      .sort((a: PortalManthraSibling, b: PortalManthraSibling) => (a.order ?? 0) - (b.order ?? 0));
+
+    const configuredLeaf = String(structureConfig?.leafName || "Mantra").trim() || "Mantra";
+    const granthaName = String(data?.GranthaName || draft.title || "").trim();
+
+    const publishFailures: Array<{ manthra: string; error: string }> = [];
+    const returnedDocId = await publishManthraToStrapi(
+      manthraNode,
+      sectionDocId,
+      granthaDocId,
+      teekaNameToDocId,
+      publishFailures,
+      {
+        fastSinglePublish: true,
+        portalSiblings,
+        configuredLeaf,
+        granthaName,
+      },
+    );
+
+    if (returnedDocId && manthraNode.id) {
+      hierarchy = hierarchy.map((a: any) => {
+        if (a.id !== adhyayaId) return a;
+        return {
+          ...a,
+          khandas: (a.khandas || []).map((k: any) => {
+            if (k.id !== khandaId) return k;
+            if (padaId) {
+              return {
+                ...k,
+                padas: (k.padas || []).map((p: any) => {
+                  if (p.id !== padaId) return p;
+                  return {
+                    ...p,
+                    manthras: (p.manthras || []).map((m: any) =>
+                      m.id === manthraId ? { ...m, strapiDocumentId: returnedDocId } : m,
+                    ),
+                  };
+                }),
+              };
+            }
+            return {
+              ...k,
+              manthras: (k.manthras || []).map((m: any) =>
+                m.id === manthraId ? { ...m, strapiDocumentId: returnedDocId } : m,
+              ),
+            };
+          }),
+        };
+      });
+      data = { ...data, hierarchy };
+    }
+
+    return { returnedDocId, publishFailures, hierarchy, data };
+  }
+
   // ── Publish preflight (integrity scan, no Strapi writes) ───────────────────
   app.post("/api/drafts/:id/publish-preflight", requireAuth, async (req, res) => {
     try {
@@ -3561,207 +3799,108 @@ export async function registerRoutes(
         return res.status(400).json({ message: "adhyayaId, khandaId, and manthraId are required" });
       }
 
-      const draft = await storage.getDraft(id, user.id);
-      if (!draft) return res.status(404).json({ message: "Draft not found" });
-
-      const granthaDocId: string | undefined = draft.strapiDocumentId ?? undefined;
-      if (!granthaDocId) {
-        return res.status(400).json({ message: "The grantha must be published to Strapi first before publishing individual mantras. Use 'Save & Publish' on the grantha to publish it, then try again." });
-      }
-
-      let data = draft.data as any;
-      let hierarchy: any[] = data?.hierarchy || [];
-      const structureConfig = data?.structureConfig || {};
-      const teekaDefinitions: any[] = data?.teekas || [];
-
-      if (manthraData && typeof manthraData === "object") {
-        const merged = patchManthraInHierarchy(
-          hierarchy,
-          { adhyayaId, khandaId, padaId, manthraId },
-          manthraData,
-          true,
-        );
-        if (merged.updated) {
-          hierarchy = merged.hierarchy;
-          data = { ...data, hierarchy };
-          await storage.updateDraft(id, user.id, { data, status: "draft" });
-        }
-      }
-
-      // Locate the manthra node in the hierarchy
-      const adhyaya = hierarchy.find((a: any) => a.id === adhyayaId);
-      if (!adhyaya) return res.status(404).json({ message: "Adhyaya not found in draft" });
-      const khanda = (adhyaya.khandas || []).find((k: any) => k.id === khandaId);
-      if (!khanda) return res.status(404).json({ message: "Khanda not found in draft" });
-
-      let manthraNode: any;
-      let padaNode: any;
-      if (padaId) {
-        padaNode = (khanda.padas || []).find((p: any) => p.id === padaId);
-        if (!padaNode) return res.status(404).json({ message: "Pada not found in draft" });
-        manthraNode = (padaNode.manthras || []).find((m: any) => m.id === manthraId);
-      } else {
-        manthraNode = (khanda.manthras || []).find((m: any) => m.id === manthraId);
-      }
-      if (!manthraNode) return res.status(404).json({ message: "Manthra not found in draft" });
-
-      const neededTeekaNames = new Set<string>();
-      for (const t of manthraNode.Teekas ?? []) {
-        const n = String(t?.TeekaName ?? "").trim().toLowerCase();
-        if (n) neededTeekaNames.add(n);
-      }
-
-      // Build teekaNameToDocId only for teekas referenced on this mantra (fast single publish).
-      const teekaNameToDocId: Map<string, string> = new Map();
-      for (const teeka of teekaDefinitions) {
-        const validAuthor = teeka.TeekaAuthor && STRAPI_TEEKA_AUTHORS.has(teeka.TeekaAuthor)
-          ? teeka.TeekaAuthor : undefined;
-        const effectiveName = (teeka.TeekaName || "").trim() || (validAuthor ? `${validAuthor} Teeka` : "");
-        if (!effectiveName) continue;
-        if (neededTeekaNames.size > 0 && !neededTeekaNames.has(effectiveName.toLowerCase())) continue;
-        // Use stored teeka documentId if available
-        if (teeka.documentId && teeka.documentId.length >= 10) {
-          teekaNameToDocId.set(effectiveName.toLowerCase(), teeka.documentId);
-          continue;
-        }
-        try {
-          const tName = encodeURIComponent(effectiveName);
-          const tGrantha = encodeURIComponent(granthaDocId);
-          const existing = await strapiRequest(
-            `/api/teekas?filters[TeekaName][$eqi]=${tName}&filters[grantha][documentId][$eq]=${tGrantha}&fields[0]=documentId`
-          );
-          const existingDocId: string | undefined = existing?.data?.[0]?.documentId;
-          if (existingDocId) teekaNameToDocId.set(effectiveName.toLowerCase(), existingDocId);
-        } catch (e: any) {
-          console.warn(`[publish-manthra] Teeka "${effectiveName}" lookup failed:`, e.message);
-        }
-      }
-
-      // Resolve section hierarchy in Strapi
-      const L1name: string = structureConfig?.levelOneName || "Adhyaya";
-      const L2name: string = structureConfig?.levelTwoName || "Khanda";
-      const L3name: string = structureConfig?.levelThreeName || "Pada";
-      const levelTwoEnabled: boolean = structureConfig?.levelTwoEnabled !== false;
-      const levelThreeEnabled: boolean = !!structureConfig?.levelThreeEnabled;
-      const L1type = mapSectionType(L1name);
-      const L2type = mapSectionType(L2name);
-      const L3type = mapSectionType(L3name);
-
-      const knownSectionId = (id: unknown): string | undefined =>
-        typeof id === "string" && id.length >= 10 ? id : undefined;
-
-      // Fast path: use section documentIds already on the draft (skip section PUT round-trips).
-      let adhyayaDocId = knownSectionId(adhyaya.documentId);
-      if (!adhyayaDocId) {
-        adhyayaDocId = await resolveSection(
-          adhyaya.documentId, adhyaya.title, L1type, adhyaya.order ?? undefined, granthaDocId, undefined,
-        );
-      }
-      if (!adhyayaDocId) {
-        return res.status(500).json({ message: `Could not resolve section "${adhyaya.title}" in Strapi` });
-      }
-
-      const isDefaultKhanda = khanda.title === "_default" || !levelTwoEnabled;
-      let khandaDocId: string | undefined = isDefaultKhanda
-        ? adhyayaDocId
-        : knownSectionId(khanda.documentId);
-      if (!khandaDocId && !isDefaultKhanda) {
-        khandaDocId = await resolveSection(
-          khanda.documentId, khanda.title, L2type, khanda.order ?? undefined, granthaDocId, adhyayaDocId,
-        );
-      }
-      if (!khandaDocId) {
-        return res.status(500).json({ message: `Could not resolve section "${khanda.title}" in Strapi` });
-      }
-
-      let sectionDocId: string | undefined = khandaDocId;
-      if (levelThreeEnabled && padaId && padaNode) {
-        sectionDocId = knownSectionId(padaNode.documentId);
-        if (!sectionDocId) {
-          sectionDocId = await resolveSection(
-            padaNode.documentId, padaNode.title, L3type, padaNode.order ?? undefined, granthaDocId, khandaDocId,
-          );
-        }
-        if (!sectionDocId) {
-          return res.status(500).json({ message: `Could not resolve section "${padaNode.title}" in Strapi` });
-        }
-      }
-      if (!sectionDocId) {
-        return res.status(500).json({ message: "Could not resolve target section in Strapi" });
-      }
-
-      const portalSiblings = (padaId && padaNode ? padaNode.manthras : khanda.manthras ?? [])
-        .map((m: any) => ({ id: m.id, strapiDocumentId: m.strapiDocumentId, order: m.order }))
-        .sort((a: PortalManthraSibling, b: PortalManthraSibling) => (a.order ?? 0) - (b.order ?? 0));
-
-      const configuredLeaf = String(structureConfig?.leafName || "Mantra").trim() || "Mantra";
-      const granthaName = String(data?.GranthaName || draft.title || "").trim();
-
-      const publishFailures: Array<{ manthra: string; error: string }> = [];
-      const returnedDocId = await publishManthraToStrapi(
-        manthraNode,
-        sectionDocId,
-        granthaDocId,
-        teekaNameToDocId,
-        publishFailures,
-        {
-          fastSinglePublish: true,
-          portalSiblings,
-          configuredLeaf,
-          granthaName,
-        },
+      const result = await publishOneManthraFromGranthaDraft(
+        id,
+        user.id,
+        { adhyayaId, khandaId, padaId, manthraId },
+        manthraData,
       );
 
-      // Update the draft hierarchy with the new strapiDocumentId so the next save persists it
-      if (returnedDocId && manthraNode.id) {
-        try {
-          const updatedHierarchy = hierarchy.map((a: any) => {
-            if (a.id !== adhyayaId) return a;
-            return {
-              ...a,
-              khandas: (a.khandas || []).map((k: any) => {
-                if (k.id !== khandaId) return k;
-                if (padaId) {
-                  return {
-                    ...k,
-                    padas: (k.padas || []).map((p: any) => {
-                      if (p.id !== padaId) return p;
-                      return {
-                        ...p,
-                        manthras: (p.manthras || []).map((m: any) =>
-                          m.id === manthraId ? { ...m, strapiDocumentId: returnedDocId } : m
-                        ),
-                      };
-                    }),
-                  };
-                }
-                return {
-                  ...k,
-                  manthras: (k.manthras || []).map((m: any) =>
-                    m.id === manthraId ? { ...m, strapiDocumentId: returnedDocId } : m
-                  ),
-                };
-              }),
-            };
-          });
-          await storage.updateDraft(id, user.id, { data: { ...data, hierarchy: updatedHierarchy } });
-        } catch (saveErr: any) {
-          console.warn(`[publish-manthra] Could not save updated docId back to draft:`, saveErr.message);
-        }
+      try {
+        await storage.updateDraft(id, user.id, { data: result.data, status: "draft" });
+      } catch (saveErr: any) {
+        console.warn(`[publish-manthra] Could not save updated docId back to draft:`, saveErr.message);
       }
 
-      const errors = publishFailures.filter(f => !f.error.startsWith("[WARNING]"));
+      const errors = result.publishFailures.filter((f) => !f.error.startsWith("[WARNING]"));
       if (errors.length > 0) {
-        return res.status(500).json({ message: errors[0].error, publishFailures });
+        return res.status(500).json({ message: errors[0].error, publishFailures: result.publishFailures });
       }
 
       res.json({
-        strapiDocumentId: returnedDocId,
-        warnings: publishFailures.filter(f => f.error.startsWith("[WARNING]")),
+        strapiDocumentId: result.returnedDocId,
+        warnings: result.publishFailures.filter((f) => f.error.startsWith("[WARNING]")),
       });
     } catch (error: any) {
       console.error("[publish-manthra]", error);
-      res.status(500).json({ message: error.message || "Failed to publish mantra" });
+      const status = error?.status ?? 500;
+      res.status(status).json({ message: error.message || "Failed to publish mantra" });
+    }
+  });
+
+  // Batch publish: only the listed mantra nodes (used when grantha metadata/structure unchanged).
+  app.post("/api/drafts/:id/publish-manthras-batch", requireAuth, async (req, res) => {
+    try {
+      const user = req.user as User;
+      const id = parseInt(req.params.id);
+      if (isNaN(id)) return res.status(400).json({ message: "Invalid draft ID" });
+
+      const targets: Array<{ adhyayaId: string; khandaId: string; padaId?: string; manthraId: string }> =
+        Array.isArray(req.body?.mantras) ? req.body.mantras : [];
+      if (targets.length === 0) {
+        return res.status(400).json({ message: "mantras array is required (at least one target)" });
+      }
+
+      const published: Array<{ manthraId: string; strapiDocumentId?: string }> = [];
+      const failures: Array<{ manthraId: string; error: string }> = [];
+      const warnings: Array<{ manthra: string; error: string }> = [];
+      let lastData: any;
+
+      for (const t of targets) {
+        if (!t.adhyayaId || !t.khandaId || !t.manthraId) {
+          failures.push({ manthraId: t.manthraId || "(unknown)", error: "Invalid target (missing ids)" });
+          continue;
+        }
+        try {
+          const result = await publishOneManthraFromGranthaDraft(id, user.id, t);
+          lastData = result.data;
+          const hard = result.publishFailures.filter((f) => !f.error.startsWith("[WARNING]"));
+          warnings.push(...result.publishFailures.filter((f) => f.error.startsWith("[WARNING]")));
+          if (hard.length > 0) {
+            failures.push({ manthraId: t.manthraId, error: hard[0].error });
+          } else {
+            published.push({ manthraId: t.manthraId, strapiDocumentId: result.returnedDocId });
+          }
+        } catch (e: any) {
+          failures.push({ manthraId: t.manthraId, error: e?.message || "Publish failed" });
+        }
+      }
+
+      if (lastData) {
+        try {
+          const clearedScope = {
+            ...lastData,
+            publishScope: {
+              changedManthraIds: [],
+              requiresFullPublish: false,
+              granthaMetaDirty: false,
+            },
+          };
+          await storage.updateDraft(id, user.id, { data: clearedScope, status: "draft" });
+        } catch (saveErr: any) {
+          console.warn(`[publish-manthras-batch] Could not save draft:`, saveErr.message);
+        }
+      }
+
+      if (published.length === 0 && failures.length > 0) {
+        return res.status(500).json({
+          message: failures[0].error,
+          published,
+          failures,
+          warnings,
+        });
+      }
+
+      res.json({
+        publishedCount: published.length,
+        failureCount: failures.length,
+        published,
+        failures,
+        warnings,
+      });
+    } catch (error: any) {
+      console.error("[publish-manthras-batch]", error);
+      res.status(500).json({ message: error.message || "Failed to publish mantras" });
     }
   });
 
@@ -4303,8 +4442,8 @@ export async function registerRoutes(
 
   // ── Restore lost Strapi content from a snapshot ──────────────────────────────
   // Compares each manthra in the backup against live Strapi and re-pushes any
-  // field (teekas | bhashyam | both) that is present in the backup but missing
-  // from the live record.  Only overwrites when the live field is genuinely empty
+  // field (teekas | bhashyam | both | shloka_ot | all) that is present in the backup
+  // but missing from the live record.  Only overwrites when the live field is genuinely empty
   // (Teekas=[] / BhashyamEntry null) so existing live content is never clobbered.
   //
   // Strategy: batch-fetch ALL manthras for the grantha from Strapi in one paginated
@@ -4321,9 +4460,241 @@ export async function registerRoutes(
     message?: string;
   }>();
 
+  type RestoreFieldScope = "teekas" | "bhashyam" | "both" | "shloka_ot" | "all";
+
+  function backupOtLangsSet(entry: any): Set<string> {
+    const set = new Set<string>();
+    for (const r of entry?.OtherTranslations ?? []) {
+      const lang = (r?.LanguageOfTranslation ?? "").trim();
+      if (lang && textEntryHasPublishableContent({ TranslationText: r.TranslationText })) {
+        set.add(lang);
+      }
+    }
+    return set;
+  }
+
+  /** Restore one mantra from snapshot into live Strapi; other mantras in the grantha are untouched. */
+  async function restoreSingleMantraFromBackup(
+    bm: any,
+    granthaDocId: string,
+    field: RestoreFieldScope,
+  ): Promise<{ actions: string[]; skipped: string[]; errors: string[] }> {
+    const label = bm.ShlokaManthraNumber ?? bm.documentId;
+    const docId = bm.documentId as string;
+    const actions: string[] = [];
+    const skipped: string[] = [];
+    const errors: string[] = [];
+
+    if (!docId || docId.length < 10) {
+      errors.push("Invalid mantra documentId in snapshot");
+      return { actions, skipped, errors };
+    }
+
+    let liveSummary: { hasTeekas: boolean; hasBhashyam: boolean; shlokaOtCount: number; bhashyamOtCount: number };
+    try {
+      const livePeek = await strapiRequest(
+        `/api/manthras/${docId}?fields[0]=documentId` +
+        `&populate[Teekas][fields][0]=id` +
+        `&populate[BhashyamEntry][fields][0]=id` +
+        `&populate[ShlokaManthraEntry][populate][OtherTranslations]=true` +
+        `&populate[BhashyamEntry][populate][OtherTranslations]=true`,
+      );
+      const item = livePeek?.data;
+      if (!item?.documentId) {
+        errors.push(`Mantra "${label}" not found in live Strapi — cannot restore (no create)`);
+        return { actions, skipped, errors };
+      }
+      const countOt = (entry: any) =>
+        (entry?.OtherTranslations ?? []).filter(
+          (r: any) =>
+            (r?.LanguageOfTranslation ?? "").trim() &&
+            textEntryHasPublishableContent({ TranslationText: r.TranslationText }),
+        ).length;
+      liveSummary = {
+        hasTeekas: Array.isArray(item.Teekas) && item.Teekas.length > 0,
+        hasBhashyam: !!(item.BhashyamEntry?.id),
+        shlokaOtCount: countOt(item.ShlokaManthraEntry),
+        bhashyamOtCount: countOt(item.BhashyamEntry),
+      };
+    } catch (e: any) {
+      errors.push(e?.message ?? String(e));
+      return { actions, skipped, errors };
+    }
+
+    if (field === "teekas" || field === "both" || field === "all") {
+      const backupHasTeeka = (bm.Teekas ?? []).some(
+        (t: any) =>
+          t.TeekaEntry?.SanskritTextEntry?.length > 0 ||
+          t.TeekaEntry?.EnglishTranslationText?.length > 0 ||
+          t.TeekaEntry?.OtherTranslations?.length > 0,
+      );
+      if (!backupHasTeeka) {
+        skipped.push("Teekas — none in snapshot");
+      } else if (liveSummary.hasTeekas) {
+        skipped.push("Teekas — already present in live Strapi");
+      } else {
+        try {
+          const resolved = await resolveManthraTeekas(bm.Teekas, granthaDocId);
+          if (resolved.length > 0) {
+            await strapiRequest(`/api/manthras/${docId}`, {
+              method: "PUT",
+              body: JSON.stringify({ data: { Teekas: resolved } }),
+            });
+            actions.push(`restored ${resolved.length} teeka(s)`);
+          } else {
+            errors.push("Could not resolve teeka docIds from Strapi");
+          }
+        } catch (e: any) {
+          errors.push(`Teekas: ${e?.message ?? String(e)}`);
+        }
+      }
+    }
+
+    if (field === "bhashyam" || field === "both" || field === "all") {
+      const backupHasBhashyam =
+        bm.BhashyamEntry &&
+        (bm.BhashyamEntry.SanskritTextEntry?.length > 0 ||
+          bm.BhashyamEntry.EnglishTranslationText?.length > 0);
+      if (!backupHasBhashyam) {
+        skipped.push("Bhashyam — none in snapshot");
+      } else if (liveSummary.hasBhashyam) {
+        skipped.push("Bhashyam — already present in live Strapi");
+      } else {
+        try {
+          const normalizedBhashyam = normalizeTextAndTranslation(bm.BhashyamEntry);
+          await strapiRequest(`/api/manthras/${docId}`, {
+            method: "PUT",
+            body: JSON.stringify({ data: { BhashyamEntry: normalizedBhashyam } }),
+          });
+          actions.push("restored BhashyamEntry");
+        } catch (e: any) {
+          errors.push(`Bhashyam: ${e?.message ?? String(e)}`);
+        }
+      }
+    }
+
+    if (field === "shloka_ot" || field === "all") {
+      const backupCount = backupOtLangsSet(bm.ShlokaManthraEntry).size;
+      if (backupCount < 1) {
+        skipped.push("Shloka translations — none in snapshot");
+      } else if (backupCount <= liveSummary.shlokaOtCount) {
+        skipped.push(`Shloka translations — live already has ${liveSummary.shlokaOtCount} (snapshot ${backupCount})`);
+      } else {
+        try {
+          const liveFull = (
+            await strapiRequest(
+              `/api/manthras/${docId}?populate[ShlokaManthraEntry][populate][OtherTranslations]=*`,
+            )
+          )?.data;
+          const liveEntry = liveFull?.ShlokaManthraEntry ?? {};
+          const liveOt: any[] = Array.isArray(liveEntry.OtherTranslations) ? liveEntry.OtherTranslations : [];
+          const liveLangs = backupOtLangsSet(liveEntry);
+          const backupOt = (bm.ShlokaManthraEntry?.OtherTranslations ?? []).filter((r: any) => {
+            const lang = (r?.LanguageOfTranslation ?? "").trim();
+            return lang && !liveLangs.has(lang) && textEntryHasPublishableContent({ TranslationText: r.TranslationText });
+          });
+          if (backupOt.length === 0) {
+            skipped.push("Shloka translations — no missing languages to merge");
+          } else {
+            const mergedOt = mergeOtherTranslations(
+              backupOt.map((r: any) => omitTranslationComponentIdentity(r)),
+              liveOt,
+            );
+            const payload = {
+              SanskritTextEntry: liveEntry.SanskritTextEntry,
+              EnglishTranslationText: liveEntry.EnglishTranslationText,
+              IASTTransliteration: liveEntry.IASTTransliteration,
+              OtherTranslations: mergedOt,
+            };
+            const normalized = normalizeTextAndTranslation(payload);
+            await strapiRequest(`/api/manthras/${docId}`, {
+              method: "PUT",
+              body: JSON.stringify({ data: { ShlokaManthraEntry: normalized } }),
+            });
+            actions.push(
+              `merged ${backupOt.length} shloka translation(s): ${backupOt.map((r: any) => r.LanguageOfTranslation).join(", ")}`,
+            );
+          }
+        } catch (e: any) {
+          errors.push(`Shloka translations: ${e?.message ?? String(e)}`);
+        }
+      }
+    }
+
+    return { actions, skipped, errors };
+  }
+
+  app.post("/api/admin/backups/:id/restore-manthra", requireAuth, requireAdmin, async (req, res) => {
+    try {
+      const backupId = parseInt(req.params.id, 10);
+      if (Number.isNaN(backupId)) return res.status(400).json({ message: "Invalid backup ID" });
+
+      const { manthraDocumentId, granthaDocId, field = "all" } = req.body as {
+        manthraDocumentId?: string;
+        granthaDocId?: string;
+        field?: RestoreFieldScope;
+      };
+      if (!manthraDocumentId || manthraDocumentId.length < 10) {
+        return res.status(400).json({ message: "manthraDocumentId is required" });
+      }
+      if (!granthaDocId || granthaDocId.length < 10) {
+        return res.status(400).json({ message: "granthaDocId is required" });
+      }
+
+      const allowed: RestoreFieldScope[] = ["teekas", "bhashyam", "both", "shloka_ot", "all"];
+      const scope = allowed.includes(field as RestoreFieldScope) ? (field as RestoreFieldScope) : "all";
+
+      const backup = await storage.getBackup(backupId);
+      if (!backup) return res.status(404).json({ message: "Backup not found" });
+      const bData = decompressBackupData(backup.data);
+
+      const bm = (bData.manthras ?? []).find((m: any) => m.documentId === manthraDocumentId);
+      if (!bm) {
+        return res.status(404).json({ message: "Mantra not found in this snapshot" });
+      }
+
+      const { actions, skipped, errors } = await restoreSingleMantraFromBackup(bm, granthaDocId, scope);
+      const label = bm.ShlokaManthraNumber ?? manthraDocumentId;
+
+      if (errors.length > 0 && actions.length === 0) {
+        return res.status(500).json({
+          ok: false,
+          manthra: label,
+          documentId: manthraDocumentId,
+          message: errors[0],
+          actions,
+          skipped,
+          errors,
+        });
+      }
+
+      res.json({
+        ok: true,
+        manthra: label,
+        documentId: manthraDocumentId,
+        restored: actions.length,
+        actions,
+        skipped,
+        errors,
+        message:
+          actions.length > 0
+            ? actions.join("; ")
+            : skipped.length > 0
+              ? skipped.join("; ")
+              : "Nothing to restore for this mantra",
+      });
+    } catch (e: any) {
+      console.error("[restore-manthra]", e);
+      res.status(500).json({ message: e.message || "Failed to restore mantra" });
+    }
+  });
+
   app.post("/api/admin/backups/:id/restore-grantha", requireAuth, requireAdmin, async (req, res) => {
     const backupId = parseInt(req.params.id);
-    const { granthaDocId, field = "both" } = req.body as { granthaDocId: string; field?: string };
+    const { granthaDocId, field = "both" } = req.body as {
+      granthaDocId: string;
+      field?: "teekas" | "bhashyam" | "both" | "shloka_ot" | "all";
+    };
     if (!granthaDocId) return res.status(400).json({ message: "granthaDocId is required" });
     if (isNaN(backupId)) return res.status(400).json({ message: "Invalid backup ID" });
 
@@ -4358,6 +4729,16 @@ export async function registerRoutes(
       try {
         // Step 1: Batch-fetch all live manthras for this grantha from Strapi (paginated)
         // We ask for just enough fields to know whether teekas/bhashyam are present.
+        const countFilledOtLangs = (entry: any): number => {
+          const ot = entry?.OtherTranslations;
+          if (!Array.isArray(ot)) return 0;
+          return ot.filter(
+            (r: any) =>
+              (r?.LanguageOfTranslation ?? "").trim() &&
+              textEntryHasPublishableContent({ TranslationText: r.TranslationText }),
+          ).length;
+        };
+
         const liveManthraMap = new Map<string, { hasTeekas: boolean; hasBhashyam: boolean }>();
         let page = 1;
         while (true) {
@@ -4366,6 +4747,8 @@ export async function registerRoutes(
             `&fields[0]=documentId` +
             `&populate[Teekas][fields][0]=id` +
             `&populate[BhashyamEntry][fields][0]=id` +
+            `&populate[ShlokaManthraEntry][populate][OtherTranslations]=true` +
+            `&populate[BhashyamEntry][populate][OtherTranslations]=true` +
             `&pagination[page]=${page}&pagination[pageSize]=50`
           );
           const items: any[] = liveRes?.data ?? [];
@@ -4373,7 +4756,9 @@ export async function registerRoutes(
             liveManthraMap.set(item.documentId, {
               hasTeekas: Array.isArray(item.Teekas) && item.Teekas.length > 0,
               hasBhashyam: !!(item.BhashyamEntry?.id),
-            });
+              shlokaOtCount: countFilledOtLangs(item.ShlokaManthraEntry),
+              bhashyamOtCount: countFilledOtLangs(item.BhashyamEntry),
+            } as any);
           }
           if (items.length < 50) break;
           page++;
@@ -4384,14 +4769,28 @@ export async function registerRoutes(
         // Step 2: Identify manthras that need restoration
         const toRestoreTeekas: any[] = [];
         const toRestoreBhashyam: any[] = [];
+        const toRestoreShlokaOt: any[] = [];
+
+        const backupOtLangs = (entry: any): Set<string> => {
+          const set = new Set<string>();
+          for (const r of entry?.OtherTranslations ?? []) {
+            const lang = (r?.LanguageOfTranslation ?? "").trim();
+            if (lang && textEntryHasPublishableContent({ TranslationText: r.TranslationText })) {
+              set.add(lang);
+            }
+          }
+          return set;
+        };
 
         for (const bm of backupManthras) {
           const docId: string = bm.documentId;
           if (!docId) continue;
-          const live = liveManthraMap.get(docId);
+          const live = liveManthraMap.get(docId) as
+            | { hasTeekas: boolean; hasBhashyam: boolean; shlokaOtCount?: number; bhashyamOtCount?: number }
+            | undefined;
           if (!live) continue; // Not found in Strapi — skip (don't create)
 
-          if (field === "teekas" || field === "both") {
+          if (field === "teekas" || field === "both" || field === "all") {
             const backupHasTeeka = (bm.Teekas ?? []).some(
               (t: any) =>
                 t.TeekaEntry?.SanskritTextEntry?.length > 0 ||
@@ -4403,7 +4802,7 @@ export async function registerRoutes(
             }
           }
 
-          if (field === "bhashyam" || field === "both") {
+          if (field === "bhashyam" || field === "both" || field === "all") {
             const backupHasBhashyam =
               bm.BhashyamEntry &&
               (bm.BhashyamEntry.SanskritTextEntry?.length > 0 ||
@@ -4412,11 +4811,23 @@ export async function registerRoutes(
               toRestoreBhashyam.push(bm);
             }
           }
+
+          if (field === "shloka_ot" || field === "all") {
+            const backupCount = backupOtLangs(bm.ShlokaManthraEntry).size;
+            const liveCount = live.shlokaOtCount ?? 0;
+            if (backupCount >= 30 && backupCount > liveCount) {
+              toRestoreShlokaOt.push(bm);
+            }
+          }
         }
 
-        const needingRestore = new Set([...toRestoreTeekas, ...toRestoreBhashyam].map((m: any) => m.documentId));
+        const needingRestore = new Set(
+          [...toRestoreTeekas, ...toRestoreBhashyam, ...toRestoreShlokaOt].map((m: any) => m.documentId),
+        );
         job.total = backupManthras.length;
-        console.log(`[restore-job ${jobId}] Need teeka restore: ${toRestoreTeekas.length}, bhashyam restore: ${toRestoreBhashyam.length}`);
+        console.log(
+          `[restore-job ${jobId}] Need teeka restore: ${toRestoreTeekas.length}, bhashyam: ${toRestoreBhashyam.length}, shloka OT: ${toRestoreShlokaOt.length}`,
+        );
 
         // Mark manthras that don't need restoration as skipped
         for (const bm of backupManthras) {
@@ -4461,6 +4872,54 @@ export async function registerRoutes(
               body: JSON.stringify({ data: { BhashyamEntry: normalizedBhashyam } }),
             });
             job.results.push({ manthra: label, docId: bm.documentId, action: "restored BhashyamEntry" });
+          } catch (e: any) {
+            job.errors.push({ manthra: label, error: e?.message ?? String(e) });
+          }
+          job.progress++;
+        }
+
+        // Step 5: Merge missing ShlokaManthraEntry OtherTranslations from backup (preserve live SK/EN)
+        for (const bm of toRestoreShlokaOt) {
+          const label = bm.ShlokaManthraNumber ?? bm.documentId;
+          try {
+            const liveFull = (
+              await strapiRequest(
+                `/api/manthras/${bm.documentId}?populate[ShlokaManthraEntry][populate][OtherTranslations]=*`,
+              )
+            )?.data;
+            const liveEntry = liveFull?.ShlokaManthraEntry ?? {};
+            const liveOt: any[] = Array.isArray(liveEntry.OtherTranslations) ? liveEntry.OtherTranslations : [];
+            const liveLangs = backupOtLangs(liveEntry);
+            const backupOt = (bm.ShlokaManthraEntry?.OtherTranslations ?? []).filter((r: any) => {
+              const lang = (r?.LanguageOfTranslation ?? "").trim();
+              return lang && !liveLangs.has(lang) && textEntryHasPublishableContent({ TranslationText: r.TranslationText });
+            });
+            if (backupOt.length === 0) {
+              job.results.push({ manthra: label, docId: bm.documentId, action: "shloka OT — already complete — skipped" });
+              job.progress++;
+              continue;
+            }
+            const mergedOt = mergeOtherTranslations(
+              backupOt.map((r: any) => omitTranslationComponentIdentity(r)),
+              liveOt,
+            );
+            const payload = {
+              SanskritTextEntry: liveEntry.SanskritTextEntry,
+              EnglishTranslationText: liveEntry.EnglishTranslationText,
+              IASTTransliteration: liveEntry.IASTTransliteration,
+              OtherTranslations: mergedOt,
+            };
+            const normalized = normalizeTextAndTranslation(payload);
+            await strapiRequest(`/api/manthras/${bm.documentId}`, {
+              method: "PUT",
+              body: JSON.stringify({ data: { ShlokaManthraEntry: normalized } }),
+            });
+            const added = backupOt.map((r: any) => r.LanguageOfTranslation).join(", ");
+            job.results.push({
+              manthra: label,
+              docId: bm.documentId,
+              action: `merged ${backupOt.length} shloka translation(s): ${added}`,
+            });
           } catch (e: any) {
             job.errors.push({ manthra: label, error: e?.message ?? String(e) });
           }

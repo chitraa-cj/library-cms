@@ -1,6 +1,7 @@
 import { useState, useMemo } from "react";
 import { useParams, Link } from "wouter";
 import { useQuery } from "@tanstack/react-query";
+import { useToast } from "@/hooks/use-toast";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -150,8 +151,27 @@ function EntryBlock({ entry, showBadge }: { entry: ShlokEntry; showBadge?: strin
   );
 }
 
-function ManthraCard({ manthra }: { manthra: ManthraEntry }) {
+function countOtLangs(entry: ShlokEntry | undefined | null): number {
+  return (
+    entry?.OtherTranslations?.filter((t) => blocksToText(t.TranslationText)).length ?? 0
+  );
+}
+
+function ManthraCard({
+  manthra,
+  granthaDocumentId,
+  canRestore,
+  restoring,
+  onRestore,
+}: {
+  manthra: ManthraEntry;
+  granthaDocumentId?: string;
+  canRestore: boolean;
+  restoring: boolean;
+  onRestore: () => void;
+}) {
   const [expanded, setExpanded] = useState(false);
+  const otCount = countOtLangs(manthra.ShlokaManthraEntry);
 
   const shloka = manthra.ShlokaManthraEntry;
   const bhashyam = manthra.BhashyamEntry;
@@ -178,8 +198,31 @@ function ManthraCard({ manthra }: { manthra: ManthraEntry }) {
             </CardTitle>
           </div>
           <div className="flex items-center gap-1.5 flex-shrink-0">
+            {otCount > 0 && (
+              <Badge variant="secondary" className="text-[10px]">{otCount} lang{otCount !== 1 ? "s" : ""}</Badge>
+            )}
             {hasBhashyam && <Badge variant="outline" className="text-[10px]">Bhashyam</Badge>}
             {teekas.length > 0 && <Badge variant="outline" className="text-[10px]">{teekas.length} Teeka{teekas.length > 1 ? "s" : ""}</Badge>}
+            {canRestore && granthaDocumentId && (
+              <Button
+                variant="outline"
+                size="sm"
+                className="h-6 text-[10px] px-2"
+                disabled={restoring}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onRestore();
+                }}
+                data-testid={`button-restore-manthra-${manthra.id}`}
+              >
+                {restoring ? (
+                  <Loader2 className="w-3 h-3 animate-spin" />
+                ) : (
+                  <RotateCcw className="w-3 h-3 mr-1" />
+                )}
+                Restore live
+              </Button>
+            )}
             {hasExtras && (
               <Button variant="ghost" size="icon" className="h-6 w-6" onClick={() => setExpanded((e) => !e)} data-testid={`button-expand-manthra-${manthra.id}`}>
                 {expanded ? <ChevronUp className="w-3.5 h-3.5" /> : <ChevronDown className="w-3.5 h-3.5" />}
@@ -330,6 +373,66 @@ export default function BackupDetailPage() {
   const [restoreResult, setRestoreResult] = useState<RestoreResult | null>(null);
 
   const [restoreProgress, setRestoreProgress] = useState<{ current: number; total: number } | null>(null);
+
+  async function handleRestoreMantra() {
+    if (!mantraRestoreTarget || !selectedGrantha?.documentId) return;
+    setMantraRestoringDocId(mantraRestoreTarget.documentId);
+    setMantraRestoreResult(null);
+    try {
+      const res = await fetch(`/api/admin/backups/${id}/restore-manthra`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({
+          manthraDocumentId: mantraRestoreTarget.documentId,
+          granthaDocId: selectedGrantha.documentId,
+          field: mantraRestoreField,
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        throw new Error(data.message || "Restore failed");
+      }
+      setMantraRestoreResult({
+        ok: data.ok !== false,
+        manthra: data.manthra ?? mantraRestoreTarget.ShlokaManthraNumber,
+        actions: data.actions ?? [],
+        skipped: data.skipped ?? [],
+        errors: data.errors ?? [],
+        message: data.message,
+      });
+      if (data.ok !== false && (data.actions?.length ?? 0) > 0) {
+        toast({
+          title: "Mantra restored to Strapi",
+          description: `${data.manthra}: ${data.actions?.join("; ")}`,
+        });
+      } else if ((data.skipped?.length ?? 0) > 0 && !(data.errors?.length)) {
+        toast({
+          title: "Nothing to change",
+          description: data.skipped?.join("; "),
+        });
+      }
+    } catch (e: unknown) {
+      const msg = e instanceof Error ? e.message : String(e);
+      setMantraRestoreResult({
+        ok: false,
+        manthra: mantraRestoreTarget.ShlokaManthraNumber,
+        actions: [],
+        skipped: [],
+        errors: [msg],
+      });
+      toast({ variant: "destructive", title: "Restore failed", description: msg });
+    } finally {
+      setMantraRestoringDocId(null);
+    }
+  }
+
+  function openMantraRestore(m: ManthraEntry) {
+    setMantraRestoreTarget(m);
+    setMantraRestoreField("all");
+    setMantraRestoreResult(null);
+    setMantraRestoreOpen(true);
+  }
 
   async function handleRestore(granthaDocId: string) {
     setRestoring(true);
@@ -618,7 +721,16 @@ export default function BackupDetailPage() {
                     {manthras.length === 0 ? (
                       <p className="text-sm text-muted-foreground px-1">No manthras in this section.</p>
                     ) : (
-                      manthras.map((m) => <ManthraCard key={m.id} manthra={m} />)
+                      manthras.map((m) => (
+                        <ManthraCard
+                          key={m.id}
+                          manthra={m}
+                          granthaDocumentId={selectedGrantha?.documentId}
+                          canRestore={!!selectedGrantha?.documentId}
+                          restoring={mantraRestoringDocId === m.documentId}
+                          onRestore={() => openMantraRestore(m)}
+                        />
+                      ))
                     )}
                   </div>
                 </ScrollArea>
@@ -628,7 +740,113 @@ export default function BackupDetailPage() {
         )}
       </div>
 
-      {/* Restore Dialog */}
+      {/* Single mantra restore */}
+      <Dialog
+        open={mantraRestoreOpen}
+        onOpenChange={(o) => {
+          if (!mantraRestoringDocId) {
+            setMantraRestoreOpen(o);
+            if (!o) {
+              setMantraRestoreTarget(null);
+              setMantraRestoreResult(null);
+            }
+          }
+        }}
+      >
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2 text-base">
+              <RotateCcw className="w-4 h-4" />
+              Restore one mantra to Strapi
+            </DialogTitle>
+          </DialogHeader>
+
+          {mantraRestoreTarget && (
+            <div className="space-y-4">
+              <p className="text-sm">
+                <span className="font-medium text-primary">{mantraRestoreTarget.ShlokaManthraNumber}</span>
+                <span className="text-muted-foreground"> — only this verse is updated. Other mantras in the grantha stay unchanged.</span>
+              </p>
+              <p className="text-xs text-muted-foreground">
+                Snapshot has {countOtLangs(mantraRestoreTarget.ShlokaManthraEntry)} Shloka translation(s). Missing languages are merged into live Strapi; existing live text is not overwritten.
+              </p>
+              {!mantraRestoreResult && (
+                <div className="space-y-1.5">
+                  <p className="text-xs font-medium text-muted-foreground uppercase tracking-wider">What to restore</p>
+                  <Select value={mantraRestoreField} onValueChange={setMantraRestoreField} disabled={!!mantraRestoringDocId}>
+                    <SelectTrigger data-testid="select-restore-manthra-field">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="all">All applicable (recommended)</SelectItem>
+                      <SelectItem value="shloka_ot">Shloka translations only</SelectItem>
+                      <SelectItem value="both">Teekas + Bhashyam (if missing in live)</SelectItem>
+                      <SelectItem value="teekas">Teekas only</SelectItem>
+                      <SelectItem value="bhashyam">Bhashyam only</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+              )}
+              {mantraRestoreResult && (
+                <div className="rounded-md border p-3 space-y-2 text-xs">
+                  {mantraRestoreResult.actions.map((a, i) => (
+                    <div key={i} className="flex items-start gap-1.5 text-green-700 dark:text-green-400">
+                      <CheckCircle className="w-3.5 h-3.5 flex-shrink-0 mt-0.5" />
+                      <span>{a}</span>
+                    </div>
+                  ))}
+                  {mantraRestoreResult.skipped.map((s, i) => (
+                    <div key={i} className="text-muted-foreground">{s}</div>
+                  ))}
+                  {mantraRestoreResult.errors.map((e, i) => (
+                    <div key={i} className="flex items-start gap-1.5 text-red-600">
+                      <AlertCircle className="w-3.5 h-3.5 flex-shrink-0 mt-0.5" />
+                      <span>{e}</span>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+
+          <DialogFooter>
+            {!mantraRestoreResult ? (
+              <>
+                <Button
+                  variant="outline"
+                  onClick={() => setMantraRestoreOpen(false)}
+                  disabled={!!mantraRestoringDocId}
+                  data-testid="button-restore-manthra-cancel"
+                >
+                  Cancel
+                </Button>
+                <Button
+                  onClick={() => void handleRestoreMantra()}
+                  disabled={!!mantraRestoringDocId}
+                  data-testid="button-restore-manthra-confirm"
+                >
+                  {mantraRestoringDocId ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : null}
+                  Restore this mantra
+                </Button>
+              </>
+            ) : (
+              <Button
+                variant="outline"
+                onClick={() => {
+                  setMantraRestoreOpen(false);
+                  setMantraRestoreTarget(null);
+                  setMantraRestoreResult(null);
+                }}
+                data-testid="button-restore-manthra-close"
+              >
+                Close
+              </Button>
+            )}
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Grantha-wide restore */}
       <Dialog open={restoreOpen} onOpenChange={(o) => { if (!restoring) { setRestoreOpen(o); if (!o) setRestoreResult(null); } }}>
         <DialogContent className="max-w-lg">
           <DialogHeader>
@@ -641,7 +859,7 @@ export default function BackupDetailPage() {
           {!restoreResult ? (
             <div className="space-y-4">
               <p className="text-sm text-muted-foreground">
-                Compares each mantra in this snapshot against live Strapi. Only pushes data where the live record is <strong>missing</strong> content — existing live content is never overwritten.
+                Compares each mantra in this snapshot against live Strapi. Only pushes data where the live record is <strong>missing</strong> content — existing live translations are not overwritten. Use <strong>Shloka translations</strong> when Hermex reports missing Hindi/Kannada/etc. but this snapshot still has full OtherTranslations.
               </p>
               <div className="space-y-1.5">
                 <p className="text-xs font-medium text-muted-foreground uppercase tracking-wider">What to restore</p>
@@ -651,6 +869,8 @@ export default function BackupDetailPage() {
                   </SelectTrigger>
                   <SelectContent>
                     <SelectItem value="both">Teekas + Bhashyam (both)</SelectItem>
+                    <SelectItem value="shloka_ot">Shloka OtherTranslations (missing langs only)</SelectItem>
+                    <SelectItem value="all">Teekas + Bhashyam + Shloka OT</SelectItem>
                     <SelectItem value="teekas">Teekas only</SelectItem>
                     <SelectItem value="bhashyam">Bhashyam only</SelectItem>
                   </SelectContent>

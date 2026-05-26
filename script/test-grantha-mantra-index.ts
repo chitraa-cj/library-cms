@@ -32,10 +32,11 @@ import {
   isPlaceholderVersusCms,
   entryContentCharCount,
 } from "../client/src/lib/strapi-blocks.ts";
+import { sortKeyBetween, STRAPI_SORT_GAP } from "../shared/mantra-sort-key.ts";
 
 type ManthraRow = { id: string; title: string; order: number; strapiDocumentId?: string };
 
-/** Mirrors server `insert-between` order shifts (Strapi section state). */
+/** Mirrors server `insert-between` — fractional sort key, no sibling shifts. */
 function simulateStrapiInsertBetween(
   rows: ManthraRow[],
   afterDocumentId: string,
@@ -44,18 +45,20 @@ function simulateStrapiInsertBetween(
   const all = [...rows].sort((a, b) => a.order - b.order);
   const anchorIdx = all.findIndex((m) => m.strapiDocumentId === afterDocumentId);
   if (anchorIdx < 0) throw new Error(`anchor ${afterDocumentId} not found`);
-  const anchorOrder = all[anchorIdx].order;
-  for (let i = anchorIdx + 1; i < all.length; i++) {
-    all[i] = { ...all[i], order: all[i].order + 1 };
-  }
-  const newOrder = anchorOrder + 1;
+  const prevSort = all[anchorIdx].order;
+  const nextSort = all[anchorIdx + 1]?.order;
+  const { sortKey: newSort } = sortKeyBetween(prevSort, nextSort);
   all.splice(anchorIdx + 1, 0, {
     id: newId,
     title: "",
-    order: newOrder,
+    order: newSort,
     strapiDocumentId: newId,
   });
   return all;
+}
+
+function portalRowsToStrapiSortKeys(rows: ManthraRow[]): ManthraRow[] {
+  return rows.map((m) => ({ ...m, order: m.order * STRAPI_SORT_GAP }));
 }
 
 function simulateEditorInsertAfter(
@@ -138,18 +141,34 @@ const { byOrder, ambiguousOrders } = buildUniqueStrapiOrderMap(sectionRefs);
 assert(ambiguousOrders.has(4));
 assert.equal(byOrder.get(5)?.docId, "doc-aaaa1111111111");
 
-const byExact = new Map<string, string>([["Shloka 1.1.5", "doc-aaaa1111111111"]]);
 const remap = resolvePortalMantraToStrapiDoc(
   { title: "Shloka 1.1.5", order: 5, strapiDocumentId: "doc-bbbb2222222222" },
   {
     configuredLeaf: "Shloka",
-    byExactTitle: byExact,
     sectionMantras: sectionRefs,
     byOrder,
     ambiguousOrders,
   },
 );
 assert.equal(remap?.docId, "doc-aaaa1111111111");
+
+// Same verse label in two sections must not cross-link (no grantha-wide title map).
+const sectionARefs: StrapiMantraRef[] = [
+  { title: "Mantra 1.1.1", docId: "doc-aaaa1111111111", order: 1, contentScore: 50 },
+];
+const sectionBRefs: StrapiMantraRef[] = [
+  { title: "Mantra 1.1.1", docId: "doc-bbbb2222222222", order: 1, contentScore: 100 },
+];
+const inA = resolvePortalMantraToStrapiDoc(
+  { title: "Mantra 1.1.1", order: 1 },
+  {
+    configuredLeaf: "Mantra",
+    sectionMantras: sectionARefs,
+    byOrder: buildUniqueStrapiOrderMap(sectionARefs).byOrder,
+    ambiguousOrders: buildUniqueStrapiOrderMap(sectionARefs).ambiguousOrders,
+  },
+);
+assert.equal(inA?.docId, "doc-aaaa1111111111");
 assert.equal(
   findStrapiMantraByLeafAndSuffix(sectionRefs, "Shloka 1.1.5", "Shloka")?.docId,
   "doc-aaaa1111111111",
@@ -309,15 +328,15 @@ assert.deepEqual(
 );
 assertUniqueContiguousOrders(editor, "insert after m2");
 
-let strapi = baseFour.map((m) => ({ ...m }));
+let strapi = portalRowsToStrapiSortKeys(baseFour);
 strapi = simulateStrapiInsertBetween(strapi, "strapi-doc-m2xxxxxx", "strapi-doc-newAxxxxx");
 assert.deepEqual(
   strapi.map((m) => m.strapiDocumentId),
   ["strapi-doc-m1xxxxxx", "strapi-doc-m2xxxxxx", "strapi-doc-newAxxxxx", "strapi-doc-m3xxxxxx", "strapi-doc-m4xxxxxx"],
 );
-assert.equal(strapi.find((m) => m.strapiDocumentId === "strapi-doc-newAxxxxx")?.order, 3);
-assert.equal(strapi.find((m) => m.strapiDocumentId === "strapi-doc-m3xxxxxx")?.order, 4);
-assert.equal(strapi.find((m) => m.strapiDocumentId === "strapi-doc-m4xxxxxx")?.order, 5);
+assert.equal(strapi.find((m) => m.strapiDocumentId === "strapi-doc-newAxxxxx")?.order, 2500);
+assert.equal(strapi.find((m) => m.strapiDocumentId === "strapi-doc-m3xxxxxx")?.order, 3000);
+assert.equal(strapi.find((m) => m.strapiDocumentId === "strapi-doc-m4xxxxxx")?.order, 4000);
 
 // ── Chained insert: after 2, then after new 3 ──
 editor = simulateEditorInsertAfter(baseFour, "m2", "newA");
@@ -328,12 +347,11 @@ assert.deepEqual(
 );
 assertUniqueContiguousOrders(editor, "chained editor insert");
 
-strapi = baseFour.map((m) => ({ ...m }));
+strapi = portalRowsToStrapiSortKeys(baseFour);
 strapi = simulateStrapiInsertBetween(strapi, "strapi-doc-m2xxxxxx", "strapi-doc-newAxxxxx");
 strapi = simulateStrapiInsertBetween(strapi, "strapi-doc-newAxxxxx", "strapi-doc-newBxxxxx");
-assert.equal(strapi.find((m) => m.strapiDocumentId === "strapi-doc-newBxxxxx")?.order, 4);
-assert.equal(strapi.find((m) => m.strapiDocumentId === "strapi-doc-m4xxxxxx")?.order, 6);
-assertUniqueContiguousOrders(strapi, "chained strapi insert");
+assert.equal(strapi.find((m) => m.strapiDocumentId === "strapi-doc-newBxxxxx")?.order, 2750);
+assert.equal(strapi.find((m) => m.strapiDocumentId === "strapi-doc-m4xxxxxx")?.order, 4000);
 
 // Editor snapshot batch payload matches contiguous orders
 editor = simulateEditorInsertAfter(baseFour, "m2", "newA");

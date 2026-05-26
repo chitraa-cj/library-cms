@@ -681,19 +681,19 @@ export function createStrapiRouter() {
     "populate[ShlokaManthraEntry][populate]=*",
   ].join("&");
 
-  async function fetchAllMantrasForGrantha(granthaDocId: string): Promise<any[]> {
-    const g = encodeURIComponent(granthaDocId);
-    const base = `filters[Section][grantha][documentId][$eq]=${g}&${MANTHRA_RESOLVE_LIST_POPULATE}`;
-    const firstPage = await strapiRequest(`/api/manthras?${base}&pagination[page]=1`);
-    const pageCount: number = firstPage?.meta?.pagination?.pageCount ?? 1;
-    let all: any[] = [...(firstPage?.data ?? [])];
-    if (pageCount > 1) {
-      const rest = await Promise.all(
-        Array.from({ length: pageCount - 1 }, (_, i) =>
-          strapiRequest(`/api/manthras?${base}&pagination[page]=${i + 2}`),
-        ),
+  /** Section-scoped list for duplicate verse resolution (never loads the whole grantha). */
+  async function fetchSectionMantrasForResolve(sectionDocId: string): Promise<any[]> {
+    const s = encodeURIComponent(sectionDocId);
+    const base = `filters[Section][documentId][$eq]=${s}&${MANTHRA_RESOLVE_LIST_POPULATE}`;
+    const all: any[] = [];
+    let page = 1;
+    while (true) {
+      const r = await strapiRequest(
+        `/api/manthras?${base}&pagination[pageSize]=100&pagination[page]=${page}`,
       );
-      all = all.concat(rest.flatMap((p: any) => p?.data ?? []));
+      all.push(...(r?.data ?? []));
+      if (page >= (r?.meta?.pagination?.pageCount ?? 1)) break;
+      page++;
     }
     return all;
   }
@@ -703,7 +703,6 @@ export function createStrapiRouter() {
     try {
       const label = String(req.query.label || "").trim();
       const preferredDocId = String(req.query.preferredDocId || "").trim();
-      const granthaDocId = String(req.query.granthaDocId || "").trim();
       const sectionDocId = String(req.query.sectionDocId || "").trim();
 
       if (!label && !preferredDocId) {
@@ -712,6 +711,7 @@ export function createStrapiRouter() {
 
       const candidates: any[] = [];
       const seen = new Set<string>();
+      let preferredRow: any | null = null;
 
       const addCandidate = (row: any) => {
         const id = row?.documentId;
@@ -720,27 +720,47 @@ export function createStrapiRouter() {
         candidates.push(row);
       };
 
-      if (granthaDocId) {
-        for (const row of await fetchAllMantrasForGrantha(granthaDocId)) addCandidate(row);
-      }
-
-      if (sectionDocId) {
-        const s = encodeURIComponent(sectionDocId);
-        const secPage = await strapiRequest(
-          `/api/manthras?filters[Section][documentId][$eq]=${s}&${MANTHRA_RESOLVE_LIST_POPULATE}&pagination[pageSize]=250`,
-        );
-        for (const row of secPage?.data ?? []) addCandidate(row);
-      }
-
-      if (preferredDocId && !seen.has(preferredDocId)) {
+      if (preferredDocId) {
         try {
-          const one = await strapiRequest(
-            `/api/manthras/${preferredDocId}?fields[0]=documentId&fields[1]=ShlokaManthraNumber&fields[2]=order&populate[ShlokaManthraEntry][populate]=*`,
-          );
-          if (one?.data) addCandidate(one.data);
+          const one = await strapiRequest(`/api/manthras/${preferredDocId}?${MANTHRA_POPULATE}`);
+          if (one?.data) {
+            preferredRow = one.data;
+            addCandidate(preferredRow);
+          }
         } catch {
           /* preferred id may be orphaned */
         }
+      }
+
+      const preferredScore = preferredRow ? mantraEntryContentScore(preferredRow.ShlokaManthraEntry) : 0;
+      const preferredLabel = String(preferredRow?.ShlokaManthraNumber ?? "").trim();
+      const labelMatchesPreferred =
+        !label || !preferredLabel || labelsShareVerseSuffix(label, preferredLabel);
+
+      // Fast path: linked row exists with verse text — return immediately (no section-wide scan).
+      if (
+        preferredRow &&
+        preferredDocId &&
+        labelMatchesPreferred &&
+        preferredScore >= 12
+      ) {
+        const sec = preferredRow.Section;
+        return res.json({
+          data: {
+            ...preferredRow,
+            section: sec
+              ? { id: sec.id, documentId: sec.documentId, title: sec.title, type: sec.type }
+              : null,
+            grantha: sec?.grantha ?? null,
+          },
+          documentId: preferredDocId,
+          corrected: false,
+          contentScore: preferredScore,
+        });
+      }
+
+      if (sectionDocId) {
+        for (const row of await fetchSectionMantrasForResolve(sectionDocId)) addCandidate(row);
       }
 
       const matchLabel =
@@ -786,14 +806,17 @@ export function createStrapiRouter() {
         return res.status(404).json({ message: "No matching manthra found for this verse" });
       }
 
-      const full = await strapiRequest(`/api/manthras/${winner.documentId}?${MANTHRA_POPULATE}`);
-      const m = full?.data;
+      const corrected = !!(preferredDocId && winner.documentId !== preferredDocId);
+      const m =
+        !corrected && preferredRow && winner.documentId === preferredDocId
+          ? preferredRow
+          : (await strapiRequest(`/api/manthras/${winner.documentId}?${MANTHRA_POPULATE}`))?.data;
+
       if (!m) {
         return res.status(404).json({ message: "Manthra not found in CMS" });
       }
 
       const sec = m.Section;
-      const corrected = !!(preferredDocId && winner.documentId !== preferredDocId);
       return res.json({
         data: {
           ...m,

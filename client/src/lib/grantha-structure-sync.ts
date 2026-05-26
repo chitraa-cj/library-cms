@@ -5,6 +5,7 @@
  */
 
 import { entryContentCharCount } from "./strapi-blocks";
+import { portalIndexToStrapiSortKey, STRAPI_SORT_GAP } from "@shared/mantra-sort-key";
 
 export const STRAPI_DOCUMENT_ID_MIN_LENGTH = 10;
 
@@ -18,6 +19,41 @@ export function sortNodesByOrder<T extends { order?: number; id?: string }>(node
     if (d !== 0) return d;
     return String(a.id ?? "").localeCompare(String(b.id ?? ""));
   });
+}
+
+/** True when `order` is a Strapi fractional sort key (1000+), not portal display index 1..n. */
+export function isStrapiFractionalSortKey(order: number | undefined): boolean {
+  return typeof order === "number" && !Number.isNaN(order) && order >= STRAPI_SORT_GAP;
+}
+
+/**
+ * Comparable sort key for mantra lists that may mix portal indices (1..n) and Strapi keys (1000+).
+ * Portal rows sort just before their spaced Strapi slot (1 → 999, 2 → 1999) so inserts stay ordered.
+ */
+export function mantraDisplaySortKey(order: number | undefined): number {
+  if (order == null || Number.isNaN(order)) return 0;
+  if (isStrapiFractionalSortKey(order)) return order;
+  const n = Math.max(1, Math.floor(order));
+  return portalIndexToStrapiSortKey(n) - 1;
+}
+
+/** Sort mantras when portal `order` and Strapi `order` may appear in the same list (e.g. after enrich). */
+export function sortMantrasByDisplayOrder<T extends { order?: number; id?: string }>(nodes: T[]): T[] {
+  return [...nodes].sort((a, b) => {
+    const d = mantraDisplaySortKey(a.order) - mantraDisplaySortKey(b.order);
+    if (d !== 0) return d;
+    return String(a.id ?? "").localeCompare(String(b.id ?? ""));
+  });
+}
+
+/** 1-based rank of each Strapi row in CMS sort order (for supplement / merge before normalize). */
+export function buildStrapiMantraRankMap(manthras: StrapiMantraRef[]): Map<string, number> {
+  const sorted = [...manthras].sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
+  const ranks = new Map<string, number>();
+  sorted.forEach((sm, idx) => {
+    if (sm.docId) ranks.set(sm.docId, idx + 1);
+  });
+  return ranks;
 }
 
 /** 1-based index of `id` in `sortNodesByOrder(nodes)` — use for titles that must match sorted hierarchy. */
@@ -290,6 +326,20 @@ export function pickBestStrapiMantraRefForLink(
   return pickPreferredStrapiMantraRef(refs, preferredDocId);
 }
 
+/** Exact ShlokaManthraNumber match within one section (never grantha-wide). */
+export function findStrapiMantraByExactTitleInSection(
+  sectionMantras: StrapiMantraRef[],
+  portalTitle: string | undefined,
+  preferredDocId?: string,
+): StrapiMantraRef | undefined {
+  const label = (portalTitle ?? "").trim();
+  if (!label || sectionMantras.length === 0) return undefined;
+  const lower = label.toLowerCase();
+  const hits = sectionMantras.filter((sm) => sm.title.trim().toLowerCase() === lower);
+  if (hits.length === 0) return undefined;
+  return pickBestStrapiMantraRefForLink(hits, preferredDocId);
+}
+
 export function findStrapiMantraByLeafAndSuffix(
   mantras: StrapiMantraRef[],
   portalTitle: string | undefined,
@@ -314,7 +364,8 @@ export function findStrapiMantraByLeafAndSuffix(
 
 export interface ResolvePortalMantraStrapiOptions {
   configuredLeaf: string;
-  byExactTitle: Map<string, string>;
+  /** Fallback only when `sectionMantras` is empty (legacy / no section context). */
+  byExactTitle?: Map<string, string>;
   sectionMantras: StrapiMantraRef[];
   byOrder: Map<number, StrapiMantraRef>;
   ambiguousOrders: Set<number>;
@@ -331,8 +382,18 @@ export function resolvePortalMantraToStrapiDoc(
   const { configuredLeaf, byExactTitle, sectionMantras, byOrder, ambiguousOrders } = opts;
   const leaf = (configuredLeaf || "Mantra").trim();
 
-  if (portal.title && byExactTitle.has(portal.title)) {
-    return { docId: byExactTitle.get(portal.title)! };
+  if (portal.title) {
+    const exactInSection = findStrapiMantraByExactTitleInSection(
+      sectionMantras,
+      portal.title,
+      portal.strapiDocumentId,
+    );
+    if (exactInSection) {
+      return { docId: exactInSection.docId };
+    }
+    if (sectionMantras.length === 0 && byExactTitle?.has(portal.title)) {
+      return { docId: byExactTitle.get(portal.title)! };
+    }
   }
 
   const byLeafAndSuffix = portal.title
@@ -365,6 +426,7 @@ export function resolvePortalMantraToStrapiDoc(
     }
     if (
       portal.order != null &&
+      isStrapiFractionalSortKey(portal.order) &&
       !ambiguousOrders.has(portal.order) &&
       byOrder.has(portal.order)
     ) {
@@ -379,6 +441,7 @@ export function resolvePortalMantraToStrapiDoc(
 
   if (
     portal.order != null &&
+    isStrapiFractionalSortKey(portal.order) &&
     !ambiguousOrders.has(portal.order) &&
     byOrder.has(portal.order)
   ) {
@@ -439,7 +502,7 @@ export function reindexMantrasContiguous<T extends { id: string; title: string; 
   manthras: T[],
   ctx: MantraTitleCtx,
 ): T[] {
-  return assignContiguousOrderAndTitles(sortNodesByOrder(manthras), ctx);
+  return assignContiguousOrderAndTitles(sortMantrasByDisplayOrder(manthras), ctx);
 }
 
 /**
@@ -460,7 +523,7 @@ export function reindexMantrasInListOrder<T extends { id: string; title: string;
 export function reindexMantraOrdersPreservingTitles<T extends { id: string; title: string; order: number }>(
   manthras: T[] | undefined,
 ): T[] {
-  return sortNodesByOrder(manthras ?? []).map((m, idx) => ({
+  return sortMantrasByDisplayOrder(manthras ?? []).map((m, idx) => ({
     ...m,
     order: idx + 1,
   }));

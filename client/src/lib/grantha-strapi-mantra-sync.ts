@@ -230,6 +230,21 @@ export type MantraDocIdPatch = MantraSectionSyncTarget & {
   strapiDocumentId: string;
 };
 
+function pushMantraSectionSyncTarget(
+  targets: MantraSectionSyncTarget[],
+  seenSectionDocIds: Set<string>,
+  snapshot: SnapshotAdhyaya[],
+  adhyayaId: string,
+  khandaId: string,
+  padaId: string | undefined,
+  cfg: GranthaStructureConfig,
+): void {
+  const secId = resolveMantraSectionStrapiDocumentId(snapshot, adhyayaId, khandaId, padaId, cfg);
+  if (!secId || seenSectionDocIds.has(secId)) return;
+  seenSectionDocIds.add(secId);
+  targets.push({ adhyayaId, khandaId, padaId });
+}
+
 export function collectMantraSectionSyncTargets(
   snapshot: SnapshotAdhyaya[],
   cfg: GranthaStructureConfig,
@@ -239,19 +254,20 @@ export function collectMantraSectionSyncTargets(
 
   for (const a of snapshot) {
     for (const k of a.khandas ?? []) {
-      const levelThree = !!cfg.levelThreeEnabled && (k.padas?.length ?? 0) > 0;
-      if (levelThree) {
-        for (const p of k.padas ?? []) {
-          const secId = resolveMantraSectionStrapiDocumentId(snapshot, a.id, k.id, p.id, cfg);
-          if (!secId || seenSectionDocIds.has(secId)) continue;
-          seenSectionDocIds.add(secId);
-          targets.push({ adhyayaId: a.id, khandaId: k.id, padaId: p.id });
+      const padas = k.padas ?? [];
+      const hasPadas = padas.length > 0;
+      const khandaHasDirectMantras = (k.manthras ?? []).length > 0;
+
+      if (cfg.levelThreeEnabled && hasPadas) {
+        for (const p of padas) {
+          pushMantraSectionSyncTarget(targets, seenSectionDocIds, snapshot, a.id, k.id, p.id, cfg);
+        }
+        // Legacy rows: mantras still on khanda while L3 padas exist — sync that section too.
+        if (khandaHasDirectMantras) {
+          pushMantraSectionSyncTarget(targets, seenSectionDocIds, snapshot, a.id, k.id, undefined, cfg);
         }
       } else {
-        const secId = resolveMantraSectionStrapiDocumentId(snapshot, a.id, k.id, undefined, cfg);
-        if (!secId || seenSectionDocIds.has(secId)) continue;
-        seenSectionDocIds.add(secId);
-        targets.push({ adhyayaId: a.id, khandaId: k.id });
+        pushMantraSectionSyncTarget(targets, seenSectionDocIds, snapshot, a.id, k.id, undefined, cfg);
       }
     }
   }
@@ -395,6 +411,42 @@ export async function syncMantraSectionLabelsToStrapi(
   return updates.length;
 }
 
+/**
+ * After insert/delete: align Strapi fractional sort keys with portal list order (1…n → 1000, 2000…).
+ * Does not change ShlokaManthraNumber labels.
+ */
+export async function syncMantraSectionSortKeysToStrapi(
+  snapshot: SnapshotAdhyaya[],
+  adhyayaId: string,
+  khandaId: string,
+  padaId: string | undefined,
+  cfg: GranthaStructureConfig,
+): Promise<number> {
+  const sectionDocumentId = resolveMantraSectionStrapiDocumentId(snapshot, adhyayaId, khandaId, padaId, cfg);
+  if (!sectionDocumentId) return 0;
+
+  const sorted = getSortedMantrasFromSnapshot(snapshot, adhyayaId, khandaId, padaId, cfg);
+  const sortKeys = assignSpacedSortKeysFromPortalOrder(sorted);
+
+  const updates: Array<{ documentId: string; order: number; ShlokaManthraNumber: string }> = [];
+  const seenDocIds = new Set<string>();
+  for (const m of sorted) {
+    const documentId = m.strapiDocumentId;
+    if (!isPublishedStrapiDocId(documentId) || seenDocIds.has(documentId)) continue;
+    seenDocIds.add(documentId);
+    updates.push({
+      documentId,
+      order: sortKeys.get(m.id) ?? portalIndexToStrapiSortKey(m.order),
+      ShlokaManthraNumber: "",
+    });
+  }
+
+  if (updates.length === 0) return 0;
+  const leaf = (cfg.leafName || "Mantra").trim() || "Mantra";
+  await strapiBatchIdentitySync(updates, { sortKeysOnly: true, configuredLeaf: leaf });
+  return updates.length;
+}
+
 /** @deprecated Use pushMantraSectionStructureToStrapi — kept for callers migrating gradually. */
 export async function pushMantraSectionIdentityToStrapi(
   snapshot: SnapshotAdhyaya[],
@@ -434,10 +486,31 @@ export async function syncMantraSectionAfterStructuralEdits(
   padaId: string | undefined,
   cfg: GranthaStructureConfig,
   deleteDocumentIds: string[],
-): Promise<{ patches: Array<{ manthraId: string; strapiDocumentId: string }>; failedDeleteIds: string[] }> {
+): Promise<{
+  patches: Array<{ manthraId: string; strapiDocumentId: string }>;
+  failedDeleteIds: string[];
+  sortKeysUpdated: number;
+}> {
   const failedDeleteIds = await strapiDeleteMantrasBestEffort(deleteDocumentIds);
   const patches = await pushMantraSectionStructureToStrapi(snapshot, adhyayaId, khandaId, padaId, cfg);
-  return { patches, failedDeleteIds };
+  let snapForSort = snapshot;
+  if (patches.length > 0) {
+    snapForSort = applyMantraDocIdPatches(snapshot, patches.map((p) => ({
+      adhyayaId,
+      khandaId,
+      padaId,
+      manthraId: p.manthraId,
+      strapiDocumentId: p.strapiDocumentId,
+    })));
+  }
+  const sortKeysUpdated = await syncMantraSectionSortKeysToStrapi(
+    snapForSort,
+    adhyayaId,
+    khandaId,
+    padaId,
+    cfg,
+  );
+  return { patches, failedDeleteIds, sortKeysUpdated };
 }
 
 /** @deprecated Alias */

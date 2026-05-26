@@ -523,6 +523,9 @@ export async function translateJobIncremental(
       console.log(
         `[warn] ${chunkId} | checkpoint marked done but Strapi still missing: ${langs.join(", ")} — re-translating`,
       );
+      console.log(
+        `[warn] If a CMS snapshot still has these langs, restore with: npm run restore:shloka-ot -- --backup-id <id> --grantha "<name>" --suffix <verse> --execute`,
+      );
     }
 
     if (opts.dryRun) {

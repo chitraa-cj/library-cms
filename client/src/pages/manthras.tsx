@@ -1,4 +1,4 @@
-import { useState, useMemo } from "react";
+import { useState, useMemo, useRef, useEffect } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { queryClient, apiRequest } from "@/lib/queryClient";
 import { syncGranthaCmsCaches } from "@/lib/strapi-cache-sync";
@@ -61,12 +61,20 @@ import {
   dedupePublishedMantrasForDisplay,
   compareMantraNumberSuffix,
   mantraNumberSuffix,
+  MANTRA_LINK_MIN_CONTENT_SCORE,
   buildSectionByDocIdMap,
   buildSectionAncestorPath,
   sectionPathLabel,
   isMantraSectionMisplacedOnAdhyaya,
 } from "@/lib/grantha-structure-sync";
-import { fetchResolvedManthraDetail } from "@/lib/resolve-strapi-mantra-detail";
+import {
+  fetchPublishedManthraForEdit,
+  isManthraFetchAbortError,
+} from "@/lib/resolve-strapi-mantra-detail";
+import {
+  invalidateManthraCache,
+  invalidateManthraCacheOnDocIdCorrection,
+} from "@/lib/mantra-cms-cache";
 import { STRAPI_POLL_INTERVAL } from "@/hooks/use-strapi-sync";
 
 const EMPTY_TT: TextAndTranslation = {
@@ -153,8 +161,23 @@ export default function ManthrasPage() {
   // All sections start expanded; clicking a section header collapses it
   const [collapsedSections, setCollapsedSections] = useState<Set<string>>(new Set());
   const [fetchingEditDocId, setFetchingEditDocId] = useState<string | null>(null);
+  const publishedManthraLoadGenRef = useRef(0);
+  const publishedManthraAbortRef = useRef<AbortController | null>(null);
   const [insertTarget, setInsertTarget] = useState<{ afterDocumentId: string; afterNum: string; sectionDocId: string } | null>(null);
   const [isInserting, setIsInserting] = useState(false);
+
+  useEffect(() => {
+    return () => {
+      publishedManthraAbortRef.current?.abort();
+    };
+  }, []);
+
+  function cancelPublishedManthraLoad(): void {
+    publishedManthraAbortRef.current?.abort();
+    publishedManthraAbortRef.current = null;
+    publishedManthraLoadGenRef.current += 1;
+    setFetchingEditDocId(null);
+  }
   function toggleSection(key: string) {
     setCollapsedSections((prev) => {
       const next = new Set(prev);
@@ -274,6 +297,7 @@ export default function ManthrasPage() {
   }
 
   function resetForm() {
+    invalidateManthraCache();
     setFormData({
       ShlokaManthraNumber: "",
       order: "",
@@ -354,41 +378,67 @@ export default function ManthrasPage() {
     }
   }
 
-  function loadPublishedManthraForEdit(item: any, viewOnlyMode: boolean) {
-    setFetchingEditDocId(item.documentId);
-    fetchResolvedManthraDetail({
-      documentId: item.documentId,
-      granthaDocId: item.grantha?.documentId,
-      sectionDocId: item.section?.documentId,
-      shlokaManthraNumber: item.ShlokaManthraNumber,
-    })
-      .then(({ data: fullItem, documentId, corrected, contentScore }) => {
-        setEditingItem({ ...fullItem, documentId });
-        setEditingDraftId(null);
-        setFormData(formDataFromStrapiManthra(fullItem));
-        setViewOnly(viewOnlyMode);
-        setFormOpen(true);
-        if (corrected) {
+  async function loadPublishedManthraForEdit(item: any, viewOnlyMode: boolean) {
+    const preferredDocId = item.documentId as string;
+    publishedManthraAbortRef.current?.abort();
+
+    const controller = new AbortController();
+    publishedManthraAbortRef.current = controller;
+    const loadGen = ++publishedManthraLoadGenRef.current;
+    const { signal } = controller;
+
+    const isStale = () =>
+      loadGen !== publishedManthraLoadGenRef.current || signal.aborted;
+
+    setFetchingEditDocId(preferredDocId);
+    try {
+      const result = await fetchPublishedManthraForEdit(
+        {
+          documentId: preferredDocId,
+          grantha: item.grantha,
+          section: item.section,
+          ShlokaManthraNumber: item.ShlokaManthraNumber,
+        },
+        { signal },
+      );
+      if (isStale()) return;
+
+      const { data: fullItem, documentId, corrected, contentScore } = result;
+      invalidateManthraCacheOnDocIdCorrection(preferredDocId, documentId, corrected);
+      setEditingItem({ ...fullItem, documentId });
+      setEditingDraftId(null);
+      setFormData(formDataFromStrapiManthra(fullItem));
+      setViewOnly(viewOnlyMode);
+      setFormOpen(true);
+
+      if (corrected) {
+        toast({
+          title: "Opened CMS row with content",
+          description:
+            "This list row was an empty duplicate. Loaded the verse record used by the Grantha editor.",
+        });
+      } else if ((contentScore ?? 0) < MANTRA_LINK_MIN_CONTENT_SCORE) {
+        const sanskrit = blocksToText(fullItem.ShlokaManthraEntry?.SanskritTextEntry);
+        if (!sanskrit.trim()) {
           toast({
-            title: "Opened CMS row with content",
+            title: "No verse text in CMS",
             description:
-              "This list row was an empty duplicate. Loaded the verse record used by the Grantha editor.",
+              "This Shloka exists in Strapi but has no Sanskrit/English saved. Edit in the Grantha page or paste text here, then Save & Publish.",
           });
-        } else if ((contentScore ?? 0) < 12) {
-          const sanskrit = blocksToText(fullItem.ShlokaManthraEntry?.SanskritTextEntry);
-          if (!sanskrit.trim()) {
-            toast({
-              title: "No verse text in CMS",
-              description:
-                "This Shloka exists in Strapi but has no Sanskrit/English saved. Edit in the Grantha page or paste text here, then Save & Publish.",
-            });
-          }
         }
-      })
-      .catch((err) => {
-        toast({ variant: "destructive", title: "Error loading manthra", description: err.message });
-      })
-      .finally(() => setFetchingEditDocId(null));
+      }
+    } catch (err: unknown) {
+      if (isStale() || isManthraFetchAbortError(err)) return;
+      const message = err instanceof Error ? err.message : String(err);
+      toast({ variant: "destructive", title: "Error loading manthra", description: message });
+    } finally {
+      if (loadGen === publishedManthraLoadGenRef.current) {
+        setFetchingEditDocId(null);
+        if (publishedManthraAbortRef.current === controller) {
+          publishedManthraAbortRef.current = null;
+        }
+      }
+    }
   }
 
   function openEdit(item: any) {
@@ -452,6 +502,7 @@ export default function ManthrasPage() {
       },
       {
         onSuccess: () => {
+          if (strapiDocId) invalidateManthraCache(strapiDocId);
           setFormOpen(false);
           resetForm();
           setEditingItem(null);
@@ -839,7 +890,15 @@ export default function ManthrasPage() {
       </div>
 
       {/* Form dialog */}
-      <Dialog open={formOpen} onOpenChange={(open) => { setFormOpen(open); if (!open) { resetForm(); setEditingItem(null); setViewOnly(false); } }}>
+      <Dialog open={formOpen} onOpenChange={(open) => {
+        setFormOpen(open);
+        if (!open) {
+          cancelPublishedManthraLoad();
+          resetForm();
+          setEditingItem(null);
+          setViewOnly(false);
+        }
+      }}>
         <DialogContent className="max-w-3xl max-h-[90vh] overflow-y-auto">
           <DialogHeader>
             <DialogTitle>{viewOnly ? "View Manthra" : editingItem ? "Edit Manthra" : "Add Manthra"}</DialogTitle>

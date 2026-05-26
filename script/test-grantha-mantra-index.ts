@@ -12,6 +12,7 @@ import {
   mantrasShareLeafAndSuffix,
   findStrapiMantraByLeafAndSuffix,
   pickPreferredStrapiMantraRef,
+  pickBestStrapiMantraRefForLink,
   resolvePortalMantraToStrapiDoc,
   buildUniqueStrapiOrderMap,
   buildMantraDisplayTitle,
@@ -351,6 +352,17 @@ assert.deepEqual(
 );
 assert.equal(new Set(batch.map((u) => u.order)).size, batch.length, "batch orders unique");
 
+// Batch identity must update every Strapi row by documentId (not dedupe by verse label).
+const labelCollisionBatch = batchUpdatesFromSnapshot([
+  { id: "m1", title: "Shloka 1.3", order: 3, strapiDocumentId: "strapi-doc-aaaaaaa1" },
+  { id: "m2", title: "Shloka 1.3", order: 4, strapiDocumentId: "strapi-doc-bbbbbbb2" },
+]);
+assert.equal(labelCollisionBatch.length, 2);
+assert.deepEqual(
+  labelCollisionBatch.map((u) => u.documentId).sort(),
+  ["strapi-doc-aaaaaaa1", "strapi-doc-bbbbbbb2"],
+);
+
 // ── Delete: remove middle, keep titles ──
 editor = baseFour.map((m) => ({ ...m }));
 editor = simulateEditorDelete(editor, "m2", false, flat);
@@ -427,5 +439,11 @@ assert.equal(
   true,
 );
 assert.equal(entryContentCharCount("4"), 1);
+
+const dupRefsByRichness: StrapiMantraRef[] = [
+  { title: "Shloka 1.1.3", docId: "empty-doc", order: 3, contentScore: 0 },
+  { title: "Shloka 1.1.3", docId: "full-doc", order: 3, contentScore: 120 },
+];
+assert.equal(pickBestStrapiMantraRefForLink(dupRefsByRichness, "empty-doc")?.docId, "full-doc");
 
 console.log("test-grantha-mantra-index: all ok (insert/delete/order)");

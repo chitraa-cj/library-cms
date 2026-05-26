@@ -10,6 +10,8 @@
     "check": "tsc",
     "test:mantra-index": "tsx script/test-grantha-mantra-index.ts",
     "test:mantra-order": "tsx script/test-grantha-mantra-index.ts",
+    "test:mantra-sort-key": "tsx script/test-mantra-sort-key.ts",
+    "repair:misplaced-adhyaya-mantras": "tsx script/repair-grantha-misplaced-adhyaya-mantras.ts",
     "db:push": "drizzle-kit push",
     "hermex:install": "python3 -m venv .venv-hermex && .venv-hermex/bin/pip install -r python/hermex_translate/requirements.txt",
     "hermex:setup": ".venv-hermex/bin/python3 python/hermex_translate/setup_gemini.py",

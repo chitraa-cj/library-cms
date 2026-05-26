@@ -52,7 +52,9 @@ import {
   entryContentCharCount,
   isPlaceholderVersusCms,
   isStubOrderOrPlaceholderText,
+  stripStubTextAndTranslationEntry,
 } from "@/lib/strapi-blocks";
+import { fetchResolvedManthraDetail } from "@/lib/resolve-strapi-mantra-detail";
 import {
   sortNodesByOrder,
   isPublishedStrapiDocId,
@@ -67,7 +69,9 @@ import {
   mantrasShareNumberSuffix,
   mantrasShareLeafAndSuffix,
   findStrapiMantraByLeafAndSuffix,
-  pickPreferredStrapiMantraRef,
+  MANTRA_LINK_MIN_CONTENT_SCORE,
+  pickBestStrapiMantraRefForLink,
+  scoreStrapiManthraRowContent,
   resolvePortalMantraToStrapiDoc,
   collectKnownVerseSuffixesForLeaf,
   strapiVerseTakenForConfiguredLeaf,
@@ -75,14 +79,14 @@ import {
   mantraNumberSuffix,
   portalMantraTitleForLeaf,
   inferLeafNameFromStrapiMantras,
+  strapiGranthaHasKhandaSections,
   type GranthaStructureConfig,
   type StrapiMantraRef,
 } from "@/lib/grantha-structure-sync";
 import {
   mergeMantraStrapiDocumentIds,
   syncMantraSectionAfterStructuralEdits,
-  syncAllMantraSectionsInGrantha,
-  applyMantraDocIdPatches,
+  syncAllMantraSectionLabelsInGrantha,
   resolveMantraSectionStrapiDocumentId,
   type SnapshotAdhyaya,
 } from "@/lib/grantha-strapi-mantra-sync";
@@ -159,6 +163,8 @@ interface ManthraNode {
   title: string;
   order: number;
   strapiDocumentId?: string;
+  /** Set when inserted via + in this session; cleared after Save & Publish. */
+  _isNewLocal?: boolean;
   ShlokaManthraEntry?: TextAndTranslation;
   BhashyamForShlokaManthra?: TextAndTranslation;
   Teekas?: ManthraTeekaEntry[];
@@ -281,13 +287,14 @@ function mergeEntry(draft: any | undefined, fromStrapi: any | undefined): any | 
     hasBlocks(draft.EnglishTranslationText) &&
     !isPlaceholderVersusCms(draft.EnglishTranslationText, fromStrapi.EnglishTranslationText);
 
-  return {
+  const merged = {
     ...fromStrapi,
     ...(keepDraftSans && { SanskritTextEntry: draft.SanskritTextEntry }),
     ...(keepDraftEng && { EnglishTranslationText: draft.EnglishTranslationText }),
     ...(draft.IASTTransliteration && { IASTTransliteration: draft.IASTTransliteration }),
     ...(mergedOT !== undefined && { OtherTranslations: mergedOT }),
   };
+  return stripStubTextAndTranslationEntry(merged) as typeof merged | undefined;
 }
 
 function shlokaManthraEntryRichness(entry: unknown): number {
@@ -619,6 +626,17 @@ function hasManthraContent(m: ManthraNode) {
     hasBlocks(m.BhashyamForShlokaManthra?.SanskritTextEntry) ||
     m.Teekas?.some((t) => hasBlocks(t.TeekaEntry?.SanskritTextEntry))
   );
+}
+
+function isNewLocalManthra(m: ManthraNode): boolean {
+  return !!m._isNewLocal;
+}
+
+function manthraListRowClassName(m: ManthraNode): string {
+  const base = "flex items-center gap-2 group py-0.5";
+  return isNewLocalManthra(m)
+    ? `${base} rounded-md bg-amber-50 dark:bg-amber-950/35 border border-amber-300/70 dark:border-amber-700/60 px-2 -mx-1`
+    : base;
 }
 
 /** After publish, the server returns a structure-only hierarchy; keep loaded verse bodies from memory. */
@@ -1018,11 +1036,10 @@ export default function GranthasPage() {
 
   const adhyayasRef = useRef<AdhyayaNode[]>([]);
   const structureConfigRef = useRef(structureConfig);
+  const formDataRef = useRef(formData);
   const strapiHierarchySyncTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const mantraSyncTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const mantraSyncChainRef = useRef<Promise<void>>(Promise.resolve());
-  const fullMantraAlignTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const fullMantraAlignChainRef = useRef<Promise<void>>(Promise.resolve());
   const pendingMantraDeletesRef = useRef<Set<string>>(new Set());
 
   useEffect(() => {
@@ -1034,10 +1051,13 @@ export default function GranthasPage() {
   }, [structureConfig]);
 
   useEffect(() => {
+    formDataRef.current = formData;
+  }, [formData]);
+
+  useEffect(() => {
     return () => {
       if (strapiHierarchySyncTimerRef.current) clearTimeout(strapiHierarchySyncTimerRef.current);
       if (mantraSyncTimerRef.current) clearTimeout(mantraSyncTimerRef.current);
-      if (fullMantraAlignTimerRef.current) clearTimeout(fullMantraAlignTimerRef.current);
     };
   }, []);
 
@@ -1050,7 +1070,9 @@ export default function GranthasPage() {
     strapiDocumentId?: string; // set if this mantra is already published to Strapi
   } | null>(null);
   const [manthraDialogDirty, setManthraDialogDirty] = useState(false);
+  const [pendingCloseManthra, setPendingCloseManthra] = useState(false);
   const [manthraLoading, setManthraLoading] = useState(false);
+  const [verseLabelSyncPending, setVerseLabelSyncPending] = useState(false);
   const [editingGranthaSectionsLoading, setEditingGranthaSectionsLoading] = useState(false);
   const [pendingRemove, setPendingRemove] = useState<{ adhyayaId: string; khandaId: string; manthraId: string; padaId?: string; title: string } | null>(null);
 
@@ -1063,164 +1085,219 @@ export default function GranthasPage() {
   // This prevents the draft's English translations (or other edits not yet
   // published to Strapi) from being silently overwritten by the Strapi fetch.
   useEffect(() => {
-    const docId = editingManthra?.strapiDocumentId;
-    if (!docId || !editingManthra) return;
+    if (!editingManthra) return;
+    const snap = adhyayasRef.current as SnapshotAdhyaya[];
+    const { adhyayaId, khandaId, manthraId, padaId } = editingManthra;
+    const localNodeEarly = findManthraInTree(
+      snap as AdhyayaNode[],
+      adhyayaId,
+      khandaId,
+      manthraId,
+      padaId,
+    );
+    // Newly inserted rows: never pull from CMS (avoids wrong verse / empty wipe).
+    if (localNodeEarly?._isNewLocal) return;
+    const docId = editingManthra.strapiDocumentId;
+    if (!docId) return;
+    // Avoid CMS fetch overwriting in-progress edits (e.g. after a wrong docId link is corrected).
+    if (manthraDialogDirty) return;
     let cancelled = false;
     setManthraLoading(true);
 
     // mergeEntry and mergeTeekas are module-level functions (see top of file).
 
-    const { adhyayaId, khandaId, manthraId, padaId } = editingManthra;
-
-    const applyStrapiMantraToTree = (strapiRow: Record<string, unknown>) => {
+    const applyStrapiMantraToTree = (
+      strapiRow: Record<string, unknown>,
+      opts: { forceDocId?: string } = {},
+    ) => {
       const configuredLeaf = (structureConfigRef.current.leafName || "Mantra").trim() || "Mantra";
       const strapiLabel = String(strapiRow.ShlokaManthraNumber ?? "");
+      const cmsShloka = stripStubTextAndTranslationEntry(strapiRow.ShlokaManthraEntry);
+      const cmsBhashyam = stripStubTextAndTranslationEntry(strapiRow.BhashyamEntry);
       const applyTitle = (mn: ManthraNode) =>
         portalMantraTitleForLeaf(mn.title, configuredLeaf, strapiLabel);
+      const resolvedDocId =
+        opts.forceDocId || (strapiRow.documentId as string) || docId;
+
+      const patchManthra = (mn: ManthraNode): ManthraNode => {
+        const localRich = shlokaManthraEntryRichness(mn.ShlokaManthraEntry);
+        const remoteRich = shlokaManthraEntryRichness(cmsShloka);
+        const mergedShloka = mergeEntry(mn.ShlokaManthraEntry, cmsShloka as any);
+        const mergedRich = shlokaManthraEntryRichness(mergedShloka);
+        const shloka =
+          mergedRich >= localRich || remoteRich >= MANTRA_LINK_MIN_CONTENT_SCORE
+            ? mergedShloka
+            : stripStubTextAndTranslationEntry(mn.ShlokaManthraEntry) ?? mn.ShlokaManthraEntry;
+
+        return {
+          ...mn,
+          title: applyTitle(mn),
+          strapiDocumentId: resolvedDocId,
+          ShlokaManthraEntry: shloka,
+          BhashyamForShlokaManthra: mergeEntry(mn.BhashyamForShlokaManthra, cmsBhashyam as any),
+          Teekas:
+            Array.isArray(strapiRow.Teekas) && (strapiRow.Teekas as unknown[]).length > 0
+              ? mergeTeekas(mn.Teekas, strapiRow.Teekas as any)
+              : mn.Teekas,
+        };
+      };
+
       setAdhyayas((prev) =>
-          prev.map((a) => {
-            if (a.id !== adhyayaId) return a;
-            return {
-              ...a,
-              khandas: a.khandas.map((k) => {
-                if (k.id !== khandaId) return k;
-                if (padaId) {
-                  return {
-                    ...k,
-                    padas: (k.padas ?? []).map((p) => {
-                      if (p.id !== padaId) return p;
-                      return {
-                        ...p,
-                        manthras: p.manthras.map((mn) =>
-                          mn.id !== manthraId ? mn : {
-                            ...mn,
-                            title: applyTitle(mn),
-                            strapiDocumentId: (strapiRow.documentId as string) || mn.strapiDocumentId,
-                            ShlokaManthraEntry: mergeEntry(mn.ShlokaManthraEntry, strapiRow.ShlokaManthraEntry as any),
-                            BhashyamForShlokaManthra: mergeEntry(mn.BhashyamForShlokaManthra, strapiRow.BhashyamEntry as any),
-                            Teekas: Array.isArray(strapiRow.Teekas) && (strapiRow.Teekas as unknown[]).length > 0
-                              ? mergeTeekas(mn.Teekas, strapiRow.Teekas as any)
-                              : mn.Teekas,
-                          }
-                        ),
-                      };
-                    }),
-                  };
-                }
+        prev.map((a) => {
+          if (a.id !== adhyayaId) return a;
+          return {
+            ...a,
+            khandas: a.khandas.map((k) => {
+              if (k.id !== khandaId) return k;
+              if (padaId) {
                 return {
                   ...k,
-                  manthras: k.manthras.map((mn) =>
-                    mn.id !== manthraId ? mn : {
-                      ...mn,
-                      title: applyTitle(mn),
-                      strapiDocumentId: (strapiRow.documentId as string) || mn.strapiDocumentId,
-                      ShlokaManthraEntry: mergeEntry(mn.ShlokaManthraEntry, strapiRow.ShlokaManthraEntry as any),
-                      BhashyamForShlokaManthra: mergeEntry(mn.BhashyamForShlokaManthra, strapiRow.BhashyamEntry as any),
-                      Teekas: Array.isArray(strapiRow.Teekas) && (strapiRow.Teekas as unknown[]).length > 0
-                        ? mergeTeekas(mn.Teekas, strapiRow.Teekas as any)
-                        : mn.Teekas,
+                  padas: (k.padas ?? []).map((p) => {
+                    if (p.id !== padaId) return p;
+                    return {
+                      ...p,
+                      manthras: p.manthras.map((mn) =>
+                        mn.id !== manthraId ? mn : patchManthra(mn),
+                      ),
+                    };
+                  }),
+                };
+              }
+              return {
+                ...k,
+                manthras: k.manthras.map((mn) =>
+                  mn.id !== manthraId ? mn : patchManthra(mn),
+                ),
+              };
+            }),
+          };
+        }),
+      );
+    };
+
+    const cfg = structureConfigRef.current;
+    const localNode = localNodeEarly ?? findManthraInTree(snap as AdhyayaNode[], adhyayaId, khandaId, manthraId, padaId);
+    const sectionDocId = resolveMantraSectionStrapiDocumentId(
+      snap,
+      adhyayaId,
+      khandaId,
+      padaId,
+      cfg,
+    );
+
+    const granthaDocId = editingGranthaStrapiDocumentId();
+    const localRich = shlokaManthraEntryRichness(localNode?.ShlokaManthraEntry);
+
+    fetchResolvedManthraDetail({
+      documentId: docId,
+      granthaDocId,
+      sectionDocId,
+      shlokaManthraNumber: localNode?.title,
+    })
+      .then((result) => {
+        if (cancelled) return;
+        const remoteRich =
+          result.contentScore ?? strapiManthraRowRichness(result.data);
+
+        if (localRich >= MANTRA_LINK_MIN_CONTENT_SCORE && remoteRich < localRich) {
+          if (result.corrected) {
+            setEditingManthra((prev) =>
+              prev ? { ...prev, strapiDocumentId: result.documentId } : prev,
+            );
+            setAdhyayas((prev) =>
+              prev.map((a) => {
+                if (a.id !== adhyayaId) return a;
+                return {
+                  ...a,
+                  khandas: a.khandas.map((k) => {
+                    if (k.id !== khandaId) return k;
+                    const patchDoc = (mn: ManthraNode) =>
+                      mn.id === manthraId
+                        ? { ...mn, strapiDocumentId: result.documentId }
+                        : mn;
+                    if (padaId) {
+                      return {
+                        ...k,
+                        padas: (k.padas ?? []).map((p) =>
+                          p.id === padaId
+                            ? { ...p, manthras: p.manthras.map(patchDoc) }
+                            : p,
+                        ),
+                      };
                     }
-                  ),
+                    return { ...k, manthras: k.manthras.map(patchDoc) };
+                  }),
                 };
               }),
-            };
-          })
-      );
-    };
-
-    const fetchManthraRow = async (id: string): Promise<Record<string, unknown> | null> => {
-      const res = await fetch(`/api/strapi/manthras/${id}`, { credentials: "include" });
-      const json = await res.json();
-      return (json?.data as Record<string, unknown>) ?? null;
-    };
-
-    const loadMantraFromStrapi = async (): Promise<{
-      row: Record<string, unknown>;
-      corrected: boolean;
-    } | null> => {
-      const snap = adhyayasRef.current as SnapshotAdhyaya[];
-      const cfg = structureConfigRef.current;
-      const leaf = (cfg.leafName ?? "Mantra").trim() || "Mantra";
-      const localNode = findManthraInTree(snap as AdhyayaNode[], adhyayaId, khandaId, manthraId, padaId);
-      const sectionDocId = resolveMantraSectionStrapiDocumentId(snap, adhyayaId, khandaId, padaId, cfg);
-
-      const primary = await fetchManthraRow(docId);
-      if (!primary) return null;
-
-      const primaryNum = (primary.ShlokaManthraNumber as string) || "";
-      const primaryRich = strapiManthraRowRichness(primary);
-      const needsSectionScan = !!sectionDocId && !!localNode?.title;
-
-      if (!needsSectionScan) {
-        return { row: primary, corrected: false };
-      }
-
-      const listRes = await fetch(
-        `/api/strapi/manthras?filters[Section][documentId][$eq]=${encodeURIComponent(sectionDocId!)}&pagination[pageSize]=250`,
-        { credentials: "include" },
-      );
-      const listJson = await listRes.json().catch(() => ({}));
-      const rows = (listJson?.data ?? []) as Array<Record<string, unknown>>;
-      const refs: StrapiMantraRef[] = rows
-        .filter((r) => typeof r.documentId === "string")
-        .map((r) => ({
-          title: String(r.ShlokaManthraNumber ?? ""),
-          docId: String(r.documentId),
-          order: typeof r.order === "number" ? r.order : 0,
-        }));
-
-      const matchingRefs = refs.filter((r) =>
-        mantrasShareLeafAndSuffix(localNode!.title, r.title, leaf),
-      );
-      const candidateDocIds = new Set<string>([docId]);
-      for (const r of matchingRefs) candidateDocIds.add(r.docId);
-      const byLabel = findStrapiMantraByLeafAndSuffix(refs, localNode!.title, leaf, docId);
-      if (byLabel) candidateDocIds.add(byLabel.docId);
-
-      let bestRow = primary;
-      let bestScore = mantrasShareLeafAndSuffix(localNode!.title, primaryNum, leaf) ? primaryRich : -1;
-      for (const candidateId of candidateDocIds) {
-        const row =
-          candidateId === (primary.documentId as string)
-            ? primary
-            : await fetchManthraRow(candidateId);
-        if (!row) continue;
-        const rowLabel = String(row.ShlokaManthraNumber ?? "");
-        if (!mantrasShareLeafAndSuffix(localNode!.title, rowLabel, leaf)) continue;
-        const score = strapiManthraRowRichness(row);
-        if (score > bestScore) {
-          bestRow = row;
-          bestScore = score;
-        }
-      }
-
-      const corrected =
-        (bestRow.documentId as string | undefined) !== docId || bestScore > primaryRich;
-      return { row: bestRow, corrected };
-    };
-
-    loadMantraFromStrapi()
-      .then((result) => {
-        if (cancelled || !result) return;
-        applyStrapiMantraToTree(result.row);
-        if (result.corrected) {
-          const fixedDocId = result.row.documentId as string | undefined;
-          if (fixedDocId) {
-            setEditingManthra((prev) =>
-              prev ? { ...prev, strapiDocumentId: fixedDocId } : prev,
             );
+          }
+          return;
+        }
+
+        if (
+          !result.corrected &&
+          remoteRich < MANTRA_LINK_MIN_CONTENT_SCORE &&
+          localRich >= MANTRA_LINK_MIN_CONTENT_SCORE
+        ) {
+          return;
+        }
+        if (!result.corrected && remoteRich < localRich) {
+          return;
+        }
+
+        applyStrapiMantraToTree(result.data, { forceDocId: result.documentId });
+
+        if (result.corrected) {
+          setEditingManthra((prev) =>
+            prev ? { ...prev, strapiDocumentId: result.documentId } : prev,
+          );
+          if (editingDraftId) {
+            const leaf = (cfg.leafName ?? "Mantra").trim() || "Mantra";
+            const cmsShloka = stripStubTextAndTranslationEntry(result.data.ShlokaManthraEntry);
+            saveManthraPatchMutation.mutate({
+              draftId: editingDraftId,
+              title: formDataRef.current.GranthaName || "Grantha",
+              adhyayaId,
+              khandaId,
+              padaId,
+              manthraId,
+              manthraData: {
+                ...(localNode ?? { id: manthraId, title: "", order: 0 }),
+                strapiDocumentId: result.documentId,
+                title: portalMantraTitleForLeaf(
+                  localNode?.title ?? "",
+                  leaf,
+                  String(result.data.ShlokaManthraNumber ?? ""),
+                ),
+                ShlokaManthraEntry: mergeEntry(localNode?.ShlokaManthraEntry, cmsShloka as any),
+                BhashyamForShlokaManthra: mergeEntry(
+                  localNode?.BhashyamForShlokaManthra,
+                  stripStubTextAndTranslationEntry(result.data.BhashyamEntry) as any,
+                ),
+              },
+            });
           }
           toast({
             title: "Mantra link corrected",
             description:
-              "This row was pointing at the wrong CMS record after renumbering. Content now loads from the record matching this label.",
+              "Linked to the CMS row with content for this verse. Mantras tab uses the same rule when duplicates exist.",
           });
         }
       })
       .catch(console.error)
-      .finally(() => { if (!cancelled) setManthraLoading(false); });
-    return () => { cancelled = true; };
-  }, [editingManthra?.manthraId, editingManthra?.strapiDocumentId]); // eslint-disable-line react-hooks/exhaustive-deps
+      .finally(() => {
+        if (!cancelled) setManthraLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+    // Do not depend on strapiDocumentId — correcting the link must not re-fetch and wipe the editor.
+  }, [
+    editingManthra?.adhyayaId,
+    editingManthra?.khandaId,
+    editingManthra?.padaId,
+    editingManthra?.manthraId,
+  ]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Reset dirty flag when opening a mantra for view/edit.
   useEffect(() => {
@@ -1325,17 +1402,21 @@ export default function GranthasPage() {
 
   // Per-manthra publish mutation
   const publishMantraMutation = useMutation({
-    mutationFn: async (params: { draftId: number; adhyayaId: string; khandaId: string; padaId?: string; manthraId: string }) => {
+    mutationFn: async (params: {
+      draftId: number;
+      adhyayaId: string;
+      khandaId: string;
+      padaId?: string;
+      manthraId: string;
+      manthraData: ManthraNode;
+    }) => {
       const res = await apiRequest("POST", `/api/drafts/${params.draftId}/publish-manthra`, {
         adhyayaId: params.adhyayaId,
         khandaId: params.khandaId,
         padaId: params.padaId,
         manthraId: params.manthraId,
+        manthraData: params.manthraData,
       });
-      if (!res.ok) {
-        const body = await res.json().catch(() => ({}));
-        throw new Error(body.message || "Failed to publish mantra");
-      }
       return res.json();
     },
     onSuccess: (data: any, params) => {
@@ -1344,11 +1425,12 @@ export default function GranthasPage() {
           params.adhyayaId,
           params.khandaId,
           params.manthraId,
-          { strapiDocumentId: data.strapiDocumentId },
+          { strapiDocumentId: data.strapiDocumentId, _isNewLocal: false },
           params.padaId,
           { markDirty: false }
         );
       }
+      setPendingCloseManthra(false);
       const warnCount = data.warnings?.length ?? 0;
       track("manthra_published", {
         grantha_name: formData.GranthaName,
@@ -1359,8 +1441,8 @@ export default function GranthasPage() {
         title: "Mantra published to CMS",
         description:
           warnCount > 0
-            ? `${warnCount} warning(s) — saved under "${findManthraInTree(adhyayasRef.current, params.adhyayaId, params.khandaId, params.manthraId, params.padaId)?.title ?? "this label"}" in Strapi. Mantras and Sections tabs will refresh.`
-            : "Content and verse label are live in Strapi. Mantras and Sections tabs will refresh.",
+            ? `${warnCount} warning(s) — saved under "${findManthraInTree(adhyayasRef.current, params.adhyayaId, params.khandaId, params.manthraId, params.padaId)?.title ?? "this label"}" in Strapi.`
+            : "This verse is live in Strapi. Use full grantha Save & Publish to re-sync all section orders.",
       });
       setEditingManthra(null);
     },
@@ -1766,11 +1848,17 @@ export default function GranthasPage() {
       // under their adhyaya. This covers both fresh loads (no draft) and old drafts
       // that were saved before this auto-detection was added.
       if (hierToUse2.length > 0) {
+        const strapiHasKhandaLevel = strapiGranthaHasKhandaSections(fetchedSections);
         const isFlat = hierToUse2.every(
-          (a) => a.khandas.length === 1 && a.khandas[0]?.title === "_default"
+          (a) => a.khandas.length === 1 && a.khandas[0]?.title === "_default",
         );
-        if (isFlat && effectiveStructureConfig.levelTwoEnabled) {
+        // Only treat as flat when Strapi also has no child sections — otherwise mantras get
+        // published onto the adhyaya documentId and the Mantras tab shows "Adhyaya → mantras".
+        if (isFlat && !strapiHasKhandaLevel && effectiveStructureConfig.levelTwoEnabled) {
           effectiveStructureConfig = { ...effectiveStructureConfig, levelTwoEnabled: false };
+        }
+        if (strapiHasKhandaLevel && !effectiveStructureConfig.levelTwoEnabled) {
+          effectiveStructureConfig = { ...effectiveStructureConfig, levelTwoEnabled: true };
         }
 
         // Auto-detect 3-level granthas (e.g. Brahma Sutra: Adhyaya → Pada → Adhikarana).
@@ -1841,9 +1929,9 @@ export default function GranthasPage() {
       // Title-based map (kept for flat-grantha adhyaya lookups where titles ARE unique at root level).
       // NOTE: NOT safe for khanda-level lookups — multiple khandas across different adhyayas can
       // share the same title (e.g. "Prathama Khanda" under every Mundika in Mundaka Upanishad).
-      const strapiMantrasBySecTitle = new Map<string, { title: string; docId: string; order: number }[]>();
+      const strapiMantrasBySecTitle = new Map<string, StrapiMantraRef[]>();
       // DocId-based map: section documentId → its manthras (always unique, preferred over title map).
-      const strapiMantrasBySecDocId = new Map<string, { title: string; docId: string; order: number }[]>();
+      const strapiMantrasBySecDocId = new Map<string, StrapiMantraRef[]>();
       // Map: parent section documentId → child sections (for supplementing missing khandas)
       const strapiChildSectionsByParentDocId = new Map<string, any[]>();
       // Map: section title → section (for matching draft adhyayas to Strapi adhyayas)
@@ -1851,10 +1939,15 @@ export default function GranthasPage() {
       for (const sec of fetchedSections) {
         if (sec.title) strapiSectionByTitle.set(sec.title, sec);
         if (Array.isArray(sec.manthras)) {
-          const list: { title: string; docId: string; order: number }[] = [];
+          const list: StrapiMantraRef[] = [];
           for (const m of sec.manthras) {
             if (m.ShlokaManthraNumber && m.documentId) {
-              list.push({ title: m.ShlokaManthraNumber, docId: m.documentId, order: m.order ?? 0 });
+              list.push({
+                title: m.ShlokaManthraNumber,
+                docId: m.documentId,
+                order: m.order ?? 0,
+                contentScore: scoreStrapiManthraRowContent(m.ShlokaManthraEntry),
+              });
             }
           }
           if (sec.title) strapiMantrasBySecTitle.set(sec.title, list);
@@ -1884,7 +1977,7 @@ export default function GranthasPage() {
         exactTitleRefBuckets.set(sm.title, bucket);
       }
       for (const [title, refs] of exactTitleRefBuckets) {
-        const picked = pickPreferredStrapiMantraRef(refs);
+        const picked = pickBestStrapiMantraRefForLink(refs);
         if (picked) strapiManthraByShloka.set(title, picked.docId);
       }
       const inferredLeaf = inferLeafNameFromStrapiMantras(
@@ -2077,6 +2170,8 @@ export default function GranthasPage() {
               const usedPadaOrders = new Set(enrichedPadaManthras.map((m) => m.order).filter((o): o is number => o != null));
               const newPadaManthras: ManthraNode[] = [];
               for (const sm of padaStrapi) {
+                const padaSmSuffix = mantraNumberSuffix(sm.title);
+                if (padaSmSuffix && knownSuffixes.has(padaSmSuffix)) continue;
                 if (
                   !padaMatchedDocIds.has(sm.docId) &&
                   !knownShlokas.has(sm.title) &&
@@ -2127,6 +2222,8 @@ export default function GranthasPage() {
             );
             const newManthras: ManthraNode[] = [];
             for (const sm of strapiMantrasForKhanda) {
+              const smSuffix = mantraNumberSuffix(sm.title);
+              if (smSuffix && knownSuffixes.has(smSuffix)) continue;
               if (
                 !matchedDocIds.has(sm.docId) &&
                 !knownShlokas.has(sm.title) &&
@@ -3180,50 +3277,35 @@ export default function GranthasPage() {
     }, 450);
   }
 
-  /**
-   * Debounced full-grantha pass: every section's mantras get portal titles + order written to Strapi,
-   * and docId links are reconciled so Granthas / Mantras / Sections tabs stay aligned.
-   */
-  function queueFullMantraIdentityAlignToStrapi(
-    snapshot: AdhyayaNode[],
-    cfg?: GranthaStructureConfig,
-    delayMs = 800,
-  ) {
-    if (!editingGranthaStrapiDocumentId()) return;
-    adhyayasRef.current = snapshot;
-    if (fullMantraAlignTimerRef.current) clearTimeout(fullMantraAlignTimerRef.current);
-    fullMantraAlignTimerRef.current = setTimeout(() => {
-      fullMantraAlignTimerRef.current = null;
-      void flushFullMantraIdentityAlignToStrapiNow(
-        adhyayasRef.current,
-        cfg ?? structureConfigRef.current,
-      );
-    }, delayMs);
-  }
 
-  function flushFullMantraIdentityAlignToStrapiNow(
-    snapshot: AdhyayaNode[],
-    cfg: GranthaStructureConfig = structureConfigRef.current,
-  ): Promise<void> {
-    if (!editingGranthaStrapiDocumentId()) return Promise.resolve();
-    const snap = snapshot as SnapshotAdhyaya[];
-    fullMantraAlignChainRef.current = fullMantraAlignChainRef.current
-      .then(() => syncAllMantraSectionsInGrantha(snap, cfg, { allowCreate: false }))
-      .then((patches) => {
-        if (patches.length > 0) {
-          setAdhyayas((prev) => {
-            const merged = applyMantraDocIdPatches(prev as SnapshotAdhyaya[], patches) as AdhyayaNode[];
-            adhyayasRef.current = merged;
-            return merged;
-          });
-        }
-        invalidateGranthaCmsCaches(queryClient);
-      })
-      .catch((e: unknown) => {
-        const msg = e instanceof Error ? e.message : String(e);
-        console.warn("[granthas] full mantra align failed:", msg);
+  /** Explicit action: write portal verse titles + spaced CMS sort keys (not run on every + insert). */
+  async function handleSyncVerseNumbersToCms() {
+    if (!editingGranthaStrapiDocumentId()) {
+      toast({
+        variant: "destructive",
+        title: "Grantha not in CMS yet",
+        description: "Save & Publish the grantha first, then sync verse numbers.",
       });
-    return fullMantraAlignChainRef.current;
+      return;
+    }
+    setVerseLabelSyncPending(true);
+    try {
+      const snap = adhyayasRef.current as SnapshotAdhyaya[];
+      const n = await syncAllMantraSectionLabelsInGrantha(snap, structureConfigRef.current);
+      invalidateGranthaCmsCaches(queryClient);
+      toast({
+        title: "Verse numbers synced to CMS",
+        description:
+          n > 0
+            ? `Updated ${n} ${structureConfigRef.current.leafName} label(s) in Strapi.`
+            : "No linked CMS rows in this draft needed updating.",
+      });
+    } catch (e: unknown) {
+      const msg = e instanceof Error ? e.message : String(e);
+      toast({ variant: "destructive", title: "Verse number sync failed", description: msg });
+    } finally {
+      setVerseLabelSyncPending(false);
+    }
   }
 
   function editingGranthaStrapiDocumentId(): string | undefined {
@@ -3300,6 +3382,7 @@ export default function GranthasPage() {
                 id: uid(),
                 title: "",
                 order: 0,
+                _isNewLocal: true,
                 Teekas: teekas.map((t) => ({ TeekaName: t.TeekaName, TeekaAuthor: t.TeekaAuthor })),
               };
               if (cfg.levelThreeEnabled && padaId) {
@@ -3362,6 +3445,7 @@ export default function GranthasPage() {
                       id: uid(),
                       title: "",
                       order: 0,
+                      _isNewLocal: true,
                       Teekas: teekas.map((t) => ({ TeekaName: t.TeekaName, TeekaAuthor: t.TeekaAuthor })),
                     };
                     const merged = assignContiguousMantraOrders([
@@ -3381,6 +3465,7 @@ export default function GranthasPage() {
                 id: uid(),
                 title: "",
                 order: 0,
+                _isNewLocal: true,
                 Teekas: teekas.map((t) => ({ TeekaName: t.TeekaName, TeekaAuthor: t.TeekaAuthor })),
               };
               const merged = assignContiguousMantraOrders([
@@ -3528,11 +3613,20 @@ export default function GranthasPage() {
     if (!editingManthra) return null;
     const a = adhyayas.find((x) => x.id === editingManthra.adhyayaId);
     const k = a?.khandas.find((x) => x.id === editingManthra.khandaId);
-    if (editingManthra.padaId) {
-      const p = k?.padas?.find((x) => x.id === editingManthra.padaId);
-      return p?.manthras.find((x) => x.id === editingManthra.manthraId) ?? null;
-    }
-    return k?.manthras.find((x) => x.id === editingManthra.manthraId) ?? null;
+    const raw =
+      editingManthra.padaId
+        ? k?.padas?.find((x) => x.id === editingManthra.padaId)?.manthras.find(
+            (x) => x.id === editingManthra.manthraId,
+          )
+        : k?.manthras.find((x) => x.id === editingManthra.manthraId);
+    if (!raw) return null;
+    const shloka = stripStubTextAndTranslationEntry(raw.ShlokaManthraEntry);
+    const bhashyam = stripStubTextAndTranslationEntry(raw.BhashyamForShlokaManthra);
+    return {
+      ...raw,
+      ShlokaManthraEntry: shloka as TextAndTranslation | undefined,
+      BhashyamForShlokaManthra: bhashyam as TextAndTranslation | undefined,
+    };
   })();
 
   // ---------- Validation ----------
@@ -3830,15 +3924,27 @@ export default function GranthasPage() {
   function closeMantraDialog() {
     setEditingManthra(null);
     setManthraDialogDirty(false);
+    setPendingCloseManthra(false);
   }
 
-  // Save the draft then publish just the currently open manthra to Strapi
+  function requestCloseMantraDialog() {
+    const node = currentManthra;
+    const needsConfirm = manthraDialogDirty || isNewLocalManthra(node ?? ({} as ManthraNode));
+    if (needsConfirm) {
+      setPendingCloseManthra(true);
+      return;
+    }
+    closeMantraDialog();
+  }
+
+  // Publish the open manthra in one request (server merges into draft + Strapi PUT).
   function handleSaveAndPublishManthra() {
-    if (!editingManthra) return;
+    if (!editingManthra || !currentManthra) return;
     if (!formData.GranthaName.trim()) {
       toast({ variant: "destructive", title: "Grantha Name is required" });
       return;
     }
+
     const runPublish = (draftId: number) => {
       publishMantraMutation.mutate({
         draftId,
@@ -3846,38 +3952,12 @@ export default function GranthasPage() {
         khandaId: editingManthra.khandaId,
         padaId: editingManthra.padaId,
         manthraId: editingManthra.manthraId,
+        manthraData: currentManthra,
       });
     };
 
-    // Fast path: patch only edited mantra, then publish that mantra.
-    if (editingDraftId && currentManthra) {
-      saveManthraPatchMutation.mutate(
-        {
-          draftId: editingDraftId,
-          title: formData.GranthaName,
-          adhyayaId: editingManthra.adhyayaId,
-          khandaId: editingManthra.khandaId,
-          padaId: editingManthra.padaId,
-          manthraId: editingManthra.manthraId,
-          manthraData: currentManthra,
-        },
-        {
-          onSuccess: () => runPublish(editingDraftId),
-          onError: () => {
-            const payload = buildSavePayload();
-            const strapiDocId =
-              editingItem && !editingItem._isDraft
-                ? editingItem.documentId
-                : editingItem?._strapiDocId || undefined;
-            saveDraft.mutate(
-              { title: formData.GranthaName, data: payload, strapiDocumentId: strapiDocId, draftId: editingDraftId },
-              {
-                onSuccess: () => runPublish(editingDraftId),
-              }
-            );
-          },
-        }
-      );
+    if (editingDraftId) {
+      runPublish(editingDraftId);
       return;
     }
 
@@ -3887,15 +3967,15 @@ export default function GranthasPage() {
         ? editingItem.documentId
         : editingItem?._strapiDocId || undefined;
     saveDraft.mutate(
-      { title: formData.GranthaName, data: payload, strapiDocumentId: strapiDocId, draftId: editingDraftId ?? undefined },
+      { title: formData.GranthaName, data: payload, strapiDocumentId: strapiDocId },
       {
         onSuccess: (saved: any) => {
-          const resolvedDraftId = editingDraftId ?? saved?.id;
-          if (!editingDraftId && saved?.id) setEditingDraftId(saved.id);
+          const resolvedDraftId = saved?.id;
           if (!resolvedDraftId) {
             toast({ variant: "destructive", title: "Could not determine draft ID" });
             return;
           }
+          setEditingDraftId(resolvedDraftId);
           runPublish(resolvedDraftId);
         },
       }
@@ -4863,7 +4943,9 @@ export default function GranthasPage() {
               {structureConfig.leafName}
               {" — click any "}
               {structureConfig.leafName}
-              {" to enter its text content"}
+              {" to enter its text content. Use + to insert rows (order only in the editor); "}
+              <strong>Sync verse numbers to CMS</strong>
+              {" updates Strapi labels when you are ready."}
             </p>
           </div>
 
@@ -4950,12 +5032,20 @@ export default function GranthasPage() {
                       {leaf}s in this {L1}
                     </p>
                     <div className="space-y-1">
-                      {sortNodesByOrder(flatFirstKhanda.manthras).map((manthra, mIdx) => {
+                      {dedupeManthrasForEditor(
+                        sortNodesByOrder(flatFirstKhanda.manthras),
+                        leaf,
+                      ).map((manthra, mIdx) => {
                         const hasContent = hasManthraContent(manthra);
                         return (
-                          <div key={manthra.id} className="flex items-center gap-2 group py-0.5">
+                          <div key={manthra.id} className={manthraListRowClassName(manthra)}>
                             <Hash className="w-3.5 h-3.5 text-muted-foreground shrink-0" />
                             <span className="text-sm flex-1">{manthra.title}</span>
+                            {isNewLocalManthra(manthra) && (
+                              <Badge variant="outline" className="text-[10px] h-4 px-1 border-amber-400 text-amber-800 dark:text-amber-300">
+                                New
+                              </Badge>
+                            )}
                             {hasContent && <FileText className="w-3.5 h-3.5 text-primary" />}
                             {!viewOnly && (
                               <>
@@ -5134,12 +5224,17 @@ export default function GranthasPage() {
                                 {pada.expanded && (
                                   <div className="px-4 pt-1.5 pb-2.5 border-t bg-muted/5">
                                     <div className="space-y-1">
-                                      {sortNodesByOrder(pada.manthras).map((manthra, mIdx) => {
+                                      {dedupeManthrasForEditor(sortNodesByOrder(pada.manthras), leaf).map((manthra, mIdx) => {
                                         const hasContent = hasManthraContent(manthra);
                                         return (
-                                          <div key={manthra.id} className="flex items-center gap-2 group py-0.5">
+                                          <div key={manthra.id} className={manthraListRowClassName(manthra)}>
                                             <Hash className="w-3.5 h-3.5 text-muted-foreground shrink-0" />
                                             <span className="text-sm flex-1">{manthra.title}</span>
+                                            {isNewLocalManthra(manthra) && (
+                                              <Badge variant="outline" className="text-[10px] h-4 px-1 border-amber-400 text-amber-800 dark:text-amber-300">
+                                                New
+                                              </Badge>
+                                            )}
                                             {hasContent && <FileText className="w-3.5 h-3.5 text-primary" />}
                                             {!viewOnly && (
                                               <>
@@ -5210,12 +5305,17 @@ export default function GranthasPage() {
                               Manage {leaf}s
                             </p>
                             <div className="space-y-1">
-                              {sortNodesByOrder(khanda.manthras).map((manthra, mIdx) => {
+                              {dedupeManthrasForEditor(sortNodesByOrder(khanda.manthras), leaf).map((manthra, mIdx) => {
                                 const hasContent = hasManthraContent(manthra);
                                 return (
-                                  <div key={manthra.id} className="flex items-center gap-2 group py-0.5">
+                                  <div key={manthra.id} className={manthraListRowClassName(manthra)}>
                                     <Hash className="w-3.5 h-3.5 text-muted-foreground shrink-0" />
                                     <span className="text-sm flex-1">{manthra.title}</span>
+                                    {isNewLocalManthra(manthra) && (
+                                      <Badge variant="outline" className="text-[10px] h-4 px-1 border-amber-400 text-amber-800 dark:text-amber-300">
+                                        New
+                                      </Badge>
+                                    )}
                                     {hasContent && (
                                       <span className="text-xs text-primary font-medium" title="Has content">
                                         <FileText className="w-3.5 h-3.5" />
@@ -5315,6 +5415,19 @@ export default function GranthasPage() {
                   Back
                 </Button>
                 <div className="relative flex items-center gap-2">
+                {editingGranthaStrapiDocumentId() && (
+                  <Button
+                    variant="outline"
+                    onClick={() => void handleSyncVerseNumbersToCms()}
+                    disabled={
+                      verseLabelSyncPending || saveDraft.isPending || publishDraft.isPending
+                    }
+                    data-testid="button-sync-verse-numbers-cms"
+                  >
+                    {verseLabelSyncPending && <Loader2 className="w-4 h-4 mr-2 animate-spin" />}
+                    Sync verse numbers to CMS
+                  </Button>
+                )}
                 <Button
                   variant="outline"
                   onClick={handleSave}
@@ -5370,7 +5483,7 @@ export default function GranthasPage() {
       {/* Manthra content dialog */}
       <Dialog
         open={!!editingManthra}
-        onOpenChange={(open) => { if (!open) closeMantraDialog(); }}
+        onOpenChange={(open) => { if (!open) requestCloseMantraDialog(); }}
       >
         <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
           <DialogHeader>
@@ -5379,15 +5492,21 @@ export default function GranthasPage() {
               {manthraLoading && <Loader2 className="w-4 h-4 animate-spin text-muted-foreground" />}
             </DialogTitle>
             <DialogDescription>
-              {manthraLoading
-                ? "Loading latest content from the CMS…"
-                : editingManthra?.strapiDocumentId
-                  ? "Showing live content from the CMS. Use Save & Publish to push edits to Strapi (Mantras and Sections tabs update automatically)."
-                  : "Enter the Sanskrit text and translations, then Save & Publish to create the CMS record."}
+              {manthraLoading && editingManthra?.strapiDocumentId
+                ? "Loading verse from the CMS…"
+                : currentManthra?._isNewLocal
+                  ? "New verse — edit here, then Save & Publish so it appears correctly in the Mantras tab."
+                  : editingManthra?.strapiDocumentId
+                    ? "Showing live content from the CMS. Use Save & Publish to push edits to Strapi."
+                    : "Enter the Sanskrit text and translations, then Save & Publish to create the CMS record."}
             </DialogDescription>
           </DialogHeader>
 
-          {currentManthra && editingManthra && (
+          {manthraLoading && editingManthra?.strapiDocumentId ? (
+            <div className="flex flex-col items-center justify-center py-16 gap-3" aria-busy="true">
+              <Loader2 className="w-8 h-8 animate-spin text-muted-foreground" />
+            </div>
+          ) : currentManthra && editingManthra ? (
             <div className="space-y-5 pt-1">
               {/* Shloka / Manthra Text */}
               <section className="space-y-3">
@@ -5399,6 +5518,7 @@ export default function GranthasPage() {
                 <div>
                   <Label className="text-xs">Sanskrit (Devanagari)</Label>
                   <RichTextEditor
+                    key={`shloka-sans-${editingManthra.manthraId}-${editingManthra.strapiDocumentId ?? "new"}`}
                     value={currentManthra.ShlokaManthraEntry?.SanskritTextEntry}
                     onChange={(v) =>
                       updateManthraContent(
@@ -5418,6 +5538,7 @@ export default function GranthasPage() {
                 <div>
                   <Label className="text-xs">English Translation</Label>
                   <RichTextEditor
+                    key={`shloka-eng-${editingManthra.manthraId}-${editingManthra.strapiDocumentId ?? "new"}`}
                     value={currentManthra.ShlokaManthraEntry?.EnglishTranslationText}
                     onChange={(v) =>
                       updateManthraContent(
@@ -5866,7 +5987,7 @@ export default function GranthasPage() {
               <div className="flex items-center justify-between pt-2 gap-2 border-t mt-2">
                 <Button
                   variant="outline"
-                  onClick={() => closeMantraDialog()}
+                  onClick={() => requestCloseMantraDialog()}
                   data-testid="button-manthra-close"
                   disabled={saveDraft.isPending || saveManthraPatchMutation.isPending || publishMantraMutation.isPending}
                 >
@@ -5894,9 +6015,44 @@ export default function GranthasPage() {
                 </div>
               </div>
             </div>
-          )}
+          ) : null}
         </DialogContent>
       </Dialog>
+
+      {/* Unsaved / new verse — confirm before closing mantra dialog */}
+      <AlertDialog open={pendingCloseManthra} onOpenChange={(open) => { if (!open) setPendingCloseManthra(false); }}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Save this verse before closing?</AlertDialogTitle>
+            <AlertDialogDescription>
+              {currentManthra?._isNewLocal
+                ? "This is a newly inserted verse. Use Save & Publish so it is stored in the CMS with the correct number and text. Saving draft only keeps it in the portal until you publish."
+                : "You have unsaved edits. Save to the draft or publish to Strapi before closing."}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter className="flex-col sm:flex-row gap-2">
+            <AlertDialogCancel data-testid="button-manthra-close-cancel">Keep editing</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={() => {
+                setPendingCloseManthra(false);
+                handleSaveManthra(() => closeMantraDialog());
+              }}
+              data-testid="button-manthra-close-save-draft"
+            >
+              Save draft
+            </AlertDialogAction>
+            <AlertDialogAction
+              onClick={() => {
+                setPendingCloseManthra(false);
+                handleSaveAndPublishManthra();
+              }}
+              data-testid="button-manthra-close-save-publish"
+            >
+              Save &amp; Publish
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
 
       {/* Remove manthra confirmation */}
       <AlertDialog open={!!pendingRemove} onOpenChange={(open) => { if (!open) setPendingRemove(null); }}>

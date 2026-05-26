@@ -5,8 +5,65 @@ import { execFile } from "node:child_process";
 import { writeFileSync, unlinkSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import {
+  sortKeyBetween,
+  STRAPI_SORT_GAP,
+  portalIndexToStrapiSortKey,
+} from "@shared/mantra-sort-key";
 
 const STRAPI_URL = process.env.STRAPI_URL || "http://13.53.121.15:1337";
+
+async function listSectionMantraOrders(sectionDocId: string): Promise<
+  Array<{ documentId: string; order: number; ShlokaManthraNumber?: string }>
+> {
+  const sectionFilter = encodeURIComponent(sectionDocId);
+  const listQuery = [
+    `filters[Section][documentId][$eq]=${sectionFilter}`,
+    "fields[0]=documentId",
+    "fields[1]=order",
+    "fields[2]=ShlokaManthraNumber",
+    "pagination[pageSize]=100",
+    "sort=order:asc",
+  ].join("&");
+
+  const all: Array<{ documentId: string; order: number; ShlokaManthraNumber?: string }> = [];
+  let page = 1;
+  while (true) {
+    const r = await strapiRequest(`/api/manthras?${listQuery}&pagination[page]=${page}`);
+    for (const row of r.data ?? []) {
+      if (typeof row.documentId === "string") {
+        all.push({
+          documentId: row.documentId,
+          order: typeof row.order === "number" ? row.order : 0,
+          ShlokaManthraNumber: row.ShlokaManthraNumber,
+        });
+      }
+    }
+    if (page >= (r.meta?.pagination?.pageCount ?? 1)) break;
+    page++;
+  }
+  all.sort((a, b) => a.order - b.order);
+  return all;
+}
+
+/** Reassign spaced sort keys 1000, 2000, … for every row in a section (rare; gap exhausted). */
+async function recompactSectionSortKeys(
+  _sectionDocId: string,
+  documentIdsInDisplayOrder: string[],
+): Promise<void> {
+  const sortedUpdates = [...documentIdsInDisplayOrder]
+    .map((documentId, idx) => ({
+      documentId,
+      order: portalIndexToStrapiSortKey(idx + 1),
+    }))
+    .sort((a, b) => b.order - a.order);
+  for (const u of sortedUpdates) {
+    await strapiRequest(`/api/manthras/${u.documentId}`, {
+      method: "PUT",
+      body: JSON.stringify({ data: { order: u.order } }),
+    });
+  }
+}
 const STRAPI_TOKEN = () => process.env.STRAPI_API_TOKEN || "";
 
 function classifyStrapiError(status?: number, body?: string): string {
@@ -366,6 +423,8 @@ export function createStrapiRouter() {
         "fields[2]=order",
         "fields[3]=id",
         "populate[Section][fields][0]=documentId",
+        "populate[ShlokaManthraEntry][fields][0]=SanskritTextEntry",
+        "populate[ShlokaManthraEntry][fields][1]=EnglishTranslationText",
         `filters[Section][grantha][documentId][$eq]=${g}`,
         "sort[0]=order:asc",
         "pagination[pageSize]=100",
@@ -397,6 +456,7 @@ export function createStrapiRouter() {
           documentId: m.documentId,
           ShlokaManthraNumber: m.ShlokaManthraNumber,
           order: m.order,
+          ShlokaManthraEntry: m.ShlokaManthraEntry ?? null,
         });
       }
 
@@ -465,6 +525,7 @@ export function createStrapiRouter() {
     "populate[Section][populate][grantha][fields][1]=documentId",
     "populate[Section][populate][grantha][fields][2]=GranthaName",
     "populate[ShlokaManthraEntry][fields][0]=SanskritTextEntry",
+    "populate[ShlokaManthraEntry][fields][1]=EnglishTranslationText",
     "pagination[pageSize]=100",
   ].join("&");
 
@@ -477,8 +538,8 @@ export function createStrapiRouter() {
     "populate[Section][populate][grantha][fields][0]=id",
     "populate[Section][populate][grantha][fields][1]=documentId",
     "populate[Section][populate][grantha][fields][2]=GranthaName",
-    "populate[ShlokaManthraEntry][populate][OtherTranslations]=*",
-    "populate[BhashyamEntry][populate][OtherTranslations]=*",
+    "populate[ShlokaManthraEntry][populate]=*",
+    "populate[BhashyamEntry][populate]=*",
     "populate[Teekas][populate][teeka][fields][0]=documentId&populate[Teekas][populate][teeka][fields][1]=TeekaName&populate[Teekas][populate][teeka][fields][2]=TeekaAuthor&populate[Teekas][populate][TeekaEntry][populate][OtherTranslations]=*",
     "populate[wordMeanings]=*",
     "pagination[pageSize]=100",
@@ -570,6 +631,173 @@ export function createStrapiRouter() {
     }
   });
 
+  function mantraNumberSuffix(label: string): string | null {
+    const m = String(label || "")
+      .trim()
+      .match(/([\d]+(?:\.[\d]+)*)\s*$/);
+    return m ? m[1] : null;
+  }
+
+  function blocksPlainTextForScore(v: any): string {
+    if (!v) return "";
+    if (typeof v === "string") return v;
+    if (!Array.isArray(v)) return "";
+    return v
+      .map((block: any) =>
+        (block?.children ?? [])
+          .map((c: any) => (typeof c?.text === "string" ? c.text : ""))
+          .join(""),
+      )
+      .join("\n")
+      .trim();
+  }
+
+  function mantraEntryContentScore(entry: any): number {
+    if (!entry || typeof entry !== "object") return 0;
+    return (
+      blocksPlainTextForScore(entry.SanskritTextEntry).length +
+      blocksPlainTextForScore(entry.EnglishTranslationText).length
+    );
+  }
+
+  function labelsShareVerseSuffix(a: string, b: string): boolean {
+    const sa = mantraNumberSuffix(a);
+    const sb = mantraNumberSuffix(b);
+    return !!(sa && sb && sa === sb);
+  }
+
+  const MANTHRA_RESOLVE_LIST_POPULATE = [
+    "fields[0]=documentId",
+    "fields[1]=ShlokaManthraNumber",
+    "fields[2]=order",
+    "populate[Section][fields][0]=documentId",
+    "populate[ShlokaManthraEntry][populate]=*",
+  ].join("&");
+
+  async function fetchAllMantrasForGrantha(granthaDocId: string): Promise<any[]> {
+    const g = encodeURIComponent(granthaDocId);
+    const base = `filters[Section][grantha][documentId][$eq]=${g}&${MANTHRA_RESOLVE_LIST_POPULATE}`;
+    const firstPage = await strapiRequest(`/api/manthras?${base}&pagination[page]=1`);
+    const pageCount: number = firstPage?.meta?.pagination?.pageCount ?? 1;
+    let all: any[] = [...(firstPage?.data ?? [])];
+    if (pageCount > 1) {
+      const rest = await Promise.all(
+        Array.from({ length: pageCount - 1 }, (_, i) =>
+          strapiRequest(`/api/manthras?${base}&pagination[page]=${i + 2}`),
+        ),
+      );
+      all = all.concat(rest.flatMap((p: any) => p?.data ?? []));
+    }
+    return all;
+  }
+
+  /** Pick the CMS row with verse text for a label — same logic for Grantha editor and Mantras tab. */
+  router.get("/manthras/resolve-for-edit", async (req, res) => {
+    try {
+      const label = String(req.query.label || "").trim();
+      const preferredDocId = String(req.query.preferredDocId || "").trim();
+      const granthaDocId = String(req.query.granthaDocId || "").trim();
+      const sectionDocId = String(req.query.sectionDocId || "").trim();
+
+      if (!label && !preferredDocId) {
+        return res.status(400).json({ message: "label or preferredDocId is required" });
+      }
+
+      const candidates: any[] = [];
+      const seen = new Set<string>();
+
+      const addCandidate = (row: any) => {
+        const id = row?.documentId;
+        if (!id || seen.has(id)) return;
+        seen.add(id);
+        candidates.push(row);
+      };
+
+      if (granthaDocId) {
+        for (const row of await fetchAllMantrasForGrantha(granthaDocId)) addCandidate(row);
+      }
+
+      if (sectionDocId) {
+        const s = encodeURIComponent(sectionDocId);
+        const secPage = await strapiRequest(
+          `/api/manthras?filters[Section][documentId][$eq]=${s}&${MANTHRA_RESOLVE_LIST_POPULATE}&pagination[pageSize]=250`,
+        );
+        for (const row of secPage?.data ?? []) addCandidate(row);
+      }
+
+      if (preferredDocId && !seen.has(preferredDocId)) {
+        try {
+          const one = await strapiRequest(
+            `/api/manthras/${preferredDocId}?fields[0]=documentId&fields[1]=ShlokaManthraNumber&fields[2]=order&populate[ShlokaManthraEntry][populate]=*`,
+          );
+          if (one?.data) addCandidate(one.data);
+        } catch {
+          /* preferred id may be orphaned */
+        }
+      }
+
+      const matchLabel =
+        label ||
+        String(
+          candidates.find((c) => c.documentId === preferredDocId)?.ShlokaManthraNumber ?? "",
+        ).trim();
+
+      let hits = matchLabel
+        ? candidates.filter((c) =>
+            labelsShareVerseSuffix(matchLabel, String(c.ShlokaManthraNumber ?? "")),
+          )
+        : [];
+
+      if (hits.length === 0 && preferredDocId) {
+        hits = candidates.filter((c) => c.documentId === preferredDocId);
+      }
+
+      const scored = hits.map((row) => ({
+        row,
+        score: mantraEntryContentScore(row.ShlokaManthraEntry),
+        order: row.order ?? Number.MAX_SAFE_INTEGER,
+      }));
+
+      scored.sort((a, b) => {
+        if (b.score !== a.score) return b.score - a.score;
+        if (preferredDocId) {
+          if (a.row.documentId === preferredDocId) return -1;
+          if (b.row.documentId === preferredDocId) return 1;
+        }
+        if (a.order !== b.order) return a.order - b.order;
+        return String(a.row.documentId).localeCompare(String(b.row.documentId));
+      });
+
+      const winner = scored[0]?.row;
+      if (!winner?.documentId) {
+        return res.status(404).json({ message: "No matching manthra found for this verse" });
+      }
+
+      const full = await strapiRequest(`/api/manthras/${winner.documentId}?${MANTHRA_POPULATE}`);
+      const m = full?.data;
+      if (!m) {
+        return res.status(404).json({ message: "Manthra not found in CMS" });
+      }
+
+      const sec = m.Section;
+      const corrected = !!(preferredDocId && winner.documentId !== preferredDocId);
+      return res.json({
+        data: {
+          ...m,
+          section: sec
+            ? { id: sec.id, documentId: sec.documentId, title: sec.title, type: sec.type }
+            : null,
+          grantha: sec?.grantha ?? null,
+        },
+        documentId: winner.documentId,
+        corrected,
+        contentScore: mantraEntryContentScore(m.ShlokaManthraEntry),
+      });
+    } catch (error: any) {
+      res.status(500).json({ message: error.message || "Failed to resolve manthra for edit" });
+    }
+  });
+
   router.get("/manthras/:documentId", async (req, res) => {
     try {
       const data = await strapiRequest(`/api/manthras/${req.params.documentId}?${MANTHRA_POPULATE}`);
@@ -588,10 +816,7 @@ export function createStrapiRouter() {
     }
   });
 
-  // ── Insert a new blank manthra between two consecutive ones ──
-  // Shifts order (and last numeric segment of ShlokaManthraNumber) for all
-  // manthras in the same section that come after the anchor, then creates the
-  // new blank manthra at the freed-up position.
+  // ── Insert blank manthra: O(1) fractional sort key (no sibling order shifts) ──
   router.post("/manthras/insert-between", async (req, res) => {
     try {
       const { afterDocumentId, sectionDocId, afterNum } = req.body as {
@@ -604,96 +829,43 @@ export function createStrapiRouter() {
         return;
       }
 
-      // 1. Fetch all manthras in the section, minimal fields
-      const sectionFilter = encodeURIComponent(sectionDocId);
-      const listQuery = [
-        `filters[Section][documentId][$eq]=${sectionFilter}`,
-        "fields[0]=documentId",
-        "fields[1]=order",
-        "fields[2]=ShlokaManthraNumber",
-        "pagination[pageSize]=100",
-        "sort=order:asc",
-      ].join("&");
-
-      let all: any[] = [];
-      let page = 1;
-      while (true) {
-        const r = await strapiRequest(`/api/manthras?${listQuery}&pagination[page]=${page}`);
-        all.push(...(r.data || []));
-        if (page >= (r.meta?.pagination?.pageCount ?? 1)) break;
-        page++;
-      }
-
-      // 2. Sort by order, find anchor
-      all.sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
+      const all = await listSectionMantraOrders(sectionDocId);
       const anchorIdx = all.findIndex((m) => m.documentId === afterDocumentId);
       if (anchorIdx === -1) {
         res.status(404).json({ message: `Manthra ${afterDocumentId} not found in section` });
         return;
       }
 
-      const anchorOrder: number = all[anchorIdx].order ?? anchorIdx + 1;
-      const newOrder = anchorOrder + 1;
+      const prevSort = all[anchorIdx].order;
+      const nextSort = all[anchorIdx + 1]?.order;
+      let { sortKey: newSortKey, needsRecompact } = sortKeyBetween(prevSort, nextSort);
 
-      // Helper: increment the last run of digits by N (e.g. "Shloka 1.1.5", 3 → "Shloka 1.1.8")
-      function incrementBy(s: string, n: number): string {
-        return s.replace(/(\d+)(?=\D*$)/, (_, num) => String(parseInt(num, 10) + n));
+      if (needsRecompact) {
+        await recompactSectionSortKeys(
+          sectionDocId,
+          all.map((m) => m.documentId),
+        );
+        const refreshed = await listSectionMantraOrders(sectionDocId);
+        const anchorIdx2 = refreshed.findIndex((m) => m.documentId === afterDocumentId);
+        const again = sortKeyBetween(
+          refreshed[anchorIdx2]?.order,
+          refreshed[anchorIdx2 + 1]?.order,
+        );
+        newSortKey = again.sortKey;
       }
 
-      // 3. Determine the new manthra's ShlokaManthraNumber.
-      //    Prefer the client-supplied afterNum (what the user actually sees in the
-      //    portal list) over the Strapi record value, which may have drifted from
-      //    the displayed sequence due to previous insertions.
-      const anchorNum: string = afterNum || all[anchorIdx].ShlokaManthraNumber || "";
-      const newNum = anchorNum ? incrementBy(anchorNum, 1) : "";
-
-      // 4. Shift order for all manthras after anchor, and RE-NUMBER them
-      //    sequentially from anchorNum + 2, anchorNum + 3, … so that any
-      //    drift in existing Strapi numbers is corrected at the same time.
-      const toShift = all.slice(anchorIdx + 1);
-
-      async function pLimit<T>(tasks: (() => Promise<T>)[], concurrency: number): Promise<T[]> {
-        const results: T[] = [];
-        let i = 0;
-        async function run(): Promise<void> {
-          while (i < tasks.length) {
-            const idx = i++;
-            results[idx] = await tasks[idx]();
-          }
-        }
-        await Promise.all(Array.from({ length: Math.min(concurrency, tasks.length) }, run));
-        return results;
-      }
-
-      await pLimit(
-        toShift.map((m, relIdx) => async () => {
-          const updates: any = { order: (m.order ?? 0) + 1 };
-          if (anchorNum) {
-            // relIdx 0 → anchorNum + 2, relIdx 1 → anchorNum + 3, …
-            updates.ShlokaManthraNumber = incrementBy(anchorNum, relIdx + 2);
-          }
-          await strapiRequest(`/api/manthras/${m.documentId}`, {
-            method: "PUT",
-            body: JSON.stringify({ data: updates }),
-          });
-        }),
-        5,
-      );
-
-      // 5. Create the new blank manthra
-      const newPayload = {
-        data: {
-          ShlokaManthraNumber: newNum,
-          order: newOrder,
-          Section: sectionDocId,
-        },
-      };
       const created = await strapiRequest("/api/manthras", {
         method: "POST",
-        body: JSON.stringify(newPayload),
+        body: JSON.stringify({
+          data: {
+            ShlokaManthraNumber: "",
+            order: newSortKey,
+            Section: sectionDocId,
+          },
+        }),
       });
 
-      res.json({ data: created.data, shiftedCount: toShift.length });
+      res.json({ data: created.data, shiftedCount: 0, sortKey: newSortKey });
     } catch (error: any) {
       res.status(error.status || 500).json({ message: error.message });
     }
@@ -702,8 +874,10 @@ export function createStrapiRouter() {
   // Batch PUT order + ShlokaManthraNumber only (Strapi v5 merges; omits rich fields).
   router.post("/manthras/batch-identity-sync", async (req, res) => {
     try {
-      const { updates } = req.body as {
+      const { updates, sortKeysOnly } = req.body as {
         updates?: Array<{ documentId?: string; order?: number; ShlokaManthraNumber?: string }>;
+        /** When true, only PUT `order` (fractional sort key) — labels unchanged. */
+        sortKeysOnly?: boolean;
       };
       if (!Array.isArray(updates) || updates.length === 0) {
         res.status(400).json({ message: "updates must be a non-empty array" });
@@ -717,52 +891,44 @@ export function createStrapiRouter() {
       const CONCURRENCY = 12;
       const results: Array<{ documentId: string; ok: boolean; error?: string }> = [];
 
-      // One Strapi row per verse label — never PUT the same title onto two documentIds.
-      const byLabel = new Map<string, { documentId: string; order: number; ShlokaManthraNumber: string }>();
+      // One PUT per Strapi documentId (after insert/renumber every sibling needs its own update).
+      const byDocumentId = new Map<string, { documentId: string; order: number; ShlokaManthraNumber: string }>();
       for (const u of updates) {
+        const documentId = (u.documentId ?? "").trim();
+        if (!documentId || documentId.length < 10) continue;
         const label = (u.ShlokaManthraNumber ?? "").trim();
-        const key = label.toLowerCase() || (u.documentId ?? "").trim();
-        if (!key) continue;
-        const row = {
-          documentId: u.documentId!.trim(),
+        byDocumentId.set(documentId, {
+          documentId,
           order: typeof u.order === "number" && !Number.isNaN(u.order) ? u.order : 0,
           ShlokaManthraNumber: label,
-        };
-        const prev = byLabel.get(key);
-        if (!prev || row.order >= prev.order) {
-          byLabel.set(key, row);
-        }
+        });
       }
-      const dedupedUpdates = [...byLabel.values()];
+      const dedupedUpdates = [...byDocumentId.values()];
 
-      // Apply higher `order` values first so two rows never briefly share the same slot.
       const sortedUpdates = dedupedUpdates.sort(
         (a, b) => (Number(b?.order) || 0) - (Number(a?.order) || 0),
       );
 
-      async function runChunk(chunk: typeof updates) {
-        await Promise.all(
-          chunk.map(async (u) => {
-            const documentId = u?.documentId?.trim() || "";
-            if (!documentId || documentId.length < 10) {
-              results.push({ documentId: documentId || "(missing)", ok: false, error: "invalid documentId" });
-              return;
-            }
-            const order = typeof u.order === "number" && !Number.isNaN(u.order) ? u.order : 0;
-            const ShlokaManthraNumber = u.ShlokaManthraNumber ?? "";
-            try {
-              await strapiRequest(`/api/manthras/${documentId}`, {
-                method: "PUT",
-                body: JSON.stringify({
-                  data: { order, ShlokaManthraNumber },
-                }),
-              });
-              results.push({ documentId, ok: true });
-            } catch (e: any) {
-              results.push({ documentId, ok: false, error: e?.message || String(e) });
-            }
-          }),
-        );
+      async function runChunk(chunk: typeof sortedUpdates) {
+        for (const u of chunk) {
+          const documentId = u?.documentId?.trim() || "";
+          if (!documentId || documentId.length < 10) {
+            results.push({ documentId: documentId || "(missing)", ok: false, error: "invalid documentId" });
+            continue;
+          }
+          const order = typeof u.order === "number" && !Number.isNaN(u.order) ? u.order : 0;
+          const ShlokaManthraNumber = u.ShlokaManthraNumber ?? "";
+          const data = sortKeysOnly ? { order } : { order, ShlokaManthraNumber };
+          try {
+            await strapiRequest(`/api/manthras/${documentId}`, {
+              method: "PUT",
+              body: JSON.stringify({ data }),
+            });
+            results.push({ documentId, ok: true });
+          } catch (e: any) {
+            results.push({ documentId, ok: false, error: e?.message || String(e) });
+          }
+        }
       }
 
       for (let i = 0; i < sortedUpdates.length; i += CONCURRENCY) {
@@ -775,10 +941,10 @@ export function createStrapiRouter() {
     }
   });
 
-  /** Minimal POST for grantha wizard: blank mantra row linked to an existing section. */
+  /** Append blank mantra at end of section (max sort key + GAP). */
   router.post("/manthras/create-blank-in-section", async (req, res) => {
     try {
-      const { sectionDocumentId, order, ShlokaManthraNumber } = req.body as {
+      const { sectionDocumentId, ShlokaManthraNumber } = req.body as {
         sectionDocumentId?: string;
         order?: number;
         ShlokaManthraNumber?: string;
@@ -788,42 +954,20 @@ export function createStrapiRouter() {
         res.status(400).json({ message: "sectionDocumentId is required" });
         return;
       }
-      const o = typeof order === "number" && !Number.isNaN(order) ? order : 0;
-      const sectionFilter = encodeURIComponent(sid);
-      const listQuery = [
-        `filters[Section][documentId][$eq]=${sectionFilter}`,
-        "fields[0]=documentId",
-        "fields[1]=order",
-        "pagination[pageSize]=100",
-        "sort=order:desc",
-      ].join("&");
-      let page = 1;
-      while (true) {
-        const r = await strapiRequest(`/api/manthras?${listQuery}&pagination[page]=${page}`);
-        const rows: any[] = r.data || [];
-        for (const row of rows) {
-          const cur = row.order ?? 0;
-          if (cur >= o) {
-            await strapiRequest(`/api/manthras/${row.documentId}`, {
-              method: "PUT",
-              body: JSON.stringify({ data: { order: cur + 1 } }),
-            });
-          }
-        }
-        if (page >= (r.meta?.pagination?.pageCount ?? 1)) break;
-        page++;
-      }
+      const all = await listSectionMantraOrders(sid);
+      const maxOrder = all.length > 0 ? Math.max(...all.map((r) => r.order)) : 0;
+      const newSortKey = maxOrder > 0 ? maxOrder + STRAPI_SORT_GAP : STRAPI_SORT_GAP;
       const created = await strapiRequest("/api/manthras", {
         method: "POST",
         body: JSON.stringify({
           data: {
             Section: sid,
-            order: o,
+            order: newSortKey,
             ShlokaManthraNumber: ShlokaManthraNumber ?? "",
           },
         }),
       });
-      res.json({ data: created.data });
+      res.json({ data: created.data, sortKey: newSortKey });
     } catch (error: any) {
       res.status(error.status || 500).json({ message: error.message });
     }

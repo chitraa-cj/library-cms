@@ -18,6 +18,11 @@ import {
   runHermexTranslate,
 } from "./hermex-translate";
 import { otherTranslationLanguages } from "@shared/schema";
+import {
+  portalIndexToStrapiSortKey,
+  sortKeyBetween,
+  STRAPI_SORT_GAP,
+} from "@shared/mantra-sort-key";
 
 /** Compress a snapshot payload for DB storage (gzip + base64 wrapper). */
 function compressBackupData(data: any): any {
@@ -704,7 +709,8 @@ async function buildManthraData(
   manthra: Record<string, any>,
   sectionDocId: string | undefined,
   granthaDocId?: string,
-  teekaNameToDocId?: Map<string, string>
+  teekaNameToDocId?: Map<string, string>,
+  options?: { fastSinglePublish?: boolean },
 ): Promise<Record<string, any>> {
   // Portal `title` is what the user sees in the hierarchy; it must win over any stale CMS field.
   const mData: Record<string, any> = {
@@ -762,7 +768,10 @@ async function buildManthraData(
     resolvedTeekas = await resolveManthraTeekas(rawTeekas, granthaDocId, teekaNameToDocId);
   }
 
-  const needsStrapiSnapshot = isExistingStrapi;
+  const localTeekasNeedMerge =
+    Array.isArray(rawTeekas) && rawTeekas.length > 0 && resolvedTeekas.length > 0;
+  const needsStrapiSnapshot =
+    isExistingStrapi && !options?.fastSinglePublish && localTeekasNeedMerge;
 
   let strapiMantraSnapshot: any = null;
   if (needsStrapiSnapshot) {
@@ -837,11 +846,13 @@ async function buildManthraData(
     // so Strapi preserves whatever content it already holds for this manthra.
   }
 
-  // ── SAFETY: Merge ShlokaManthraEntry + BhashyamEntry (same snapshot when possible) ──
-  if (isExistingStrapi && strapiMantraSnapshot) {
-    applyMantraTextMergeFromStrapiData(cleaned, strapiMantraSnapshot);
-  } else if (isExistingStrapi && mantraTextMergeNeeded(cleaned) && !strapiMantraSnapshot) {
-    await mergeMantraTextComponentsFromStrapi(cleaned, strapiDocId);
+  // ── SAFETY: Merge ShlokaManthraEntry + BhashyamEntry (skip on fast single publish — local body is authoritative) ──
+  if (!options?.fastSinglePublish) {
+    if (isExistingStrapi && strapiMantraSnapshot) {
+      applyMantraTextMergeFromStrapiData(cleaned, strapiMantraSnapshot);
+    } else if (isExistingStrapi && mantraTextMergeNeeded(cleaned) && !strapiMantraSnapshot) {
+      await mergeMantraTextComponentsFromStrapi(cleaned, strapiDocId);
+    }
   }
 
   pruneNonPublishableManthraTextFields(cleaned);
@@ -1664,57 +1675,136 @@ async function resolveManthraDocIdForPublish(
 
   if (!sectionDocId) return stored;
 
+  // Trust the portal hierarchy link so publish updates the row the editor opened,
+  // not another duplicate that happens to share the verse label after insert/renumber.
+  if (stored) {
+    try {
+      await strapiRequest(`/api/manthras/${stored}?fields[0]=documentId`);
+      return stored;
+    } catch (e: any) {
+      if (!isOrphanedDocError(e)) {
+        console.warn(`[publish] Stored doc ${stored} lookup failed:`, e?.message || e);
+      }
+    }
+  }
+
   if (portalLabel) {
     const byLabel = await findManthraDocIdByLabelInSection(
       sectionDocId,
       portalLabel,
       manthra.strapiDocumentId,
     );
-    if (byLabel) {
-      if (stored && stored !== byLabel) {
-        console.warn(
-          `[publish] Portal "${portalLabel}" → Strapi doc ${byLabel}; ignoring stale strapiDocumentId ${stored}`,
-        );
-      }
-      return byLabel;
-    }
+    if (byLabel) return byLabel;
   }
 
-  if (!stored) return undefined;
-
-  if (!portalLabel) return stored;
-
-  try {
-    const row = (await strapiRequest(`/api/manthras/${stored}?fields[0]=ShlokaManthraNumber`))?.data;
-    const strapiNum = String(row?.ShlokaManthraNumber ?? "").trim();
-    if (!strapiNum || portalLabel.trim().toLowerCase() === strapiNum.trim().toLowerCase()) {
-      return stored;
-    }
-    console.warn(
-      `[publish] Stored doc ${stored} is "${strapiNum}" but portal shows "${portalLabel}" — will upsert by label`,
-    );
-    return undefined;
-  } catch {
-    return stored;
-  }
+  return undefined;
 }
 
-/** Publish one mantra: content + order + ShlokaManthraNumber always match the portal row label. */
+type PortalManthraSibling = { id?: string; strapiDocumentId?: string; order?: number };
+
+async function listSectionMantraSortKeys(
+  sectionDocId: string,
+): Promise<Array<{ documentId: string; order: number }>> {
+  const sectionFilter = encodeURIComponent(sectionDocId);
+  const listQuery = [
+    `filters[Section][documentId][$eq]=${sectionFilter}`,
+    "fields[0]=documentId",
+    "fields[1]=order",
+    "pagination[pageSize]=100",
+    "sort=order:asc",
+  ].join("&");
+
+  const all: Array<{ documentId: string; order: number }> = [];
+  let page = 1;
+  while (true) {
+    const r = await strapiRequest(`/api/manthras?${listQuery}&pagination[page]=${page}`);
+    for (const row of r.data ?? []) {
+      if (typeof row.documentId === "string") {
+        all.push({
+          documentId: row.documentId,
+          order: typeof row.order === "number" ? row.order : 0,
+        });
+      }
+    }
+    if (page >= (r.meta?.pagination?.pageCount ?? 1)) break;
+    page++;
+  }
+  all.sort((a, b) => a.order - b.order);
+  return all;
+}
+
+/**
+ * Strapi `order` is a fractional sort key. Portal `order` 1..n is display-only.
+ * - Existing rows: keep CMS sort key on fast single publish; full publish uses spaced keys from portal index.
+ * - New rows: key between Strapi neighbors of portal prev/next siblings.
+ */
+async function resolvePublishSortKey(
+  manthra: Record<string, any>,
+  sectionDocId: string | undefined,
+  options?: { fastSinglePublish?: boolean; portalSiblings?: PortalManthraSibling[] },
+): Promise<number | undefined> {
+  if (!sectionDocId) return undefined;
+
+  const stored =
+    typeof manthra.strapiDocumentId === "string" && manthra.strapiDocumentId.length >= 10
+      ? manthra.strapiDocumentId
+      : undefined;
+
+  const strapiRows = await listSectionMantraSortKeys(sectionDocId);
+  const orderByDocId = new Map(strapiRows.map((r) => [r.documentId, r.order]));
+
+  if (options?.fastSinglePublish && stored && orderByDocId.has(stored)) {
+    return orderByDocId.get(stored);
+  }
+
+  const siblings = options?.portalSiblings;
+  if (siblings && siblings.length > 0) {
+    const sorted = [...siblings].sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
+    const idx = sorted.findIndex((s) => s.id === manthra.id);
+    if (idx >= 0) {
+      if (!options?.fastSinglePublish) {
+        return portalIndexToStrapiSortKey(idx + 1);
+      }
+      const prevDoc = idx > 0 ? sorted[idx - 1]?.strapiDocumentId : undefined;
+      const nextDoc = idx < sorted.length - 1 ? sorted[idx + 1]?.strapiDocumentId : undefined;
+      const prevSort = prevDoc ? orderByDocId.get(prevDoc) : undefined;
+      const nextSort = nextDoc ? orderByDocId.get(nextDoc) : undefined;
+      if (stored && orderByDocId.has(stored)) {
+        return orderByDocId.get(stored);
+      }
+      return sortKeyBetween(prevSort, nextSort).sortKey;
+    }
+  }
+
+  if (stored && orderByDocId.has(stored)) {
+    return orderByDocId.get(stored);
+  }
+
+  const portalOrder = Number(manthra.order);
+  if (!Number.isNaN(portalOrder) && portalOrder > 0) {
+    if (portalOrder >= STRAPI_SORT_GAP) return portalOrder;
+    return portalIndexToStrapiSortKey(portalOrder);
+  }
+  return undefined;
+}
+
+/** Publish one mantra: content + ShlokaManthraNumber; sort key from fractional CMS ordering. */
 async function publishManthraToStrapi(
   manthra: Record<string, any>,
   sectionDocId: string | undefined,
   granthaDocId: string | undefined,
   teekaNameToDocId: Map<string, string> | undefined,
   publishFailures: Array<{ manthra: string; error: string }>,
+  options?: { fastSinglePublish?: boolean; portalSiblings?: PortalManthraSibling[] },
 ): Promise<string | undefined> {
   const portalLabel = (manthra.title || manthra.ShlokaManthraNumber || "").trim();
   const prelimData = { ShlokaManthraNumber: portalLabel };
   const targetDocId = await resolveManthraDocIdForPublish(manthra, sectionDocId, prelimData);
   const label = portalLabel || manthra.title || "(unknown)";
+  const publishOrder = await resolvePublishSortKey(manthra, sectionDocId, options);
 
   if (targetDocId && !manthraHasLocalPublishableContent(manthra)) {
-    const order =
-      manthra.order != null && !Number.isNaN(Number(manthra.order)) ? Number(manthra.order) : undefined;
+    const order = publishOrder;
     try {
       return await updateManthraIdentityOnly(targetDocId, label, order, publishFailures);
     } catch (putErr: any) {
@@ -1744,9 +1834,18 @@ async function publishManthraToStrapi(
     targetDocId && targetDocId !== manthra.strapiDocumentId
       ? { ...manthra, strapiDocumentId: targetDocId }
       : manthra;
-  const mData = await buildManthraData(manthraForBuild, sectionDocId, granthaDocId, teekaNameToDocId);
+  const mData = await buildManthraData(
+    manthraForBuild,
+    sectionDocId,
+    granthaDocId,
+    teekaNameToDocId,
+    options,
+  );
   if (portalLabel) {
     mData.ShlokaManthraNumber = portalLabel;
+  }
+  if (publishOrder != null && !Number.isNaN(publishOrder)) {
+    mData.order = publishOrder;
   }
 
   const fullLabel = portalMantraLabel(manthra, mData) || manthra.title || "(unknown)";
@@ -2142,7 +2241,8 @@ async function publishGranthaWithHierarchy(
   // before this line would TDZ on `publishManthra` itself, not on a closed-over variable.
   const publishManthra = async (
     manthra: any,
-    sectionDocId: string | undefined
+    sectionDocId: string | undefined,
+    portalSiblings?: PortalManthraSibling[],
   ): Promise<boolean> => {
     try {
       if (manthra.strapiDocumentId && manthra.strapiDocumentId.length < 10) {
@@ -2157,6 +2257,7 @@ async function publishGranthaWithHierarchy(
         granthaDocId,
         teekaNameToDocId,
         publishFailures,
+        { portalSiblings },
       );
       if (returnedDocId && manthra.id) {
         manthraIdToDocId.set(manthra.id, returnedDocId);
@@ -2180,12 +2281,15 @@ async function publishGranthaWithHierarchy(
     Math.max(4, Number(process.env.PUBLISH_MANTHRA_CONCURRENCY) || 10),
   );
   const publishManthrasBatch = async (manthras: any[], sectionDocId: string | undefined): Promise<void> => {
+    const portalSiblings = [...manthras]
+      .map((m) => ({ id: m.id, strapiDocumentId: m.strapiDocumentId, order: m.order }))
+      .sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
     if (!jobId) {
       for (let i = 0; i < manthras.length; i += MANTHRA_CONCURRENCY) {
         const batch = manthras.slice(i, i + MANTHRA_CONCURRENCY);
         await Promise.all(
           batch.map(async (m) => {
-            await publishManthra(m, sectionDocId);
+            await publishManthra(m, sectionDocId, portalSiblings);
             reportProgress(m.title || m.id);
           }),
         );
@@ -2203,6 +2307,7 @@ async function publishGranthaWithHierarchy(
         payload: {
           sectionDocId,
           manthra,
+          portalSiblings,
         },
         result: null,
         error: null,
@@ -2221,9 +2326,10 @@ async function publishGranthaWithHierarchy(
         const payload = (claimed.payload as any) ?? {};
         const qManthra = payload.manthra;
         const qSectionDocId = payload.sectionDocId;
+        const qPortalSiblings = payload.portalSiblings as PortalManthraSibling[] | undefined;
         let terminal = false;
         try {
-          const ok = await publishManthra(qManthra, qSectionDocId);
+          const ok = await publishManthra(qManthra, qSectionDocId, qPortalSiblings);
           if (ok) {
             await storage.completePublishJobTask(claimed.id, { ok: true });
             terminal = true;
@@ -2329,6 +2435,28 @@ async function publishGranthaWithHierarchy(
         const isDefaultKhanda = khanda.title === "_default" || !levelTwoEnabled;
         let khandaDocId: string | undefined;
 
+        if (isDefaultKhanda && levelTwoEnabled && khanda.title === "_default" && adhyayaDocId) {
+          const childCheck = await strapiRequest(
+            `/api/sections?filters[parent][documentId][$eq]=${encodeURIComponent(adhyayaDocId)}&filters[grantha][documentId][$eq]=${encodeURIComponent(granthaDocId)}&fields[0]=documentId&fields[1]=title&pagination[pageSize]=5`,
+          );
+          const childSecs: any[] = childCheck?.data ?? [];
+          if (childSecs.length > 0) {
+            const realKhanda = (adhyaya.khandas ?? []).find(
+              (k: any) => k.title && k.title !== "_default" && k.documentId,
+            );
+            const match =
+              realKhanda?.documentId
+                ? childSecs.find((c: any) => c.documentId === realKhanda.documentId)
+                : childSecs[0];
+            if (match?.documentId) {
+              khandaDocId = match.documentId;
+              console.warn(
+                `[publish] Adhyaya "${adhyaya.title}" has khanda sections in Strapi — publishing mantras to "${match.title}" (${match.documentId}) instead of the adhyaya row`,
+              );
+            }
+          }
+        }
+
         if (!isDefaultKhanda) {
           // Guard: skip L2 sections with blank titles
           if (!khanda.title?.trim()) {
@@ -2357,7 +2485,7 @@ async function publishGranthaWithHierarchy(
           if (!khandaDocId) continue;
           if (khanda.id) khandaIdToDocId.set(khanda.id, khandaDocId);
           reportProgress(khanda.title);
-        } else {
+        } else if (!khandaDocId) {
           khandaDocId = adhyayaDocId;
         }
 
@@ -3029,6 +3157,55 @@ export async function registerRoutes(
     }
   });
 
+  /** Merge one mantra node into draft hierarchy; optionally append if missing (new local insert). */
+  function patchManthraInHierarchy(
+    hierarchy: any[],
+    loc: { adhyayaId: string; khandaId: string; padaId?: string; manthraId: string },
+    manthraData: Record<string, any>,
+    upsert = false,
+  ): { hierarchy: any[]; updated: boolean } {
+    const { adhyayaId, khandaId, padaId, manthraId } = loc;
+    let updated = false;
+
+    const patchList = (manthras: any[]) => {
+      const list = manthras ?? [];
+      const idx = list.findIndex((m: any) => m?.id === manthraId);
+      if (idx >= 0) {
+        updated = true;
+        const next = [...list];
+        next[idx] = { ...next[idx], ...manthraData, id: manthraId };
+        return next;
+      }
+      if (upsert) {
+        updated = true;
+        return [...list, { ...manthraData, id: manthraId }];
+      }
+      return list;
+    };
+
+    const nextHierarchy = hierarchy.map((a: any) => {
+      if (a?.id !== adhyayaId) return a;
+      return {
+        ...a,
+        khandas: (a.khandas || []).map((k: any) => {
+          if (k?.id !== khandaId) return k;
+          if (padaId) {
+            return {
+              ...k,
+              padas: (k.padas || []).map((p: any) => {
+                if (p?.id !== padaId) return p;
+                return { ...p, manthras: patchList(p.manthras) };
+              }),
+            };
+          }
+          return { ...k, manthras: patchList(k.manthras) };
+        }),
+      };
+    });
+
+    return { hierarchy: nextHierarchy, updated };
+  }
+
   // Fast-path draft save for mantra modal edits.
   // Updates only one mantra node inside hierarchy to avoid sending full draft payload
   // from the browser on every modal save/close.
@@ -3064,40 +3241,20 @@ export async function registerRoutes(
         const draftData = (draft.data && typeof draft.data === "object") ? draft.data as any : {};
         const hierarchy = Array.isArray(draftData.hierarchy) ? draftData.hierarchy : [];
 
-        let updatedNode = false;
-        const updatedHierarchy = hierarchy.map((a: any) => {
-          if (a?.id !== adhyayaId) return a;
-          return {
-            ...a,
-            khandas: (a.khandas || []).map((k: any) => {
-              if (k?.id !== khandaId) return k;
-              if (padaId) {
-                return {
-                  ...k,
-                  padas: (k.padas || []).map((p: any) => {
-                    if (p?.id !== padaId) return p;
-                    return {
-                      ...p,
-                      manthras: (p.manthras || []).map((m: any) => {
-                        if (m?.id !== manthraId) return m;
-                        updatedNode = true;
-                        return { ...m, ...manthraData, id: m.id };
-                      }),
-                    };
-                  }),
-                };
-              }
-              return {
-                ...k,
-                manthras: (k.manthras || []).map((m: any) => {
-                  if (m?.id !== manthraId) return m;
-                  updatedNode = true;
-                  return { ...m, ...manthraData, id: m.id };
-                }),
-              };
-            }),
-          };
-        });
+        let { hierarchy: updatedHierarchy, updated: updatedNode } = patchManthraInHierarchy(
+          hierarchy,
+          { adhyayaId, khandaId, padaId, manthraId },
+          manthraData,
+          false,
+        );
+        if (!updatedNode) {
+          ({ hierarchy: updatedHierarchy, updated: updatedNode } = patchManthraInHierarchy(
+            hierarchy,
+            { adhyayaId, khandaId, padaId, manthraId },
+            manthraData,
+            true,
+          ));
+        }
 
         if (!updatedNode) {
           res.status(404).json({ message: "Manthra not found in draft hierarchy" });
@@ -3215,33 +3372,37 @@ export async function registerRoutes(
       const id = parseInt(req.params.id);
       if (isNaN(id)) return res.status(400).json({ message: "Invalid draft ID" });
 
-      const { adhyayaId, khandaId, padaId, manthraId } = req.body;
+      const { adhyayaId, khandaId, padaId, manthraId, manthraData } = req.body;
       if (!adhyayaId || !khandaId || !manthraId) {
         return res.status(400).json({ message: "adhyayaId, khandaId, and manthraId are required" });
       }
 
       const draft = await storage.getDraft(id, user.id);
       if (!draft) return res.status(404).json({ message: "Draft not found" });
-      void writeDraftSnapshot({
-        event: "draft.publish-manthra.before",
-        draftId: draft.id,
-        userId: user.id,
-        title: draft.title,
-        status: draft.status,
-        strapiDocumentId: draft.strapiDocumentId,
-        data: draft.data,
-        metadata: { adhyayaId, khandaId, padaId: padaId ?? null, manthraId },
-      });
 
       const granthaDocId: string | undefined = draft.strapiDocumentId ?? undefined;
       if (!granthaDocId) {
         return res.status(400).json({ message: "The grantha must be published to Strapi first before publishing individual mantras. Use 'Save & Publish' on the grantha to publish it, then try again." });
       }
 
-      const data = draft.data as any;
-      const hierarchy: any[] = data?.hierarchy || [];
+      let data = draft.data as any;
+      let hierarchy: any[] = data?.hierarchy || [];
       const structureConfig = data?.structureConfig || {};
       const teekaDefinitions: any[] = data?.teekas || [];
+
+      if (manthraData && typeof manthraData === "object") {
+        const merged = patchManthraInHierarchy(
+          hierarchy,
+          { adhyayaId, khandaId, padaId, manthraId },
+          manthraData,
+          true,
+        );
+        if (merged.updated) {
+          hierarchy = merged.hierarchy;
+          data = { ...data, hierarchy };
+          await storage.updateDraft(id, user.id, { data, status: "draft" });
+        }
+      }
 
       // Locate the manthra node in the hierarchy
       const adhyaya = hierarchy.find((a: any) => a.id === adhyayaId);
@@ -3260,13 +3421,20 @@ export async function registerRoutes(
       }
       if (!manthraNode) return res.status(404).json({ message: "Manthra not found in draft" });
 
-      // Build teekaNameToDocId by querying Strapi for existing teekas on this grantha
+      const neededTeekaNames = new Set<string>();
+      for (const t of manthraNode.Teekas ?? []) {
+        const n = String(t?.TeekaName ?? "").trim().toLowerCase();
+        if (n) neededTeekaNames.add(n);
+      }
+
+      // Build teekaNameToDocId only for teekas referenced on this mantra (fast single publish).
       const teekaNameToDocId: Map<string, string> = new Map();
       for (const teeka of teekaDefinitions) {
         const validAuthor = teeka.TeekaAuthor && STRAPI_TEEKA_AUTHORS.has(teeka.TeekaAuthor)
           ? teeka.TeekaAuthor : undefined;
         const effectiveName = (teeka.TeekaName || "").trim() || (validAuthor ? `${validAuthor} Teeka` : "");
         if (!effectiveName) continue;
+        if (neededTeekaNames.size > 0 && !neededTeekaNames.has(effectiveName.toLowerCase())) continue;
         // Use stored teeka documentId if available
         if (teeka.documentId && teeka.documentId.length >= 10) {
           teekaNameToDocId.set(effectiveName.toLowerCase(), teeka.documentId);
@@ -3295,37 +3463,41 @@ export async function registerRoutes(
       const L2type = mapSectionType(L2name);
       const L3type = mapSectionType(L3name);
 
-      // L1: Adhyaya
-      const adhyayaDocId = await resolveSection(
-        adhyaya.documentId, adhyaya.title, L1type, adhyaya.order ?? undefined, granthaDocId, undefined
-      );
+      const knownSectionId = (id: unknown): string | undefined =>
+        typeof id === "string" && id.length >= 10 ? id : undefined;
+
+      // Fast path: use section documentIds already on the draft (skip section PUT round-trips).
+      let adhyayaDocId = knownSectionId(adhyaya.documentId);
+      if (!adhyayaDocId) {
+        adhyayaDocId = await resolveSection(
+          adhyaya.documentId, adhyaya.title, L1type, adhyaya.order ?? undefined, granthaDocId, undefined,
+        );
+      }
       if (!adhyayaDocId) {
         return res.status(500).json({ message: `Could not resolve section "${adhyaya.title}" in Strapi` });
       }
 
-      // L2: Khanda
       const isDefaultKhanda = khanda.title === "_default" || !levelTwoEnabled;
-      let khandaDocId: string | undefined;
-      if (isDefaultKhanda) {
-        khandaDocId = adhyayaDocId;
-      } else {
+      let khandaDocId: string | undefined = isDefaultKhanda
+        ? adhyayaDocId
+        : knownSectionId(khanda.documentId);
+      if (!khandaDocId && !isDefaultKhanda) {
         khandaDocId = await resolveSection(
-          khanda.documentId, khanda.title, L2type, khanda.order ?? undefined, granthaDocId, adhyayaDocId
+          khanda.documentId, khanda.title, L2type, khanda.order ?? undefined, granthaDocId, adhyayaDocId,
         );
-        if (!khandaDocId) {
-          return res.status(500).json({ message: `Could not resolve section "${khanda.title}" in Strapi` });
-        }
+      }
+      if (!khandaDocId) {
+        return res.status(500).json({ message: `Could not resolve section "${khanda.title}" in Strapi` });
       }
 
-      // L3: Pada (if applicable)
-      if (!khandaDocId) {
-        return res.status(500).json({ message: "Could not resolve khanda section in Strapi" });
-      }
       let sectionDocId: string | undefined = khandaDocId;
       if (levelThreeEnabled && padaId && padaNode) {
-        sectionDocId = await resolveSection(
-          padaNode.documentId, padaNode.title, L3type, padaNode.order ?? undefined, granthaDocId, khandaDocId
-        );
+        sectionDocId = knownSectionId(padaNode.documentId);
+        if (!sectionDocId) {
+          sectionDocId = await resolveSection(
+            padaNode.documentId, padaNode.title, L3type, padaNode.order ?? undefined, granthaDocId, khandaDocId,
+          );
+        }
         if (!sectionDocId) {
           return res.status(500).json({ message: `Could not resolve section "${padaNode.title}" in Strapi` });
         }
@@ -3334,6 +3506,10 @@ export async function registerRoutes(
         return res.status(500).json({ message: "Could not resolve target section in Strapi" });
       }
 
+      const portalSiblings = (padaId && padaNode ? padaNode.manthras : khanda.manthras ?? [])
+        .map((m: any) => ({ id: m.id, strapiDocumentId: m.strapiDocumentId, order: m.order }))
+        .sort((a: PortalManthraSibling, b: PortalManthraSibling) => (a.order ?? 0) - (b.order ?? 0));
+
       const publishFailures: Array<{ manthra: string; error: string }> = [];
       const returnedDocId = await publishManthraToStrapi(
         manthraNode,
@@ -3341,6 +3517,7 @@ export async function registerRoutes(
         granthaDocId,
         teekaNameToDocId,
         publishFailures,
+        { fastSinglePublish: true, portalSiblings },
       );
 
       // Update the draft hierarchy with the new strapiDocumentId so the next save persists it

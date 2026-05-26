@@ -1,8 +1,11 @@
 import { apiRequest, ApiError } from "@/lib/queryClient";
 import {
+  assignSpacedSortKeysFromPortalOrder,
+  portalIndexToStrapiSortKey,
+} from "@shared/mantra-sort-key";
+import {
   sortNodesByOrder,
   isPublishedStrapiDocId,
-  findStrapiMantraByLeafAndSuffix,
   pickPreferredStrapiMantraRef,
   titleUsesConfiguredLeaf,
   type GranthaStructureConfig,
@@ -119,18 +122,20 @@ export function mergeMantraStrapiDocumentIds<T extends SnapshotAdhyaya>(
   });
 }
 
-async function strapiCreateBlankMantra(params: {
+async function strapiCreateBlankMantraAtEnd(params: {
   sectionDocumentId: string;
-  order: number;
   ShlokaManthraNumber: string;
 }): Promise<string | undefined> {
-  const res = await apiRequest("POST", "/api/strapi/manthras/create-blank-in-section", params);
+  const res = await apiRequest("POST", "/api/strapi/manthras/create-blank-in-section", {
+    sectionDocumentId: params.sectionDocumentId,
+    ShlokaManthraNumber: params.ShlokaManthraNumber,
+  });
   const json = await res.json();
   const docId = json?.data?.documentId ?? json?.data?.document?.documentId;
   return typeof docId === "string" && docId.length > 0 ? docId : undefined;
 }
 
-/** Shift subsequent rows in Strapi and insert a blank mantra after `afterDocumentId`. */
+/** O(1) insert: fractional sort key between anchor and next row — no sibling shifts. */
 async function strapiInsertMantraAfter(params: {
   sectionDocumentId: string;
   afterDocumentId: string;
@@ -146,7 +151,6 @@ async function strapiInsertMantraAfter(params: {
   return typeof docId === "string" && docId.length > 0 ? docId : undefined;
 }
 
-/** Delete mantras one-by-one (avoids races when several are removed in quick succession). */
 export async function strapiDeleteMantrasBestEffort(documentIds: string[]): Promise<string[]> {
   const failed: string[] = [];
   for (const documentId of documentIds) {
@@ -161,7 +165,6 @@ export async function strapiDeleteMantrasBestEffort(documentIds: string[]): Prom
   return failed;
 }
 
-/** Fetch all mantras in a section (paginated). */
 export async function listStrapiMantrasInSection(sectionDocumentId: string): Promise<StrapiMantraRef[]> {
   if (!isPublishedStrapiDocId(sectionDocumentId)) return [];
   const base = [
@@ -198,7 +201,6 @@ export async function listStrapiMantrasInSection(sectionDocumentId: string): Pro
     }));
 }
 
-/** Look up a published manthra in a section by portal label (exact, then shared verse number). */
 export async function lookupStrapiMantraDocIdByLabel(
   sectionDocumentId: string,
   label: string,
@@ -214,7 +216,7 @@ export async function lookupStrapiMantraDocIdByLabel(
   const exact = refs.filter((r) => r.title.trim().toLowerCase() === trimmed.toLowerCase());
   const exactPick = pickPreferredStrapiMantraRef(exact, preferredDocId);
   if (exactPick) return exactPick.docId;
-  return findStrapiMantraByLeafAndSuffix(refs, trimmed, leaf, preferredDocId)?.docId;
+  return undefined;
 }
 
 export type MantraSectionSyncTarget = {
@@ -228,7 +230,6 @@ export type MantraDocIdPatch = MantraSectionSyncTarget & {
   strapiDocumentId: string;
 };
 
-/** Every section in the hierarchy that owns a published mantra list. */
 export function collectMantraSectionSyncTargets(
   snapshot: SnapshotAdhyaya[],
   cfg: GranthaStructureConfig,
@@ -281,37 +282,18 @@ export function applyMantraDocIdPatches<T extends SnapshotAdhyaya>(
   return result;
 }
 
-/** Mirror every mantra section in the grantha to Strapi (labels + order + docId links). */
-export async function syncAllMantraSectionsInGrantha(
-  snapshot: SnapshotAdhyaya[],
-  cfg: GranthaStructureConfig,
-  options?: { allowCreate?: boolean },
-): Promise<MantraDocIdPatch[]> {
-  const all: MantraDocIdPatch[] = [];
-  for (const ctx of collectMantraSectionSyncTargets(snapshot, cfg)) {
-    const patches = await pushMantraSectionIdentityToStrapi(
-      snapshot,
-      ctx.adhyayaId,
-      ctx.khandaId,
-      ctx.padaId,
-      cfg,
-      options,
-    );
-    for (const p of patches) {
-      all.push({ ...ctx, ...p });
-    }
-  }
-  return all;
-}
-
 async function strapiBatchIdentitySync(
   updates: Array<{ documentId: string; order: number; ShlokaManthraNumber: string }>,
+  options?: { sortKeysOnly?: boolean },
 ): Promise<void> {
   if (updates.length === 0) return;
   const CHUNK = 500;
   for (let i = 0; i < updates.length; i += CHUNK) {
     const chunk = updates.slice(i, i + CHUNK);
-    const res = await apiRequest("POST", "/api/strapi/manthras/batch-identity-sync", { updates: chunk });
+    const res = await apiRequest("POST", "/api/strapi/manthras/batch-identity-sync", {
+      updates: chunk,
+      sortKeysOnly: options?.sortKeysOnly === true,
+    });
     const json = await res.json().catch(() => ({}));
     const results: Array<{ ok?: boolean }> = json?.results ?? [];
     const failed = results.filter((r) => r && r.ok === false).length;
@@ -322,57 +304,30 @@ async function strapiBatchIdentitySync(
 }
 
 /**
- * Ensures Strapi mantras for this section match the editor snapshot: create blanks
- * for rows without `strapiDocumentId`, then batch-PUT `order` + `ShlokaManthraNumber`
- * for every row with a Strapi id.
+ * Structural sync after insert/delete: create missing Strapi rows only (fractional sort keys).
+ * Does NOT rewrite verse labels for the whole section — use syncMantraSectionLabelsToStrapi for that.
  */
-export async function pushMantraSectionIdentityToStrapi(
+export async function pushMantraSectionStructureToStrapi(
   snapshot: SnapshotAdhyaya[],
   adhyayaId: string,
   khandaId: string,
   padaId: string | undefined,
   cfg: GranthaStructureConfig,
-  options?: { allowCreate?: boolean },
 ): Promise<Array<{ manthraId: string; strapiDocumentId: string }>> {
-  const allowCreate = options?.allowCreate !== false;
   const sectionDocumentId = resolveMantraSectionStrapiDocumentId(snapshot, adhyayaId, khandaId, padaId, cfg);
   if (!sectionDocumentId) return [];
 
   const sorted = getSortedMantrasFromSnapshot(snapshot, adhyayaId, khandaId, padaId, cfg);
   const patches: Array<{ manthraId: string; strapiDocumentId: string }> = [];
   const resolved = new Map<string, string>();
-  const sectionList = await listStrapiMantrasInSection(sectionDocumentId);
 
-  // Process in display order so consecutive new rows (insert after 2, then after new 3) each
-  // call insert-between on the row directly above — never duplicate or skip a slot.
   for (let i = 0; i < sorted.length; i++) {
     const m = sorted[i];
-    const portalLabel = (m.title ?? "").trim();
-
-    if (portalLabel) {
-      const leaf = (cfg.leafName ?? "Mantra").trim() || "Mantra";
-      const byLabel = await lookupStrapiMantraDocIdByLabel(
-        sectionDocumentId,
-        portalLabel,
-        leaf,
-        sectionList,
-        isPublishedStrapiDocId(m.strapiDocumentId) ? m.strapiDocumentId : undefined,
-      );
-      if (byLabel) {
-        resolved.set(m.id, byLabel);
-        if (!isPublishedStrapiDocId(m.strapiDocumentId) || m.strapiDocumentId !== byLabel) {
-          patches.push({ manthraId: m.id, strapiDocumentId: byLabel });
-        }
-        continue;
-      }
-    }
 
     if (isPublishedStrapiDocId(m.strapiDocumentId)) {
       resolved.set(m.id, m.strapiDocumentId!);
       continue;
     }
-
-    if (!allowCreate) continue;
 
     const prevWithStrapi = sorted
       .slice(0, i)
@@ -388,10 +343,9 @@ export async function pushMantraSectionIdentityToStrapi(
         afterNum: prevWithStrapi.title ?? "",
       });
     } else {
-      docId = await strapiCreateBlankMantra({
+      docId = await strapiCreateBlankMantraAtEnd({
         sectionDocumentId,
-        order: m.order,
-        ShlokaManthraNumber: m.title ?? "",
+        ShlokaManthraNumber: "",
       });
     }
 
@@ -401,34 +355,75 @@ export async function pushMantraSectionIdentityToStrapi(
     }
   }
 
-  const updatesByLabel = new Map<
-    string,
-    { documentId: string; order: number; ShlokaManthraNumber: string }
-  >();
-  for (const m of sorted) {
-    const documentId = resolved.get(m.id);
-    if (!isPublishedStrapiDocId(documentId)) continue;
-    const ShlokaManthraNumber = (m.title ?? "").trim();
-    const key = ShlokaManthraNumber.toLowerCase() || documentId!;
-    const row = {
-      documentId: documentId!,
-      order: m.order,
-      ShlokaManthraNumber,
-    };
-    const prev = updatesByLabel.get(key);
-    if (!prev || row.order >= prev.order) {
-      updatesByLabel.set(key, row);
-    }
-  }
-
-  await strapiBatchIdentitySync([...updatesByLabel.values()]);
   return patches;
 }
 
 /**
- * After local insert/delete/renumber: remove deleted Strapi rows first, then mirror
- * the remaining snapshot (create + batch identity). Keeps order compact on consecutive deletes.
+ * Explicit "Sync verse numbers to CMS" — writes portal display titles + spaced sort keys
+ * for every linked row in the section (like saving the sheet in Excel).
  */
+export async function syncMantraSectionLabelsToStrapi(
+  snapshot: SnapshotAdhyaya[],
+  adhyayaId: string,
+  khandaId: string,
+  padaId: string | undefined,
+  cfg: GranthaStructureConfig,
+): Promise<number> {
+  const sectionDocumentId = resolveMantraSectionStrapiDocumentId(snapshot, adhyayaId, khandaId, padaId, cfg);
+  if (!sectionDocumentId) return 0;
+
+  const sorted = getSortedMantrasFromSnapshot(snapshot, adhyayaId, khandaId, padaId, cfg);
+  const sortKeys = assignSpacedSortKeysFromPortalOrder(sorted);
+
+  const updates: Array<{ documentId: string; order: number; ShlokaManthraNumber: string }> = [];
+  const seenDocIds = new Set<string>();
+  for (const m of sorted) {
+    const documentId = m.strapiDocumentId;
+    if (!isPublishedStrapiDocId(documentId) || seenDocIds.has(documentId)) continue;
+    seenDocIds.add(documentId);
+    updates.push({
+      documentId,
+      order: sortKeys.get(m.id) ?? portalIndexToStrapiSortKey(m.order),
+      ShlokaManthraNumber: (m.title ?? "").trim(),
+    });
+  }
+
+  await strapiBatchIdentitySync(updates, { sortKeysOnly: false });
+  return updates.length;
+}
+
+/** @deprecated Use pushMantraSectionStructureToStrapi — kept for callers migrating gradually. */
+export async function pushMantraSectionIdentityToStrapi(
+  snapshot: SnapshotAdhyaya[],
+  adhyayaId: string,
+  khandaId: string,
+  padaId: string | undefined,
+  cfg: GranthaStructureConfig,
+  options?: { allowCreate?: boolean },
+): Promise<Array<{ manthraId: string; strapiDocumentId: string }>> {
+  if (options?.allowCreate === false) {
+    return [];
+  }
+  return pushMantraSectionStructureToStrapi(snapshot, adhyayaId, khandaId, padaId, cfg);
+}
+
+export async function syncAllMantraSectionLabelsInGrantha(
+  snapshot: SnapshotAdhyaya[],
+  cfg: GranthaStructureConfig,
+): Promise<number> {
+  let total = 0;
+  for (const ctx of collectMantraSectionSyncTargets(snapshot, cfg)) {
+    total += await syncMantraSectionLabelsToStrapi(
+      snapshot,
+      ctx.adhyayaId,
+      ctx.khandaId,
+      ctx.padaId,
+      cfg,
+    );
+  }
+  return total;
+}
+
 export async function syncMantraSectionAfterStructuralEdits(
   snapshot: SnapshotAdhyaya[],
   adhyayaId: string,
@@ -438,8 +433,29 @@ export async function syncMantraSectionAfterStructuralEdits(
   deleteDocumentIds: string[],
 ): Promise<{ patches: Array<{ manthraId: string; strapiDocumentId: string }>; failedDeleteIds: string[] }> {
   const failedDeleteIds = await strapiDeleteMantrasBestEffort(deleteDocumentIds);
-  const patches = await pushMantraSectionIdentityToStrapi(snapshot, adhyayaId, khandaId, padaId, cfg, {
-    allowCreate: true,
-  });
+  const patches = await pushMantraSectionStructureToStrapi(snapshot, adhyayaId, khandaId, padaId, cfg);
   return { patches, failedDeleteIds };
+}
+
+/** @deprecated Alias */
+export async function syncAllMantraSectionsInGrantha(
+  snapshot: SnapshotAdhyaya[],
+  cfg: GranthaStructureConfig,
+  options?: { allowCreate?: boolean },
+): Promise<MantraDocIdPatch[]> {
+  void options;
+  const all: MantraDocIdPatch[] = [];
+  for (const ctx of collectMantraSectionSyncTargets(snapshot, cfg)) {
+    const patches = await pushMantraSectionStructureToStrapi(
+      snapshot,
+      ctx.adhyayaId,
+      ctx.khandaId,
+      ctx.padaId,
+      cfg,
+    );
+    for (const p of patches) {
+      all.push({ ...ctx, ...p });
+    }
+  }
+  return all;
 }

@@ -56,7 +56,17 @@ import {
   Lock,
   Eye,
 } from "lucide-react";
-import { blocksToText } from "@/lib/strapi-blocks";
+import { blocksToText, textToBlocks } from "@/lib/strapi-blocks";
+import {
+  dedupePublishedMantrasForDisplay,
+  compareMantraNumberSuffix,
+  mantraNumberSuffix,
+  buildSectionByDocIdMap,
+  buildSectionAncestorPath,
+  sectionPathLabel,
+  isMantraSectionMisplacedOnAdhyaya,
+} from "@/lib/grantha-structure-sync";
+import { fetchResolvedManthraDetail } from "@/lib/resolve-strapi-mantra-detail";
 import { STRAPI_POLL_INTERVAL } from "@/hooks/use-strapi-sync";
 
 const EMPTY_TT: TextAndTranslation = {
@@ -90,6 +100,44 @@ function unpackOtherTranslation(tt: TextAndTranslation | null | undefined): Text
 
 let _uid = 0;
 function uid() { return String(++_uid); }
+
+function normalizeTextAndTranslationFromApi(
+  tt: TextAndTranslation | null | undefined,
+): TextAndTranslation {
+  const unpacked = unpackOtherTranslation(tt);
+  const out: TextAndTranslation = { ...unpacked };
+  for (const field of ["SanskritTextEntry", "EnglishTranslationText", "IASTTransliteration"] as const) {
+    const v = out[field];
+    if (typeof v === "string" && v.trim()) {
+      out[field] = textToBlocks(v);
+    }
+  }
+  return out;
+}
+
+function formDataFromStrapiManthra(fullItem: Record<string, any>) {
+  return {
+    ShlokaManthraNumber: fullItem.ShlokaManthraNumber || "",
+    order: fullItem.order != null ? String(fullItem.order) : "",
+    section: fullItem.Section?.documentId || fullItem.section?.documentId || "",
+    ShlokaManthraEntry: normalizeTextAndTranslationFromApi(fullItem.ShlokaManthraEntry),
+    BhashyamEntry: normalizeTextAndTranslationFromApi(fullItem.BhashyamEntry),
+    Teekas: (fullItem.Teekas || []).map((t: any) => ({
+      teeka: t.teeka
+        ? {
+            id: t.teeka.id,
+            documentId: t.teeka.documentId,
+            TeekaName: t.teeka.TeekaName || "",
+            TeekaAuthor: t.teeka.TeekaAuthor || undefined,
+          }
+        : null,
+      TeekaName: t.teeka?.TeekaName || t.TeekaName || "",
+      TeekaAuthor: t.teeka?.TeekaAuthor || t.TeekaAuthor || "",
+      TeekaEntry: t.TeekaEntry || {},
+    })),
+    wordMeanings: (fullItem.wordMeanings || []).map((w: WordMeaning) => ({ ...w, _id: uid() })),
+  };
+}
 
 export default function ManthrasPage() {
   const { toast } = useToast();
@@ -190,16 +238,10 @@ export default function ManthrasPage() {
   // This is used to fill in missing grantha data on manthras where Strapi's nested
   // populate didn't return the grantha (Strapi v5 nested populate can silently omit
   // sub-relations for some records when the response is very large).
-  const sectionByDocId = useMemo(() => {
-    const map = new Map<string, any>();
-    for (const s of allSections) {
-      if (s.documentId) map.set(s.documentId, s);
-    }
-    return map;
-  }, [allSections]);
+  const sectionByDocId = useMemo(() => buildSectionByDocIdMap(allSections), [allSections]);
 
   const strapiManthras = useMemo(() => {
-    return [...(data?.data || [])].map((m: any) => {
+    const normalized = [...(data?.data || [])].map((m: any) => {
       // If the server normalization already gave us a grantha, use it.
       if (m.grantha) return m;
       // Otherwise supplement from the sections list using the section documentId.
@@ -208,7 +250,17 @@ export default function ManthrasPage() {
       const sec = sectionByDocId.get(sectionDocId);
       if (!sec?.grantha) return m;
       return { ...m, grantha: sec.grantha };
-    }).sort((a: any, b: any) => (a.order ?? 0) - (b.order ?? 0));
+    });
+    return dedupePublishedMantrasForDisplay(normalized).sort(
+      (a: any, b: any) => {
+        const bySuffix = compareMantraNumberSuffix(
+          mantraNumberSuffix(a.ShlokaManthraNumber),
+          mantraNumberSuffix(b.ShlokaManthraNumber),
+        );
+        if (bySuffix !== 0) return bySuffix;
+        return (a.order ?? 0) - (b.order ?? 0);
+      },
+    );
   }, [data, sectionByDocId]);
 
   function getGranthaForSection(sectionDocId: string) {
@@ -298,34 +350,45 @@ export default function ManthrasPage() {
       });
       setFormOpen(true);
     } else {
-      setFetchingEditDocId(item.documentId);
-      fetch(`/api/strapi/manthras/${item.documentId}`)
-        .then((r) => r.json())
-        .then((resp) => {
-          const fullItem = resp.data ?? resp;
-          setEditingItem(fullItem);
-          setEditingDraftId(null);
-          setFormData({
-            ShlokaManthraNumber: fullItem.ShlokaManthraNumber || "",
-            order: fullItem.order != null ? String(fullItem.order) : "",
-            section: fullItem.Section?.documentId || fullItem.section?.documentId || "",
-            ShlokaManthraEntry: unpackOtherTranslation(fullItem.ShlokaManthraEntry),
-            BhashyamEntry: unpackOtherTranslation(fullItem.BhashyamEntry),
-            Teekas: (fullItem.Teekas || []).map((t: any) => ({
-              teeka: t.teeka ? { id: t.teeka.id, documentId: t.teeka.documentId, TeekaName: t.teeka.TeekaName || "", TeekaAuthor: t.teeka.TeekaAuthor || undefined } : null,
-              TeekaName: t.teeka?.TeekaName || t.TeekaName || "",
-              TeekaAuthor: t.teeka?.TeekaAuthor || t.TeekaAuthor || "",
-              TeekaEntry: t.TeekaEntry || {},
-            })),
-            wordMeanings: (fullItem.wordMeanings || []).map((w: WordMeaning) => ({ ...w, _id: uid() })),
-          });
-          setFormOpen(true);
-        })
-        .catch((err) => {
-          toast({ variant: "destructive", title: "Error loading manthra", description: err.message });
-        })
-        .finally(() => setFetchingEditDocId(null));
+      loadPublishedManthraForEdit(item, true);
     }
+  }
+
+  function loadPublishedManthraForEdit(item: any, viewOnlyMode: boolean) {
+    setFetchingEditDocId(item.documentId);
+    fetchResolvedManthraDetail({
+      documentId: item.documentId,
+      granthaDocId: item.grantha?.documentId,
+      sectionDocId: item.section?.documentId,
+      shlokaManthraNumber: item.ShlokaManthraNumber,
+    })
+      .then(({ data: fullItem, documentId, corrected, contentScore }) => {
+        setEditingItem({ ...fullItem, documentId });
+        setEditingDraftId(null);
+        setFormData(formDataFromStrapiManthra(fullItem));
+        setViewOnly(viewOnlyMode);
+        setFormOpen(true);
+        if (corrected) {
+          toast({
+            title: "Opened CMS row with content",
+            description:
+              "This list row was an empty duplicate. Loaded the verse record used by the Grantha editor.",
+          });
+        } else if ((contentScore ?? 0) < 12) {
+          const sanskrit = blocksToText(fullItem.ShlokaManthraEntry?.SanskritTextEntry);
+          if (!sanskrit.trim()) {
+            toast({
+              title: "No verse text in CMS",
+              description:
+                "This Shloka exists in Strapi but has no Sanskrit/English saved. Edit in the Grantha page or paste text here, then Save & Publish.",
+            });
+          }
+        }
+      })
+      .catch((err) => {
+        toast({ variant: "destructive", title: "Error loading manthra", description: err.message });
+      })
+      .finally(() => setFetchingEditDocId(null));
   }
 
   function openEdit(item: any) {
@@ -352,40 +415,7 @@ export default function ManthrasPage() {
       });
       setFormOpen(true);
     } else {
-      // The list only fetches lightweight data (no bhashyam/teekas/OtherTranslations).
-      // Fetch the full manthra detail before opening the edit form.
-      setFetchingEditDocId(item.documentId);
-      fetch(`/api/strapi/manthras/${item.documentId}`)
-        .then((r) => r.json())
-        .then((resp) => {
-          const fullItem = resp.data ?? resp;
-          setEditingItem(fullItem);
-          setEditingDraftId(null);
-          setFormData({
-            ShlokaManthraNumber: fullItem.ShlokaManthraNumber || "",
-            order: fullItem.order != null ? String(fullItem.order) : "",
-            section: fullItem.Section?.documentId || fullItem.section?.documentId || "",
-            ShlokaManthraEntry: unpackOtherTranslation(fullItem.ShlokaManthraEntry),
-            BhashyamEntry: unpackOtherTranslation(fullItem.BhashyamEntry),
-            Teekas: (fullItem.Teekas || []).map((t: any) => ({
-              teeka: t.teeka ? {
-                id: t.teeka.id,
-                documentId: t.teeka.documentId,
-                TeekaName: t.teeka.TeekaName || "",
-                TeekaAuthor: t.teeka.TeekaAuthor || undefined,
-              } : null,
-              TeekaName: t.teeka?.TeekaName || t.TeekaName || "",
-              TeekaAuthor: t.teeka?.TeekaAuthor || t.TeekaAuthor || "",
-              TeekaEntry: t.TeekaEntry || {},
-            })),
-            wordMeanings: (fullItem.wordMeanings || []).map((w: WordMeaning) => ({ ...w, _id: uid() })),
-          });
-          setFormOpen(true);
-        })
-        .catch((err) => {
-          toast({ variant: "destructive", title: "Error loading manthra", description: err.message });
-        })
-        .finally(() => setFetchingEditDocId(null));
+      loadPublishedManthraForEdit(item, false);
     }
   }
 
@@ -636,35 +666,68 @@ export default function ManthrasPage() {
                     </tr>
                   );
 
-                  // Group by section within this grantha
-                  const bySection = new Map<string, { sTitle: string; sType: string | null; sDocId: string; manthras: any[] }>();
+                  const granthaSections = allSections.filter(
+                    (s) => (s as any).grantha?.documentId === gId || (s as any).grantha?.GranthaName === granthaName,
+                  );
+
+                  // Group by full section path (Adhyaya → Khanda), not only the immediate Section row
+                  const byPath = new Map<
+                    string,
+                    { pathLabel: string; leafType: string | null; sDocId: string; misplaced: boolean; manthras: any[] }
+                  >();
                   for (const m of gManthras) {
                     const sec = (m as any).section;
                     const sId = sec?.documentId || "__none__";
-                    if (!bySection.has(sId)) bySection.set(sId, { sTitle: sec?.title || "No Section", sType: sec?.type || null, sDocId: sId, manthras: [] });
-                    bySection.get(sId)!.manthras.push(m);
+                    const path =
+                      sId !== "__none__"
+                        ? buildSectionAncestorPath(sId, sectionByDocId)
+                        : [];
+                    const pathLabel =
+                      path.length > 0 ? sectionPathLabel(path) : sec?.title || "No Section";
+                    const pathKey = path.map((p) => p.documentId).join("/") || sId;
+                    const leaf = path[path.length - 1];
+                    const misplaced = isMantraSectionMisplacedOnAdhyaya(sId, granthaSections);
+                    if (!byPath.has(pathKey)) {
+                      byPath.set(pathKey, {
+                        pathLabel,
+                        leafType: leaf?.type ?? sec?.type ?? null,
+                        sDocId: sId,
+                        misplaced,
+                        manthras: [],
+                      });
+                    }
+                    byPath.get(pathKey)!.manthras.push(m);
                   }
 
-                  for (const [sId, { sTitle, sType, manthras: sManthras }] of bySection) {
-                    const sectionKey = `${gId}__${sId}`;
+                  const sortedPaths = [...byPath.entries()].sort((a, b) =>
+                    a[1].pathLabel.localeCompare(b[1].pathLabel),
+                  );
+
+                  for (const [pathKey, { pathLabel, leafType, sDocId, misplaced, manthras: sManthras }] of sortedPaths) {
+                    const sectionKey = `${gId}__${pathKey}`;
                     const isCollapsed = collapsedSections.has(sectionKey);
 
                     // Section sub-header (collapsible, starts expanded)
                     rows.push(
                       <tr
-                        key={`section-${gId}-${sId}`}
+                        key={`section-${gId}-${pathKey}`}
                         className="bg-muted/20 border-b border-border hover:bg-muted/30 transition-colors cursor-pointer select-none"
                         onClick={() => toggleSection(sectionKey)}
                         data-testid={`row-section-group-${sectionKey}`}
                       >
                         <td colSpan={5} className="px-4 py-2 pl-8">
-                          <div className="flex items-center gap-2">
+                          <div className="flex items-center gap-2 flex-wrap">
                             <span className="text-muted-foreground">
                               {isCollapsed ? <ChevronRight className="w-3.5 h-3.5" /> : <ChevronDown className="w-3.5 h-3.5" />}
                             </span>
-                            <span className="text-sm font-medium text-foreground">{sTitle}</span>
-                            {sType && (
-                              <Badge variant="outline" className="text-xs py-0 h-5">{sType}</Badge>
+                            <span className="text-sm font-medium text-foreground">{pathLabel}</span>
+                            {leafType && leafType !== "null" && (
+                              <Badge variant="outline" className="text-xs py-0 h-5">{leafType}</Badge>
+                            )}
+                            {misplaced && (
+                              <Badge variant="destructive" className="text-xs py-0 h-5">
+                                Wrong section — use Khanda
+                              </Badge>
                             )}
                             <span className="text-xs text-muted-foreground">
                               ({sManthras.length} mantra{sManthras.length !== 1 ? "s" : ""})
@@ -677,12 +740,14 @@ export default function ManthrasPage() {
                     // Manthra rows (hidden when section is collapsed)
                     if (!isCollapsed) {
                       const sorted = [...sManthras].sort((a: any, b: any) => {
+                        const bySuffix = compareMantraNumberSuffix(
+                          mantraNumberSuffix(a.ShlokaManthraNumber),
+                          mantraNumberSuffix(b.ShlokaManthraNumber),
+                        );
+                        if (bySuffix !== 0) return bySuffix;
                         const oa = a.order ?? 999999;
                         const ob = b.order ?? 999999;
                         if (oa !== ob) return oa - ob;
-                        const ta = (a.ShlokaManthraNumber ?? "").toLowerCase();
-                        const tb = (b.ShlokaManthraNumber ?? "").toLowerCase();
-                        if (ta !== tb) return ta.localeCompare(tb, undefined, { numeric: true });
                         return String(a.documentId ?? "").localeCompare(String(b.documentId ?? ""));
                       });
                       const granthaLocked = lockedDocIds.has(gId);
@@ -703,7 +768,10 @@ export default function ManthrasPage() {
                               {sanskrit && <p className="text-xs text-muted-foreground font-serif line-clamp-1 mt-0.5">{sanskrit}</p>}
                             </td>
                             <td className="px-4 py-3 text-muted-foreground text-xs">
-                              {sTitle}{sType ? <span className="text-muted-foreground/60"> ({sType})</span> : null}
+                              {pathLabel}
+                              {leafType && leafType !== "null" ? (
+                                <span className="text-muted-foreground/60"> ({leafType})</span>
+                              ) : null}
                             </td>
                             <td className="px-4 py-3 text-muted-foreground text-sm">{m.order ?? "—"}</td>
                             <td className="px-4 py-3">
@@ -743,7 +811,7 @@ export default function ManthrasPage() {
                                         setInsertTarget({
                                           afterDocumentId: m.documentId,
                                           afterNum: m.ShlokaManthraNumber || String(m.order ?? "?"),
-                                          sectionDocId: sId,
+                                          sectionDocId: sDocId,
                                         });
                                       }}
                                       data-testid={`button-insert-after-${m.documentId}`}

@@ -19,12 +19,35 @@ export function entryContentCharCount(
   return blocksToText(value).trim().length;
 }
 
-/** Order / sequence stubs auto-filled in the editor (e.g. "4", "4.", "4.."). */
+/** Order / sequence stubs auto-filled in the editor (e.g. "4", "4.", "4..", "4...."). */
 export function isStubOrderOrPlaceholderText(text: string): boolean {
   const t = text.trim();
   if (!t) return false;
-  if (/^\d{1,4}(\.\.*)?$/.test(t)) return true;
+  if (/^\d{1,4}(\.+)?$/.test(t)) return true;
   return false;
+}
+
+/** Remove order-digit stubs from a TextAndTranslation object (draft or CMS). */
+export function stripStubTextAndTranslationEntry(
+  entry: unknown,
+): Record<string, unknown> | undefined {
+  if (!entry || typeof entry !== "object") return undefined;
+  const e = entry as Record<string, unknown>;
+  const out: Record<string, unknown> = { ...e };
+  for (const field of ["SanskritTextEntry", "EnglishTranslationText", "IASTTransliteration"] as const) {
+    const t = blocksToText(out[field] as any).trim();
+    if (!t || isStubOrderOrPlaceholderText(t)) delete out[field];
+  }
+  const hasRealText = ["SanskritTextEntry", "EnglishTranslationText", "IASTTransliteration"].some(
+    (field) => {
+      const t = blocksToText(out[field] as any).trim();
+      return t.length > 0 && !isStubOrderOrPlaceholderText(t);
+    },
+  );
+  const ot = out.OtherTranslations;
+  const hasOt = Array.isArray(ot) && ot.length > 0;
+  if (!hasRealText && !hasOt) return undefined;
+  return out;
 }
 
 /** True when a portal draft field is a stub (e.g. order digit "4") and must not mask CMS text. */

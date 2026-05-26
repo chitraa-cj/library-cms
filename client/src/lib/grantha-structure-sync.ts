@@ -4,6 +4,8 @@
  * the same normalization as the wizard "Next" step without ordering bugs.
  */
 
+import { entryContentCharCount } from "./strapi-blocks";
+
 export const STRAPI_DOCUMENT_ID_MIN_LENGTH = 10;
 
 export function isPublishedStrapiDocId(id: string | undefined): id is string {
@@ -53,7 +55,46 @@ export const PORTAL_SELECTABLE_LEAF_NAMES = [
 ] as const;
 
 /** Strapi mantra row used when linking portal hierarchy nodes to CMS documentIds. */
-export type StrapiMantraRef = { title: string; docId: string; order: number };
+export type StrapiMantraRef = {
+  title: string;
+  docId: string;
+  order: number;
+  /** Sanskrit + English char count from list/detail fetch; used to pick the CMS row with real content. */
+  contentScore?: number;
+};
+
+/** Minimum richness to prefer content over lowest-order duplicate when linking. */
+export const MANTRA_LINK_MIN_CONTENT_SCORE = 12;
+
+export function strapiMantraRefRichness(ref: StrapiMantraRef): number {
+  return ref.contentScore ?? 0;
+}
+
+/** Compare verse suffixes numerically: `"1.1.10"` > `"1.1.9"`. */
+export function compareMantraNumberSuffix(
+  a: string | null | undefined,
+  b: string | null | undefined,
+): number {
+  if (!a && !b) return 0;
+  if (!a) return 1;
+  if (!b) return -1;
+  const pa = a.split(".").map((x) => parseInt(x, 10) || 0);
+  const pb = b.split(".").map((x) => parseInt(x, 10) || 0);
+  for (let i = 0; i < Math.max(pa.length, pb.length); i++) {
+    const da = pa[i] ?? 0;
+    const db = pb[i] ?? 0;
+    if (da !== db) return da - db;
+  }
+  return 0;
+}
+
+/** Last numeric segment of a suffix, e.g. `"1.1.4"` → `4`. */
+export function mantraSuffixLeafOrder(suffix: string | null | undefined): number | null {
+  if (!suffix) return null;
+  const parts = suffix.split(".");
+  const n = parseInt(parts[parts.length - 1] ?? "", 10);
+  return Number.isNaN(n) ? null : n;
+}
 
 /** Trailing numeric segment, e.g. `"Mantra 1.1.5"` → `"1.1.5"`. */
 export function mantraNumberSuffix(title: string | undefined): string | null {
@@ -221,6 +262,23 @@ export function pickPreferredStrapiMantraRef(
   })[0];
 }
 
+/**
+ * When duplicates share the same verse suffix, prefer the row with substantive CMS text
+ * so the Grantha editor and Mantras tab link to the same record.
+ */
+export function pickBestStrapiMantraRefForLink(
+  refs: StrapiMantraRef[],
+  preferredDocId?: string,
+): StrapiMantraRef | undefined {
+  if (refs.length === 0) return undefined;
+  const maxScore = Math.max(...refs.map((r) => strapiMantraRefRichness(r)));
+  if (maxScore >= MANTRA_LINK_MIN_CONTENT_SCORE) {
+    const richest = refs.filter((r) => strapiMantraRefRichness(r) === maxScore);
+    return pickPreferredStrapiMantraRef(richest, preferredDocId);
+  }
+  return pickPreferredStrapiMantraRef(refs, preferredDocId);
+}
+
 export function findStrapiMantraByLeafAndSuffix(
   mantras: StrapiMantraRef[],
   portalTitle: string | undefined,
@@ -240,7 +298,7 @@ export function findStrapiMantraByLeafAndSuffix(
       titleUsesConfiguredLeaf(sm.title, leaf),
   );
   if (hits.length === 0) return undefined;
-  return pickPreferredStrapiMantraRef(hits, preferredDocId);
+  return pickBestStrapiMantraRefForLink(hits, preferredDocId);
 }
 
 export interface ResolvePortalMantraStrapiOptions {
@@ -666,4 +724,106 @@ export function prepareHierarchyForContentStep(
   });
 
   return { hierarchy: next, sectionDocIdsToMarkDeleted };
+}
+
+export function scoreStrapiManthraRowContent(entry: unknown): number {
+  if (!entry || typeof entry !== "object") return 0;
+  const e = entry as { SanskritTextEntry?: unknown; EnglishTranslationText?: unknown };
+  return (
+    entryContentCharCount(e.SanskritTextEntry) + entryContentCharCount(e.EnglishTranslationText)
+  );
+}
+
+/** One row per section + verse suffix — keep the CMS row with the most text (matches Grantha linking). */
+export function dedupePublishedMantrasForDisplay<
+  T extends {
+    documentId?: string;
+    ShlokaManthraNumber?: string;
+    ShlokaManthraEntry?: unknown;
+    section?: { documentId?: string };
+  },
+>(rows: T[]): T[] {
+  const byKey = new Map<string, { row: T; score: number }>();
+  for (const m of rows) {
+    const sec = m.section?.documentId ?? "__none__";
+    const numSuffix = mantraNumberSuffix(String(m.ShlokaManthraNumber ?? ""));
+    const key = numSuffix ? `${sec}:${numSuffix}` : `${sec}:__${m.documentId ?? Math.random()}`;
+    const score = scoreStrapiManthraRowContent(m.ShlokaManthraEntry);
+    const leafOrd = mantraSuffixLeafOrder(numSuffix);
+    const orderBonus =
+      leafOrd != null && typeof (m as { order?: number }).order === "number" && (m as { order?: number }).order === leafOrd
+        ? 500
+        : 0;
+    const emptyPenalty = score < 8 ? -2000 : 0;
+    const totalScore = score + orderBonus + emptyPenalty;
+    const prev = byKey.get(key);
+    if (!prev || totalScore > prev.score) byKey.set(key, { row: m, score: totalScore });
+  }
+  return [...byKey.values()].map((v) => v.row);
+}
+
+/** Section row from Strapi `sections/by-grantha` (metadata + optional manthras). */
+export type StrapiSectionNode = {
+  documentId?: string;
+  title?: string;
+  type?: string | null;
+  parent?: { documentId?: string; title?: string; type?: string | null };
+};
+
+/** True when this grantha has at least one section whose parent is another section (e.g. Khanda under Adhyaya). */
+export function strapiGranthaHasKhandaSections(sections: StrapiSectionNode[]): boolean {
+  if (!sections?.length) return false;
+  const docIds = new Set(
+    sections.map((s) => s.documentId).filter((id): id is string => isPublishedStrapiDocId(id)),
+  );
+  return sections.some((sec) => {
+    const pid = sec.parent?.documentId;
+    return !!pid && docIds.has(pid);
+  });
+}
+
+export function buildSectionByDocIdMap(
+  sections: StrapiSectionNode[],
+): Map<string, StrapiSectionNode> {
+  const map = new Map<string, StrapiSectionNode>();
+  for (const s of sections) {
+    if (isPublishedStrapiDocId(s.documentId)) map.set(s.documentId, s);
+  }
+  return map;
+}
+
+/** Root → leaf chain for a section (e.g. Prathama Adhyaya → Prathama Khanda). */
+export function buildSectionAncestorPath(
+  sectionDocId: string,
+  sectionsByDocId: Map<string, StrapiSectionNode>,
+): StrapiSectionNode[] {
+  const path: StrapiSectionNode[] = [];
+  let cur = sectionsByDocId.get(sectionDocId);
+  const seen = new Set<string>();
+  while (cur?.documentId) {
+    if (seen.has(cur.documentId)) break;
+    seen.add(cur.documentId);
+    path.unshift(cur);
+    const pid = cur.parent?.documentId;
+    cur = pid ? sectionsByDocId.get(pid) : undefined;
+  }
+  return path;
+}
+
+export function sectionPathLabel(path: StrapiSectionNode[]): string {
+  return path.map((s) => s.title?.trim() || "Section").join(" → ");
+}
+
+/**
+ * Mantras whose `Section` is the adhyaya row while child khanda sections exist in Strapi.
+ * Those rows show as "Adhyaya → mantras" in the list and often carry stale/wrong content.
+ */
+export function isMantraSectionMisplacedOnAdhyaya(
+  mantraSectionDocId: string | undefined,
+  sections: StrapiSectionNode[],
+): boolean {
+  if (!mantraSectionDocId || !strapiGranthaHasKhandaSections(sections)) return false;
+  const byId = buildSectionByDocIdMap(sections);
+  const path = buildSectionAncestorPath(mantraSectionDocId, byId);
+  return path.length === 1;
 }

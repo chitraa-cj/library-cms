@@ -640,12 +640,34 @@ function dedupeManthrasForEditor(manthras: ManthraNode[], leaf: string): Manthra
   return sortNodesByOrder([...bySuffix.values()]);
 }
 
-function hasManthraContent(m: ManthraNode) {
+function hasManthraContent(m: ManthraNode): boolean {
   return (
     shlokaManthraEntryRichness(m.ShlokaManthraEntry) > 12 ||
     hasBlocks(m.BhashyamForShlokaManthra?.SanskritTextEntry) ||
-    m.Teekas?.some((t) => hasBlocks(t.TeekaEntry?.SanskritTextEntry))
+    !!m.Teekas?.some((t) => hasBlocks(t.TeekaEntry?.SanskritTextEntry))
   );
+}
+
+/** Drop portal-only stub rows left in draft after Strapi cleanup (no docId, no text). */
+function shouldKeepManthraInEditor(m: ManthraNode): boolean {
+  if (isNewLocalManthra(m)) return true;
+  if (!!m.strapiDocumentId && isPublishedStrapiDocId(m.strapiDocumentId)) return true;
+  return hasManthraContent(m);
+}
+
+function stripOrphanPortalMantrasFromHierarchy(hier: AdhyayaNode[]): AdhyayaNode[] {
+  const filterList = (list: ManthraNode[]) => list.filter(shouldKeepManthraInEditor);
+  return hier.map((a) => ({
+    ...a,
+    khandas: (a.khandas ?? []).map((k) => ({
+      ...k,
+      manthras: filterList(k.manthras ?? []),
+      padas: (k.padas ?? []).map((p) => ({
+        ...p,
+        manthras: filterList(p.manthras ?? []),
+      })),
+    })),
+  }));
 }
 
 function isNewLocalManthra(m: ManthraNode): boolean {
@@ -2461,17 +2483,17 @@ export default function GranthasPage() {
               const resolved = resolveDocId(m);
               if (!resolved) return acc; // dropped: Strapi record was deleted, no order remap
               const { docId } = resolved;
-              acc.push(
-                hydrateManthraShlokaFromIndex(
-                  {
-                    ...m,
-                    title: portalMantraTitleForLeaf(m.title, leafLabel),
-                    strapiDocumentId: docId,
-                  },
-                  shlokaIndex,
-                  docId,
-                ),
+              const row = hydrateManthraShlokaFromIndex(
+                {
+                  ...m,
+                  title: portalMantraTitleForLeaf(m.title, leafLabel),
+                  strapiDocumentId: docId,
+                },
+                shlokaIndex,
+                docId,
               );
+              if (!shouldKeepManthraInEditor(row)) return acc;
+              acc.push(row);
               return acc;
             }, []);
             // Enrich existing padas (3-level granthas: khanda → pada → manthra).
@@ -2505,10 +2527,10 @@ export default function GranthasPage() {
                 ambiguousOrders: padaAmbiguousOrders,
               };
               const padaMatchedDocIds = new Set<string>();
-              const enrichedPadaManthras = p.manthras.map((m) => {
+              const enrichedPadaManthras = p.manthras.reduce<ManthraNode[]>((acc, m) => {
                 const resolved = resolvePortalMantraToStrapiDoc(m, padaResolveOpts);
-                if (!resolved?.docId) return m;
-                padaMatchedDocIds.add(resolved.docId);
+                if (!resolved) return acc;
+                if (resolved.docId) padaMatchedDocIds.add(resolved.docId);
                 const row = hydrateManthraShlokaFromIndex(
                   {
                     ...m,
@@ -2518,10 +2540,14 @@ export default function GranthasPage() {
                   shlokaIndex,
                   resolved.docId,
                 );
-                markStrapiDocsMatchedByLeaf(m.title, padaStrapi, padaMatchedDocIds);
-                markStrapiDocsMatchedBySuffix(m.title, padaStrapi, padaMatchedDocIds);
-                return row;
-              });
+                if (!shouldKeepManthraInEditor(row)) return acc;
+                if (resolved.docId) {
+                  markStrapiDocsMatchedByLeaf(m.title, padaStrapi, padaMatchedDocIds);
+                  markStrapiDocsMatchedBySuffix(m.title, padaStrapi, padaMatchedDocIds);
+                }
+                acc.push(row);
+                return acc;
+              }, []);
               // Supplement: Strapi manthras on this pada not yet in the local list.
               const newPadaManthras: ManthraNode[] = [];
               for (const sm of padaStrapi) {
@@ -2792,7 +2818,8 @@ export default function GranthasPage() {
         ? [...enrichedHier2, ...missingAdhyayas].sort((a, b) => (a.order ?? 0) - (b.order ?? 0))
         : enrichedHier2;
 
-      const prep = prepareHierarchyForContentStep(finalHier2, effectiveStructureConfig);
+      const prunedHier2 = stripOrphanPortalMantrasFromHierarchy(finalHier2);
+      const prep = prepareHierarchyForContentStep(prunedHier2, effectiveStructureConfig);
       if (!isCurrentOpenEditLoad(openEditLoadGen)) {
         return;
       }
@@ -4519,7 +4546,7 @@ export default function GranthasPage() {
       <div className="p-6 lg:p-8 max-w-7xl mx-auto">
         <div className="flex items-center justify-between mb-6">
           <div>
-            <h1 className="text-2xl font-bold tracking-tight">All Granthas</h1>
+            <h1 className="text-2xl font-bold tracking-tight">All the Granthas</h1>
             <p className="text-muted-foreground text-sm mt-1">
               Browse library to update existing content
             </p>

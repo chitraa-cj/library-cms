@@ -82,6 +82,12 @@ function normalizeSnapshotPayload(input: any): any {
   return null;
 }
 
+import {
+  isPortalDraftDataKey,
+  scrubLeakedPortalKeysFromStrapiPayload,
+  stripPortalMetaFromGranthaPayload,
+} from "@shared/portal-draft-meta";
+
 const STRAPI_INTERNAL_KEYS = new Set(["id", "_id", "__component", "createdAt", "updatedAt", "publishedAt", "documentId", "locale"]);
 
 // ─── Background publish job store ────────────────────────────────────────────
@@ -634,6 +640,7 @@ function cleanPayloadForStrapi(data: Record<string, any>): Record<string, any> {
     // Strip string "NaN" — happens when a number input was left blank and serialized
     if (value === "NaN") continue;
     if (STRAPI_INTERNAL_KEYS.has(key)) continue;
+    if (isPortalDraftDataKey(key)) continue;
     // Strip local-only portal fields (prefixed with _)
     if (key.startsWith("_")) continue;
     if (typeof value === "object" && !Array.isArray(value)) {
@@ -2132,9 +2139,10 @@ async function publishGranthaWithHierarchy(
     deletedStrapiSectionDocIds,
     deletedStrapiManthraDocIds,
     deletedStrapiTeekaDocIds,
+    publishScope: _publishScope,
     ...granthaDataRaw
   } = rawData;
-  const granthaPayload = cleanPayloadForStrapi(granthaDataRaw);
+  const granthaPayload = cleanPayloadForStrapi(stripPortalMetaFromGranthaPayload(granthaDataRaw));
 
   // ── Progress tracking ─────────────────────────────────────────────────────
   // All three bindings use const/let (not function declarations) so they are
@@ -2211,6 +2219,14 @@ async function publishGranthaWithHierarchy(
       ];
     }
     // We already know the Strapi record — update it
+    scrubLeakedPortalKeysFromStrapiPayload(
+      granthaPayload,
+      `PUT /api/granthas/${draft.strapiDocumentId}`,
+    );
+    console.log(
+      `[publish] Strapi PUT /api/granthas/${draft.strapiDocumentId} keys:`,
+      Object.keys(granthaPayload).sort().join(", "),
+    );
     strapiResult = await strapiRequest(`/api/granthas/${draft.strapiDocumentId}`, {
       method: "PUT",
       body: JSON.stringify({ data: granthaPayload }),
@@ -2246,11 +2262,13 @@ async function publishGranthaWithHierarchy(
           { type: "paragraph", children: [{ type: "text", text: "" }] },
         ];
       }
+      scrubLeakedPortalKeysFromStrapiPayload(granthaPayload, `PUT /api/granthas/${existingDocId}`);
       strapiResult = await strapiRequest(`/api/granthas/${existingDocId}`, {
         method: "PUT",
         body: JSON.stringify({ data: granthaPayload }),
       });
     } else {
+      scrubLeakedPortalKeysFromStrapiPayload(granthaPayload, "POST /api/granthas");
       strapiResult = await strapiRequest("/api/granthas", {
         method: "POST",
         body: JSON.stringify({ data: granthaPayload }),
@@ -3492,9 +3510,20 @@ export async function registerRoutes(
           data: before.data,
         });
       }
-      const success = await storage.deleteDraft(id, user.id);
-      if (!success) return res.status(404).json({ message: "Draft not found" });
-      res.json({ message: "Draft deleted" });
+      const plan = await storage.getDraftDiscardPlan(id, user.id);
+      if (!plan.draft) return res.status(404).json({ message: "Draft not found" });
+      const { deleted, plan: resultPlan } = await storage.discardDraftWithDependencies(id, {
+        userId: user.id,
+      });
+      if (!deleted) return res.status(404).json({ message: "Draft not found" });
+      res.json({
+        message: "Draft deleted",
+        removed: {
+          idempotencyKeys: resultPlan.idempotencyKeys,
+          publishJobs: resultPlan.publishJobs,
+          publishJobTasks: resultPlan.publishJobTasks,
+        },
+      });
     } catch (error: any) {
       res.status(500).json({ message: error.message || "Failed to delete draft" });
     }

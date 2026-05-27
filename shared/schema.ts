@@ -50,7 +50,7 @@ export type Draft = typeof contentDrafts.$inferSelect;
 
 export const publishJobs = pgTable("cms_publish_jobs", {
   id: varchar("id").primaryKey(),
-  draftId: integer("draft_id").notNull().references(() => contentDrafts.id),
+  draftId: integer("draft_id").notNull().references(() => contentDrafts.id, { onDelete: "cascade" }),
   userId: varchar("user_id").references(() => users.id),
   status: text("status").notNull().default("queued"), // queued|running|done|failed|cancelled|failed_recoverable
   progressDone: integer("progress_done").notNull().default(0),
@@ -69,15 +69,15 @@ export const idempotencyKeys = pgTable("cms_idempotency_keys", {
   responseStatus: integer("response_status").notNull(),
   responseBody: jsonb("response_body"),
   userId: varchar("user_id").references(() => users.id),
-  draftId: integer("draft_id").references(() => contentDrafts.id),
+  draftId: integer("draft_id").references(() => contentDrafts.id, { onDelete: "cascade" }),
   createdAt: timestamp("created_at").defaultNow().notNull(),
   expiresAt: timestamp("expires_at").notNull(),
 });
 
 export const publishJobTasks = pgTable("cms_publish_job_tasks", {
   id: serial("id").primaryKey(),
-  jobId: varchar("job_id").notNull().references(() => publishJobs.id),
-  draftId: integer("draft_id").notNull().references(() => contentDrafts.id),
+  jobId: varchar("job_id").notNull().references(() => publishJobs.id, { onDelete: "cascade" }),
+  draftId: integer("draft_id").notNull().references(() => contentDrafts.id, { onDelete: "cascade" }),
   taskType: text("task_type").notNull().default("publish_manthra"),
   status: text("status").notNull().default("queued"), // queued|running|done|failed
   attemptCount: integer("attempt_count").notNull().default(0),

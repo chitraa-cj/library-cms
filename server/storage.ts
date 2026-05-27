@@ -1,6 +1,7 @@
 import { type User, type InsertUser, type Draft, type InsertDraft, users, contentDrafts, granthaBackups, type GranthaBackup, type GranthaBackupMeta, granthaLocks, type GranthaLock, publishJobs, type PublishJobRecord, idempotencyKeys, type IdempotencyKeyRecord, publishJobTasks, type PublishJobTaskRecord } from "@shared/schema";
 import { db } from "./db";
-import { eq, and, desc, sql, inArray, gte, lte } from "drizzle-orm";
+import { eq, and, desc, sql, inArray, gte, lte, lt } from "drizzle-orm";
+import { discardDraftWithDependencies, getDraftDiscardPlan, type DraftDiscardPlan, type DraftDiscardResult } from "./draft-discard";
 
 export interface IStorage {
   getUser(id: string): Promise<User | undefined>;
@@ -19,6 +20,9 @@ export interface IStorage {
   updateDraftIfVersion(id: number, userId: string, expectedUpdatedAt: Date, data: Partial<InsertDraft>): Promise<Draft | undefined>;
   deleteDraft(id: number, userId: string): Promise<boolean>;
   deleteDraftById(id: number): Promise<boolean>;
+  getDraftDiscardPlan(draftId: number, userId?: string): Promise<DraftDiscardPlan>;
+  discardDraftWithDependencies(draftId: number, opts?: { userId?: string; dryRun?: boolean }): Promise<DraftDiscardResult>;
+  purgeExpiredIdempotencyKeys(): Promise<number>;
   markDraftPublished(id: number, userId: string, strapiDocumentId?: string): Promise<Draft | undefined>;
   createBackup(label: string, data: any, granthaCount: number, sectionCount: number, manthraCount: number): Promise<GranthaBackup>;
   listBackups(): Promise<GranthaBackupMeta[]>;
@@ -144,18 +148,36 @@ export class DatabaseStorage implements IStorage {
     return draft;
   }
 
+  async getDraftDiscardPlan(draftId: number, userId?: string): Promise<DraftDiscardPlan> {
+    return getDraftDiscardPlan(draftId, userId);
+  }
+
+  async discardDraftWithDependencies(
+    draftId: number,
+    opts?: { userId?: string; dryRun?: boolean },
+  ): Promise<DraftDiscardResult> {
+    return discardDraftWithDependencies({ draftId, ...opts });
+  }
+
+  async purgeExpiredIdempotencyKeys(): Promise<number> {
+    const removed = await db
+      .delete(idempotencyKeys)
+      .where(lt(idempotencyKeys.expiresAt, new Date()))
+      .returning({ key: idempotencyKeys.key });
+    if (removed.length > 0) {
+      console.log(`[idempotency.ttl] purged ${removed.length} expired key(s)`);
+    }
+    return removed.length;
+  }
+
   async deleteDraft(id: number, userId: string): Promise<boolean> {
-    const result = await db.delete(contentDrafts)
-      .where(and(eq(contentDrafts.id, id), eq(contentDrafts.createdBy, userId)))
-      .returning();
-    return result.length > 0;
+    const { deleted } = await discardDraftWithDependencies({ draftId: id, userId });
+    return deleted;
   }
 
   async deleteDraftById(id: number): Promise<boolean> {
-    const result = await db.delete(contentDrafts)
-      .where(eq(contentDrafts.id, id))
-      .returning();
-    return result.length > 0;
+    const { deleted } = await discardDraftWithDependencies({ draftId: id });
+    return deleted;
   }
 
   async markDraftPublished(id: number, userId: string, strapiDocumentId?: string): Promise<Draft | undefined> {

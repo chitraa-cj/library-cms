@@ -6,6 +6,7 @@ import { serveStatic } from "./static";
 import { createServer } from "http";
 import { db } from "./db";
 import { publishJobs, publishJobTasks, users } from "@shared/schema";
+import { storage } from "./storage";
 import { eq, sql } from "drizzle-orm";
 
 const app = express();
@@ -111,6 +112,20 @@ app.use((req, res, next) => {
   } catch (e) {
     console.error("[startup] Publish job reconcile error:", e);
   }
+
+  // Physical TTL for idempotency replay rows (logical expiry ignored them until now).
+  try {
+    const purged = await storage.purgeExpiredIdempotencyKeys();
+    if (purged > 0) console.log(`[startup] Purged ${purged} expired idempotency key(s)`);
+  } catch (e) {
+    console.error("[startup] Idempotency TTL purge error:", e);
+  }
+  const idempotencyTtlMs = 60 * 60 * 1000;
+  setInterval(() => {
+    void storage.purgeExpiredIdempotencyKeys().catch((e) => {
+      console.error("[idempotency.ttl] periodic purge error:", e);
+    });
+  }, idempotencyTtlMs).unref?.();
 
   await registerRoutes(httpServer, app);
 

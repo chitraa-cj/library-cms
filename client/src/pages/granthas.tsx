@@ -72,7 +72,6 @@ import {
   buildMantraShlokaIndexFromSections,
   hydrateManthraShlokaFromIndex,
   mantraNodeHasHydratedShloka,
-  type StrapiMantraShlokaIndex,
 } from "@/lib/strapi-mantra-hydration";
 import {
   sortNodesByOrder,
@@ -677,25 +676,6 @@ function shouldKeepManthraInEditor(
   return hasManthraContent(m);
 }
 
-function hydrateHierarchyShlokasFromIndex(
-  hier: AdhyayaNode[],
-  shlokaIndex: StrapiMantraShlokaIndex,
-): AdhyayaNode[] {
-  const mapManthras = (list: ManthraNode[]) =>
-    list.map((m) => hydrateManthraShlokaFromIndex(m, shlokaIndex, m.strapiDocumentId));
-  return hier.map((a) => ({
-    ...a,
-    khandas: (a.khandas ?? []).map((k) => ({
-      ...k,
-      manthras: mapManthras(k.manthras ?? []),
-      padas: (k.padas ?? []).map((p) => ({
-        ...p,
-        manthras: mapManthras(p.manthras ?? []),
-      })),
-    })),
-  }));
-}
-
 function stripOrphanPortalMantrasFromHierarchy(
   hier: AdhyayaNode[],
   validStrapiMantraDocIds?: Set<string>,
@@ -810,6 +790,7 @@ function GranthaCard({
   onUnlock?: () => void;
 }) {
   const isDraft = item._isDraft;
+  const isLinkedPublishedDraft = isDraft && !!item._strapiDocId;
   const canDelete = !currentUserId || item._createdBy === currentUserId;
 
   return (
@@ -833,7 +814,7 @@ function GranthaCard({
                 : "border-green-300 text-green-700 bg-green-50 dark:bg-green-950/30 dark:text-green-400"
             }`}
           >
-            {isDraft ? "Draft" : "Published"}
+            {isDraft ? (isLinkedPublishedDraft ? "Draft overlay" : "Draft") : "Published"}
           </Badge>
           {isLocked && (
             <Badge
@@ -869,7 +850,7 @@ function GranthaCard({
               onClick={onResetDraftFromStrapi}
               disabled={isPublishing || isResettingDraft}
               data-testid={`button-reset-draft-strapi-${item._draftId}`}
-              title="Discard draft changes and reload hierarchy from published Strapi"
+              title="Discard portal draft and show the published Strapi entry in the list"
             >
               {isResettingDraft ? (
                 <Loader2 className="w-3.5 h-3.5 animate-spin" />
@@ -1031,7 +1012,11 @@ function GranthaCard({
         </div>
       )}
       {isDraft && (
-        <p className="text-xs text-muted-foreground mt-3 pt-3 border-t">Draft — not yet published</p>
+        <p className="text-xs text-muted-foreground mt-3 pt-3 border-t">
+          {isLinkedPublishedDraft
+            ? "Portal draft overlay — Strapi is already published. Use ↺ to discard this draft and show the live entry."
+            : "Draft — not yet published"}
+        </p>
       )}
     </div>
   );
@@ -1422,6 +1407,11 @@ export default function GranthasPage() {
             mergedRich >= localRich || remoteRich >= MANTRA_LINK_MIN_CONTENT_SCORE
               ? mergedShloka
               : stripStubTextAndTranslationEntry(mn.ShlokaManthraEntry) ?? mn.ShlokaManthraEntry;
+        } else {
+          // Shloka SK/EN already came from sections/by-grantha — still merge OtherTranslations
+          // (and IAST) from full CMS row. Bhashyam already did this; shloka OT was skipped before.
+          const mergedShloka = mergeEntry(mn.ShlokaManthraEntry, cmsShloka as any);
+          shloka = mergedShloka ?? mn.ShlokaManthraEntry;
         }
 
         return {
@@ -4125,164 +4115,6 @@ export default function GranthasPage() {
 
   // ---------- Save / Delete / Publish ----------
 
-  function applyPublishedStrapiPayloadToEditor(payload: Record<string, any>) {
-    const bh = payload.BhashyakaraIntroduction;
-    setFormData({
-      GranthaName: payload.GranthaName || "",
-      GranthaType: payload.GranthaType || "",
-      BhashyamName: payload.BhashyamName || "",
-      BhashyamAuthor: payload.BhashyamAuthor || "",
-      IntroductionToTextEnglish: payload.IntroductionToTextEnglish || [],
-      BhashyakaraIntroductionSanskrit: bh?.SanskritTextEntry || [],
-      BhashyakaraIntroductionEnglish: bh?.EnglishTranslationText || [],
-      BhashyakaraIntroductionIAST: bh?.IASTTransliteration || [],
-      slug: payload.slug || "",
-      order: payload.order != null ? String(payload.order) : "",
-      introVideoId: payload.introVideoId || "",
-      introVideoTitle: payload.introVideoTitle || "",
-    });
-    setTeekas(payload.teekas || []);
-    setOtherTranslations(
-      (payload.otherTranslations || []).map((t: any) => ({
-        ...t,
-        text: t.text || [],
-      })),
-    );
-    setGranthaNameTranslations(payload.granthaNameTranslations || []);
-    setStructureConfig(payload.structureConfig || DEFAULT_STRUCTURE);
-    setAdhyayas(payload.hierarchy || []);
-    setDeletedStrapiSectionDocIds([]);
-    setDeletedStrapiManthraDocIds([]);
-    setDeletedStrapiTeekaDocIds([]);
-    resetPublishScope();
-    publishScopeMetaEffectSkipRef.current = true;
-    publishScopeReadyRef.current = true;
-    bindGranthaMantraPrefetchContext();
-    prefetchGranthaMantrasFromHierarchy(payload.hierarchy || []);
-  }
-
-  async function buildDraftDataFromPublishedStrapi(
-    granthaDocId: string,
-    draftData: Record<string, any>,
-  ): Promise<Record<string, any>> {
-    const [sectionsRes, teekasRes, granthaRes] = await Promise.all([
-      fetch(`/api/strapi/sections/by-grantha/${granthaDocId}`, { credentials: "include" }),
-      fetch(`/api/strapi/teekas/by-grantha/${granthaDocId}`, { credentials: "include" }),
-      fetch(`/api/strapi/granthas/${granthaDocId}`, { credentials: "include" }),
-    ]);
-    if (!sectionsRes.ok) {
-      throw new Error("Could not load sections from Strapi");
-    }
-    const sectionsData = await sectionsRes.json();
-    const fetchedSections: any[] = sectionsData?.data || [];
-
-    let strapiGranthaOne: any = null;
-    if (granthaRes.ok) {
-      try {
-        const gj = await granthaRes.json();
-        strapiGranthaOne = gj?.data ?? null;
-      } catch {
-        strapiGranthaOne = null;
-      }
-    }
-
-    const strapiTeekas: any[] = teekasRes.ok
-      ? ((await teekasRes.json())?.data || [])
-      : [];
-
-    let cfg = migrateStructureConfig(draftData.structureConfig);
-
-    let hier = reconstructHierarchyFromStrapi(fetchedSections, cfg.leafName);
-    if (hier.length > 0) {
-      const strapiHasKhandaLevel = strapiGranthaHasKhandaSections(fetchedSections);
-      const isFlat = hier.every(
-        (a) => a.khandas.length === 1 && a.khandas[0]?.title === "_default",
-      );
-      if (isFlat && !strapiHasKhandaLevel && cfg.levelTwoEnabled) {
-        cfg = { ...cfg, levelTwoEnabled: false };
-      }
-      if (strapiHasKhandaLevel && !cfg.levelTwoEnabled) {
-        cfg = { ...cfg, levelTwoEnabled: true };
-      }
-    }
-
-    const allStrapiMantraRefs: StrapiMantraRef[] = [];
-    const seenStrapiMantraDocIds = new Set<string>();
-    for (const sec of fetchedSections) {
-      if (!Array.isArray(sec.manthras)) continue;
-      for (const m of sec.manthras) {
-        if (m.ShlokaManthraNumber && m.documentId && !seenStrapiMantraDocIds.has(m.documentId)) {
-          seenStrapiMantraDocIds.add(m.documentId);
-          allStrapiMantraRefs.push({
-            title: m.ShlokaManthraNumber,
-            docId: m.documentId,
-            order: m.order ?? 0,
-            contentScore: scoreStrapiManthraRowContent(m.ShlokaManthraEntry),
-          });
-        }
-      }
-    }
-    const inferredLeaf = inferLeafNameFromStrapiMantras(
-      allStrapiMantraRefs,
-      cfg.leafName || "Mantra",
-    );
-    if (inferredLeaf !== (cfg.leafName || "Mantra")) {
-      cfg = { ...cfg, leafName: inferredLeaf };
-      hier = reconstructHierarchyFromStrapi(fetchedSections, inferredLeaf);
-    }
-
-    const shlokaIndex = buildMantraShlokaIndexFromSections(fetchedSections);
-    const validDocIds = collectValidStrapiMantraDocIdsFromSections(fetchedSections);
-    hier = hydrateHierarchyShlokasFromIndex(hier, shlokaIndex);
-    hier = stripOrphanPortalMantrasFromHierarchy(hier, validDocIds);
-    const prep = prepareHierarchyForContentStep(hier, cfg);
-    hier = withNormalizedHierarchy(prep.hierarchy as AdhyayaNode[], cfg);
-
-    const teekasFromStrapi = strapiTeekas.map((t: any) => ({
-      id: t.documentId || uid(),
-      TeekaName: t.TeekaName || "",
-      TeekaAuthor: t.TeekaAuthor || "",
-    }));
-
-    const g = strapiGranthaOne || {};
-    const d = draftData || {};
-    const payload: Record<string, any> = {
-      GranthaName: g.GranthaName || d.GranthaName || "",
-      GranthaType: g.GranthaType || d.GranthaType || undefined,
-      BhashyamName: g.BhashyamName || d.BhashyamName || undefined,
-      BhashyamAuthor: g.BhashyamAuthor || d.BhashyamAuthor || undefined,
-      teekas: teekasFromStrapi,
-      otherTranslations: mergeBhashyakaraPortalOtherTranslations([], g.BhashyakaraIntroduction),
-      granthaNameTranslations: mergeGranthaNameTranslationsPortal([], g.GranthaNameTranslations),
-      structureConfig: cfg,
-      hierarchy: hier,
-      publishScope: {
-        changedManthraIds: [],
-        requiresFullPublish: false,
-        granthaMetaDirty: false,
-      },
-    };
-
-    if (g.slug || d.slug) payload.slug = g.slug || d.slug;
-    const orderVal = g.order ?? d.order;
-    if (orderVal != null && orderVal !== "") payload.order = orderVal;
-    if (g.introVideoId || d.introVideoId) payload.introVideoId = g.introVideoId || d.introVideoId;
-    if (g.introVideoTitle || d.introVideoTitle) {
-      payload.introVideoTitle = g.introVideoTitle || d.introVideoTitle;
-    }
-    if (hasBlocks(g.IntroductionToTextEnglish)) {
-      payload.IntroductionToTextEnglish = g.IntroductionToTextEnglish;
-    } else if (hasBlocks(d.IntroductionToTextEnglish)) {
-      payload.IntroductionToTextEnglish = d.IntroductionToTextEnglish;
-    }
-    const bh = g.BhashyakaraIntroduction;
-    if (bh) {
-      payload.BhashyakaraIntroduction = bh;
-    }
-
-    return payload;
-  }
-
   async function confirmResetDraftFromStrapi() {
     const item = resetDraftTarget;
     if (!item?._draftId || !item._strapiDocId) {
@@ -4292,37 +4124,25 @@ export default function GranthasPage() {
     const draftId = item._draftId as number;
     setResettingDraftId(draftId);
     try {
-      const payload = await buildDraftDataFromPublishedStrapi(
-        item._strapiDocId,
-        item._draftData || {},
-      );
-      await new Promise<void>((resolve, reject) => {
-        saveDraft.mutate(
-          {
-            title: payload.GranthaName || item.GranthaName || "Grantha",
-            data: payload,
-            strapiDocumentId: item._strapiDocId,
-            draftId,
-          },
-          {
-            onSuccess: () => resolve(),
-            onError: (err: unknown) => reject(err),
-          },
-        );
-      });
+      // Strapi is already live — remove the portal overlay draft so the list shows "Published".
+      await apiRequest("DELETE", `/api/drafts/${draftId}`);
+      await queryClient.invalidateQueries({ queryKey: ["/api/drafts", "granthas"] });
+      await queryClient.invalidateQueries({ queryKey: ["/api/strapi", "granthas"] });
+      syncGranthaCmsCaches(queryClient);
       if (editingDraftId === draftId) {
-        applyPublishedStrapiPayloadToEditor(payload);
+        resetForm();
+        setView("list");
       }
       toast({
-        title: "Draft reset from Strapi",
+        title: "Portal draft discarded",
         description:
-          "Portal draft hierarchy and verse list now match published Strapi. Unsaved local edits were discarded.",
+          "The published Strapi entry is shown again in the list. Open it to work from live CMS data.",
       });
     } catch (err: any) {
       toast({
         variant: "destructive",
-        title: "Reset failed",
-        description: err?.message || "Could not reload draft from Strapi",
+        title: "Could not discard draft",
+        description: err?.message || "Delete draft failed",
       });
     } finally {
       setResettingDraftId(null);
@@ -4928,11 +4748,11 @@ export default function GranthasPage() {
         <AlertDialog open={!!resetDraftTarget} onOpenChange={(open) => { if (!open) setResetDraftTarget(null); }}>
           <AlertDialogContent>
             <AlertDialogHeader>
-              <AlertDialogTitle>Reset draft from Strapi?</AlertDialogTitle>
+              <AlertDialogTitle>Discard portal draft?</AlertDialogTitle>
               <AlertDialogDescription>
-                This discards unpublished portal changes for &quot;{resetDraftTarget?.GranthaName}&quot; and
-                rebuilds the draft hierarchy from live Strapi (sections, mantras, teekas). Strapi content is not
-                deleted. This is not the same as Recover Snapshot.
+                This removes the portal draft for &quot;{resetDraftTarget?.GranthaName}&quot; only. Published
+                content in Strapi is unchanged. The card will show as <strong>Published</strong> again in the list.
+                Open that entry to edit from live CMS data. (Not the same as Recover Snapshot.)
               </AlertDialogDescription>
             </AlertDialogHeader>
             <AlertDialogFooter>
@@ -4943,7 +4763,7 @@ export default function GranthasPage() {
                 data-testid="button-confirm-reset-draft-strapi"
               >
                 {resettingDraftId != null && <Loader2 className="w-4 h-4 mr-2 animate-spin" />}
-                Reset draft
+                Discard draft
               </AlertDialogAction>
             </AlertDialogFooter>
           </AlertDialogContent>
@@ -6230,14 +6050,14 @@ export default function GranthasPage() {
                       saveDraft.isPending ||
                       publishDraft.isPending
                     }
-                    title="Discard draft changes and reload hierarchy from published Strapi"
+                    title="Discard portal draft and return to the published Strapi entry in the list"
                     data-testid="button-reset-draft-strapi-editor"
                   >
                     {resettingDraftId === editingDraftId && (
                       <Loader2 className="w-4 h-4 mr-2 animate-spin" />
                     )}
                     <RotateCcw className="w-4 h-4 mr-2" />
-                    Reset from Strapi
+                    Discard draft
                   </Button>
                 )}
                 {editingGranthaStrapiDocumentId() && (
@@ -6966,11 +6786,11 @@ export default function GranthasPage() {
       <AlertDialog open={!!resetDraftTarget} onOpenChange={(open) => { if (!open) setResetDraftTarget(null); }}>
         <AlertDialogContent>
           <AlertDialogHeader>
-            <AlertDialogTitle>Reset draft from Strapi?</AlertDialogTitle>
+            <AlertDialogTitle>Discard portal draft?</AlertDialogTitle>
             <AlertDialogDescription>
-              This discards unpublished portal changes for &quot;{resetDraftTarget?.GranthaName}&quot; and
-              rebuilds the draft hierarchy from live Strapi (sections, mantras, teekas). Strapi content is not
-              deleted. This is not the same as Recover Snapshot.
+              This removes the portal draft for &quot;{resetDraftTarget?.GranthaName}&quot; only. Published
+              content in Strapi is unchanged. The card will show as <strong>Published</strong> again in the list.
+              Open that entry to edit from live CMS data. (Not the same as Recover Snapshot.)
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
@@ -6981,7 +6801,7 @@ export default function GranthasPage() {
               data-testid="button-confirm-reset-draft-strapi-form"
             >
               {resettingDraftId != null && <Loader2 className="w-4 h-4 mr-2 animate-spin" />}
-              Reset draft
+              Discard draft
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>

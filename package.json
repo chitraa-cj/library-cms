@@ -18,6 +18,8 @@
     "audit:grantha-mantras": "tsx script/audit-grantha-mantra-integrity.ts",
     "compare:grantha-backup": "tsx script/compare-restore-grantha-backup.ts",
     "restore:shloka-ot": "tsx script/restore-shloka-ot-from-backup.ts",
+    "import:ishavasya-scrape": "tsx script/import-ishavasya-translations-from-scrape.ts",
+    "discard:grantha-draft": "tsx script/discard-grantha-portal-draft.ts",
     "test:publish-integrity": "tsx script/test-grantha-publish-integrity.ts",
     "db:push": "drizzle-kit push",
     "hermex:install": "python3 -m venv .venv-hermex && .venv-hermex/bin/pip install -r python/hermex_translate/requirements.txt",

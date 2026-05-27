@@ -15,6 +15,7 @@ import {
   assertVerseSuffixStable,
   isPublishIntegrityEnabled,
   mantraNumberSuffix,
+  portalMantraTitleForConfiguredLeaf,
   sectionSuffixCollision,
 } from "@shared/grantha-publish-integrity";
 
@@ -958,7 +959,10 @@ export function createStrapiRouter() {
             continue;
           }
           const order = typeof u.order === "number" && !Number.isNaN(u.order) ? u.order : 0;
-          const ShlokaManthraNumber = u.ShlokaManthraNumber ?? "";
+          const ShlokaManthraNumber = portalMantraTitleForConfiguredLeaf(
+            u.ShlokaManthraNumber ?? "",
+            leaf,
+          );
           if (integrityOn && ShlokaManthraNumber.trim()) {
             let existing = labelCache.get(documentId);
             if (existing === undefined) {

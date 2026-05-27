@@ -1,6 +1,7 @@
 import {
   assertVerseSuffixStable,
   detectSuspectCrossGranthaContent,
+  portalMantraTitleForConfiguredLeaf,
   scanMantraForPublish,
   scanGranthaHierarchyMantras,
 } from "../shared/grantha-publish-integrity";
@@ -8,6 +9,21 @@ import {
 function assert(cond: boolean, msg: string) {
   if (!cond) throw new Error(msg);
 }
+
+// Leaf relabel (Shloka → Mantra when grantha uses Mantra)
+assert(
+  portalMantraTitleForConfiguredLeaf("Shloka 3.10", "Mantra") === "Mantra 3.10",
+  "wrong leaf prefix should normalize on publish",
+);
+const relabeled = scanMantraForPublish({
+  portalLabel: portalMantraTitleForConfiguredLeaf("Shloka 3.10", "Mantra"),
+  configuredLeaf: "Mantra",
+  granthaName: "Test",
+});
+assert(
+  !relabeled.some((x) => x.code === "wrong_leaf_prefix"),
+  "normalized label must pass leaf check",
+);
 
 // Suffix stability
 assert(

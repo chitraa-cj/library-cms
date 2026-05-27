@@ -25,6 +25,53 @@ export function titleUsesConfiguredLeaf(title: string | undefined, configuredLea
   return prefix.toLowerCase() === leaf.toLowerCase();
 }
 
+export function canonicalMantraTitle(configuredLeaf: string, numericSuffix: string): string {
+  return `${(configuredLeaf || "Mantra").trim()} ${numericSuffix}`.trim();
+}
+
+/** Rewrite portal/Strapi label to use the grantha's configured leaf while keeping the verse suffix. */
+export function portalMantraTitleForConfiguredLeaf(
+  portalTitle: string | undefined,
+  configuredLeaf: string,
+  strapiTitle?: string,
+): string {
+  const leaf = (configuredLeaf || "Mantra").trim() || "Mantra";
+  const suffix = mantraNumberSuffix(portalTitle) ?? mantraNumberSuffix(strapiTitle);
+  if (suffix) return canonicalMantraTitle(leaf, suffix);
+  const st = (strapiTitle ?? "").trim();
+  if (st && titleUsesConfiguredLeaf(st, leaf)) return st;
+  const pt = (portalTitle ?? "").trim();
+  if (pt && titleUsesConfiguredLeaf(pt, leaf)) return pt;
+  return pt || canonicalMantraTitle(leaf, "1");
+}
+
+/** In-place: align all hierarchy mantra titles with configuredLeaf (Shloka ↔ Mantra relabel). */
+export function normalizeHierarchyMantraLeafTitles(
+  hierarchy: unknown[],
+  configuredLeaf: string,
+): void {
+  const leaf = (configuredLeaf || "Mantra").trim() || "Mantra";
+  const fix = (m: HierarchyMantraNode) => {
+    const next = portalMantraTitleForConfiguredLeaf(m.title, leaf, m.title);
+    if (next && next !== (m.title ?? "").trim()) {
+      m.title = next;
+    }
+  };
+  for (const a of hierarchy ?? []) {
+    const adhyaya = a as { khandas?: unknown[] };
+    for (const k of adhyaya.khandas ?? []) {
+      const khanda = k as {
+        manthras?: HierarchyMantraNode[];
+        padas?: { manthras?: HierarchyMantraNode[] }[];
+      };
+      for (const m of khanda.manthras ?? []) fix(m);
+      for (const p of khanda.padas ?? []) {
+        for (const m of p.manthras ?? []) fix(m);
+      }
+    }
+  }
+}
+
 export type PublishIntegritySeverity = "error" | "warning";
 
 export type PublishIntegrityViolation = {

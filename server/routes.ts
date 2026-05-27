@@ -26,7 +26,9 @@ import {
 import {
   formatIntegrityFailures,
   isPublishIntegrityEnabled,
+  normalizeHierarchyMantraLeafTitles,
   plainTextFromManthraEntry,
+  portalMantraTitleForConfiguredLeaf,
   scanGranthaHierarchyMantras,
   scanMantraForPublish,
   sectionSuffixCollision,
@@ -1866,6 +1868,15 @@ async function publishManthraToStrapi(
     granthaName?: string;
   },
 ): Promise<string | undefined> {
+  const configuredLeaf = (options?.configuredLeaf || "Mantra").trim() || "Mantra";
+  const normalizedTitle = portalMantraTitleForConfiguredLeaf(
+    manthra.title || manthra.ShlokaManthraNumber,
+    configuredLeaf,
+    manthra.ShlokaManthraNumber,
+  );
+  if (normalizedTitle !== (manthra.title ?? "").trim()) {
+    manthra = { ...manthra, title: normalizedTitle };
+  }
   const portalLabel = (manthra.title || manthra.ShlokaManthraNumber || "").trim();
   const prelimData = { ShlokaManthraNumber: portalLabel };
   const targetDocId = await resolveManthraDocIdForPublish(
@@ -1925,7 +1936,6 @@ async function publishManthraToStrapi(
   const fullLabel = portalMantraLabel(manthra, mData) || manthra.title || "(unknown)";
 
   if (isPublishIntegrityEnabled()) {
-    const configuredLeaf = (options?.configuredLeaf || "Mantra").trim() || "Mantra";
     const existingStrapiLabel =
       targetDocId ? await fetchManthraStrapiLabel(targetDocId) : undefined;
     const entry = mData.ShlokaManthraEntry ?? manthra.ShlokaManthraEntry;
@@ -2358,6 +2368,10 @@ async function publishGranthaWithHierarchy(
 
   const configuredLeaf = String(structureConfig?.leafName || "Mantra").trim() || "Mantra";
   const granthaNameForIntegrity = String(granthaPayload.GranthaName || draft.title || "").trim();
+
+  if (Array.isArray(hierarchy)) {
+    normalizeHierarchyMantraLeafTitles(hierarchy, configuredLeaf);
+  }
 
   if (isPublishIntegrityEnabled() && Array.isArray(hierarchy)) {
     const preflight = scanGranthaHierarchyMantras(
@@ -3763,6 +3777,10 @@ export async function registerRoutes(
       const structureConfig = data?.structureConfig ?? {};
       const configuredLeaf = String(structureConfig?.leafName || "Mantra").trim() || "Mantra";
       const granthaName = String(data?.GranthaName || draft.title || "").trim();
+
+      if (Array.isArray(hierarchy)) {
+        normalizeHierarchyMantraLeafTitles(hierarchy, configuredLeaf);
+      }
 
       const violations = isPublishIntegrityEnabled()
         ? scanGranthaHierarchyMantras(hierarchy, configuredLeaf, granthaName, { maxErrors: 40 })

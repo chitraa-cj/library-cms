@@ -61,11 +61,14 @@ import {
   dedupePublishedMantrasForDisplay,
   compareMantraNumberSuffix,
   mantraNumberSuffix,
+  mantraSuffixLeafOrder,
   MANTRA_LINK_MIN_CONTENT_SCORE,
   buildSectionByDocIdMap,
   buildSectionAncestorPath,
   sectionPathLabel,
   isMantraSectionMisplacedOnAdhyaya,
+  scoreStrapiManthraRowContent,
+  strapiGranthaHasKhandaSections,
 } from "@/lib/grantha-structure-sync";
 import {
   fetchPublishedManthraForEdit,
@@ -274,7 +277,57 @@ export default function ManthrasPage() {
       if (!sec?.grantha) return m;
       return { ...m, grantha: sec.grantha };
     });
-    return dedupePublishedMantrasForDisplay(normalized).sort(
+    const deduped = dedupePublishedMantrasForDisplay(normalized);
+
+    // One more canonicalization pass for granthas that now have khanda-level sections:
+    // keep exactly one best row per section-path + verse leaf index (e.g. 13),
+    // so legacy ghosts like "1.13" don't appear alongside canonical "1.1.13".
+    const byCanonicalDisplayKey = new Map<string, { row: any; score: number }>();
+    for (const m of deduped) {
+      const sectionDocId = m.section?.documentId;
+      const granthaId = m.grantha?.documentId || "__none__";
+      const granthaSections = allSections.filter(
+        (s) =>
+          (s as any).grantha?.documentId === granthaId ||
+          ((s as any).grantha?.GranthaName &&
+            (s as any).grantha?.GranthaName === m.grantha?.GranthaName),
+      );
+      const hasKhandaStructure = strapiGranthaHasKhandaSections(granthaSections as any[]);
+      if (!hasKhandaStructure || !sectionDocId) {
+        byCanonicalDisplayKey.set(`${m.documentId}`, { row: m, score: 0 });
+        continue;
+      }
+
+      const suffix = mantraNumberSuffix(m.ShlokaManthraNumber);
+      const leafOrd = mantraSuffixLeafOrder(suffix);
+      if (leafOrd == null) {
+        byCanonicalDisplayKey.set(`${m.documentId}`, { row: m, score: 0 });
+        continue;
+      }
+
+      const path = buildSectionAncestorPath(sectionDocId, sectionByDocId);
+      const pathKey = path.map((p) => p.documentId).join("/") || sectionDocId;
+      const canonicalKey = `${granthaId}:${pathKey}:${leafOrd}`;
+
+      const contentScore = scoreStrapiManthraRowContent(m.ShlokaManthraEntry);
+      const suffixDepth = suffix?.split(".").length ?? 0;
+      const misplacedPenalty = isMantraSectionMisplacedOnAdhyaya(sectionDocId, granthaSections as any[])
+        ? -5000
+        : 0;
+      const score =
+        contentScore +
+        suffixDepth * 100 +
+        (path.length > 1 ? 1000 : 0) +
+        misplacedPenalty;
+
+      const prev = byCanonicalDisplayKey.get(canonicalKey);
+      if (!prev || score > prev.score) {
+        byCanonicalDisplayKey.set(canonicalKey, { row: m, score });
+      }
+    }
+    const canonicalRows = [...byCanonicalDisplayKey.values()].map((x) => x.row);
+
+    return canonicalRows.sort(
       (a: any, b: any) => {
         const bySuffix = compareMantraNumberSuffix(
           mantraNumberSuffix(a.ShlokaManthraNumber),

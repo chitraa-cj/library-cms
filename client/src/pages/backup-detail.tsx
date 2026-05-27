@@ -359,20 +359,36 @@ type RestoreResult = {
   errors: { manthra: string; error: string }[];
 };
 
+type MantraRestoreResult = {
+  ok: boolean;
+  manthra: string;
+  actions: string[];
+  skipped: string[];
+  errors: string[];
+  message?: string;
+};
+
 export default function BackupDetailPage() {
   const params = useParams<{ id: string }>();
   const id = params.id;
+  const { toast } = useToast();
 
   const [selectedGranthaId, setSelectedGranthaId] = useState<number | null>(null);
   const [selectedSectionId, setSelectedSectionId] = useState<number | null>(null);
 
-  // Restore state
+  // Grantha-wide restore state
   const [restoreOpen, setRestoreOpen] = useState(false);
   const [restoreField, setRestoreField] = useState<string>("both");
   const [restoring, setRestoring] = useState(false);
   const [restoreResult, setRestoreResult] = useState<RestoreResult | null>(null);
-
   const [restoreProgress, setRestoreProgress] = useState<{ current: number; total: number } | null>(null);
+
+  // Single-mantra restore state
+  const [mantraRestoreOpen, setMantraRestoreOpen] = useState(false);
+  const [mantraRestoreTarget, setMantraRestoreTarget] = useState<ManthraEntry | null>(null);
+  const [mantraRestoreField, setMantraRestoreField] = useState<string>("all");
+  const [mantraRestoreResult, setMantraRestoreResult] = useState<MantraRestoreResult | null>(null);
+  const [mantraRestoringDocId, setMantraRestoringDocId] = useState<string | null>(null);
 
   async function handleRestoreMantra() {
     if (!mantraRestoreTarget || !selectedGrantha?.documentId) return;

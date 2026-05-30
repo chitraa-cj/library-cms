@@ -60,7 +60,7 @@ export function useDrafts(contentType: string) {
       try {
         const statusRes = await fetch(
           `/api/drafts/${draftId}/publish-status?jobId=${encodeURIComponent(jobId)}`,
-          { credentials: "include" }
+          { credentials: "include", cache: "no-store" },
         );
         if (!statusRes.ok) continue;
         const status = await statusRes.json();
@@ -98,6 +98,7 @@ export function useDrafts(contentType: string) {
     queryFn: async () => {
       const res = await fetch(`/api/drafts?contentType=${contentType}`, {
         credentials: "include",
+        cache: "no-store",
       });
       if (!res.ok) throw new Error("Failed to fetch drafts");
       return res.json();

@@ -1,6 +1,6 @@
 import { useState, useMemo, useRef, useEffect } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
-import { queryClient, apiRequest } from "@/lib/queryClient";
+import { queryClient, apiRequest, CMS_FETCH_INIT } from "@/lib/queryClient";
 import { syncGranthaCmsCaches } from "@/lib/strapi-cache-sync";
 import { useToast } from "@/hooks/use-toast";
 import { useDrafts } from "@/hooks/use-drafts";
@@ -384,7 +384,7 @@ export default function ManthrasPage() {
       void syncGranthaCmsCaches(queryClient);
       toast({ title: `Shloka inserted after ${insertTarget.afterNum}`, description: `${json.shiftedCount ?? 0} subsequent shlokas renumbered.` });
       if (newDoc?.documentId) {
-        fetch(`/api/strapi/manthras/${newDoc.documentId}`)
+        fetch(`/api/strapi/manthras/${newDoc.documentId}`, CMS_FETCH_INIT)
           .then((r) => r.json())
           .then((resp) => {
             const fullItem = resp.data ?? resp;

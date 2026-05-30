@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef } from "react";
 import { track } from "@/lib/posthog";
 import { useQuery, useMutation } from "@tanstack/react-query";
-import { queryClient, apiRequest, ApiError } from "@/lib/queryClient";
+import { queryClient, apiRequest, ApiError, CMS_FETCH_INIT } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
 import { useDrafts } from "@/hooks/use-drafts";
 import { useAuth } from "@/hooks/use-auth";
@@ -1482,6 +1482,7 @@ export default function GranthasPage() {
         shlokaManthraNumber: localNode?.title,
         localContentScore: localRich,
         background,
+        bypassCache: !background,
       });
 
     if (hasHydratedShloka) {
@@ -1764,7 +1765,7 @@ export default function GranthasPage() {
       try {
         const statusRes = await fetch(
           `/api/drafts/${draftId}/publish-status?jobId=${encodeURIComponent(jobId)}`,
-          { credentials: "include" },
+          { credentials: "include", cache: "no-store" },
         );
         if (!statusRes.ok) continue;
         const status = await statusRes.json();
@@ -1791,20 +1792,18 @@ export default function GranthasPage() {
       manthraId: string;
       manthraData: ManthraNode;
     }) => {
-      try {
-        const res = await apiRequest("POST", `/api/drafts/${params.draftId}/publish-manthra`, {
-          adhyayaId: params.adhyayaId,
-          khandaId: params.khandaId,
-          padaId: params.padaId,
-          manthraId: params.manthraId,
-          manthraData: params.manthraData,
-        });
-        const data = await res.json();
-        if (data.async && data.jobId) {
-          return pollMantraPublishJob(params.draftId, data.jobId);
-        }
-        return data;
+      const res = await apiRequest("POST", `/api/drafts/${params.draftId}/publish-manthra`, {
+        adhyayaId: params.adhyayaId,
+        khandaId: params.khandaId,
+        padaId: params.padaId,
+        manthraId: params.manthraId,
+        manthraData: params.manthraData,
+      });
+      const data = await res.json();
+      if (data.async && data.jobId) {
+        return pollMantraPublishJob(params.draftId, data.jobId);
       }
+      return data;
     },
     onSuccess: (data: any, params) => {
       clearManthraFromChangedSet(params.manthraId);
@@ -2203,9 +2202,9 @@ export default function GranthasPage() {
     let strapiGranthaOne: any = null;
     try {
       const [sectionsRes, teekasRes, granthaRes] = await Promise.all([
-        fetch(`/api/strapi/sections/by-grantha/${effectiveDocId}`, { credentials: "include" }),
-        fetch(`/api/strapi/teekas/by-grantha/${effectiveDocId}`, { credentials: "include" }),
-        fetch(`/api/strapi/granthas/${effectiveDocId}`, { credentials: "include" }),
+        fetch(`/api/strapi/sections/by-grantha/${effectiveDocId}`, CMS_FETCH_INIT),
+        fetch(`/api/strapi/teekas/by-grantha/${effectiveDocId}`, CMS_FETCH_INIT),
+        fetch(`/api/strapi/granthas/${effectiveDocId}`, CMS_FETCH_INIT),
       ]);
 
       if (granthaRes.ok) {
@@ -2938,7 +2937,7 @@ export default function GranthasPage() {
     // is individually opened. Without this, any "Save" before opening every
     // dialog would clear teeka content in the draft.
     if (granthaDocId && isCurrentOpenEditLoad(openEditLoadGen)) {
-      fetch(`/api/strapi/manthras/teekas-by-grantha/${granthaDocId}`, { credentials: "include" })
+      fetch(`/api/strapi/manthras/teekas-by-grantha/${granthaDocId}`, CMS_FETCH_INIT)
         .then((r) => r.ok ? r.json() : null)
         .then((payload) => {
           if (!isCurrentOpenEditLoad(openEditLoadGen)) return;

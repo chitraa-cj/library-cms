@@ -40,9 +40,11 @@ export function isManthraFetchAbortError(err: unknown): boolean {
 /** One Strapi GET — full manthra (cached). */
 export async function fetchManthraByDocumentId(
   documentId: string,
-  opts?: { signal?: AbortSignal },
+  opts?: { signal?: AbortSignal; bypassCache?: boolean },
 ): Promise<ResolvedManthraDetail> {
-  return fetchManthraDetailCached(documentId, async () => {
+  return fetchManthraDetailCached(
+    documentId,
+    async () => {
     const res = await apiRequest("GET", `/api/strapi/manthras/${documentId}`, undefined, {
       signal: opts?.signal,
     });
@@ -57,7 +59,9 @@ export async function fetchManthraByDocumentId(
       corrected: false,
       contentScore: entryContentScore(data.ShlokaManthraEntry),
     };
-  });
+  },
+    { bypassCache: opts?.bypassCache },
+  );
 }
 
 /**
@@ -74,13 +78,17 @@ export async function fetchManthraForGranthaEditor(opts: {
   skipFetch?: boolean;
   /** Background refresh for teekas/bhashyam only (shloka already in state). */
   background?: boolean;
+  /** Foreground editor open — skip in-memory cache so verse text is always fresh. */
+  bypassCache?: boolean;
 }): Promise<ResolvedManthraDetail | null> {
   if (opts.skipFetch) return null;
 
   const localScore = opts.localContentScore ?? 0;
 
   try {
-    const direct = await fetchManthraByDocumentId(opts.documentId);
+    const direct = await fetchManthraByDocumentId(opts.documentId, {
+      bypassCache: opts.bypassCache,
+    });
     const remoteScore = direct.contentScore ?? 0;
     const needsResolve =
       remoteScore < MANTRA_LINK_MIN_CONTENT_SCORE ||
@@ -127,6 +135,7 @@ export async function fetchResolvedManthraDetail(opts: {
 
   const res = await fetch(`/api/strapi/manthras/resolve-for-edit?${params.toString()}`, {
     credentials: "include",
+    cache: "no-store",
     signal: opts.signal,
   });
   if (!res.ok) {

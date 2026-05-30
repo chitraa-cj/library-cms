@@ -1,6 +1,6 @@
 import type { ResolvedManthraDetail } from "@/lib/resolve-strapi-mantra-detail";
 
-const TTL_MS = 5 * 60 * 1000;
+const TTL_MS = 60 * 1000;
 const cache = new Map<string, { at: number; value: ResolvedManthraDetail }>();
 /** Per documentId — bumped on invalidate / explicit set so stale in-flight loads cannot write. */
 const docVersion = new Map<string, number>();
@@ -61,9 +61,12 @@ export function invalidateManthraCacheOnDocIdCorrection(
 export async function fetchManthraDetailCached(
   documentId: string,
   loader: () => Promise<ResolvedManthraDetail>,
+  options?: { bypassCache?: boolean },
 ): Promise<ResolvedManthraDetail> {
-  const hit = getCachedManthraDetail(documentId);
-  if (hit) return hit;
+  if (!options?.bypassCache) {
+    const hit = getCachedManthraDetail(documentId);
+    if (hit) return hit;
+  }
 
   const pending = inFlight.get(documentId);
   if (pending) return pending;

@@ -304,11 +304,44 @@ def _should_reopen_browser(err: BaseException) -> bool:
             "invalid session",
             "session not created",
             "chrome not reachable",
+            "cannot connect to chrome",
             "disconnected",
             "target window already closed",
             "web view not found",
         )
     )
+
+
+def _cleanup_stale_chrome() -> None:
+    """Kill orphaned chromedriver processes after repeated launch failures."""
+    import subprocess
+
+    _log("[hermex] Cleaning up stale chromedriver before relaunch")
+    if sys.platform in ("darwin", "linux"):
+        subprocess.run(["pkill", "-f", "chromedriver"], capture_output=True)
+    time.sleep(3)
+
+
+def _open_gemini_browser(headless: bool, *, after_cleanup: bool = False) -> Any:
+    from hermex import Gemini
+
+    if after_cleanup:
+        _cleanup_stale_chrome()
+    gemini = Gemini(headless=headless)
+    gemini.open_url("https://gemini.google.com/app")
+    _dismiss_gemini_overlays(gemini)
+    if not getattr(gemini, "is_logged_in", True):
+        _log("[hermex] WARN: Gemini session not logged in — run: npm run hermex:setup")
+    return gemini
+
+
+def _close_gemini_browser(gemini: Any | None) -> None:
+    if gemini is None:
+        return
+    try:
+        gemini.close()
+    except Exception:
+        pass
 
 
 def _recover_browser_session(gemini: Any) -> None:
@@ -519,8 +552,6 @@ def _translate_chunks(
     max_retries: int = 1,
 ) -> tuple[list[dict[str, str]], list[dict[str, Any]]]:
     """Returns (successful rows, per-chunk log entries)."""
-    from hermex import Gemini
-
     all_results: list[dict[str, str]] = []
     chunk_logs: list[dict[str, Any]] = []
     eff_size = _effective_chunk_size(source_text, chunk_size)
@@ -571,27 +602,32 @@ def _translate_chunks(
         if missing and not continue_on_error:
             raise RuntimeError(f"Missing languages in chunk: {', '.join(missing)}")
 
-    for idx, chunk in enumerate(chunks):
-        chunk_label = f"{context or 'translation'} | chunk {idx + 1}/{len(chunks)}"
-        last_err: Exception | None = None
-        gemini: Any | None = None
-        try:
+    gemini: Any | None = None
+    chunks_since_browser_open = 0
+    browser_restart_every = 12
+
+    def _reopen_browser(*, force_cleanup: bool = False) -> Any:
+        nonlocal gemini, chunks_since_browser_open
+        _close_gemini_browser(gemini)
+        gemini = _open_gemini_browser(headless, after_cleanup=force_cleanup)
+        chunks_since_browser_open = 0
+        return gemini
+
+    try:
+        _reopen_browser()
+        for idx, chunk in enumerate(chunks):
+            chunk_label = f"{context or 'translation'} | chunk {idx + 1}/{len(chunks)}"
+            last_err: Exception | None = None
             for attempt in range(1, max(1, max_retries) + 1):
-                reopen = gemini is None or (last_err is not None and _should_reopen_browser(last_err))
-                if reopen:
-                    if gemini is not None:
-                        try:
-                            gemini.close()
-                        except Exception:
-                            pass
-                    gemini = Gemini(headless=headless)
-                    gemini.open_url("https://gemini.google.com/app")
-                    _dismiss_gemini_overlays(gemini)
-                    if not getattr(gemini, "is_logged_in", True):
-                        _log("[hermex] WARN: Gemini session not logged in — run: npm run hermex:setup")
+                if chunks_since_browser_open >= browser_restart_every:
+                    _log(
+                        f"[hermex] Proactive browser restart after {chunks_since_browser_open} chunks"
+                    )
+                    _reopen_browser(force_cleanup=True)
                 try:
                     _run_one_chunk(gemini, idx, chunk)
                     last_err = None
+                    chunks_since_browser_open += 1
                     break
                 except Exception as e:
                     last_err = e
@@ -600,31 +636,27 @@ def _translate_chunks(
                         wait = chunk_delay_sec * attempt
                         if _should_reopen_browser(e):
                             _log(f"[hermex] RETRY {chunk_label} in {wait:.0f}s (reopen browser)")
-                            gemini = None
+                            _reopen_browser(force_cleanup=True)
                         else:
                             _log(f"[hermex] RETRY {chunk_label} in {wait:.0f}s (same browser)")
                             _recover_browser_session(gemini)
                         time.sleep(wait)
-        finally:
-            if gemini is not None:
-                try:
-                    gemini.close()
-                except Exception:
-                    pass
-        if last_err is not None:
-            chunk_logs.append(
-                {
-                    "chunk": idx + 1,
-                    "languages": chunk,
-                    "ok": [],
-                    "fail": chunk,
-                    "error": str(last_err),
-                }
-            )
-            if not continue_on_error:
-                raise last_err
-        if idx < len(chunks) - 1 and chunk_delay_sec > 0:
-            time.sleep(chunk_delay_sec)
+            if last_err is not None:
+                chunk_logs.append(
+                    {
+                        "chunk": idx + 1,
+                        "languages": chunk,
+                        "ok": [],
+                        "fail": chunk,
+                        "error": str(last_err),
+                    }
+                )
+                if not continue_on_error:
+                    raise last_err
+            if idx < len(chunks) - 1 and chunk_delay_sec > 0:
+                time.sleep(chunk_delay_sec)
+    finally:
+        _close_gemini_browser(gemini)
 
     return all_results, chunk_logs
 

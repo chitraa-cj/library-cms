@@ -256,6 +256,7 @@ export function isHermexRetryableError(err: unknown): boolean {
     msg.includes("json") ||
     msg.includes("no such window") ||
     msg.includes("session not created") ||
+    msg.includes("cannot connect to chrome") ||
     msg.includes("did not reach state") ||
     msg.includes("state.idle") ||
     msg.includes("neither text") ||
@@ -263,6 +264,17 @@ export function isHermexRetryableError(err: unknown): boolean {
     msg.includes("empty gemini response") ||
     msg.includes("click intercepted") ||
     msg.includes("not clickable at point")
+  );
+}
+
+function isChromeSessionError(err: unknown): boolean {
+  const msg = (err instanceof Error ? err.message : String(err)).toLowerCase();
+  return (
+    msg.includes("session not created") ||
+    msg.includes("chrome not reachable") ||
+    msg.includes("cannot connect to chrome") ||
+    msg.includes("invalid session") ||
+    msg.includes("no such window")
   );
 }
 
@@ -289,7 +301,8 @@ export async function runHermexWithRetry(
     } catch (e) {
       lastErr = e;
       if (attempt >= maxRetries || !isHermexRetryableError(e)) throw e;
-      const wait = chunkDelayMs * attempt;
+      const baseWait = isChromeSessionError(e) ? Math.max(chunkDelayMs * 2, 8000) : chunkDelayMs;
+      const wait = baseWait * attempt;
       console.log(`[retry] attempt ${attempt + 1}/${maxRetries} in ${wait}ms — ${e instanceof Error ? e.message.slice(0, 120) : e}`);
       await sleep(wait);
     }
@@ -497,12 +510,20 @@ export async function translateJobIncremental(
     `\n[job] ${job.context} | ${job.targetLanguages.length} langs | ${chunks.length} chunks (size ${effChunk}, ${job.sourceText.length} chars source) | headless=${opts.headless}`,
   );
 
+  type ChunkWork = {
+    plannedLangs: string[];
+    langs: string[];
+    key: string;
+    chunkId: string;
+  };
+  const workChunks: ChunkWork[] = [];
+
   for (let i = 0; i < chunks.length; i++) {
     const plannedLangs = chunks[i];
     const key = chunkKey(job, plannedLangs);
     const chunkId = `${job.context} chunk ${i + 1}/${chunks.length}`;
 
-    let langs = await filterLangsStillMissing(job, plannedLangs);
+    const langs = await filterLangsStillMissing(job, plannedLangs);
     const alreadyInStrapi = plannedLangs.filter((l) => !langs.includes(l));
     if (alreadyInStrapi.length > 0) {
       console.log(`[skip] ${chunkId} | already in Strapi (${job.field}): ${alreadyInStrapi.join(", ")}`);
@@ -528,118 +549,136 @@ export async function translateJobIncremental(
       );
     }
 
-    if (opts.dryRun) {
-      console.log(`[dry-run] would translate ${chunkId}: ${langs.join(", ")}`);
-      continue;
-    }
+    workChunks.push({ plannedLangs, langs, key, chunkId });
+  }
 
+  if (workChunks.length === 0) return { ok, fail };
+
+  if (opts.dryRun) {
+    for (const w of workChunks) {
+      console.log(`[dry-run] would translate ${w.chunkId}: ${w.langs.join(", ")}`);
+    }
+    return { ok, fail };
+  }
+
+  const seenLangs = new Set<string>();
+  const allLangs: string[] = [];
+  for (const w of workChunks) {
+    for (const lang of w.langs) {
+      if (!seenLangs.has(lang)) {
+        seenLangs.add(lang);
+        allLangs.push(lang);
+      }
+    }
+  }
+
+  const byLang = new Map<string, HermexTranslationRow>();
+
+  const fetchHermexRows = async (targetLanguages: string[]): Promise<void> => {
+    const result = await runHermexWithRetry(
+      {
+        sourceText: job.sourceText,
+        sourceLanguage: job.sourceLanguage,
+        targetLanguages,
+        context: job.context,
+        chunkSize: effChunk,
+        headless: opts.headless,
+        queryTimeoutSec: queryTimeoutForSource(job.sourceText.length),
+        chunkDelaySec: opts.chunkDelayMs / 1000,
+        maxRetries: 3,
+      },
+      opts.maxRetries,
+      opts.chunkDelayMs,
+    );
+    for (const row of result.translations ?? []) {
+      byLang.set(row.language, row);
+    }
+  };
+
+  try {
+    console.log(
+      `[hermex] One browser session for ${allLangs.length} language(s) across ${workChunks.length} Strapi chunk(s)`,
+    );
+    await fetchHermexRows(allLangs);
+  } catch (e: unknown) {
+    const msg = e instanceof Error ? e.message : String(e);
+    const parseFailed =
+      msg.toLowerCase().includes("json") ||
+      msg.toLowerCase().includes("delimiter") ||
+      msg.toLowerCase().includes("could not parse");
+
+    if (parseFailed && allLangs.length > 1) {
+      console.log(`[translate] JSON parse failed — retrying ${allLangs.length} languages one at a time`);
+      for (const lang of allLangs) {
+        if (byLang.has(lang)) continue;
+        try {
+          await fetchHermexRows([lang]);
+          console.log(`[translate] OK single-lang retry | ${lang}`);
+        } catch (singleErr: unknown) {
+          const sm = singleErr instanceof Error ? singleErr.message : String(singleErr);
+          console.log(`[translate] FAIL single-lang retry | ${lang} | ${sm}`);
+        }
+        if (opts.chunkDelayMs > 0) await sleep(opts.chunkDelayMs);
+      }
+    } else {
+      fail += allLangs.length;
+      console.log(`[translate] FAIL ${job.context} | [${allLangs.join(", ")}] | ${msg}`);
+      for (const w of workChunks) {
+        checkpoint.failedChunks[w.key] = msg || "unknown";
+        console.log(`[warn] ${w.chunkId} | still missing in Strapi: ${w.langs.join(", ")}`);
+      }
+      saveCheckpoint(opts.checkpointPath, checkpoint);
+      return { ok, fail };
+    }
+  }
+
+  for (let wi = 0; wi < workChunks.length; wi++) {
+    const { plannedLangs, langs, key, chunkId } = workChunks[wi];
     let rows: HermexTranslationRow[] = [];
     let chunkFailed = false;
     let lastError = "";
 
-    try {
-      const result = await runHermexWithRetry(
-        {
-          sourceText: job.sourceText,
-          sourceLanguage: job.sourceLanguage,
-          targetLanguages: langs,
-          context: job.context,
-          chunkSize: langs.length,
-          headless: opts.headless,
-          queryTimeoutSec: queryTimeoutForSource(job.sourceText.length),
-          chunkDelaySec: opts.chunkDelayMs / 1000,
-          maxRetries: 2,
-        },
-        opts.maxRetries,
-        opts.chunkDelayMs,
-      );
-      rows = result.translations ?? [];
-      const got = new Set(rows.map((r) => r.language));
-      for (const lang of langs) {
-        if (got.has(lang)) ok++;
-        else {
-          fail++;
-          chunkFailed = true;
-          console.log(`[translate] FAIL ${chunkId} | ${lang} | not in Gemini response`);
-        }
-      }
-      if (rows.length > 0) {
-        try {
-          await syncJobToStrapi(job, rows);
-          console.log(`[strapi] OK ${chunkId} | synced: ${rows.map((r) => r.language).join(", ")}`);
-        } catch (syncErr: unknown) {
-          const sm = syncErr instanceof Error ? syncErr.message : String(syncErr);
-          chunkFailed = true;
-          lastError = sm;
-          for (const r of rows) {
-            if (got.has(r.language)) ok = Math.max(0, ok - 1);
-            fail++;
-          }
-          console.log(
-            `[strapi] FAIL ${chunkId} | Gemini OK but Strapi save failed: ${rows.map((r) => r.language).join(", ")} | ${sm.slice(0, 120)}`,
-          );
-          console.log(`[strapi] Re-run the job to retry save only (translations may be re-fetched from Gemini).`);
-          rows = [];
-        }
-        if (chunkFailed) {
-          console.log(
-            `[translate] partial ${chunkId} | saved ${rows.length}/${langs.length} — retry missing langs on next run`,
-          );
-        }
-      } else if (!chunkFailed) {
-        chunkFailed = true;
-        lastError = "no rows parsed";
-        console.log(`[translate] FAIL ${chunkId} | no rows parsed`);
-      }
-    } catch (e: unknown) {
-      const msg = e instanceof Error ? e.message : String(e);
-      lastError = msg;
-      const parseFailed =
-        msg.toLowerCase().includes("json") ||
-        msg.toLowerCase().includes("delimiter") ||
-        msg.toLowerCase().includes("could not parse");
-
-      if (parseFailed && langs.length > 1) {
-        console.log(`[translate] JSON parse failed — retrying ${langs.length} languages one at a time`);
-        for (const lang of langs) {
-          try {
-            const single = await runHermexWithRetry(
-              {
-                sourceText: job.sourceText,
-                sourceLanguage: job.sourceLanguage,
-                targetLanguages: [lang],
-                context: job.context,
-                chunkSize: 1,
-                headless: opts.headless,
-                queryTimeoutSec: queryTimeoutForSource(job.sourceText.length),
-                chunkDelaySec: opts.chunkDelayMs / 1000,
-                maxRetries: 2,
-              },
-              opts.maxRetries,
-              opts.chunkDelayMs,
-            );
-            const oneRows = single.translations ?? [];
-            if (oneRows.length > 0) {
-              await syncJobToStrapi(job, oneRows);
-              console.log(`[strapi] OK ${chunkId} | ${lang} (single-lang retry)`);
-              ok++;
-              chunkFailed = false;
-            } else {
-              fail++;
-              console.log(`[translate] FAIL ${chunkId} | ${lang} | single-lang retry empty`);
-            }
-          } catch (singleErr: unknown) {
-            fail++;
-            const sm = singleErr instanceof Error ? singleErr.message : String(singleErr);
-            console.log(`[translate] FAIL ${chunkId} | ${lang} | single-lang: ${sm}`);
-          }
-          if (opts.chunkDelayMs > 0) await sleep(opts.chunkDelayMs);
-        }
+    const got = new Set<string>();
+    for (const lang of langs) {
+      const row = byLang.get(lang);
+      if (row) {
+        rows.push(row);
+        got.add(lang);
+        ok++;
       } else {
-        fail += langs.length;
+        fail++;
         chunkFailed = true;
-        console.log(`[translate] FAIL ${chunkId} | [${langs.join(", ")}] | ${msg}`);
+        console.log(`[translate] FAIL ${chunkId} | ${lang} | not in Gemini response`);
       }
+    }
+
+    if (rows.length > 0) {
+      try {
+        await syncJobToStrapi(job, rows);
+        console.log(`[strapi] OK ${chunkId} | synced: ${rows.map((r) => r.language).join(", ")}`);
+      } catch (syncErr: unknown) {
+        const sm = syncErr instanceof Error ? syncErr.message : String(syncErr);
+        chunkFailed = true;
+        lastError = sm;
+        for (const r of rows) {
+          if (got.has(r.language)) ok = Math.max(0, ok - 1);
+          fail++;
+        }
+        console.log(
+          `[strapi] FAIL ${chunkId} | Gemini OK but Strapi save failed: ${rows.map((r) => r.language).join(", ")} | ${sm.slice(0, 120)}`,
+        );
+        console.log(`[strapi] Re-run the job to retry save only (translations may be re-fetched from Gemini).`);
+        rows = [];
+      }
+      if (chunkFailed) {
+        console.log(
+          `[translate] partial ${chunkId} | saved ${rows.length}/${langs.length} — retry missing langs on next run`,
+        );
+      }
+    } else if (!chunkFailed) {
+      chunkFailed = true;
+      lastError = "no rows parsed";
+      console.log(`[translate] FAIL ${chunkId} | no rows parsed`);
     }
 
     let stillMissingAfter = plannedLangs;
@@ -662,7 +701,7 @@ export async function translateJobIncremental(
     }
     saveCheckpoint(opts.checkpointPath, checkpoint);
 
-    if (i < chunks.length - 1 && opts.chunkDelayMs > 0) {
+    if (wi < workChunks.length - 1 && opts.chunkDelayMs > 0) {
       await sleep(opts.chunkDelayMs);
     }
   }

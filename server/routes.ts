@@ -33,6 +33,7 @@ import {
   scanMantraForPublish,
   sectionSuffixCollision,
 } from "@shared/grantha-publish-integrity";
+import { readClientBuildId } from "./build-info";
 
 /** Compress a snapshot payload for DB storage (gzip + base64 wrapper). */
 function compressBackupData(data: any): any {
@@ -3238,6 +3239,10 @@ export async function registerRoutes(
 ): Promise<Server> {
   setupAuth(app);
   app.use(activityLogger);
+
+  app.get("/api/app-version", (_req, res) => {
+    res.json({ buildId: readClientBuildId() });
+  });
 
   const strapiRouter = createStrapiRouter();
   app.use("/api/strapi", strapiRouter);

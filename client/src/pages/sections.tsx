@@ -1,7 +1,8 @@
-import { useState, useMemo } from "react";
+import { useState, useMemo, useEffect } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { queryClient, apiRequest } from "@/lib/queryClient";
 import { syncGranthaCmsCaches } from "@/lib/strapi-cache-sync";
+import { fetchManthraByDocumentId } from "@/lib/resolve-strapi-mantra-detail";
 import { useToast } from "@/hooks/use-toast";
 import { useDrafts } from "@/hooks/use-drafts";
 import { useAuth } from "@/hooks/use-auth";
@@ -107,11 +108,15 @@ export default function SectionsPage() {
     parent: "",
   });
 
-  const { data, isLoading } = useQuery<StrapiResponse<StrapiSection>>({
+  const { data, isLoading, dataUpdatedAt } = useQuery<StrapiResponse<StrapiSection>>({
     queryKey: ["/api/strapi", "sections"],
     refetchInterval: STRAPI_POLL_INTERVAL,
     refetchOnWindowFocus: true,
   });
+
+  useEffect(() => {
+    setManthraDetailsCache({});
+  }, [dataUpdatedAt]);
 
   const { data: granthasData } = useQuery<StrapiResponse<StrapiGrantha>>({
     queryKey: ["/api/strapi", "granthas"],
@@ -215,13 +220,10 @@ export default function SectionsPage() {
       return;
     }
     setExpandedManthraId(docId);
-    if (manthraDetailsCache[docId]) return;
     setFetchingManthraId(docId);
-    fetch(`/api/strapi/manthras/${docId}`)
-      .then((r) => r.json())
-      .then((resp) => {
-        const full = resp.data ?? resp;
-        setManthraDetailsCache((prev) => ({ ...prev, [docId]: full }));
+    void fetchManthraByDocumentId(docId, { bypassCache: true })
+      .then((resolved) => {
+        setManthraDetailsCache((prev) => ({ ...prev, [docId]: resolved.data }));
       })
       .catch((err) => {
         console.warn(`[sections] Failed to load mantra details for ${docId}:`, err);

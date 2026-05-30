@@ -6,6 +6,7 @@ import { Toaster } from "@/components/ui/toaster";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { useAuth } from "@/hooks/use-auth";
 import { identifyUser, resetUser } from "@/lib/posthog";
+import { useAppVersionRefreshPrompt } from "@/hooks/use-app-version";
 import DashboardLayout from "@/components/dashboard-layout";
 import LoginPage from "@/pages/login";
 import DashboardPage from "@/pages/dashboard";
@@ -84,10 +85,16 @@ function AppRouter() {
   return <AuthenticatedRoutes />;
 }
 
+function AppVersionWatcher() {
+  useAppVersionRefreshPrompt();
+  return null;
+}
+
 function App() {
   return (
     <QueryClientProvider client={queryClient}>
       <TooltipProvider>
+        <AppVersionWatcher />
         <PostHogIdentifier />
         <Toaster />
         <AppRouter />

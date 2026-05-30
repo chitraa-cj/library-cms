@@ -1,5 +1,11 @@
 import { QueryClient, QueryFunction } from "@tanstack/react-query";
 
+/** CMS data must never come from the browser HTTP cache (stale Upanishad text, old UI). */
+export const CMS_FETCH_INIT: RequestInit = {
+  credentials: "include",
+  cache: "no-store",
+};
+
 export class ApiError extends Error {
   status: number;
   body: unknown;
@@ -51,6 +57,7 @@ export async function apiRequest(
     },
     body: data ? JSON.stringify(data) : undefined,
     credentials: "include",
+    cache: "no-store",
     signal: options?.signal,
   });
 
@@ -64,9 +71,7 @@ export const getQueryFn: <T>(options: {
 }) => QueryFunction<T> =
   ({ on401: unauthorizedBehavior }) =>
   async ({ queryKey }) => {
-    const res = await fetch(queryKey.join("/") as string, {
-      credentials: "include",
-    });
+    const res = await fetch(queryKey.join("/") as string, CMS_FETCH_INIT);
 
     if (unauthorizedBehavior === "returnNull" && res.status === 401) {
       return null;
@@ -82,7 +87,9 @@ export const queryClient = new QueryClient({
       queryFn: getQueryFn({ on401: "throw" }),
       refetchInterval: false,
       refetchOnWindowFocus: true,
-      staleTime: 30_000,
+      refetchOnMount: true,
+      staleTime: 0,
+      gcTime: 5 * 60 * 1000,
       retry: false,
     },
     mutations: {

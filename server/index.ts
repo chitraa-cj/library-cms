@@ -2,6 +2,7 @@ import "./env";
 
 import express, { type Request, Response, NextFunction } from "express";
 import { registerRoutes } from "./routes";
+import { registerApiCacheMiddleware } from "./http-cache";
 import { serveStatic } from "./static";
 import { createServer } from "http";
 import { db } from "./db";
@@ -29,6 +30,8 @@ app.use(
 );
 
 app.use(express.urlencoded({ extended: false, limit: "50mb" }));
+
+registerApiCacheMiddleware(app);
 
 export function log(message: string, source = "express") {
   const formattedTime = new Date().toLocaleTimeString("en-US", {

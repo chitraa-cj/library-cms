@@ -14,7 +14,7 @@ export function useAuth() {
     queryKey: ["/api/auth/user"],
     queryFn: async () => {
       try {
-        const res = await fetch("/api/auth/user", { credentials: "include" });
+        const res = await fetch("/api/auth/user", { credentials: "include", cache: "no-store" });
         if (res.status === 401) return null;
         if (!res.ok) throw new Error("Failed to fetch user");
         return res.json();
@@ -23,7 +23,8 @@ export function useAuth() {
       }
     },
     retry: false,
-    staleTime: 5 * 60 * 1000,
+    staleTime: 60_000,
+    refetchOnWindowFocus: true,
   });
 
   const loginMutation = useMutation({

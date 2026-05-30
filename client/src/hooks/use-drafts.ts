@@ -55,6 +55,7 @@ export function useDrafts(contentType: string) {
 
   const pollPublishJob = async (draftId: number, jobId: string) => {
     const maxAttempts = 900; // up to 15 minutes, every 1s
+    let authFailures = 0;
     for (let attempt = 0; attempt < maxAttempts; attempt++) {
       await new Promise((resolve) => setTimeout(resolve, 1000));
       try {
@@ -62,6 +63,16 @@ export function useDrafts(contentType: string) {
           `/api/drafts/${draftId}/publish-status?jobId=${encodeURIComponent(jobId)}`,
           { credentials: "include", cache: "no-store" },
         );
+        if (statusRes.status === 401) {
+          authFailures += 1;
+          if (authFailures >= 8) {
+            throw new Error(
+              "Session could not be verified while publish was running (server may have restarted). Your draft is saved — wait a few seconds and use Save & Publish again without closing this tab.",
+            );
+          }
+          continue;
+        }
+        authFailures = 0;
         if (!statusRes.ok) continue;
         const status = await statusRes.json();
         if (status.progress) {

@@ -1,10 +1,6 @@
 import { Router } from "express";
 import { requireAuth } from "./auth";
 import { storage } from "./storage";
-import { execFile } from "node:child_process";
-import { writeFileSync, unlinkSync, readFileSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 import {
   sortKeyBetween,
   STRAPI_SORT_GAP,
@@ -20,6 +16,34 @@ import {
 } from "@shared/grantha-publish-integrity";
 
 const STRAPI_URL = process.env.STRAPI_URL || "http://13.53.121.15:1337";
+
+/**
+ * Per-section serialization for read-modify-write operations on Strapi mantra `order`
+ * (insert-between, recompaction, sibling reorder publish). Concurrent inserts that race
+ * on the same section pick identical fractional keys and silently corrupt sort order;
+ * this in-process mutex chain ensures one writer per section at a time. Mirrors the
+ * withDraftLock pattern in routes.ts.
+ */
+const sectionOperationQueues = new Map<string, Promise<void>>();
+export async function withSectionLock<T>(
+  sectionDocId: string,
+  op: () => Promise<T>,
+): Promise<T> {
+  const previous = sectionOperationQueues.get(sectionDocId) ?? Promise.resolve();
+  const running = previous.then(op, op);
+  const settled = running.then(
+    () => undefined,
+    () => undefined,
+  );
+  sectionOperationQueues.set(sectionDocId, settled);
+  try {
+    return await running;
+  } finally {
+    if (sectionOperationQueues.get(sectionDocId) === settled) {
+      sectionOperationQueues.delete(sectionDocId);
+    }
+  }
+}
 
 async function listSectionMantraOrders(sectionDocId: string): Promise<
   Array<{ documentId: string; order: number; ShlokaManthraNumber?: string }>
@@ -54,22 +78,34 @@ async function listSectionMantraOrders(sectionDocId: string): Promise<
   return all;
 }
 
-/** Reassign spaced sort keys 1000, 2000, … for every row in a section (rare; gap exhausted). */
+/**
+ * Reassign spaced sort keys (GAP, 2*GAP, 3*GAP …) for every row in a section.
+ * Rare: only triggered when the fractional gap between two siblings collapses to
+ * MIN_STRAPI_SORT_GAP. Runs with bounded concurrency; fractional keys do not
+ * collide so descending order is unnecessary.
+ */
+const RECOMPACT_CONCURRENCY = 12;
 async function recompactSectionSortKeys(
-  _sectionDocId: string,
+  sectionDocId: string,
   documentIdsInDisplayOrder: string[],
 ): Promise<void> {
-  const sortedUpdates = [...documentIdsInDisplayOrder]
-    .map((documentId, idx) => ({
-      documentId,
-      order: portalIndexToStrapiSortKey(idx + 1),
-    }))
-    .sort((a, b) => b.order - a.order);
-  for (const u of sortedUpdates) {
-    await strapiRequest(`/api/manthras/${u.documentId}`, {
-      method: "PUT",
-      body: JSON.stringify({ data: { order: u.order } }),
-    });
+  const updates = documentIdsInDisplayOrder.map((documentId, idx) => ({
+    documentId,
+    order: portalIndexToStrapiSortKey(idx + 1),
+  }));
+  console.warn(
+    `[sort-key] recompact triggered section=${sectionDocId} rows=${updates.length}`,
+  );
+  for (let i = 0; i < updates.length; i += RECOMPACT_CONCURRENCY) {
+    const batch = updates.slice(i, i + RECOMPACT_CONCURRENCY);
+    await Promise.all(
+      batch.map((u) =>
+        strapiRequest(`/api/manthras/${u.documentId}`, {
+          method: "PUT",
+          body: JSON.stringify({ data: { order: u.order } }),
+        }),
+      ),
+    );
   }
 }
 const STRAPI_TOKEN = () => process.env.STRAPI_API_TOKEN || "";
@@ -82,61 +118,47 @@ function classifyStrapiError(status?: number, body?: string): string {
   return "upstream_unknown";
 }
 
-function curlRequest(
+/**
+ * HTTP transport. Previously spawned `curl` per request (process fork + temp-file
+ * write); for a grantha publish with 1000+ mantras × 3-5 Strapi calls each, that
+ * was the dominant cost (~30-50ms overhead per call).
+ *
+ * Switched to native global fetch (Node 18+ undici) which keeps connections alive
+ * via the default Agent. Large bodies are streamed, so the E2BIG / temp-file
+ * workaround is no longer needed. Errors are normalized to the same "curl failed"
+ * / "curl no-status" / "max-time" phrases that strapiRequest's retry classifier
+ * already understands, so backoff behavior is preserved.
+ */
+const STRAPI_HTTP_TIMEOUT_MS = 40_000;
+async function fetchRequest(
   url: string,
   method = "GET",
-  body?: string
+  body?: string,
 ): Promise<{ ok: boolean; status: number; body: string }> {
-  return new Promise((resolve, reject) => {
-    const args = [
-      "-g",
-      "-s",
-      "-k",
-      "--max-time", "40",
-      "-w", "|||HTTPSTATUS|||%{http_code}",
-      "-X", method,
-      "-H", `Authorization: Bearer ${STRAPI_TOKEN()}`,
-      "-H", "Content-Type: application/json",
-    ];
-
-    // Write the body to a temp file to avoid E2BIG when the payload is large
-    // (e.g. manthras with many teeka entries containing long Sanskrit blocks).
-    // curl's `--data @filepath` reads from file, bypassing the OS ARG_MAX limit.
-    let tmpFile: string | undefined;
-    if (body) {
-      tmpFile = join(tmpdir(), `strapi_body_${Date.now()}_${Math.random().toString(36).slice(2)}.json`);
-      writeFileSync(tmpFile, body, "utf8");
-      args.push("--data", `@${tmpFile}`);
-    }
-
-    args.push(url);
-
-    execFile("curl", args, { timeout: 45000, maxBuffer: 10 * 1024 * 1024 }, (err, stdout, stderr) => {
-      // Always clean up the temp file
-      if (tmpFile) {
-        try { unlinkSync(tmpFile); } catch { /* ignore */ }
-      }
-
-      if (err && !stdout) {
-        return reject(new Error(`curl failed: ${err.message} | stderr: ${stderr?.slice(0, 200)}`));
-      }
-
-      const output = stdout || "";
-      const sep = "|||HTTPSTATUS|||";
-      const sepIdx = output.lastIndexOf(sep);
-      if (sepIdx === -1) {
-        return reject(new Error(`curl no-status (exit ${(err as any)?.code}): "${output.slice(0, 100)}"`));
-      }
-      const status = parseInt(output.slice(sepIdx + sep.length), 10) || 0;
-      const responseBody = output.slice(0, sepIdx);
-
-      resolve({
-        ok: status >= 200 && status < 300,
-        status,
-        body: responseBody,
-      });
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(new Error("max-time exceeded")), STRAPI_HTTP_TIMEOUT_MS);
+  try {
+    const res = await fetch(url, {
+      method,
+      headers: {
+        Authorization: `Bearer ${STRAPI_TOKEN()}`,
+        "Content-Type": "application/json",
+        Accept: "application/json",
+      },
+      body,
+      signal: controller.signal,
     });
-  });
+    const text = await res.text();
+    return { ok: res.ok, status: res.status, body: text };
+  } catch (e: any) {
+    if (e?.name === "AbortError" || e?.message?.includes("max-time")) {
+      throw new Error(`curl failed: max-time exceeded after ${STRAPI_HTTP_TIMEOUT_MS}ms`);
+    }
+    // Normalize to "curl failed:" prefix so the existing transient-error matcher fires.
+    throw new Error(`curl failed: ${e?.message || String(e)}`);
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 export async function strapiRequest(
@@ -151,7 +173,7 @@ export async function strapiRequest(
 
   for (let attempt = 1; attempt <= _maxRetries; attempt++) {
     try {
-      const res = await curlRequest(url, method, options.body);
+      const res = await fetchRequest(url, method, options.body);
 
       if (!res.ok) {
         const err = new Error(`Strapi error ${res.status}: ${res.body.slice(0, 300)}`) as any;
@@ -199,48 +221,45 @@ export async function strapiRequest(
 }
 
 /**
- * Like strapiRequest but writes the response body to a temp file first,
- * bypassing the execFile maxBuffer limit. Use for endpoints that can return
- * very large payloads (e.g., full populate of manthras with rich-text blocks).
+ * GET endpoints that can return very large payloads (e.g. full populate of manthras
+ * with rich-text blocks). Native fetch streams the response body — no maxBuffer
+ * limit and no temp-file round-trip required.
  */
-export function strapiRequestLarge(path: string): Promise<any> {
+export async function strapiRequestLarge(path: string): Promise<any> {
   const url = `${STRAPI_URL}${path}`;
-  const outFile = join(tmpdir(), `strapi_large_${Date.now()}_${Math.random().toString(36).slice(2)}.json`);
-
-  return new Promise((resolve, reject) => {
-    const args = [
-      "-g", "-s", "-k",
-      "--max-time", "30",
-      "-H", `Authorization: Bearer ${STRAPI_TOKEN()}`,
-      "-H", "Content-Type: application/json",
-      "-o", outFile,
-      "-w", `%{http_code}`,
-      url,
-    ];
-
-    execFile("curl", args, { timeout: 35000, maxBuffer: 64 * 1024 }, (err, stdout) => {
-      const status = parseInt(stdout?.trim() || "0", 10);
-      let rawBody = "";
-      try { rawBody = readFileSync(outFile, "utf8"); } catch { /* empty */ }
-      try { unlinkSync(outFile); } catch { /* ignore */ }
-
-      if (err && !rawBody) {
-        return reject(new Error(`curl large failed: ${err.message}`));
-      }
-      if (status < 200 || status >= 300) {
-        const errBody = rawBody.slice(0, 300);
-        const e = new Error(`Strapi error ${status}: ${errBody}`) as any;
-        e.status = status;
-        return reject(e);
-      }
-      if (!rawBody.trim()) return resolve({ data: null });
-      try {
-        resolve(JSON.parse(rawBody));
-      } catch {
-        resolve({ data: null });
-      }
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(new Error("max-time exceeded")), 30_000);
+  try {
+    const res = await fetch(url, {
+      method: "GET",
+      headers: {
+        Authorization: `Bearer ${STRAPI_TOKEN()}`,
+        "Content-Type": "application/json",
+        Accept: "application/json",
+      },
+      signal: controller.signal,
     });
-  });
+    const rawBody = await res.text();
+    if (!res.ok) {
+      const e = new Error(`Strapi error ${res.status}: ${rawBody.slice(0, 300)}`) as any;
+      e.status = res.status;
+      throw e;
+    }
+    if (!rawBody.trim()) return { data: null };
+    try {
+      return JSON.parse(rawBody);
+    } catch {
+      return { data: null };
+    }
+  } catch (e: any) {
+    if (e?.status) throw e;
+    if (e?.name === "AbortError" || e?.message?.includes("max-time")) {
+      throw new Error("curl large failed: max-time exceeded after 30000ms");
+    }
+    throw new Error(`curl large failed: ${e?.message || String(e)}`);
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 export function createStrapiRouter() {
@@ -854,6 +873,8 @@ export function createStrapiRouter() {
   });
 
   // ── Insert blank manthra: O(1) fractional sort key (no sibling order shifts) ──
+  // Serialized per section: concurrent inserts on the same section would otherwise
+  // observe the same prev/next snapshot and pick the same fractional key.
   router.post("/manthras/insert-between", async (req, res) => {
     try {
       const { afterDocumentId, sectionDocId, afterNum } = req.body as {
@@ -866,43 +887,49 @@ export function createStrapiRouter() {
         return;
       }
 
-      const all = await listSectionMantraOrders(sectionDocId);
-      const anchorIdx = all.findIndex((m) => m.documentId === afterDocumentId);
-      if (anchorIdx === -1) {
-        res.status(404).json({ message: `Manthra ${afterDocumentId} not found in section` });
-        return;
-      }
+      const result = await withSectionLock(sectionDocId, async () => {
+        const all = await listSectionMantraOrders(sectionDocId);
+        const anchorIdx = all.findIndex((m) => m.documentId === afterDocumentId);
+        if (anchorIdx === -1) {
+          const err: any = new Error(`Manthra ${afterDocumentId} not found in section`);
+          err.status = 404;
+          throw err;
+        }
 
-      const prevSort = all[anchorIdx].order;
-      const nextSort = all[anchorIdx + 1]?.order;
-      let { sortKey: newSortKey, needsRecompact } = sortKeyBetween(prevSort, nextSort);
+        const prevSort = all[anchorIdx].order;
+        const nextSort = all[anchorIdx + 1]?.order;
+        let { sortKey: newSortKey, needsRecompact } = sortKeyBetween(prevSort, nextSort);
+        let recompacted = false;
 
-      if (needsRecompact) {
-        await recompactSectionSortKeys(
-          sectionDocId,
-          all.map((m) => m.documentId),
-        );
-        const refreshed = await listSectionMantraOrders(sectionDocId);
-        const anchorIdx2 = refreshed.findIndex((m) => m.documentId === afterDocumentId);
-        const again = sortKeyBetween(
-          refreshed[anchorIdx2]?.order,
-          refreshed[anchorIdx2 + 1]?.order,
-        );
-        newSortKey = again.sortKey;
-      }
+        if (needsRecompact) {
+          await recompactSectionSortKeys(
+            sectionDocId,
+            all.map((m) => m.documentId),
+          );
+          const refreshed = await listSectionMantraOrders(sectionDocId);
+          const anchorIdx2 = refreshed.findIndex((m) => m.documentId === afterDocumentId);
+          const again = sortKeyBetween(
+            refreshed[anchorIdx2]?.order,
+            refreshed[anchorIdx2 + 1]?.order,
+          );
+          newSortKey = again.sortKey;
+          recompacted = true;
+        }
 
-      const created = await strapiRequest("/api/manthras", {
-        method: "POST",
-        body: JSON.stringify({
-          data: {
-            ShlokaManthraNumber: "",
-            order: newSortKey,
-            Section: sectionDocId,
-          },
-        }),
+        const created = await strapiRequest("/api/manthras", {
+          method: "POST",
+          body: JSON.stringify({
+            data: {
+              ShlokaManthraNumber: "",
+              order: newSortKey,
+              Section: sectionDocId,
+            },
+          }),
+        });
+        return { data: created.data, sortKey: newSortKey, recompacted };
       });
 
-      res.json({ data: created.data, shiftedCount: 0, sortKey: newSortKey });
+      res.json({ ...result, shiftedCount: 0 });
     } catch (error: any) {
       res.status(error.status || 500).json({ message: error.message });
     }

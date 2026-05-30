@@ -1,7 +1,9 @@
 import { mkdir, writeFile, readdir, readFile } from "node:fs/promises";
 import { join } from "node:path";
-import { gzipSync } from "node:zlib";
-import { gunzipSync } from "node:zlib";
+import { gzip, gunzipSync } from "node:zlib";
+import { promisify } from "node:util";
+
+const gzipAsync = promisify(gzip);
 
 type SnapshotPayload = {
   event: string;
@@ -39,7 +41,9 @@ export async function writeDraftSnapshot(payload: SnapshotPayload): Promise<void
       ...payload,
     };
     const raw = Buffer.from(JSON.stringify(record), "utf8");
-    const gz = gzipSync(raw, { level: 6 });
+    // Async gzip frees the event loop while compressing — for a 1-2MB mantra draft the
+    // sync version blocked the loop for 50-200ms each call, twice per publish.
+    const gz = await gzipAsync(raw, { level: 6 });
     await writeFile(fullPath, gz);
   } catch (err) {
     console.error("[data-safety] snapshot write failed:", err);

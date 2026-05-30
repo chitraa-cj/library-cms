@@ -766,6 +766,7 @@ function GranthaCard({
   onPublish,
   onResetDraftFromStrapi,
   isPublishing,
+  publishProgress,
   isResettingDraft,
   currentUserId,
   isDuplicate,
@@ -781,6 +782,7 @@ function GranthaCard({
   onPublish: () => void;
   onResetDraftFromStrapi?: () => void;
   isPublishing: boolean;
+  publishProgress?: { done: number; total: number; current: string } | null;
   isResettingDraft?: boolean;
   currentUserId?: string | null;
   isDuplicate?: boolean;
@@ -935,6 +937,36 @@ function GranthaCard({
       {item.BhashyamName && (
         <p className="text-xs text-muted-foreground mt-1">{item.BhashyamName}</p>
       )}
+      {isPublishing && publishProgress && publishProgress.total > 0 && (() => {
+        const pct = Math.min(
+          100,
+          Math.max(0, Math.round((publishProgress.done / publishProgress.total) * 100)),
+        );
+        return (
+          <div
+            className="mt-3 px-2.5 py-2 rounded-md bg-primary/5 border border-primary/20"
+            onClick={(e) => e.stopPropagation()}
+            data-testid={`grantha-card-publish-progress-${item._draftId}`}
+          >
+            <div className="flex items-center justify-between gap-2 mb-1">
+              <div className="flex items-center gap-1.5 text-xs text-muted-foreground min-w-0">
+                <Loader2 className="w-3 h-3 animate-spin flex-shrink-0" />
+                <span className="font-medium text-foreground">Publishing</span>
+              </div>
+              <span className="text-xs font-semibold tabular-nums text-primary">{pct}%</span>
+            </div>
+            <div className="w-full bg-muted rounded-full h-1.5">
+              <div
+                className="bg-primary rounded-full h-1.5 transition-all"
+                style={{ width: `${pct}%` }}
+              />
+            </div>
+            <div className="text-[10px] text-muted-foreground mt-1 truncate">
+              {publishProgress.done}/{publishProgress.total} · {publishProgress.current}
+            </div>
+          </div>
+        );
+      })()}
       {isDuplicate && (
         <div className="flex items-center gap-1.5 mt-2 px-2 py-1 rounded-md bg-amber-50 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-800">
           <AlertTriangle className="w-3.5 h-3.5 text-amber-600 dark:text-amber-400 flex-shrink-0" />
@@ -1189,6 +1221,7 @@ export default function GranthasPage() {
   const [manthraDialogDirty, setManthraDialogDirty] = useState(false);
   const [manthraDialogViewOnly, setManthraDialogViewOnly] = useState(false);
   const [pendingCloseManthra, setPendingCloseManthra] = useState(false);
+  const [mantraPublishStatus, setMantraPublishStatus] = useState<string | null>(null);
   const [manthraLoading, setManthraLoading] = useState(false);
   const mantraFetchGenRef = useRef(0);
   const openEditLoadGenRef = useRef(0);
@@ -1758,17 +1791,36 @@ export default function GranthasPage() {
   });
 
   // Per-manthra publish mutation
-  const pollMantraPublishJob = async (draftId: number, jobId: string) => {
-    const maxAttempts = 1200; // up to 20 minutes for large OT/teeka payloads
+  const pollMantraPublishJob = async (
+    draftId: number,
+    jobId: string,
+    onProgress?: (current: string) => void,
+  ) => {
+    const maxAttempts = 1200; // up to ~20 minutes for large OT/teeka payloads
+    let authFailures = 0;
     for (let attempt = 0; attempt < maxAttempts; attempt++) {
-      await new Promise((resolve) => setTimeout(resolve, 1000));
+      const delayMs = attempt < 40 ? 500 : 1000;
+      await new Promise((resolve) => setTimeout(resolve, delayMs));
       try {
         const statusRes = await fetch(
           `/api/drafts/${draftId}/publish-status?jobId=${encodeURIComponent(jobId)}`,
           { credentials: "include", cache: "no-store" },
         );
+        if (statusRes.status === 401) {
+          authFailures += 1;
+          if (authFailures >= 8) {
+            throw new Error(
+              "Session could not be verified while mantra publish was running. Your draft is saved — wait a few seconds and publish again without closing this tab.",
+            );
+          }
+          continue;
+        }
+        authFailures = 0;
         if (!statusRes.ok) continue;
         const status = await statusRes.json();
+        const current =
+          typeof status.progress?.current === "string" ? status.progress.current : undefined;
+        if (current) onProgress?.(current);
         if (status.status === "done") return status.result;
         if (status.status === "failed" || status.status === "failed_recoverable") {
           throw new Error(status.error || "Mantra publish failed");
@@ -1792,6 +1844,7 @@ export default function GranthasPage() {
       manthraId: string;
       manthraData: ManthraNode;
     }) => {
+      setMantraPublishStatus("Starting publish…");
       const res = await apiRequest("POST", `/api/drafts/${params.draftId}/publish-manthra`, {
         adhyayaId: params.adhyayaId,
         khandaId: params.khandaId,
@@ -1801,7 +1854,9 @@ export default function GranthasPage() {
       });
       const data = await res.json();
       if (data.async && data.jobId) {
-        return pollMantraPublishJob(params.draftId, data.jobId);
+        return pollMantraPublishJob(params.draftId, data.jobId, (current) => {
+          setMantraPublishStatus(current);
+        });
       }
       return data;
     },
@@ -1831,21 +1886,22 @@ export default function GranthasPage() {
         grantha_name: formData.GranthaName,
         warnings: warnCount,
       });
-      // Ensure the "live" CMS-backed views update immediately
-      // (avoid stale data that previously required logout/login).
-      syncGranthaCmsCaches(queryClient);
+      invalidateGranthaCmsCaches(queryClient);
       toast({
         title: "Mantra published to CMS",
         description:
           warnCount > 0
             ? `${warnCount} warning(s) — saved under "${findManthraInTree(adhyayasRef.current, params.adhyayaId, params.khandaId, params.manthraId, params.padaId)?.title ?? "this label"}" in Strapi.`
-            : "This verse is live in Strapi. Use full grantha Save & Publish to re-sync all section orders.",
+            : "This verse is live in Strapi.",
       });
       setEditingManthra(null);
     },
     onError: (err: any) => {
       track("manthra_publish_failed", { grantha_name: formData.GranthaName, error: err.message });
       toast({ variant: "destructive", title: "Publish failed", description: err.message });
+    },
+    onSettled: () => {
+      setMantraPublishStatus(null);
     },
   });
 
@@ -4769,6 +4825,12 @@ export default function GranthasPage() {
                       publishDraft.isPending &&
                       (publishDraft.variables as number) === item._draftId
                     }
+                    publishProgress={
+                      publishDraft.isPending &&
+                      (publishDraft.variables as number) === item._draftId
+                        ? publishProgress
+                        : null
+                    }
                     isResettingDraft={resettingDraftId === item._draftId}
                     currentUserId={user?.id}
                     isDuplicate={norm ? duplicateSet.has(norm) : false}
@@ -6169,9 +6231,14 @@ export default function GranthasPage() {
                 )}
                 {publishDraft.isPending && publishProgress && publishProgress.total > 0 && (
                   <div className="absolute bottom-full mb-2 right-0 bg-popover border rounded-md shadow-md p-3 min-w-[260px] text-sm z-50" data-testid="publish-progress-box">
-                    <div className="flex items-center gap-2 mb-1 text-muted-foreground">
-                      <Loader2 className="w-3 h-3 animate-spin flex-shrink-0" />
-                      <span className="font-medium">Publishing to Strapi</span>
+                    <div className="flex items-center justify-between gap-2 mb-1 text-muted-foreground">
+                      <div className="flex items-center gap-2">
+                        <Loader2 className="w-3 h-3 animate-spin flex-shrink-0" />
+                        <span className="font-medium">Publishing to Strapi</span>
+                      </div>
+                      <span className="font-semibold tabular-nums text-foreground" data-testid="publish-progress-percent">
+                        {Math.round((publishProgress.done / publishProgress.total) * 100)}%
+                      </span>
                     </div>
                     <div className="w-full bg-muted rounded-full h-1.5 mb-1">
                       <div
@@ -6743,38 +6810,45 @@ export default function GranthasPage() {
                     </Button>
                   )
                 ) : (
-                  <div className="flex gap-2">
-                    <Button
-                      variant="secondary"
-                      onClick={() => handleSaveManthra()}
-                      disabled={
-                        saveDraft.isPending ||
-                        saveManthraPatchMutation.isPending ||
-                        publishMantraMutation.isPending
-                      }
-                      data-testid="button-manthra-save"
-                    >
-                      {(saveDraft.isPending || saveManthraPatchMutation.isPending) &&
-                        !publishMantraMutation.isPending && (
+                  <div className="flex flex-col items-end gap-1">
+                    <div className="flex gap-2">
+                      <Button
+                        variant="secondary"
+                        onClick={() => handleSaveManthra()}
+                        disabled={
+                          saveDraft.isPending ||
+                          saveManthraPatchMutation.isPending ||
+                          publishMantraMutation.isPending
+                        }
+                        data-testid="button-manthra-save"
+                      >
+                        {(saveDraft.isPending || saveManthraPatchMutation.isPending) &&
+                          !publishMantraMutation.isPending && (
+                            <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                          )}
+                        Save
+                      </Button>
+                      <Button
+                        onClick={handleSaveAndPublishManthra}
+                        disabled={
+                          saveDraft.isPending ||
+                          saveManthraPatchMutation.isPending ||
+                          publishMantraMutation.isPending
+                        }
+                        data-testid="button-manthra-save-publish"
+                      >
+                        {publishMantraMutation.isPending && (
                           <Loader2 className="w-4 h-4 mr-2 animate-spin" />
                         )}
-                      Save
-                    </Button>
-                    <Button
-                      onClick={handleSaveAndPublishManthra}
-                      disabled={
-                        saveDraft.isPending ||
-                        saveManthraPatchMutation.isPending ||
-                        publishMantraMutation.isPending
-                      }
-                      data-testid="button-manthra-save-publish"
-                    >
-                      {publishMantraMutation.isPending && (
-                        <Loader2 className="w-4 h-4 mr-2 animate-spin" />
-                      )}
-                      <Send className="w-4 h-4 mr-2" />
-                      Save & Publish
-                    </Button>
+                        <Send className="w-4 h-4 mr-2" />
+                        Save & Publish
+                      </Button>
+                    </div>
+                    {mantraPublishStatus && publishMantraMutation.isPending && (
+                      <p className="text-xs text-muted-foreground max-w-[280px] text-right">
+                        {mantraPublishStatus}
+                      </p>
+                    )}
                   </div>
                 )}
               </div>

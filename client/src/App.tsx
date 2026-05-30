@@ -23,20 +23,44 @@ import AdminUsersPage from "@/pages/admin-users";
 import BackupsPage from "@/pages/backups";
 import BackupDetailPage from "@/pages/backup-detail";
 import NotFound from "@/pages/not-found";
-import { Loader2 } from "lucide-react";
+import { Loader2, WifiOff } from "lucide-react";
+import { Button } from "@/components/ui/button";
+
+function AuthReconnectBanner({
+  onRetry,
+  fetching,
+}: {
+  onRetry: () => void;
+  fetching: boolean;
+}) {
+  return (
+    <div className="bg-amber-500/15 border-b border-amber-500/30 px-4 py-2 text-sm flex items-center justify-between gap-3">
+      <div className="flex items-center gap-2 text-amber-950 dark:text-amber-100">
+        <WifiOff className="h-4 w-4 shrink-0" />
+        <span>
+          Connection to the server was interrupted (often during Save &amp; Publish or a server restart).
+          You are still signed in — your work in this tab is preserved. Retrying in the background.
+        </span>
+      </div>
+      <Button type="button" variant="outline" size="sm" onClick={onRetry} disabled={fetching}>
+        {fetching ? "Retrying…" : "Retry now"}
+      </Button>
+    </div>
+  );
+}
 
 function PostHogIdentifier() {
-  const { user, isAuthenticated } = useAuth();
+  const { user, isAuthenticated, authDegraded } = useAuth();
   useEffect(() => {
     if (isAuthenticated && user) {
       identifyUser(user.username, {
         display_name: user.displayName ?? user.username,
         role: user.role,
       });
-    } else if (!isAuthenticated) {
+    } else if (!isAuthenticated && !authDegraded) {
       resetUser();
     }
-  }, [isAuthenticated, user]);
+  }, [isAuthenticated, user, authDegraded]);
   return null;
 }
 
@@ -65,9 +89,9 @@ function AuthenticatedRoutes() {
 }
 
 function AppRouter() {
-  const { isAuthenticated, isLoading } = useAuth();
+  const { isAuthenticated, isLoading, authDegraded, retryAuth, isFetching } = useAuth();
 
-  if (isLoading) {
+  if (isLoading && !isAuthenticated) {
     return (
       <div className="min-h-screen flex items-center justify-center bg-background">
         <div className="flex flex-col items-center gap-3">
@@ -82,7 +106,14 @@ function AppRouter() {
     return <LoginPage />;
   }
 
-  return <AuthenticatedRoutes />;
+  return (
+    <>
+      {authDegraded && (
+        <AuthReconnectBanner onRetry={() => void retryAuth()} fetching={isFetching} />
+      )}
+      <AuthenticatedRoutes />
+    </>
+  );
 }
 
 function AppVersionWatcher() {

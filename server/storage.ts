@@ -1,4 +1,4 @@
-import { type User, type InsertUser, type Draft, type InsertDraft, users, contentDrafts, granthaBackups, type GranthaBackup, type GranthaBackupMeta, granthaLocks, type GranthaLock, publishJobs, type PublishJobRecord, idempotencyKeys, type IdempotencyKeyRecord, publishJobTasks, type PublishJobTaskRecord } from "@shared/schema";
+import { type User, type InsertUser, type Draft, type InsertDraft, users, contentDrafts, granthaBackups, type GranthaBackup, type GranthaBackupMeta, granthaLocks, type GranthaLock, publishJobs, type PublishJobRecord, idempotencyKeys, type IdempotencyKeyRecord, publishJobTasks, type PublishJobTaskRecord, publishManthraResolutions } from "@shared/schema";
 import { db } from "./db";
 import { eq, and, desc, sql, inArray, gte, lte, lt } from "drizzle-orm";
 import { discardDraftWithDependencies, getDraftDiscardPlan, type DraftDiscardPlan, type DraftDiscardResult } from "./draft-discard";
@@ -34,9 +34,17 @@ export interface IStorage {
   createPublishJob(job: Omit<PublishJobRecord, "createdAt" | "updatedAt">): Promise<PublishJobRecord>;
   getPublishJob(id: string): Promise<PublishJobRecord | null>;
   getRunningPublishJobForDraft(draftId: number): Promise<PublishJobRecord | null>;
+  getRunningPublishJobForGrantha(granthaDocId: string): Promise<PublishJobRecord | null>;
   updatePublishJob(id: string, patch: Partial<PublishJobRecord>): Promise<PublishJobRecord | null>;
+  markStalePublishJobsAsRecoverable(olderThanMs: number): Promise<number>;
+  // D5: per-job manthra resolution checkpoint
+  recordManthraResolution(jobId: string, portalManthraId: string, strapiDocumentId: string): Promise<void>;
+  recordManthraResolutionsBulk(jobId: string, entries: Array<{ portalManthraId: string; strapiDocumentId: string }>): Promise<void>;
+  loadManthraResolutions(jobId: string): Promise<Map<string, string>>;
+  deleteManthraResolutions(jobId: string): Promise<number>;
   upsertIdempotencyRecord(record: Omit<IdempotencyKeyRecord, "createdAt">): Promise<IdempotencyKeyRecord>;
   getIdempotencyRecord(key: string): Promise<IdempotencyKeyRecord | null>;
+  deleteIdempotencyRecord(key: string): Promise<boolean>;
   enqueuePublishJobTask(task: Omit<PublishJobTaskRecord, "id" | "createdAt" | "updatedAt">): Promise<PublishJobTaskRecord>;
   listPublishJobTasks(jobId: string, statuses?: string[]): Promise<PublishJobTaskRecord[]>;
   claimNextPublishJobTask(jobId: string): Promise<PublishJobTaskRecord | null>;
@@ -275,6 +283,93 @@ export class DatabaseStorage implements IStorage {
     return updated ?? null;
   }
 
+  async getRunningPublishJobForGrantha(granthaDocId: string): Promise<PublishJobRecord | null> {
+    // Cross-process / cross-restart guard: even after this process loses its in-memory
+    // map, another draft pointing at the same Strapi grantha can find the in-flight job
+    // here. Filters on the indexed (grantha_doc_id, status) pair.
+    const [job] = await db
+      .select()
+      .from(publishJobs)
+      .where(and(eq(publishJobs.granthaDocId, granthaDocId), eq(publishJobs.status, "running")))
+      .orderBy(desc(publishJobs.updatedAt));
+    return job ?? null;
+  }
+
+  async recordManthraResolution(
+    jobId: string,
+    portalManthraId: string,
+    strapiDocumentId: string,
+  ): Promise<void> {
+    await db
+      .insert(publishManthraResolutions)
+      .values({ jobId, portalManthraId, strapiDocumentId })
+      .onConflictDoUpdate({
+        target: [publishManthraResolutions.jobId, publishManthraResolutions.portalManthraId],
+        set: { strapiDocumentId },
+      });
+  }
+
+  async recordManthraResolutionsBulk(
+    jobId: string,
+    entries: Array<{ portalManthraId: string; strapiDocumentId: string }>,
+  ): Promise<void> {
+    if (entries.length === 0) return;
+    // Chunk to keep INSERT under typical statement-size limits (~1000 rows is comfy).
+    const CHUNK = 500;
+    for (let i = 0; i < entries.length; i += CHUNK) {
+      const slice = entries.slice(i, i + CHUNK).map((e) => ({
+        jobId,
+        portalManthraId: e.portalManthraId,
+        strapiDocumentId: e.strapiDocumentId,
+      }));
+      await db
+        .insert(publishManthraResolutions)
+        .values(slice)
+        .onConflictDoUpdate({
+          target: [publishManthraResolutions.jobId, publishManthraResolutions.portalManthraId],
+          set: { strapiDocumentId: sql`EXCLUDED.strapi_document_id` },
+        });
+    }
+  }
+
+  async loadManthraResolutions(jobId: string): Promise<Map<string, string>> {
+    const rows = await db
+      .select({
+        portalManthraId: publishManthraResolutions.portalManthraId,
+        strapiDocumentId: publishManthraResolutions.strapiDocumentId,
+      })
+      .from(publishManthraResolutions)
+      .where(eq(publishManthraResolutions.jobId, jobId));
+    const map = new Map<string, string>();
+    for (const r of rows) map.set(r.portalManthraId, r.strapiDocumentId);
+    return map;
+  }
+
+  async deleteManthraResolutions(jobId: string): Promise<number> {
+    const removed = await db
+      .delete(publishManthraResolutions)
+      .where(eq(publishManthraResolutions.jobId, jobId))
+      .returning({ portalManthraId: publishManthraResolutions.portalManthraId });
+    return removed.length;
+  }
+
+  async markStalePublishJobsAsRecoverable(olderThanMs: number): Promise<number> {
+    // Called on server startup. In-memory worker state is lost across restarts; any
+    // publish_jobs row still marked "running" with no recent heartbeat is orphaned and
+    // will never complete. Mark them failed_recoverable so the client can re-trigger.
+    const cutoff = new Date(Date.now() - olderThanMs);
+    const updated = await db
+      .update(publishJobs)
+      .set({
+        status: "failed_recoverable",
+        error: "Server restarted while publish was in progress",
+        updatedAt: new Date(),
+      })
+      .where(and(eq(publishJobs.status, "running"), lt(publishJobs.updatedAt, cutoff)))
+      .returning();
+    return updated.length;
+  }
+
   async upsertIdempotencyRecord(record: Omit<IdempotencyKeyRecord, "createdAt">): Promise<IdempotencyKeyRecord> {
     const [saved] = await db
       .insert(idempotencyKeys)
@@ -300,6 +395,14 @@ export class DatabaseStorage implements IStorage {
     if (!record) return null;
     if (record.expiresAt && new Date(record.expiresAt) < new Date()) return null;
     return record;
+  }
+
+  async deleteIdempotencyRecord(key: string): Promise<boolean> {
+    const removed = await db
+      .delete(idempotencyKeys)
+      .where(eq(idempotencyKeys.key, key))
+      .returning({ key: idempotencyKeys.key });
+    return removed.length > 0;
   }
 
   async enqueuePublishJobTask(task: Omit<PublishJobTaskRecord, "id" | "createdAt" | "updatedAt">): Promise<PublishJobTaskRecord> {

@@ -382,7 +382,12 @@ export default function ManthrasPage() {
       const newDoc = json?.data;
       setInsertTarget(null);
       void syncGranthaCmsCaches(queryClient);
-      toast({ title: `Shloka inserted after ${insertTarget.afterNum}`, description: `${json.shiftedCount ?? 0} subsequent shlokas renumbered.` });
+      toast({
+        title: `Shloka inserted after ${insertTarget.afterNum}`,
+        description: json.recompacted
+          ? "Section sort keys were recompacted to make room."
+          : "No sibling shlokas needed renumbering (fractional sort key).",
+      });
       if (newDoc?.documentId) {
         fetch(`/api/strapi/manthras/${newDoc.documentId}`, CMS_FETCH_INIT)
           .then((r) => r.json())

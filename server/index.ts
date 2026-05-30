@@ -130,6 +130,20 @@ app.use((req, res, next) => {
     });
   }, idempotencyTtlMs).unref?.();
 
+  // Reclaim orphaned publish jobs left "running" by a previous process crash/restart.
+  // The job worker lives in-memory, so any row still marked "running" with no recent
+  // heartbeat after a restart will never complete — clients would poll forever.
+  // 10-minute window covers normal Strapi-syncs without misclassifying live jobs.
+  const stalePublishJobMs = 10 * 60 * 1000;
+  try {
+    const reclaimed = await storage.markStalePublishJobsAsRecoverable(stalePublishJobMs);
+    if (reclaimed > 0) {
+      console.log(`[publish-jobs] marked ${reclaimed} orphaned running job(s) as failed_recoverable`);
+    }
+  } catch (e) {
+    console.error("[publish-jobs] startup reclaim failed:", e);
+  }
+
   await registerRoutes(httpServer, app);
 
   app.use((err: any, _req: Request, res: Response, next: NextFunction) => {

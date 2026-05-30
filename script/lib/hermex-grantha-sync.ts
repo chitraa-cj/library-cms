@@ -286,6 +286,7 @@ export function queryTimeoutForSource(sourceLen: number, baseSec = 900): number 
 export function effectiveChunkSizeForSource(sourceLen: number, defaultSize: number): number {
   if (sourceLen > 3500) return 1;
   if (sourceLen > 1500) return Math.min(defaultSize, 2);
+  if (sourceLen > 400) return Math.min(defaultSize, 2);
   return defaultSize;
 }
 

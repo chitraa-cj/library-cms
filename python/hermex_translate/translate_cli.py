@@ -193,6 +193,8 @@ def _effective_chunk_size(source_text: str, chunk_size: int) -> int:
         return 1
     if n > 1500:
         return min(chunk_size, 2)
+    if n > 400:
+        return min(chunk_size, 2)
     return chunk_size
 
 
@@ -362,6 +364,38 @@ def _recover_browser_session(gemini: Any) -> None:
     time.sleep(3)
 
 
+def _start_fresh_gemini_chat(gemini: Any) -> None:
+    """Each language batch needs a clean chat — follow-ups often omit later languages."""
+    from selenium.webdriver.common.by import By
+    from selenium.webdriver.support import expected_conditions as EC
+    from selenium.webdriver.support.ui import WebDriverWait
+
+    _try_stop_generation(gemini)
+    opened = False
+    for selector in (
+        '[aria-label="New chat"]',
+        'button[aria-label="New chat"]',
+        'a[href="/app"]',
+    ):
+        try:
+            btn = WebDriverWait(gemini.driver, 4).until(
+                EC.element_to_be_clickable((By.CSS_SELECTOR, selector))
+            )
+            btn.click()
+            opened = True
+            break
+        except Exception:
+            continue
+    if not opened:
+        gemini.open_url("https://gemini.google.com/app")
+    if hasattr(gemini, "wait_for_page_load"):
+        gemini.wait_for_page_load(45)
+    else:
+        time.sleep(4)
+    _dismiss_gemini_overlays(gemini)
+    time.sleep(1)
+
+
 def _gemini_fetch_response(gemini: Any) -> Any:
     """Gemini often hits IDLE before .markdown is populated — poll before giving up."""
     from hermex.models import State
@@ -469,8 +503,9 @@ def _build_prompt(
 ) -> str:
     langs = ", ".join(target_languages)
     ctx = f"\nContext: {context}" if context else ""
-    long_source = len(source_text) > 800
-    if long_source:
+    # JSON arrays break easily for 2+ languages; marker blocks are more reliable.
+    use_marker_format = len(target_languages) > 1 or len(source_text) > 800
+    if use_marker_format:
         format_rules = """Output format (CRITICAL — do NOT use JSON for long text):
 Use exactly this delimiter format for each language (copy language names exactly):
 
@@ -559,10 +594,30 @@ def _translate_chunks(
         _log(f"[hermex] Long source ({len(source_text)} chars) — chunk size {chunk_size} → {eff_size}")
     chunks = _chunk(target_languages, eff_size)
 
-    def _run_one_chunk(gemini: Any, idx: int, chunk: list[str]) -> None:
-        label = context or "translation"
-        chunk_label = f"{label} | chunk {idx + 1}/{len(chunks)}"
-        _log(f"[hermex] START {chunk_label} | languages: {', '.join(chunk)} | headless={headless}")
+    def _parse_chunk_response(raw: str, chunk: list[str]) -> list[dict[str, str]]:
+        if not raw:
+            raise RuntimeError("Empty Gemini response")
+        expected = set(chunk)
+        try:
+            parsed = _extract_translations(raw, expected)
+            rows = _normalize_rows(parsed, expected)
+        except ValueError as parse_err:
+            _log(f"[hermex] Parse failed ({parse_err}) — salvaging from response body")
+            salvaged = _salvage_translations(raw, expected)
+            rows = _normalize_rows(salvaged, expected)
+            if not rows:
+                raise RuntimeError(f"Could not parse response. Snippet: {raw[:500]}") from parse_err
+        return rows
+
+    def _translate_language_batch(
+        gemini: Any,
+        chunk: list[str],
+        chunk_label: str,
+        *,
+        fresh_chat: bool,
+    ) -> list[dict[str, str]]:
+        if fresh_chat:
+            _start_fresh_gemini_chat(gemini)
         prompt = _build_prompt(source_text, source_language, chunk, context)
         msg = _gemini_query_with_recovery(
             gemini,
@@ -571,30 +626,49 @@ def _translate_chunks(
             timeout=query_timeout,
         )
         raw = (msg.text or "").strip()
-        if not raw:
-            raise RuntimeError("Empty Gemini response")
-        rows: list[dict[str, str]] = []
-        try:
-            parsed = _extract_translations(raw, set(chunk))
-            rows = _normalize_rows(parsed, set(chunk))
-        except ValueError as parse_err:
-            _log(f"[hermex] Parse failed ({parse_err}) — salvaging from response body")
-            salvaged = _salvage_translations(raw, set(chunk))
-            rows = _normalize_rows(salvaged, set(chunk))
-            if not rows:
-                raise RuntimeError(f"Could not parse response. Snippet: {raw[:500]}") from parse_err
+        return _parse_chunk_response(raw, chunk)
+
+    def _run_one_chunk(gemini: Any, idx: int, chunk: list[str]) -> None:
+        label = context or "translation"
+        chunk_label = f"{label} | chunk {idx + 1}/{len(chunks)}"
+        _log(f"[hermex] START {chunk_label} | languages: {', '.join(chunk)} | headless={headless}")
+
+        rows = _translate_language_batch(gemini, chunk, chunk_label, fresh_chat=True)
         got = {r["language"] for r in rows}
+        missing = [lang for lang in chunk if lang not in got]
+
+        if missing:
+            if len(missing) == len(chunk):
+                _log(f"[hermex] WARN entire chunk empty — will retry languages individually")
+            else:
+                _log(
+                    f"[hermex] Partial chunk ({len(rows)}/{len(chunk)}) — retrying: {', '.join(missing)}"
+                )
+            for lang in missing:
+                single_label = f"{chunk_label} | {lang} (single)"
+                try:
+                    one_rows = _translate_language_batch(
+                        gemini, [lang], single_label, fresh_chat=True
+                    )
+                    for r in one_rows:
+                        if r["language"] not in got:
+                            rows.append(r)
+                            got.add(r["language"])
+                except Exception as e:
+                    _log(f"[hermex] FAIL {single_label} | {e}")
+
         missing = [lang for lang in chunk if lang not in got]
         all_results.extend(rows)
         for r in rows:
-            _log(f"[hermex] OK   {chunk_label} | {r['language']} ({len(r['text'])} chars)")
+            if r["language"] in chunk:
+                _log(f"[hermex] OK   {chunk_label} | {r['language']} ({len(r['text'])} chars)")
         for lang in missing:
             _log(f"[hermex] FAIL {chunk_label} | {lang} | not returned by Gemini")
         chunk_logs.append(
             {
                 "chunk": idx + 1,
                 "languages": chunk,
-                "ok": [r["language"] for r in rows],
+                "ok": [r["language"] for r in rows if r["language"] in chunk],
                 "fail": missing,
                 "error": None if not missing else "partial chunk",
             }

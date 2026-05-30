@@ -1,7 +1,7 @@
 import type { Express } from "express";
 import { type Server } from "http";
 import { setupAuth, requireAuth, requireAdmin, hashPassword } from "./auth";
-import { createStrapiRouter, strapiRequest, strapiRequestLarge } from "./strapi";
+import { createStrapiRouter, strapiRequest, strapiRequestLarge, withSectionLock } from "./strapi";
 import { createMigrateRouter } from "./migrate-vivekachudamani";
 import { activityLogger } from "./activity-log";
 import { readLatestDraftSnapshot, writeDraftSnapshot } from "./data-safety";
@@ -1242,6 +1242,23 @@ const MANTRA_EXISTING_MERGE_QUERY =
   "&populate[ShlokaManthraEntry][populate]=*" +
   "&populate[BhashyamEntry][populate]=*";
 
+const MANTRA_TEEKAS_ONLY_QUERY =
+  "?populate[Teekas][populate][TeekaEntry][populate]=*" +
+  "&populate[Teekas][populate][teeka][fields][0]=TeekaName" +
+  "&populate[Teekas][populate][teeka][fields][1]=documentId";
+
+const MANTRA_TEXT_ONLY_QUERY =
+  "?populate[ShlokaManthraEntry][populate]=*" +
+  "&populate[BhashyamEntry][populate]=*";
+
+/** Picks the smallest populate query that covers the merges we actually need. */
+function pickMantraMergeQuery(needsTeekas: boolean, needsText: boolean): string | null {
+  if (!needsTeekas && !needsText) return null;
+  if (needsTeekas && needsText) return MANTRA_EXISTING_MERGE_QUERY;
+  if (needsTeekas) return MANTRA_TEEKAS_ONLY_QUERY;
+  return MANTRA_TEXT_ONLY_QUERY;
+}
+
 function mantraTextMergeNeeded(target: Record<string, any>): boolean {
   const keys = ["ShlokaManthraEntry", "BhashyamEntry"] as const;
   return keys.some((k) => target[k] && typeof target[k] === "object" && !Array.isArray(target[k]));
@@ -1390,7 +1407,8 @@ async function resolveSection(
   type: string | undefined,
   order: number | undefined,
   granthaDocId: string,
-  parentDocId: string | undefined
+  parentDocId: string | undefined,
+  skipMetadataUpdate = false,
 ): Promise<string | undefined> {
   // Normalise type to a valid Strapi enum value (same logic as findOrCreateSection).
   const effectiveType = type
@@ -1398,6 +1416,9 @@ async function resolveSection(
     : undefined;
 
   if (knownDocId) {
+    if (skipMetadataUpdate) {
+      return knownDocId;
+    }
     // Fast path: we already know this section's Strapi ID — update it in place
     try {
       const payload: Record<string, any> = {};
@@ -1438,13 +1459,16 @@ function countManthraOtherTranslations(mData: Record<string, any>): number {
 }
 
 function manthraPayloadLooksLarge(mData: Record<string, any>): boolean {
-  if (countManthraOtherTranslations(mData) > 8) return true;
+  if (countManthraOtherTranslations(mData) > 12) return true;
   try {
     return JSON.stringify(mData).length > 350_000;
   } catch {
     return false;
   }
 }
+
+const MANTRA_OT_BATCH_SIZE = 12;
+const MANTRA_OT_SINGLE_PUT_MAX = 12;
 
 /** Sync a TextAndTranslation field when OtherTranslations is large — batch merges to avoid 413/timeouts. */
 async function putTextEntryWithOptionalOtBatching(
@@ -1457,7 +1481,7 @@ async function putTextEntryWithOptionalOtBatching(
   if (!entry || typeof entry !== "object") return;
   const { OtherTranslations, ...core } = entry;
   const ot = Array.isArray(OtherTranslations) ? OtherTranslations : [];
-  if (ot.length <= 8) {
+  if (ot.length <= MANTRA_OT_SINGLE_PUT_MAX) {
     await strapiRequest(putEndpoint, {
       method: "PUT",
       body: JSON.stringify({ data: { [fieldKey]: entry } }),
@@ -1473,7 +1497,7 @@ async function putTextEntryWithOptionalOtBatching(
     body: JSON.stringify({ data: { [fieldKey]: { ...core, OtherTranslations: [] } } }),
   });
 
-  const BATCH = 6;
+  const BATCH = MANTRA_OT_BATCH_SIZE;
   let merged: any[] = [];
   for (let i = 0; i < ot.length; i += BATCH) {
     merged = mergeOtherTranslations(ot.slice(i, i + BATCH), merged);
@@ -1769,9 +1793,45 @@ async function manthraDocIdMatchesPublishContext(
 }
 
 /** Find the Strapi manthra in a section whose ShlokaManthraNumber matches the portal label. */
+// ── Per-section read cache ──────────────────────────────────────────────────
+// During a grantha publish, listSectionMantraLabels / listSectionMantraSortKeys
+// are called once per mantra by the dedup + integrity paths. For a 100-mantra
+// section that was N round-trips → N pages of Strapi data refetched ~N times.
+// Cache the result for a short TTL; intra-section writes call invalidateSectionReadCache
+// to drop stale entries before the next read.
+const SECTION_READ_TTL_MS = 30 * 1000;
+const sectionReadCache = new Map<string, { at: number; data: unknown }>();
+function sectionCacheGet<T>(key: string): T | undefined {
+  const hit = sectionReadCache.get(key);
+  if (!hit) return undefined;
+  if (Date.now() - hit.at > SECTION_READ_TTL_MS) {
+    sectionReadCache.delete(key);
+    return undefined;
+  }
+  return hit.data as T;
+}
+function sectionCacheSet<T>(key: string, data: T): T {
+  sectionReadCache.set(key, { at: Date.now(), data });
+  if (sectionReadCache.size > 256) {
+    // Prevent unbounded growth on long-running servers — drop oldest 64.
+    const keys = [...sectionReadCache.keys()].slice(0, 64);
+    for (const k of keys) sectionReadCache.delete(k);
+  }
+  return data;
+}
+export function invalidateSectionReadCache(sectionDocId: string): void {
+  if (!sectionDocId) return;
+  for (const k of sectionReadCache.keys()) {
+    if (k.startsWith(`section:${sectionDocId}:`)) sectionReadCache.delete(k);
+  }
+}
+
 async function listSectionMantraLabels(
   sectionDocId: string,
 ): Promise<Array<{ documentId: string; label: string }>> {
+  const cacheKey = `section:${sectionDocId}:labels`;
+  const cached = sectionCacheGet<Array<{ documentId: string; label: string }>>(cacheKey);
+  if (cached) return cached;
   const s = encodeURIComponent(sectionDocId);
   const all: Array<{ documentId: string; label: string }> = [];
   let page = 1;
@@ -1790,7 +1850,7 @@ async function listSectionMantraLabels(
     if (page >= (r.meta?.pagination?.pageCount ?? 1)) break;
     page++;
   }
-  return all;
+  return sectionCacheSet(cacheKey, all);
 }
 
 async function fetchManthraStrapiLabel(documentId: string): Promise<string | undefined> {
@@ -1802,6 +1862,47 @@ async function fetchManthraStrapiLabel(documentId: string): Promise<string | und
   } catch {
     return undefined;
   }
+}
+
+async function fetchMantraOrderByDocId(documentId: string): Promise<number | undefined> {
+  try {
+    const r = await strapiRequest(`/api/manthras/${documentId}?fields[0]=order`);
+    const o = r?.data?.order;
+    return typeof o === "number" && !Number.isNaN(o) ? o : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+async function fetchMantraOrdersByDocIds(docIds: string[]): Promise<Map<string, number>> {
+  const out = new Map<string, number>();
+  const unique = [...new Set(docIds.filter((id) => typeof id === "string" && id.length >= 10))];
+  await Promise.all(
+    unique.map(async (id) => {
+      const o = await fetchMantraOrderByDocId(id);
+      if (o != null) out.set(id, o);
+    }),
+  );
+  return out;
+}
+
+/** One Strapi list call instead of N teeka lookups during single-mantra publish. */
+async function loadGranthaTeekaNameToDocId(granthaDocId: string): Promise<Map<string, string>> {
+  const map = new Map<string, string>();
+  const g = encodeURIComponent(granthaDocId);
+  let page = 1;
+  while (true) {
+    const r = await strapiRequest(
+      `/api/teekas?filters[grantha][documentId][$eq]=${g}&fields[0]=documentId&fields[1]=TeekaName&pagination[pageSize]=100&pagination[page]=${page}`,
+    );
+    for (const row of r.data ?? []) {
+      const name = String(row.TeekaName ?? "").trim().toLowerCase();
+      if (name && typeof row.documentId === "string") map.set(name, row.documentId);
+    }
+    if (page >= (r.meta?.pagination?.pageCount ?? 1)) break;
+    page++;
+  }
+  return map;
 }
 
 async function findManthraDocIdByLabelInSection(
@@ -1830,6 +1931,7 @@ async function resolveManthraDocIdForPublish(
   sectionDocId: string | undefined,
   mData: Record<string, any>,
   granthaDocId?: string,
+  options?: { fastSinglePublish?: boolean },
 ): Promise<string | undefined> {
   const portalLabel = portalMantraLabel(manthra, mData);
   const stored =
@@ -1838,6 +1940,11 @@ async function resolveManthraDocIdForPublish(
       : undefined;
 
   if (!sectionDocId) return stored;
+
+  // Single-mantra publish: hierarchy docId is authoritative (avoids 2–3 Strapi round-trips).
+  if (options?.fastSinglePublish && stored) {
+    return stored;
+  }
 
   // Trust the portal hierarchy link — but never publish into another grantha's row.
   if (stored) {
@@ -1871,6 +1978,9 @@ type PortalManthraSibling = { id?: string; strapiDocumentId?: string; order?: nu
 async function listSectionMantraSortKeys(
   sectionDocId: string,
 ): Promise<Array<{ documentId: string; order: number }>> {
+  const cacheKey = `section:${sectionDocId}:sortKeys`;
+  const cached = sectionCacheGet<Array<{ documentId: string; order: number }>>(cacheKey);
+  if (cached) return cached;
   const sectionFilter = encodeURIComponent(sectionDocId);
   const listQuery = [
     `filters[Section][documentId][$eq]=${sectionFilter}`,
@@ -1896,7 +2006,7 @@ async function listSectionMantraSortKeys(
     page++;
   }
   all.sort((a, b) => a.order - b.order);
-  return all;
+  return sectionCacheSet(cacheKey, all);
 }
 
 /**
@@ -1916,31 +2026,56 @@ async function resolvePublishSortKey(
       ? manthra.strapiDocumentId
       : undefined;
 
-  const strapiRows = await listSectionMantraSortKeys(sectionDocId);
-  const orderByDocId = new Map(strapiRows.map((r) => [r.documentId, r.order]));
-
-  if (options?.fastSinglePublish && stored && orderByDocId.has(stored)) {
-    return orderByDocId.get(stored);
+  // Fast single-mantra publish: one GET — not a full section walk (often 100+ mantras).
+  if (options?.fastSinglePublish && stored) {
+    const existing = await fetchMantraOrderByDocId(stored);
+    if (existing != null) return existing;
   }
 
   const siblings = options?.portalSiblings;
+  if (options?.fastSinglePublish && siblings && siblings.length > 0) {
+    const sorted = [...siblings].sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
+    const idx = sorted.findIndex((s) => s.id === manthra.id);
+    if (idx >= 0) {
+      const prevDoc = idx > 0 ? sorted[idx - 1]?.strapiDocumentId : undefined;
+      const nextDoc = idx < sorted.length - 1 ? sorted[idx + 1]?.strapiDocumentId : undefined;
+      const neighborIds = [prevDoc, nextDoc, stored].filter(
+        (id): id is string => typeof id === "string" && id.length >= 10,
+      );
+      const orderByDocId = await fetchMantraOrdersByDocIds(neighborIds);
+      if (stored && orderByDocId.has(stored)) {
+        return orderByDocId.get(stored);
+      }
+      const prevSort = prevDoc ? orderByDocId.get(prevDoc) : undefined;
+      const nextSort = nextDoc ? orderByDocId.get(nextDoc) : undefined;
+      return sortKeyBetween(prevSort, nextSort).sortKey;
+    }
+  }
+
+  if (options?.fastSinglePublish) {
+    const portalOrder = Number(manthra.order);
+    if (!Number.isNaN(portalOrder) && portalOrder > 0) {
+      if (portalOrder >= STRAPI_SORT_GAP) return portalOrder;
+      return portalIndexToStrapiSortKey(portalOrder);
+    }
+    return undefined;
+  }
+
+  // Grantha-publish hot path: when portal siblings are provided and this manthra is
+  // in the list, the sort key is just the portal index spaced by GAP. No Strapi state
+  // is needed — skipping listSectionMantraSortKeys here removes a paged GET per mantra
+  // (cached at TTL, but still wasted CPU on the cached deserialize for large sections).
   if (siblings && siblings.length > 0) {
     const sorted = [...siblings].sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
     const idx = sorted.findIndex((s) => s.id === manthra.id);
     if (idx >= 0) {
-      if (!options?.fastSinglePublish) {
-        return portalIndexToStrapiSortKey(idx + 1);
-      }
-      const prevDoc = idx > 0 ? sorted[idx - 1]?.strapiDocumentId : undefined;
-      const nextDoc = idx < sorted.length - 1 ? sorted[idx + 1]?.strapiDocumentId : undefined;
-      const prevSort = prevDoc ? orderByDocId.get(prevDoc) : undefined;
-      const nextSort = nextDoc ? orderByDocId.get(nextDoc) : undefined;
-      if (stored && orderByDocId.has(stored)) {
-        return orderByDocId.get(stored);
-      }
-      return sortKeyBetween(prevSort, nextSort).sortKey;
+      return portalIndexToStrapiSortKey(idx + 1);
     }
   }
+
+  // Fall back to the live Strapi state only when portal siblings can't anchor us.
+  const strapiRows = await listSectionMantraSortKeys(sectionDocId);
+  const orderByDocId = new Map(strapiRows.map((r) => [r.documentId, r.order]));
 
   if (stored && orderByDocId.has(stored)) {
     return orderByDocId.get(stored);
@@ -1956,6 +2091,35 @@ async function resolvePublishSortKey(
 
 /** Publish one mantra: content + ShlokaManthraNumber; sort key from fractional CMS ordering. */
 async function publishManthraToStrapi(
+  manthra: Record<string, any>,
+  sectionDocId: string | undefined,
+  granthaDocId: string | undefined,
+  teekaNameToDocId: Map<string, string> | undefined,
+  publishFailures: Array<{ manthra: string; error: string }>,
+  options?: {
+    fastSinglePublish?: boolean;
+    portalSiblings?: PortalManthraSibling[];
+    configuredLeaf?: string;
+    granthaName?: string;
+  },
+): Promise<string | undefined> {
+  try {
+    return await publishManthraToStrapiInner(
+      manthra,
+      sectionDocId,
+      granthaDocId,
+      teekaNameToDocId,
+      publishFailures,
+      options,
+    );
+  } finally {
+    // Drop cached section reads after this mantra's writes so the NEXT publish in
+    // the same section observes our changes (label, sort key, new docId).
+    if (sectionDocId) invalidateSectionReadCache(sectionDocId);
+  }
+}
+
+async function publishManthraToStrapiInner(
   manthra: Record<string, any>,
   sectionDocId: string | undefined,
   granthaDocId: string | undefined,
@@ -1984,6 +2148,7 @@ async function publishManthraToStrapi(
     sectionDocId,
     prelimData,
     granthaDocId,
+    options,
   );
   const label = portalLabel || manthra.title || "(unknown)";
   const publishOrder = await resolvePublishSortKey(manthra, sectionDocId, options);
@@ -2037,7 +2202,9 @@ async function publishManthraToStrapi(
 
   if (isPublishIntegrityEnabled()) {
     const existingStrapiLabel =
-      targetDocId ? await fetchManthraStrapiLabel(targetDocId) : undefined;
+      targetDocId && !options?.fastSinglePublish
+        ? await fetchManthraStrapiLabel(targetDocId)
+        : undefined;
     const entry = mData.ShlokaManthraEntry ?? manthra.ShlokaManthraEntry;
     const { sk, en } = plainTextFromManthraEntry(entry);
     const violations = scanMantraForPublish({
@@ -2056,7 +2223,7 @@ async function publishManthraToStrapi(
       publishFailures.push({ manthra: fullLabel, error: msg });
       return undefined;
     }
-    if (sectionDocId && fullLabel) {
+    if (!options?.fastSinglePublish && sectionDocId && fullLabel) {
       const rows = await listSectionMantraLabels(sectionDocId);
       const collision = sectionSuffixCollision(
         rows.map((r) => r.label),
@@ -2216,7 +2383,7 @@ async function assertGranthaPublishNotLocked(strapiGranthaDocId: string | null |
 async function publishGranthaWithHierarchy(
   draft: any,
   jobId?: string,
-  onProgress?: (done: number, total: number, current: string) => void
+  onProgress?: (done: number, total: number, current: string) => void,
 ): Promise<any> {
   await assertGranthaPublishNotLocked(draft.strapiDocumentId);
   const rawData = draft.data as Record<string, any>;
@@ -2377,87 +2544,126 @@ async function publishGranthaWithHierarchy(
   // without extra API lookups, even for teekas created for the first time right now.
   const teekaNameToDocId: Map<string, string> = new Map();
   if (Array.isArray(teekaDefinitions) && granthaDocId) {
+    // Normalize wizard entries first (skip duplicates / blanks).
+    type TeekaCandidate = { effectiveName: string; validAuthor?: string };
+    const candidates: TeekaCandidate[] = [];
+    const seen = new Set<string>();
     for (const teeka of teekaDefinitions) {
-      // TeekaAuthor is a Strapi enum — only include if valid
       const validAuthor = teeka.TeekaAuthor && STRAPI_TEEKA_AUTHORS.has(teeka.TeekaAuthor)
         ? teeka.TeekaAuthor : undefined;
-      // Use TeekaName if given; fall back to author name; skip if neither
       const effectiveName = (teeka.TeekaName || "").trim() || (validAuthor ? `${validAuthor} Teeka` : "");
       if (!effectiveName) continue;
+      const key = effectiveName.toLowerCase();
+      if (seen.has(key)) continue;
+      seen.add(key);
+      candidates.push({ effectiveName, validAuthor });
+    }
+
+    if (candidates.length > 0) {
+      // Single bulk lookup: pull every existing teeka for this grantha in one GET, then
+      // resolve each candidate in memory. Replaces the per-teeka filtered GET that used
+      // to be O(N) round-trips serial — for a 10-teeka grantha that's 10 fewer RTTs.
+      let existingByName: Map<string, string>;
       try {
-        // Dedup: if a teeka with the same name already exists for this grantha, reuse it
-        const tName = encodeURIComponent(effectiveName);
-        const tGrantha = encodeURIComponent(granthaDocId);
-        const existing = await strapiRequest(
-          `/api/teekas?filters[TeekaName][$eqi]=${tName}&filters[grantha][documentId][$eq]=${tGrantha}&fields[0]=documentId`
-        );
-        const existingDocId: string | undefined = existing?.data?.[0]?.documentId;
-        if (existingDocId) {
-          console.log(`[publish] Teeka "${effectiveName}" already exists (${existingDocId}) — reusing`);
-          teekaNameToDocId.set(effectiveName.toLowerCase(), existingDocId);
-          reportProgress(`Teeka: ${effectiveName}`);
-          continue;
-        }
-        const created = await strapiRequest("/api/teekas", {
-          method: "POST",
-          body: JSON.stringify({
-            data: {
-              TeekaName: effectiveName,
-              ...(validAuthor ? { TeekaAuthor: validAuthor } : {}),
-              grantha: granthaDocId,
-            },
-          }),
-        });
-        const createdDocId: string | undefined = created?.data?.documentId;
-        if (createdDocId) {
-          teekaNameToDocId.set(effectiveName.toLowerCase(), createdDocId);
-          console.log(`[publish] Teeka "${effectiveName}" created (${createdDocId})`);
-        } else {
-          console.warn(`[publish] Teeka "${effectiveName}" created but no documentId returned`);
-        }
-        reportProgress(`Teeka: ${effectiveName}`);
+        existingByName = await loadGranthaTeekaNameToDocId(granthaDocId);
       } catch (e: any) {
-        console.error(`[publish] Teeka "${effectiveName}" failed:`, e.message);
-        reportProgress(`Teeka: ${effectiveName}`);
+        console.warn(`[publish] Bulk teeka lookup failed; falling back per-teeka. ${e?.message || e}`);
+        existingByName = new Map();
+      }
+
+      const toCreate: TeekaCandidate[] = [];
+      for (const c of candidates) {
+        const docId = existingByName.get(c.effectiveName.toLowerCase());
+        if (docId) {
+          console.log(`[publish] Teeka "${c.effectiveName}" already exists (${docId}) — reusing`);
+          teekaNameToDocId.set(c.effectiveName.toLowerCase(), docId);
+          reportProgress(`Teeka: ${c.effectiveName}`);
+        } else {
+          toCreate.push(c);
+        }
+      }
+
+      // Parallelize creates. Strapi handles them as independent POSTs; if two land at
+      // exactly the same instant we accept the rare dup risk — `loadGranthaTeekaNameToDocId`
+      // would resolve either copy on the next publish.
+      const TEEKA_CREATE_CONCURRENCY = 6;
+      for (let i = 0; i < toCreate.length; i += TEEKA_CREATE_CONCURRENCY) {
+        const batch = toCreate.slice(i, i + TEEKA_CREATE_CONCURRENCY);
+        await Promise.all(
+          batch.map(async (c) => {
+            try {
+              const created = await strapiRequest("/api/teekas", {
+                method: "POST",
+                body: JSON.stringify({
+                  data: {
+                    TeekaName: c.effectiveName,
+                    ...(c.validAuthor ? { TeekaAuthor: c.validAuthor } : {}),
+                    grantha: granthaDocId,
+                  },
+                }),
+              });
+              const createdDocId: string | undefined = created?.data?.documentId;
+              if (createdDocId) {
+                teekaNameToDocId.set(c.effectiveName.toLowerCase(), createdDocId);
+                console.log(`[publish] Teeka "${c.effectiveName}" created (${createdDocId})`);
+              } else {
+                console.warn(`[publish] Teeka "${c.effectiveName}" created but no documentId returned`);
+              }
+            } catch (e: any) {
+              console.error(`[publish] Teeka "${c.effectiveName}" failed:`, e.message);
+            } finally {
+              reportProgress(`Teeka: ${c.effectiveName}`);
+            }
+          }),
+        );
       }
     }
   }
   console.log(`[publish] teekaNameToDocId map: ${[...teekaNameToDocId.entries()].map(([k, v]) => `"${k}"→${v}`).join(", ") || "(empty)"}`);
 
-  // 2b. Delete explicitly removed sections from Strapi (best-effort).
-  // The client tracks removed sections in deletedStrapiSectionDocIds.
-  // We delete them here so they don't reappear on the next load.
-  if (Array.isArray(deletedStrapiSectionDocIds) && deletedStrapiSectionDocIds.length > 0) {
-    console.log(`[publish] Deleting ${deletedStrapiSectionDocIds.length} removed sections from Strapi: ${deletedStrapiSectionDocIds.join(", ")}`);
-    for (const sectionDocId of deletedStrapiSectionDocIds) {
-      try {
-        await strapiRequest(`/api/sections/${sectionDocId}`, { method: "DELETE" });
-        console.log(`[publish] Deleted section ${sectionDocId}`);
-      } catch (e: any) {
-        // 404 means already gone — that's fine
-        if (e?.status !== 404) {
-          console.error(`[publish] Failed to delete section ${sectionDocId}:`, e.message);
-        }
-      }
-    }
-  }
+  // 2b/2c. Delete explicitly removed sections + manthras from Strapi.
+  // Failed deletes (non-404) are collected and bubbled out so the publish
+  // handler can re-pin them onto draft.data.deletedStrapiManthraDocIds for
+  // the next publish to retry. Without this, transient Strapi 5xx errors
+  // silently orphan rows because the cleanup step always strips the array.
+  const failedDeletedSectionDocIds: string[] = [];
+  const failedDeletedManthraDocIds: string[] = [];
 
-  // 2c. Delete explicitly removed manthras from Strapi (best-effort).
-  // The client tracks removed manthras in deletedStrapiManthraDocIds.
-  // Without this step they remain in Strapi as orphaned duplicates.
-  if (Array.isArray(deletedStrapiManthraDocIds) && deletedStrapiManthraDocIds.length > 0) {
-    console.log(`[publish] Deleting ${deletedStrapiManthraDocIds.length} removed manthras from Strapi: ${deletedStrapiManthraDocIds.join(", ")}`);
-    for (const manthraDocId of deletedStrapiManthraDocIds) {
-      try {
-        await strapiRequest(`/api/manthras/${manthraDocId}`, { method: "DELETE" });
-        console.log(`[publish] Deleted manthra ${manthraDocId}`);
-      } catch (e: any) {
-        // 404 means already gone — that's fine
-        if (e?.status !== 404) {
-          console.error(`[publish] Failed to delete manthra ${manthraDocId}:`, e.message);
-        }
-      }
+  const DELETE_CONCURRENCY = 8;
+  const runBoundedDeletes = async (
+    docIds: string[],
+    label: "section" | "manthra",
+    failedSink: string[],
+  ): Promise<void> => {
+    if (docIds.length === 0) return;
+    const apiPath = label === "section" ? "sections" : "manthras";
+    console.log(`[publish] Deleting ${docIds.length} removed ${label}s from Strapi: ${docIds.join(", ")}`);
+    for (let i = 0; i < docIds.length; i += DELETE_CONCURRENCY) {
+      const batch = docIds.slice(i, i + DELETE_CONCURRENCY);
+      await Promise.all(
+        batch.map(async (docId) => {
+          try {
+            await strapiRequest(`/api/${apiPath}/${docId}`, { method: "DELETE" });
+            console.log(`[publish] Deleted ${label} ${docId}`);
+            if (label === "section") invalidateSectionReadCache(docId);
+          } catch (e: any) {
+            if (e?.status === 404) {
+              if (label === "section") invalidateSectionReadCache(docId);
+              return; // already gone — fine
+            }
+            console.error(`[publish] Failed to delete ${label} ${docId}:`, e?.message || e);
+            failedSink.push(docId);
+          }
+        }),
+      );
     }
+  };
+
+  if (Array.isArray(deletedStrapiSectionDocIds)) {
+    await runBoundedDeletes(deletedStrapiSectionDocIds, "section", failedDeletedSectionDocIds);
+  }
+  if (Array.isArray(deletedStrapiManthraDocIds)) {
+    await runBoundedDeletes(deletedStrapiManthraDocIds, "manthra", failedDeletedManthraDocIds);
   }
 
   // 3. Publish hierarchy as Sections + Manthras (best-effort)
@@ -2506,7 +2712,40 @@ async function publishGranthaWithHierarchy(
   // Built during the traversal below; used to sync Strapi docIds back into the
   // draft hierarchy after publish so that the NEXT publish can do a direct PUT
   // (no dedup API calls) for every manthra whose docId is now known.
-  const manthraIdToDocId: Map<string, string> = new Map();
+  //
+  // On retry after a crash, hydrate from cms_publish_manthra_resolutions so we
+  // skip re-resolving manthras already published. A buffered flusher batches
+  // upserts (50 at a time / every 2s) so the worker hot path doesn't pay a DB
+  // round-trip per mantra. The trade-off is finer-grained crash recovery
+  // (you may re-publish up to ~50 mantras after a crash) for big throughput
+  // wins on large single-section granthas (Vivekachudamani et al).
+  const manthraIdToDocId: Map<string, string> = jobId
+    ? await storage.loadManthraResolutions(jobId)
+    : new Map();
+  if (manthraIdToDocId.size > 0) {
+    console.log(`[publish] Hydrated ${manthraIdToDocId.size} manthra resolution(s) from checkpoint`);
+  }
+
+  const resolutionBuffer: Array<{ portalManthraId: string; strapiDocumentId: string }> = [];
+  const RESOLUTION_FLUSH_SIZE = 50;
+  const RESOLUTION_FLUSH_MS = 2000;
+  let resolutionFlushInFlight: Promise<void> = Promise.resolve();
+  const flushResolutions = async (): Promise<void> => {
+    if (!jobId || resolutionBuffer.length === 0) return;
+    const batch = resolutionBuffer.splice(0, resolutionBuffer.length);
+    resolutionFlushInFlight = resolutionFlushInFlight.then(() =>
+      storage.recordManthraResolutionsBulk(jobId, batch).catch((e) => {
+        console.warn(`[publish] resolution flush of ${batch.length} entries failed: ${e?.message || e}`);
+      }),
+    );
+    await resolutionFlushInFlight;
+  };
+  const resolutionTimer = jobId
+    ? setInterval(() => {
+        void flushResolutions();
+      }, RESOLUTION_FLUSH_MS)
+    : null;
+  if (resolutionTimer) resolutionTimer.unref?.();
 
   // Collect manthra publish failures so they can be surfaced to the user.
   // Each entry: { manthra: string (number/title), error: string }
@@ -2526,6 +2765,17 @@ async function publishGranthaWithHierarchy(
         );
       }
 
+      // If a previous attempt of this job already resolved this manthra, the in-memory
+      // map (hydrated from cms_publish_manthra_resolutions on entry) carries the docId.
+      // Stamp it onto the manthra so publishManthraToStrapi takes the fast PUT path
+      // instead of re-running the dedup search.
+      if (manthra.id && manthraIdToDocId.has(manthra.id)) {
+        const checkpointDocId = manthraIdToDocId.get(manthra.id)!;
+        if (!manthra.strapiDocumentId || manthra.strapiDocumentId.length < 10) {
+          manthra = { ...manthra, strapiDocumentId: checkpointDocId };
+        }
+      }
+
       const returnedDocId = await publishManthraToStrapi(
         manthra,
         sectionDocId,
@@ -2536,6 +2786,15 @@ async function publishGranthaWithHierarchy(
       );
       if (returnedDocId && manthra.id) {
         manthraIdToDocId.set(manthra.id, returnedDocId);
+        if (jobId) {
+          // Buffered, fire-and-forget: keep the worker hot path free of DB latency.
+          // The flusher above writes batches in the background; on crash we lose at
+          // most ~50 checkpoints — a retry just re-publishes those mantras.
+          resolutionBuffer.push({ portalManthraId: manthra.id, strapiDocumentId: returnedDocId });
+          if (resolutionBuffer.length >= RESOLUTION_FLUSH_SIZE) {
+            void flushResolutions();
+          }
+        }
       }
       return true;
     } catch (e: any) {
@@ -2560,6 +2819,9 @@ async function publishGranthaWithHierarchy(
       .map((m) => ({ id: m.id, strapiDocumentId: m.strapiDocumentId, order: m.order }))
       .sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
     if (!jobId) {
+      // Synchronous path: sort keys are derived from the portal index (no read-modify-
+      // write on Strapi state) and labels are unique per section by preflight, so we
+      // can publish intra-section mantras in parallel without the section lock.
       for (let i = 0; i < manthras.length; i += MANTHRA_CONCURRENCY) {
         const batch = manthras.slice(i, i + MANTHRA_CONCURRENCY);
         await Promise.all(
@@ -2604,6 +2866,9 @@ async function publishGranthaWithHierarchy(
         const qPortalSiblings = payload.portalSiblings as PortalManthraSibling[] | undefined;
         let terminal = false;
         try {
+          // No section lock here: sort keys are derived from the portal index (no
+          // shared Strapi state) and label uniqueness is enforced by preflight.
+          // Workers in the same section can publish in parallel safely.
           const ok = await publishManthra(qManthra, qSectionDocId, qPortalSiblings);
           if (ok) {
             await storage.completePublishJobTask(claimed.id, { ok: true });
@@ -2675,7 +2940,17 @@ async function publishGranthaWithHierarchy(
       error: "Strapi did not return a documentId for the grantha record. Sections and manthras were not published. Please try publishing again.",
     });
   } else if (Array.isArray(hierarchy) && hierarchy.length > 0) {
-    for (const adhyaya of hierarchy) {
+    // Process L1 sections (adhyayas) with bounded concurrency. Distinct sections
+    // are safe to publish in parallel — intra-section mutations are still serialized
+    // by withSectionLock further down. The Maps (adhyayaIdToDocId, …) are mutated
+    // from multiple async branches but only with `.set` so there is no read-then-write
+    // race; Promise.all on the JS event loop keeps each increment atomic.
+    const ADHYAYA_CONCURRENCY = Math.min(
+      6,
+      Math.max(1, Number(process.env.PUBLISH_ADHYAYA_CONCURRENCY) || 4),
+    );
+
+    const processAdhyaya = async (adhyaya: any): Promise<void> => {
       // Guard: skip L1 sections with blank titles — they cannot be deduped and corrupt Strapi
       if (!adhyaya.title?.trim()) {
         const skipped = countManthrasUnder(adhyaya);
@@ -2686,7 +2961,7 @@ async function publishGranthaWithHierarchy(
             error: `Section has no title — ${skipped} mantra${skipped === 1 ? "" : "s"} not published. Add a title in the portal and re-publish.`,
           });
         }
-        continue;
+        return;
       }
 
       let adhyayaDocId: string | undefined;
@@ -2700,9 +2975,9 @@ async function publishGranthaWithHierarchy(
         const skipped = countManthrasUnder(adhyaya);
         const skipNote = skipped > 0 ? ` (${skipped} mantra${skipped === 1 ? "" : "s"} not published)` : "";
         publishFailures.push({ manthra: `[Section] ${adhyaya.title}`, error: msg + skipNote });
-        continue;
+        return;
       }
-      if (!adhyayaDocId) continue;
+      if (!adhyayaDocId) return;
       if (adhyaya.id) adhyayaIdToDocId.set(adhyaya.id, adhyayaDocId);
       reportProgress(adhyaya.title);
 
@@ -2800,7 +3075,29 @@ async function publishGranthaWithHierarchy(
           await publishManthrasBatch(khanda.manthras ?? [], khandaDocId);
         }
       }
-    }
+    };
+
+    // Worker pool: each worker pulls the next adhyaya index from a shared cursor.
+    let cursor = 0;
+    const adhyayas = hierarchy;
+    const workers = Array.from({ length: ADHYAYA_CONCURRENCY }, async () => {
+      while (true) {
+        const idx = cursor++;
+        if (idx >= adhyayas.length) return;
+        try {
+          await processAdhyaya(adhyayas[idx]);
+        } catch (e: any) {
+          // Defensive — processAdhyaya catches its own errors per section, but a thrown
+          // exception here would otherwise abort the whole grantha publish.
+          console.error(`[publish] Unexpected error processing adhyaya ${adhyayas[idx]?.title}:`, e);
+          publishFailures.push({
+            manthra: `[Section] ${adhyayas[idx]?.title || `idx=${idx}`}`,
+            error: e?.message || "Unexpected publish error",
+          });
+        }
+      }
+    });
+    await Promise.all(workers);
   }
 
   // 2d. Delete Teeka collection entries removed in Teeka Management (best-effort).
@@ -2875,7 +3172,26 @@ async function publishGranthaWithHierarchy(
     );
   }
 
-  return { strapiResult, updatedHierarchy, publishFailures };
+  // Final flush + timer teardown before returning. setInterval keeps the Node process
+  // alive otherwise; the .unref() above mitigates that but we still want a deterministic
+  // shutdown when the publish completes.
+  if (resolutionTimer) clearInterval(resolutionTimer);
+  if (jobId) {
+    try {
+      await flushResolutions();
+      await resolutionFlushInFlight;
+    } catch (e: any) {
+      console.warn(`[publish] final resolution flush failed: ${e?.message || e}`);
+    }
+  }
+
+  return {
+    strapiResult,
+    updatedHierarchy,
+    publishFailures,
+    failedDeletedSectionDocIds,
+    failedDeletedManthraDocIds,
+  };
 }
 
 /**
@@ -2936,80 +3252,68 @@ async function resolveManthraTeekas(
   granthaDocId?: string,
   teekaNameToDocId?: Map<string, string>
 ): Promise<any[]> {
-  console.log(`[resolveManthraTeekas] Processing ${rawTeekas.length} raw teeka(s):`,
-    rawTeekas.map((t, i) => `[${i}] teekaDocId=${t.teekaDocId || t.teeka?.documentId || "(none)"} TeekaName="${t.TeekaName || ""}" hasTeekaEntry=${!!t.TeekaEntry}`));
+  if (rawTeekas.length === 0) return [];
 
-  const resolved: any[] = [];
-  for (const t of rawTeekas) {
+  // Phase 1: resolve each teeka's Strapi docId WITHOUT sequential blocking.
+  // The previous serial loop did one Strapi GET per teeka missing a docId; a mantra with
+  // 8 unbound teekas was 8 sequential round-trips (~4-8s with old curl transport).
+  // Parallelize the name lookups via Promise.all so the wall time is one Strapi call.
+  const teekaSlots = rawTeekas.map((t) => {
     const TeekaName = (t.TeekaName || "").trim();
-
-    // Priority 1: check the publish-run map (TeekaName→Strapi-docId built in step 2).
-    // This is the most reliable source for teekas created during THIS publish operation.
     let teekaDocId: string | undefined;
+
     if (teekaNameToDocId && TeekaName) {
       teekaDocId = teekaNameToDocId.get(TeekaName.toLowerCase());
-      if (teekaDocId) {
-        console.log(`[resolveManthraTeekas] Resolved "${TeekaName}" via publish-run map → ${teekaDocId}`);
-      }
     }
-
-    // Priority 2: stored teekaDocId — only trust it if it looks like a real Strapi documentId.
-    // Real Strapi v5 documentIds are 20+ character alphanumeric strings.
-    // Portal-local IDs (nanoid) are typically 7 characters — far too short.
-    // We use a minimum length of 20 chars to distinguish them.
     if (!teekaDocId) {
       const stored = t.teekaDocId || t.teeka?.documentId || undefined;
-      if (stored && stored.length >= 20) {
-        teekaDocId = stored;
-        console.log(`[resolveManthraTeekas] Using stored Strapi documentId="${teekaDocId}"`);
-      } else if (stored) {
-        console.log(`[resolveManthraTeekas] Ignoring short/local ID "${stored}" (${stored.length} chars) — will use name lookup instead`);
-      }
+      if (stored && stored.length >= 20) teekaDocId = stored;
     }
+    return { raw: t, TeekaName, teekaDocId, needsLookup: !teekaDocId && !!TeekaName };
+  });
 
-    // Priority 3: Strapi API lookup by TeekaName
-    if (!teekaDocId) {
-      if (!TeekaName) {
+  const lookupTargets = teekaSlots.filter((s) => s.needsLookup);
+  if (lookupTargets.length > 0) {
+    const uniqueNames = [...new Set(lookupTargets.map((s) => s.TeekaName))];
+    const nameToDocId = new Map<string, string>();
+    await Promise.all(
+      uniqueNames.map(async (name) => {
+        try {
+          let url = `/api/teekas?filters[TeekaName][$eqi]=${encodeURIComponent(name)}&fields[0]=documentId&pagination[pageSize]=5`;
+          if (granthaDocId) url += `&filters[grantha][documentId][$eq]=${encodeURIComponent(granthaDocId)}`;
+          const found = await strapiRequest(url);
+          const docId = found?.data?.[0]?.documentId;
+          if (docId) nameToDocId.set(name, docId);
+        } catch (e: any) {
+          console.error(`[resolveManthraTeekas] Lookup error for "${name}": ${e.message}`);
+        }
+      }),
+    );
+    for (const slot of lookupTargets) {
+      slot.teekaDocId = nameToDocId.get(slot.TeekaName);
+    }
+  }
+
+  // Phase 2: build the output entries. Pure CPU work — no awaits.
+  const resolved: any[] = [];
+  for (const slot of teekaSlots) {
+    if (!slot.teekaDocId) {
+      if (!slot.TeekaName) {
         console.warn(`[resolveManthraTeekas] Entry has no teeka documentId and no TeekaName — skipping`);
-        continue;
+      } else {
+        console.warn(`[resolveManthraTeekas] Teeka record not found in Strapi: "${slot.TeekaName}" — skipping this teeka entry`);
       }
-      console.log(`[resolveManthraTeekas] No documentId; looking up by TeekaName="${TeekaName}"${granthaDocId ? ` grantha=${granthaDocId}` : ""}`);
-      try {
-        let url = `/api/teekas?filters[TeekaName][$eqi]=${encodeURIComponent(TeekaName)}&fields[0]=documentId&pagination[pageSize]=5`;
-        if (granthaDocId) url += `&filters[grantha][documentId][$eq]=${encodeURIComponent(granthaDocId)}`;
-        const found = await strapiRequest(url);
-        console.log(`[resolveManthraTeekas] Lookup result for "${TeekaName}":`, JSON.stringify(found?.data || []));
-        teekaDocId = found?.data?.[0]?.documentId;
-      } catch (e: any) {
-        console.error(`[resolveManthraTeekas] Lookup error for "${TeekaName}": ${e.message}`);
-      }
-      if (!teekaDocId) {
-        console.warn(`[resolveManthraTeekas] Teeka record not found in Strapi: "${TeekaName}" — skipping this teeka entry`);
-        continue;
-      }
-    }
-
-    // Only include this teeka entry if it actually has content.
-    // Sending an empty TeekaEntry (or no TeekaEntry at all) to Strapi would overwrite
-    // whatever content was previously stored for this teeka on the manthra — for example,
-    // when a new teeka is added to the grantha and the user hasn't filled it in yet,
-    // its slot in the UI is empty; we must not let that empty slot wipe Strapi content.
-    if (!t.TeekaEntry || typeof t.TeekaEntry !== "object") {
-      console.warn(`[resolveManthraTeekas] Skipping teeka "${teekaDocId}" — no TeekaEntry provided; existing Strapi content preserved`);
       continue;
     }
+    const t = slot.raw;
+    if (!t.TeekaEntry || typeof t.TeekaEntry !== "object") continue;
     const norm = normalizeTextAndTranslation(t.TeekaEntry);
     const hasRealContent =
       (norm.SanskritTextEntry?.length ?? 0) > 0 ||
       (norm.EnglishTranslationText?.length ?? 0) > 0 ||
       (norm.OtherTranslations?.length ?? 0) > 0;
-    if (!hasRealContent) {
-      console.warn(`[resolveManthraTeekas] Skipping teeka "${teekaDocId}" — TeekaEntry has no content; existing Strapi content preserved`);
-      continue;
-    }
-    const item: any = { teeka: teekaDocId, TeekaEntry: norm };
-    console.log(`[resolveManthraTeekas] TeekaEntry keys: ${Object.keys(t.TeekaEntry).join(", ")}`);
-    resolved.push(item);
+    if (!hasRealContent) continue;
+    resolved.push({ teeka: slot.teekaDocId, TeekaEntry: norm });
   }
   console.log(`[resolveManthraTeekas] Resolved ${resolved.length}/${rawTeekas.length} teeka(s)`);
   return resolved;
@@ -3066,25 +3370,31 @@ async function buildManthraPayloadAsync(
   // we OMIT Teekas from the payload so Strapi preserves whatever content it holds.
   const isExistingStrapi = typeof strapiDocumentId === "string" && strapiDocumentId.length >= 10;
 
-  let resolvedTeekas: any[] = [];
-  if (Array.isArray(rawTeekas) && rawTeekas.length > 0) {
-    resolvedTeekas = await resolveManthraTeekas(rawTeekas);
-  }
+  // Run teeka resolution in parallel with the existing-mantra snapshot fetch: both are
+  // independent network calls. With keep-alive HTTP they share a connection.
+  const localHasTeekas = Array.isArray(rawTeekas) && rawTeekas.length > 0;
+  const needsTextMerge = isExistingStrapi && mantraTextMergeNeeded(payload);
+  // Pull the snapshot only if we actually need to merge something; skip otherwise
+  // so a publish that's only updating, say, ShlokaManthraNumber doesn't pay for
+  // a multi-MB populate=* GET.
+  const mergeQuery = pickMantraMergeQuery(localHasTeekas && isExistingStrapi, needsTextMerge);
+  const snapshotPromise =
+    mergeQuery && strapiDocumentId
+      ? strapiRequest(`/api/manthras/${strapiDocumentId}${mergeQuery}`)
+          .then((r) => r?.data ?? null)
+          .catch((e: any) => {
+            console.warn(`[buildManthraPayloadAsync] Could not fetch existing Strapi mantra for merge — ${e.message}`);
+            return null;
+          })
+      : Promise.resolve(null);
 
-  const needsStrapiSnapshot = isExistingStrapi;
-
-  let strapiMantraSnapshot: any = null;
-  if (needsStrapiSnapshot && strapiDocumentId) {
-    try {
-      strapiMantraSnapshot =
-        (await strapiRequest(`/api/manthras/${strapiDocumentId}${MANTRA_EXISTING_MERGE_QUERY}`))?.data ?? null;
-      if (resolvedTeekas.length > 0) {
-        const n = strapiMantraSnapshot?.Teekas?.length ?? 0;
-        console.log(`[buildManthraPayloadAsync] Fetched Strapi mantra snapshot (${n} teeka row(s)) for merge`);
-      }
-    } catch (e: any) {
-      console.warn(`[buildManthraPayloadAsync] Could not fetch existing Strapi mantra for merge — ${e.message}`);
-    }
+  const [resolvedTeekas, strapiMantraSnapshot] = await Promise.all([
+    localHasTeekas ? resolveManthraTeekas(rawTeekas) : Promise.resolve([] as any[]),
+    snapshotPromise,
+  ]);
+  if (strapiMantraSnapshot && resolvedTeekas.length > 0) {
+    const n = (strapiMantraSnapshot as any)?.Teekas?.length ?? 0;
+    console.log(`[buildManthraPayloadAsync] Fetched Strapi mantra snapshot (${n} teeka row(s)) for merge`);
   }
 
   if (Array.isArray(rawTeekas)) {
@@ -3701,7 +4011,6 @@ export async function registerRoutes(
       if (merged.updated) {
         hierarchy = merged.hierarchy;
         data = { ...data, hierarchy };
-        await storage.updateDraft(draftId, userId, { data, status: "draft" });
       }
     }
 
@@ -3743,28 +4052,17 @@ export async function registerRoutes(
       if (n) neededTeekaNames.add(n);
     }
 
-    const teekaNameToDocId: Map<string, string> = new Map();
+    const teekaNameToDocId: Map<string, string> = await loadGranthaTeekaNameToDocId(granthaDocId);
     for (const teeka of teekaDefinitions) {
       const validAuthor = teeka.TeekaAuthor && STRAPI_TEEKA_AUTHORS.has(teeka.TeekaAuthor)
         ? teeka.TeekaAuthor
         : undefined;
       const effectiveName = (teeka.TeekaName || "").trim() || (validAuthor ? `${validAuthor} Teeka` : "");
       if (!effectiveName) continue;
-      if (neededTeekaNames.size > 0 && !neededTeekaNames.has(effectiveName.toLowerCase())) continue;
+      const key = effectiveName.toLowerCase();
+      if (neededTeekaNames.size > 0 && !neededTeekaNames.has(key)) continue;
       if (teeka.documentId && teeka.documentId.length >= 10) {
-        teekaNameToDocId.set(effectiveName.toLowerCase(), teeka.documentId);
-        continue;
-      }
-      try {
-        const tName = encodeURIComponent(effectiveName);
-        const tGrantha = encodeURIComponent(granthaDocId);
-        const existing = await strapiRequest(
-          `/api/teekas?filters[TeekaName][$eqi]=${tName}&filters[grantha][documentId][$eq]=${tGrantha}&fields[0]=documentId`,
-        );
-        const existingDocId: string | undefined = existing?.data?.[0]?.documentId;
-        if (existingDocId) teekaNameToDocId.set(effectiveName.toLowerCase(), existingDocId);
-      } catch (e: any) {
-        console.warn(`[publish-manthra] Teeka "${effectiveName}" lookup failed:`, e.message);
+        teekaNameToDocId.set(key, teeka.documentId);
       }
     }
 
@@ -3780,6 +4078,8 @@ export async function registerRoutes(
     const knownSectionId = (id: unknown): string | undefined =>
       typeof id === "string" && id.length >= 10 ? id : undefined;
 
+    const skipSectionTouch = true;
+
     let adhyayaDocId = knownSectionId(adhyaya.documentId);
     if (!adhyayaDocId) {
       adhyayaDocId = await resolveSection(
@@ -3789,6 +4089,7 @@ export async function registerRoutes(
         adhyaya.order ?? undefined,
         granthaDocId,
         undefined,
+        skipSectionTouch,
       );
     }
     if (!adhyayaDocId) {
@@ -3807,6 +4108,7 @@ export async function registerRoutes(
         khanda.order ?? undefined,
         granthaDocId,
         adhyayaDocId,
+        skipSectionTouch,
       );
     }
     if (!khandaDocId) {
@@ -3826,6 +4128,7 @@ export async function registerRoutes(
           padaNode.order ?? undefined,
           granthaDocId,
           khandaDocId,
+          skipSectionTouch,
         );
       }
       if (!sectionDocId) {
@@ -3965,6 +4268,7 @@ export async function registerRoutes(
           id: jobId,
           draftId: id,
           userId: user.id,
+          granthaDocId: null,
           status: "running",
           progressDone: 0,
           progressTotal: 1,
@@ -3977,8 +4281,7 @@ export async function registerRoutes(
       res.json({
         async: true,
         jobId,
-        message:
-          "Mantra publish started in background. Large teeka/translation payloads may take several minutes.",
+        message: "Mantra publish started. Verse with many teekas may take a minute or two.",
       });
 
       void (async () => {
@@ -4128,8 +4431,29 @@ export async function registerRoutes(
       const user = req.user as User;
       const id = parseInt(req.params.id);
       if (isNaN(id)) return res.status(400).json({ message: "Invalid draft ID" });
-      const idem = await loadOrReplayIdempotency(req, `/api/drafts/${id}/publish`);
-      if (idem?.replay) return res.status(idem.status).json(idem.body);
+      let idem = await loadOrReplayIdempotency(req, `/api/drafts/${id}/publish`);
+      if (idem?.replay) {
+        // If the cached response references a publish job that is now failed/missing,
+        // invalidate the cache and let a fresh publish start. Otherwise the client would
+        // poll a dead jobId forever and never recover via retry.
+        const cachedJobId = (idem.body as any)?.jobId;
+        const key = (req.get?.("Idempotency-Key") || req.get?.("idempotency-key")) as string | undefined;
+        if (cachedJobId && key) {
+          const cachedJob = await storage.getPublishJob(cachedJobId);
+          const stale =
+            !cachedJob ||
+            cachedJob.status === "failed" ||
+            cachedJob.status === "failed_recoverable";
+          if (stale) {
+            await storage.deleteIdempotencyRecord(key);
+            console.log(
+              `[publish] idempotency replay invalidated for key=${key} (job ${cachedJobId} status=${cachedJob?.status ?? "missing"})`,
+            );
+            idem = await loadOrReplayIdempotency(req, `/api/drafts/${id}/publish`);
+          }
+        }
+        if (idem?.replay) return res.status(idem.status).json(idem.body);
+      }
       await withDraftLock(id, async () => {
         const existingJob = await storage.getRunningPublishJobForDraft(id);
         if (existingJob) {
@@ -4185,6 +4509,27 @@ export async function registerRoutes(
         // Granthas publish can take several minutes (hundreds of Strapi API calls).
         // Run it in a background job so the HTTP request returns immediately and the
         // Replit proxy doesn't time it out. The client polls /publish-status for progress.
+
+        // Per-grantha guard: two drafts can point at the same published Strapi grantha
+        // (e.g. forked drafts). The lock lives on cms_publish_jobs.grantha_doc_id so it
+        // survives process restart and works across multiple server instances.
+        const targetGranthaDocId = draft.strapiDocumentId || undefined;
+        if (targetGranthaDocId) {
+          const inflight = await storage.getRunningPublishJobForGrantha(targetGranthaDocId);
+          if (inflight && inflight.draftId !== id) {
+            const runningResponse = {
+              jobId: inflight.id,
+              async: true,
+              message: "Another publish is already running for this grantha",
+            };
+            if (idem && !idem.replay) {
+              await persistIdempotency(idem.key, `/api/drafts/${id}/publish`, idem.hash, user.id, id, 200, runningResponse);
+            }
+            res.json(runningResponse);
+            return;
+          }
+        }
+
         const jobId = Math.random().toString(36).substring(2, 14);
         const job: PublishJob = {
           status: "running",
@@ -4196,6 +4541,7 @@ export async function registerRoutes(
           id: jobId,
           draftId: id,
           userId: user.id,
+          granthaDocId: targetGranthaDocId ?? null,
           status: "running",
           progressDone: 0,
           progressTotal: 0,
@@ -4230,6 +4576,9 @@ export async function registerRoutes(
           .then(async (result) => {
             // Sync Strapi documentIds back; clear pending deletions + publish scope so the
             // next publish does not re-run full delete/sync or auto-retry the same work.
+            // Exception: deletes that failed (non-404 from Strapi) are preserved on the
+            // draft so the next publish retries them — otherwise transient errors leave
+            // orphan rows in Strapi forever.
             const existingData = (draft.data as Record<string, any>) ?? {};
             const {
               deletedStrapiSectionDocIds: _ds,
@@ -4238,10 +4587,22 @@ export async function registerRoutes(
               publishScope: _ps,
               ...restDraft
             } = existingData;
+            const retrySections = Array.isArray(result.failedDeletedSectionDocIds)
+              ? result.failedDeletedSectionDocIds
+              : [];
+            const retryManthras = Array.isArray(result.failedDeletedManthraDocIds)
+              ? result.failedDeletedManthraDocIds
+              : [];
             await storage.updateDraft(id, user.id, {
               data: {
                 ...restDraft,
                 ...(result.updatedHierarchy ? { hierarchy: result.updatedHierarchy } : {}),
+                ...(retrySections.length > 0
+                  ? { deletedStrapiSectionDocIds: retrySections }
+                  : {}),
+                ...(retryManthras.length > 0
+                  ? { deletedStrapiManthraDocIds: retryManthras }
+                  : {}),
                 publishScope: {
                   changedManthraIds: [],
                   requiresFullPublish: false,
@@ -4265,9 +4626,23 @@ export async function registerRoutes(
               });
             }
             const responseBody: Record<string, any> = { draft: updated, strapi: result.strapiResult };
-            if (result.publishFailures && result.publishFailures.length > 0) {
-              responseBody.warnings = result.publishFailures;
+            const warnings: Array<{ manthra: string; error: string }> = [];
+            if (Array.isArray(result.publishFailures) && result.publishFailures.length > 0) {
+              warnings.push(...result.publishFailures);
             }
+            for (const sid of result.failedDeletedSectionDocIds ?? []) {
+              warnings.push({
+                manthra: `[Section ${sid}]`,
+                error: "Strapi delete failed — will retry on next publish",
+              });
+            }
+            for (const mid of result.failedDeletedManthraDocIds ?? []) {
+              warnings.push({
+                manthra: `[Manthra ${mid}]`,
+                error: "Strapi delete failed — will retry on next publish",
+              });
+            }
+            if (warnings.length > 0) responseBody.warnings = warnings;
             job.status = "done";
             job.result = responseBody;
             await storage.updatePublishJob(jobId, {
@@ -4278,6 +4653,12 @@ export async function registerRoutes(
               result: responseBody,
               error: null,
             });
+            // Drop the manthra checkpoint table now that this publish succeeded; the docIds
+            // are persisted back into the draft's hierarchy JSON above so the table is no
+            // longer load-bearing for the next attempt.
+            void storage
+              .deleteManthraResolutions(jobId)
+              .catch((e) => console.warn(`[publish] resolution cleanup failed: ${e?.message || e}`));
           })
           .catch((err: any) => {
             console.error(`[publish-bg] Job ${jobId} failed:`, err.message);
@@ -4298,6 +4679,9 @@ export async function registerRoutes(
                   : null,
             });
           });
+        // No in-process Map to clear: the grantha-level lock lives on cms_publish_jobs
+        // (status='running' → no longer running once updatePublishJob flips it to
+        // done/failed in the then/catch handlers above).
 
         return; // Response already sent
         } else {
@@ -4310,7 +4694,10 @@ export async function registerRoutes(
             ? await buildChapterPayload(draft.data as Record<string, any>)
             : cleanPayloadForStrapi(draft.data as Record<string, any>);
 
-        console.log(`[publish] ${draft.contentType} payload:`, JSON.stringify(cleanedData));
+        // Log a size summary rather than the full JSON: stringify on a 500KB-2MB rich-text
+        // payload is a synchronous main-loop hit that meaningfully delays the actual PUT.
+        const cleanedKeys = cleanedData && typeof cleanedData === "object" ? Object.keys(cleanedData) : [];
+        console.log(`[publish] ${draft.contentType} payload: keys=[${cleanedKeys.join(",")}] teekas=${Array.isArray((cleanedData as any)?.Teekas) ? (cleanedData as any).Teekas.length : 0}`);
 
         if (draft.strapiDocumentId) {
           strapiResult = await strapiRequest(

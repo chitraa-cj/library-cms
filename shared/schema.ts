@@ -1,5 +1,5 @@
 import { sql } from "drizzle-orm";
-import { pgTable, text, varchar, timestamp, serial, jsonb, integer, boolean } from "drizzle-orm/pg-core";
+import { pgTable, text, varchar, timestamp, serial, jsonb, integer, boolean, primaryKey } from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod";
 
@@ -52,6 +52,10 @@ export const publishJobs = pgTable("cms_publish_jobs", {
   id: varchar("id").primaryKey(),
   draftId: integer("draft_id").notNull().references(() => contentDrafts.id, { onDelete: "cascade" }),
   userId: varchar("user_id").references(() => users.id),
+  // Strapi documentId of the grantha being published. Set when the job starts; used
+  // to reject concurrent publishes from other drafts targeting the same grantha
+  // (forked drafts) without relying on in-process state that disappears on restart.
+  granthaDocId: text("grantha_doc_id"),
   status: text("status").notNull().default("queued"), // queued|running|done|failed|cancelled|failed_recoverable
   progressDone: integer("progress_done").notNull().default(0),
   progressTotal: integer("progress_total").notNull().default(0),
@@ -88,10 +92,27 @@ export const publishJobTasks = pgTable("cms_publish_job_tasks", {
   updatedAt: timestamp("updated_at").defaultNow().notNull(),
 });
 
+// Per-job checkpoint of portal-manthra-id → Strapi-documentId so that a retry
+// after process crash can reuse the docIds already created in Strapi instead of
+// re-running expensive label-based dedup (and risking duplicate rows).
+export const publishManthraResolutions = pgTable(
+  "cms_publish_manthra_resolutions",
+  {
+    jobId: varchar("job_id").notNull().references(() => publishJobs.id, { onDelete: "cascade" }),
+    portalManthraId: text("portal_manthra_id").notNull(),
+    strapiDocumentId: text("strapi_document_id").notNull(),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+  },
+  (t) => ({
+    pk: primaryKey({ columns: [t.jobId, t.portalManthraId] }),
+  }),
+);
+
 export type PublishJobRecord = typeof publishJobs.$inferSelect;
 export type InsertPublishJobRecord = typeof publishJobs.$inferInsert;
 export type IdempotencyKeyRecord = typeof idempotencyKeys.$inferSelect;
 export type PublishJobTaskRecord = typeof publishJobTasks.$inferSelect;
+export type PublishManthraResolutionRecord = typeof publishManthraResolutions.$inferSelect;
 
 export const granthaBackups = pgTable("grantha_backups", {
   id: serial("id").primaryKey(),

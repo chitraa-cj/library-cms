@@ -2,6 +2,7 @@ import { useState, useMemo } from "react";
 import { useParams, Link } from "wouter";
 import { useQuery } from "@tanstack/react-query";
 import { useToast } from "@/hooks/use-toast";
+import { useAuth } from "@/hooks/use-auth";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -372,6 +373,8 @@ export default function BackupDetailPage() {
   const params = useParams<{ id: string }>();
   const id = params.id;
   const { toast } = useToast();
+  const { user } = useAuth();
+  const isAdmin = user?.role === "admin";
 
   const [selectedGranthaId, setSelectedGranthaId] = useState<number | null>(null);
   const [selectedSectionId, setSelectedSectionId] = useState<number | null>(null);
@@ -678,7 +681,7 @@ export default function BackupDetailPage() {
                 <p className="text-[10px] font-semibold uppercase tracking-widest text-muted-foreground">
                   Sections ({sections.length})
                 </p>
-                {selectedGrantha?.documentId && (
+                {isAdmin && selectedGrantha?.documentId && (
                   <Button
                     size="sm"
                     variant="outline"
@@ -742,7 +745,7 @@ export default function BackupDetailPage() {
                           key={m.id}
                           manthra={m}
                           granthaDocumentId={selectedGrantha?.documentId}
-                          canRestore={!!selectedGrantha?.documentId}
+                          canRestore={isAdmin && !!selectedGrantha?.documentId}
                           restoring={mantraRestoringDocId === m.documentId}
                           onRestore={() => openMantraRestore(m)}
                         />

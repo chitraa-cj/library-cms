@@ -490,6 +490,7 @@ export async function syncMantraSectionAfterStructuralEdits(
   patches: Array<{ manthraId: string; strapiDocumentId: string }>;
   failedDeleteIds: string[];
   sortKeysUpdated: number;
+  labelsUpdated: number;
 }> {
   const failedDeleteIds = await strapiDeleteMantrasBestEffort(deleteDocumentIds);
   const patches = await pushMantraSectionStructureToStrapi(snapshot, adhyayaId, khandaId, padaId, cfg);
@@ -510,7 +511,16 @@ export async function syncMantraSectionAfterStructuralEdits(
     padaId,
     cfg,
   );
-  return { patches, failedDeleteIds, sortKeysUpdated };
+  // Renumbering in the editor updates every sibling title — sync labels + sort keys to Strapi
+  // (batch identity API) instead of requiring a full grantha publish.
+  const labelsUpdated = await syncMantraSectionLabelsToStrapi(
+    snapForSort,
+    adhyayaId,
+    khandaId,
+    padaId,
+    cfg,
+  );
+  return { patches, failedDeleteIds, sortKeysUpdated, labelsUpdated };
 }
 
 /** @deprecated Alias */

@@ -25,7 +25,15 @@ async function throwIfResNotOk(res: Response) {
       (parsed && typeof parsed === "object" && "message" in (parsed as any) && typeof (parsed as any).message === "string"
         ? (parsed as any).message
         : raw) || res.statusText || `HTTP ${res.status}`;
-    throw new ApiError(message, res.status, parsed);
+    const friendly =
+      res.status === 504 ||
+      (typeof message === "string" &&
+        (message.includes("504 Gateway Time-out") || message.includes("<title>504")))
+        ? "Gateway timeout (504). Large mantra publishes run in the background — wait for the progress toast or retry in a minute."
+        : typeof message === "string" && message.includes("<html")
+          ? `Server error (${res.status}). The request may still be processing — check Strapi or retry shortly.`
+          : message;
+    throw new ApiError(friendly, res.status, parsed);
   }
 }
 

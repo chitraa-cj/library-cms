@@ -787,11 +787,11 @@ async function buildManthraData(
 
   const localTeekasNeedMerge =
     Array.isArray(rawTeekas) && rawTeekas.length > 0 && resolvedTeekas.length > 0;
-  const needsStrapiSnapshot =
-    isExistingStrapi && !options?.fastSinglePublish && localTeekasNeedMerge;
+  // Always fetch teeka snapshot for existing mantras so partial edits never wipe sibling teekas.
+  const needsTeekaMergeSnapshot = isExistingStrapi && localTeekasNeedMerge;
 
   let strapiMantraSnapshot: any = null;
-  if (needsStrapiSnapshot) {
+  if (needsTeekaMergeSnapshot) {
     try {
       strapiMantraSnapshot =
         (await strapiRequest(`/api/manthras/${strapiDocId}${MANTRA_EXISTING_MERGE_QUERY}`))?.data ?? null;
@@ -1423,7 +1423,76 @@ async function resolveSection(
   return findOrCreateSection(title, type, order, granthaDocId, parentDocId);
 }
 
-// Send a single Strapi request, splitting payload into chunks when 413.
+function countManthraOtherTranslations(mData: Record<string, any>): number {
+  let n = 0;
+  for (const key of ["ShlokaManthraEntry", "BhashyamEntry"] as const) {
+    const ot = mData[key]?.OtherTranslations;
+    if (Array.isArray(ot)) n += ot.length;
+  }
+  for (const t of mData.Teekas ?? []) {
+    const ot = t?.TeekaEntry?.OtherTranslations;
+    if (Array.isArray(ot)) n += ot.length;
+  }
+  return n;
+}
+
+function manthraPayloadLooksLarge(mData: Record<string, any>): boolean {
+  if (countManthraOtherTranslations(mData) > 8) return true;
+  try {
+    return JSON.stringify(mData).length > 350_000;
+  } catch {
+    return false;
+  }
+}
+
+/** Sync a TextAndTranslation field when OtherTranslations is large — batch merges to avoid 413/timeouts. */
+async function putTextEntryWithOptionalOtBatching(
+  putEndpoint: string,
+  fieldKey: "ShlokaManthraEntry" | "BhashyamEntry",
+  entry: Record<string, any>,
+  label: string,
+  warnings?: Array<{ manthra: string; error: string }>,
+): Promise<void> {
+  if (!entry || typeof entry !== "object") return;
+  const { OtherTranslations, ...core } = entry;
+  const ot = Array.isArray(OtherTranslations) ? OtherTranslations : [];
+  if (ot.length <= 8) {
+    await strapiRequest(putEndpoint, {
+      method: "PUT",
+      body: JSON.stringify({ data: { [fieldKey]: entry } }),
+    });
+    return;
+  }
+
+  console.log(
+    `[publish] Manthra "${label}" — syncing ${ot.length} ${fieldKey} OtherTranslations in batches`,
+  );
+  await strapiRequest(putEndpoint, {
+    method: "PUT",
+    body: JSON.stringify({ data: { [fieldKey]: { ...core, OtherTranslations: [] } } }),
+  });
+
+  const BATCH = 6;
+  let merged: any[] = [];
+  for (let i = 0; i < ot.length; i += BATCH) {
+    merged = mergeOtherTranslations(ot.slice(i, i + BATCH), merged);
+    try {
+      await strapiRequest(putEndpoint, {
+        method: "PUT",
+        body: JSON.stringify({ data: { [fieldKey]: { ...core, OtherTranslations: merged } } }),
+      });
+    } catch (e: any) {
+      if (e?.status !== 413) throw e;
+      warnings?.push({
+        manthra: label,
+        error: `[WARNING] Some ${fieldKey} OtherTranslations could not be synced (batch ${Math.floor(i / BATCH) + 1}).`,
+      });
+      break;
+    }
+  }
+}
+
+// Send a single Strapi request, splitting payload into chunks when 413 or when very large.
 // Strapi v5 PUT merges fields — omitted fields are preserved on the record.
 // This lets us split large manthras into: core + BhashyamEntry + Teekas
 // so ALL content is synced even when the combined payload exceeds the body limit.
@@ -1434,22 +1503,28 @@ async function strapiManthraRequest(
   label: string,
   warnings?: Array<{ manthra: string; error: string }>
 ): Promise<any> {
-  // --- Fast path: single request ---
-  try {
-    const res = await strapiRequest(endpoint, { method, body: JSON.stringify({ data: mData }) });
-    console.log(`[publish] Manthra "${label}" ${method === "PUT" ? "updated" : "created"} (single request)`);
-    return res;
-  } catch (e: any) {
-    if (e?.status !== 413) throw e;
+  const forceChunk = manthraPayloadLooksLarge(mData);
+
+  // --- Fast path: single request (skip when payload is predictably huge) ---
+  if (!forceChunk) {
+    try {
+      const res = await strapiRequest(endpoint, { method, body: JSON.stringify({ data: mData }) });
+      console.log(`[publish] Manthra "${label}" ${method === "PUT" ? "updated" : "created"} (single request)`);
+      return res;
+    } catch (e: any) {
+      if (e?.status !== 413) throw e;
+    }
+  } else {
+    console.log(
+      `[publish] Manthra "${label}" — large payload (${countManthraOtherTranslations(mData)} OT rows) — chunked sync`,
+    );
   }
 
-  // --- Split path: payload too large, split into up to 3 smaller requests ---
-  console.warn(`[publish] Manthra "${label}" 413 — splitting into chunked requests to sync all content`);
+  // --- Split path: payload too large, split into smaller requests ---
+  console.warn(`[publish] Manthra "${label}" — splitting into chunked requests to sync all content`);
 
   // Separate the three large sections — each will be PUT independently.
-  // Teekas are sent ONCE in their own chunk (never partial) to prevent duplicates,
-  // because Teekas is a repeatable component: sending it twice would create doubles.
-  const { BhashyamEntry, Teekas, ...coreData } = mData;
+  const { BhashyamEntry, Teekas, ShlokaManthraEntry, ...coreData } = mData;
 
   let putEndpoint = endpoint;
   let mainRes: any;
@@ -1470,24 +1545,41 @@ async function strapiManthraRequest(
     mainRes = { data: { documentId: putDocId } };
   }
 
+  // Chunk 1b: ShlokaManthraEntry (Sanskrit/English + batched OtherTranslations)
+  if (ShlokaManthraEntry && typeof ShlokaManthraEntry === "object") {
+    try {
+      await putTextEntryWithOptionalOtBatching(
+        putEndpoint,
+        "ShlokaManthraEntry",
+        ShlokaManthraEntry,
+        label,
+        warnings,
+      );
+    } catch (e: any) {
+      if (e?.status !== 413) throw e;
+      warnings?.push({
+        manthra: label,
+        error: "[WARNING] ShlokaManthraEntry could not be fully synced — payload too large.",
+      });
+    }
+  }
+
   // Chunk 2: BhashyamEntry (separate PUT — Strapi preserves other fields when omitted)
   if (BhashyamEntry && Object.keys(BhashyamEntry).some((k) => BhashyamEntry[k])) {
     try {
-      await strapiRequest(putEndpoint, { method: "PUT", body: JSON.stringify({ data: { BhashyamEntry } }) });
+      await putTextEntryWithOptionalOtBatching(
+        putEndpoint,
+        "BhashyamEntry",
+        BhashyamEntry,
+        label,
+        warnings,
+      );
     } catch (e2: any) {
       if (e2?.status !== 413) throw e2;
-      // BhashyamEntry itself is too large — split it further: Sanskrit first, then OtherTranslations
-      const { OtherTranslations: bhashyamOtherTr, ...bhashyamCore } = BhashyamEntry;
-      await strapiRequest(putEndpoint, { method: "PUT", body: JSON.stringify({ data: { BhashyamEntry: bhashyamCore } }) });
-      // Now try to sync just the OtherTranslations by merging into BhashyamEntry
-      if (bhashyamOtherTr) {
-        try {
-          await strapiRequest(putEndpoint, { method: "PUT", body: JSON.stringify({ data: { BhashyamEntry: { ...bhashyamCore, OtherTranslations: bhashyamOtherTr } } }) });
-        } catch (e2b: any) {
-          if (e2b?.status !== 413) throw e2b;
-          warnings?.push({ manthra: label, error: `[WARNING] BhashyamEntry OtherTranslations could not be synced — too large even as a separate request. All other BhashyamEntry content was synced.` });
-        }
-      }
+      warnings?.push({
+        manthra: label,
+        error: "[WARNING] BhashyamEntry could not be fully synced — payload too large.",
+      });
     }
   }
 
@@ -2766,10 +2858,20 @@ async function publishGranthaWithHierarchy(
   }
   const hardFailures = publishFailures.filter((f) => !String(f.error || "").startsWith("[WARNING]"));
   if (hardFailures.length > 0) {
-    const err: any = new Error(`Integrity guard: ${hardFailures.length} publish task(s) failed. Draft not marked as fully published.`);
-    err.code = "publish_integrity_guard";
-    err.failures = hardFailures;
-    throw err;
+    // Partial success: grantha/sections/manthras were processed; return warnings instead of
+    // throwing. Throwing caused failed_recoverable + client auto-republish loops (progress
+    // hits 100% then the entire publish restarts from zero).
+    if (!granthaDocId) {
+      const err: any = new Error(
+        `Integrity guard: grantha was not created in Strapi (${hardFailures.length} failure(s)).`,
+      );
+      err.code = "publish_integrity_guard";
+      err.failures = hardFailures;
+      throw err;
+    }
+    console.warn(
+      `[publish] Completed with ${hardFailures.length} non-warning failure(s) — returning as warnings (no full republish)`,
+    );
   }
 
   return { strapiResult, updatedHierarchy, publishFailures };
@@ -3846,28 +3948,93 @@ export async function registerRoutes(
         return res.status(400).json({ message: "adhyayaId, khandaId, and manthraId are required" });
       }
 
-      const result = await publishOneManthraFromGranthaDraft(
-        id,
-        user.id,
-        { adhyayaId, khandaId, padaId, manthraId },
-        manthraData,
-      );
-
-      try {
-        await storage.updateDraft(id, user.id, { data: result.data, status: "draft" });
-      } catch (saveErr: any) {
-        console.warn(`[publish-manthra] Could not save updated docId back to draft:`, saveErr.message);
-      }
-
-      const errors = result.publishFailures.filter((f) => !f.error.startsWith("[WARNING]"));
-      if (errors.length > 0) {
-        return res.status(500).json({ message: errors[0].error, publishFailures: result.publishFailures });
-      }
+      const jobId = Math.random().toString(36).substring(2, 14);
+      const job: PublishJob = {
+        status: "running",
+        progress: { done: 0, total: 1, current: "Publishing mantra to Strapi…" },
+        startedAt: new Date(),
+      };
+      publishJobs.set(jobId, job);
+      void storage
+        .createPublishJob({
+          id: jobId,
+          draftId: id,
+          userId: user.id,
+          status: "running",
+          progressDone: 0,
+          progressTotal: 1,
+          progressCurrent: job.progress.current,
+          result: null,
+          error: null,
+        })
+        .catch((e) => console.warn("[publish-manthra] Could not persist job row:", e?.message));
 
       res.json({
-        strapiDocumentId: result.returnedDocId,
-        warnings: result.publishFailures.filter((f) => f.error.startsWith("[WARNING]")),
+        async: true,
+        jobId,
+        message:
+          "Mantra publish started in background. Large teeka/translation payloads may take several minutes.",
       });
+
+      void (async () => {
+        try {
+          job.progress.current = "Syncing verse, teekas, and translations to Strapi…";
+          const result = await publishOneManthraFromGranthaDraft(
+            id,
+            user.id,
+            { adhyayaId, khandaId, padaId, manthraId },
+            manthraData,
+          );
+
+          try {
+            await storage.updateDraft(id, user.id, { data: result.data, status: "draft" });
+          } catch (saveErr: any) {
+            console.warn(`[publish-manthra] Could not save updated docId back to draft:`, saveErr.message);
+          }
+
+          const errors = result.publishFailures.filter((f) => !f.error.startsWith("[WARNING]"));
+          if (errors.length > 0) {
+            job.status = "failed";
+            job.error = errors[0].error;
+            await storage.updatePublishJob(jobId, {
+              status: "failed",
+              progressDone: 0,
+              progressTotal: 1,
+              progressCurrent: "Failed",
+              error: job.error,
+              result: { publishFailures: result.publishFailures },
+            });
+            return;
+          }
+
+          const responseBody = {
+            strapiDocumentId: result.returnedDocId,
+            warnings: result.publishFailures.filter((f) => f.error.startsWith("[WARNING]")),
+          };
+          job.status = "done";
+          job.progress = { done: 1, total: 1, current: "Done" };
+          job.result = responseBody;
+          await storage.updatePublishJob(jobId, {
+            status: "done",
+            progressDone: 1,
+            progressTotal: 1,
+            progressCurrent: "Done",
+            result: responseBody,
+            error: null,
+          });
+        } catch (error: any) {
+          console.error("[publish-manthra]", error);
+          job.status = "failed";
+          job.error = error.message || "Failed to publish mantra";
+          void storage.updatePublishJob(jobId, {
+            status: "failed",
+            progressDone: 0,
+            progressTotal: 1,
+            progressCurrent: "Failed",
+            error: job.error,
+          });
+        }
+      })();
     } catch (error: any) {
       console.error("[publish-manthra]", error);
       const status = error?.status ?? 500;
@@ -4041,6 +4208,7 @@ export async function registerRoutes(
         res.json(startedResponse);
 
         // Background: run the actual publish (don't await here)
+        // Single attempt: retrying re-runs the entire grantha walk (progress resets to 0).
         withPublishRetries(
           () =>
             publishGranthaWithHierarchy(draft, jobId, (done, total, current) => {
@@ -4052,22 +4220,30 @@ export async function registerRoutes(
                 progressCurrent: current,
               });
             }),
-          3,
+          1,
         )
           .then(async (result) => {
-            // Sync Strapi documentIds back into the draft hierarchy
-            if (result.updatedHierarchy) {
-              const existingData = (draft.data as Record<string, any>) ?? {};
-              const {
-                deletedStrapiSectionDocIds: _ds,
-                deletedStrapiManthraDocIds: _dm,
-                deletedStrapiTeekaDocIds: _dt,
-                ...restDraft
-              } = existingData;
-              await storage.updateDraft(id, user.id, {
-                data: { ...restDraft, hierarchy: result.updatedHierarchy },
-              });
-            }
+            // Sync Strapi documentIds back; clear pending deletions + publish scope so the
+            // next publish does not re-run full delete/sync or auto-retry the same work.
+            const existingData = (draft.data as Record<string, any>) ?? {};
+            const {
+              deletedStrapiSectionDocIds: _ds,
+              deletedStrapiManthraDocIds: _dm,
+              deletedStrapiTeekaDocIds: _dt,
+              publishScope: _ps,
+              ...restDraft
+            } = existingData;
+            await storage.updateDraft(id, user.id, {
+              data: {
+                ...restDraft,
+                ...(result.updatedHierarchy ? { hierarchy: result.updatedHierarchy } : {}),
+                publishScope: {
+                  changedManthraIds: [],
+                  requiresFullPublish: false,
+                  granthaMetaDirty: false,
+                },
+              },
+            });
             const newDocumentId =
               result.strapiResult?.data?.documentId || draft.strapiDocumentId;
             const updated = await storage.markDraftPublished(id, user.id, newDocumentId);
@@ -4100,10 +4276,9 @@ export async function registerRoutes(
           })
           .catch((err: any) => {
             console.error(`[publish-bg] Job ${jobId} failed:`, err.message);
-            const recoverable =
-              isRetryablePublishError(err) ||
-              err?.code === "publish_integrity_guard" ||
-              err?.code === "publish_preflight_failed";
+            // Do not mark integrity/preflight failures as recoverable — the client used to
+            // auto-POST /publish on failed_recoverable and restart the full grantha job.
+            const recoverable = isRetryablePublishError(err);
             job.status = recoverable ? "failed_recoverable" : "failed";
             job.error = err.message || "Publish failed";
             void storage.updatePublishJob(jobId, {

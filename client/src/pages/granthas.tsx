@@ -1757,6 +1757,31 @@ export default function GranthasPage() {
   });
 
   // Per-manthra publish mutation
+  const pollMantraPublishJob = async (draftId: number, jobId: string) => {
+    const maxAttempts = 1200; // up to 20 minutes for large OT/teeka payloads
+    for (let attempt = 0; attempt < maxAttempts; attempt++) {
+      await new Promise((resolve) => setTimeout(resolve, 1000));
+      try {
+        const statusRes = await fetch(
+          `/api/drafts/${draftId}/publish-status?jobId=${encodeURIComponent(jobId)}`,
+          { credentials: "include" },
+        );
+        if (!statusRes.ok) continue;
+        const status = await statusRes.json();
+        if (status.status === "done") return status.result;
+        if (status.status === "failed" || status.status === "failed_recoverable") {
+          throw new Error(status.error || "Mantra publish failed");
+        }
+      } catch (pollErr: unknown) {
+        const msg = pollErr instanceof Error ? pollErr.message : String(pollErr);
+        if (msg && !msg.includes("fetch")) throw pollErr;
+      }
+    }
+    throw new Error(
+      "Mantra publish is taking longer than expected. It may still complete on the server — refresh and check Strapi before republishing.",
+    );
+  };
+
   const publishMantraMutation = useMutation({
     mutationFn: async (params: {
       draftId: number;
@@ -1766,14 +1791,20 @@ export default function GranthasPage() {
       manthraId: string;
       manthraData: ManthraNode;
     }) => {
-      const res = await apiRequest("POST", `/api/drafts/${params.draftId}/publish-manthra`, {
-        adhyayaId: params.adhyayaId,
-        khandaId: params.khandaId,
-        padaId: params.padaId,
-        manthraId: params.manthraId,
-        manthraData: params.manthraData,
-      });
-      return res.json();
+      try {
+        const res = await apiRequest("POST", `/api/drafts/${params.draftId}/publish-manthra`, {
+          adhyayaId: params.adhyayaId,
+          khandaId: params.khandaId,
+          padaId: params.padaId,
+          manthraId: params.manthraId,
+          manthraData: params.manthraData,
+        });
+        const data = await res.json();
+        if (data.async && data.jobId) {
+          return pollMantraPublishJob(params.draftId, data.jobId);
+        }
+        return data;
+      }
     },
     onSuccess: (data: any, params) => {
       clearManthraFromChangedSet(params.manthraId);
@@ -3690,13 +3721,16 @@ export default function GranthasPage() {
             toDelete,
           ),
         )
-        .then(({ patches, failedDeleteIds }) => {
+        .then(({ patches, failedDeleteIds, labelsUpdated }) => {
           if (failedDeleteIds.length > 0) {
             setDeletedStrapiManthraDocIds((prev) =>
               Array.from(new Set([...prev, ...failedDeleteIds])),
             );
           }
           if (patches.length > 0) {
+            for (const p of patches) {
+              clearManthraFromChangedSet(p.manthraId);
+            }
             setAdhyayas((prev) => {
               const merged = mergeMantraStrapiDocumentIds(
                 prev as SnapshotAdhyaya[],
@@ -3706,10 +3740,41 @@ export default function GranthasPage() {
                 patches,
               ) as AdhyayaNode[];
               adhyayasRef.current = merged;
-              return merged;
+              return merged.map((a) => {
+                if (a.id !== ctx.adhyayaId) return a;
+                return {
+                  ...a,
+                  khandas: a.khandas.map((k) => {
+                    if (k.id !== ctx.khandaId) return k;
+                    const patchIds = new Set(patches.map((p) => p.manthraId));
+                    const clearNew = (m: ManthraNode) =>
+                      patchIds.has(m.id) ? { ...m, _isNewLocal: false } : m;
+                    if (ctx.padaId) {
+                      return {
+                        ...k,
+                        padas: (k.padas ?? []).map((p) =>
+                          p.id === ctx.padaId
+                            ? { ...p, manthras: (p.manthras ?? []).map(clearNew) }
+                            : p,
+                        ),
+                      };
+                    }
+                    return { ...k, manthras: (k.manthras ?? []).map(clearNew) };
+                  }),
+                };
+              });
             });
           }
           invalidateGranthaCmsCaches(queryClient);
+          if (patches.length > 0 && editingGranthaStrapiDocumentId()) {
+            toast({
+              title: "Verse slot synced to CMS",
+              description:
+                labelsUpdated && labelsUpdated > 0
+                  ? `Created ${patches.length} row(s) in Strapi with correct order and labels. Add text, then Save in the editor or Save & Publish for content only.`
+                  : `Created ${patches.length} row(s) in Strapi in the correct position.`,
+            });
+          }
         })
         .catch((e: unknown) => {
           const msg = e instanceof Error ? e.message : String(e);
@@ -3809,7 +3874,7 @@ export default function GranthasPage() {
   }
 
   function addManthra(adhyayaId: string, khandaId: string, padaId?: string) {
-    markRequiresFullPublish();
+    const newManthraId = uid();
     const adhyayaTitle = adhyayas.find((a) => a.id === adhyayaId)?.title || "";
     track("manthra_added", { grantha_name: formData.GranthaName, adhyaya: adhyayaTitle });
     setAdhyayas((prev) => {
@@ -3822,7 +3887,7 @@ export default function GranthasPage() {
             khandas: a.khandas.map((k) => {
               if (k.id !== khandaId) return k;
               const newManthra: ManthraNode = {
-                id: uid(),
+                id: newManthraId,
                 title: "",
                 order: 0,
                 _isNewLocal: true,
@@ -3854,6 +3919,7 @@ export default function GranthasPage() {
       scheduleStrapiMantraSectionIdentitySync(next, { adhyayaId, khandaId, padaId });
       return next;
     });
+    openManthraEditor({ adhyayaId, khandaId, manthraId: newManthraId, padaId });
   }
 
   /**
@@ -3866,7 +3932,7 @@ export default function GranthasPage() {
     afterManthraId: string,
     padaId?: string,
   ) {
-    markRequiresFullPublish();
+    const newManthraId = uid();
     setAdhyayas((prev) => {
       const cfg = structureConfigRef.current;
       const next = withNormalizedHierarchy(
@@ -3886,7 +3952,7 @@ export default function GranthasPage() {
                     const j = sorted.findIndex((m) => m.id === afterManthraId);
                     if (j < 0) return p;
                     const newManthra: ManthraNode = {
-                      id: uid(),
+                      id: newManthraId,
                       title: "",
                       order: 0,
                       _isNewLocal: true,
@@ -3906,7 +3972,7 @@ export default function GranthasPage() {
               const j = sorted.findIndex((m) => m.id === afterManthraId);
               if (j < 0) return k;
               const newManthra: ManthraNode = {
-                id: uid(),
+                id: newManthraId,
                 title: "",
                 order: 0,
                 _isNewLocal: true,
@@ -3926,6 +3992,7 @@ export default function GranthasPage() {
       scheduleStrapiMantraSectionIdentitySync(next, { adhyayaId, khandaId, padaId });
       return next;
     });
+    openManthraEditor({ adhyayaId, khandaId, manthraId: newManthraId, padaId });
   }
 
   function confirmRemoveManthra(renumber: boolean) {
@@ -6144,7 +6211,9 @@ export default function GranthasPage() {
                 : manthraLoading && editingManthra?.strapiDocumentId
                   ? "Loading verse from the CMS…"
                   : currentManthra?._isNewLocal
-                    ? "New verse — edit here, then Save & Publish so it appears correctly in the Mantras tab."
+                    ? editingGranthaStrapiDocumentId()
+                      ? "New verse — the CMS row is created in order. Add text here, then Save in this dialog (or Save & Publish) to push content."
+                      : "New verse — edit here, then Save & Publish the grantha so it appears in the Mantras tab."
                     : editingManthra?.strapiDocumentId
                       ? "Showing live content from the CMS. Use Save & Publish to push edits to Strapi."
                       : "Enter the Sanskrit text and translations, then Save & Publish to create the CMS record."}
@@ -6214,22 +6283,24 @@ export default function GranthasPage() {
 
                 {/* Other Language Translations for Shloka */}
                 <div className="pt-2 border-t">
-                  <OtherTranslationsHermex
-                    sectionLabel={`Shloka ${currentManthra.title}`}
-                    sanskritBlocks={currentManthra.ShlokaManthraEntry?.SanskritTextEntry}
-                    englishBlocks={currentManthra.ShlokaManthraEntry?.EnglishTranslationText}
-                    existing={currentManthra.ShlokaManthraEntry?.OtherTranslations ?? []}
-                    onApply={(merged) =>
-                      updateManthraContent(
-                        editingManthra.adhyayaId,
-                        editingManthra.khandaId,
-                        editingManthra.manthraId,
-                        { ShlokaManthraEntry: { ...currentManthra.ShlokaManthraEntry, OtherTranslations: merged } },
-                        editingManthra.padaId,
-                      )
-                    }
-                  />
-                  <div className="flex items-center justify-between mb-2 mt-3">
+                  {isAdmin && (
+                    <OtherTranslationsHermex
+                      sectionLabel={`Shloka ${currentManthra.title}`}
+                      sanskritBlocks={currentManthra.ShlokaManthraEntry?.SanskritTextEntry}
+                      englishBlocks={currentManthra.ShlokaManthraEntry?.EnglishTranslationText}
+                      existing={currentManthra.ShlokaManthraEntry?.OtherTranslations ?? []}
+                      onApply={(merged) =>
+                        updateManthraContent(
+                          editingManthra.adhyayaId,
+                          editingManthra.khandaId,
+                          editingManthra.manthraId,
+                          { ShlokaManthraEntry: { ...currentManthra.ShlokaManthraEntry, OtherTranslations: merged } },
+                          editingManthra.padaId,
+                        )
+                      }
+                    />
+                  )}
+                  <div className={`flex items-center justify-between mb-2 ${isAdmin ? "mt-3" : ""}`}>
                     <Label className="text-xs">Other Language Translations</Label>
                     <Button
                       size="sm"
@@ -6356,27 +6427,29 @@ export default function GranthasPage() {
 
                 {/* Other Language Translations for Bhashyam */}
                 <div className="pt-2 border-t">
-                  <OtherTranslationsHermex
-                    sectionLabel={`Bhashyam ${currentManthra.title}`}
-                    sanskritBlocks={currentManthra.BhashyamForShlokaManthra?.SanskritTextEntry}
-                    englishBlocks={currentManthra.BhashyamForShlokaManthra?.EnglishTranslationText}
-                    existing={currentManthra.BhashyamForShlokaManthra?.OtherTranslations ?? []}
-                    onApply={(merged) =>
-                      updateManthraContent(
-                        editingManthra.adhyayaId,
-                        editingManthra.khandaId,
-                        editingManthra.manthraId,
-                        {
-                          BhashyamForShlokaManthra: {
-                            ...currentManthra.BhashyamForShlokaManthra,
-                            OtherTranslations: merged,
+                  {isAdmin && (
+                    <OtherTranslationsHermex
+                      sectionLabel={`Bhashyam ${currentManthra.title}`}
+                      sanskritBlocks={currentManthra.BhashyamForShlokaManthra?.SanskritTextEntry}
+                      englishBlocks={currentManthra.BhashyamForShlokaManthra?.EnglishTranslationText}
+                      existing={currentManthra.BhashyamForShlokaManthra?.OtherTranslations ?? []}
+                      onApply={(merged) =>
+                        updateManthraContent(
+                          editingManthra.adhyayaId,
+                          editingManthra.khandaId,
+                          editingManthra.manthraId,
+                          {
+                            BhashyamForShlokaManthra: {
+                              ...currentManthra.BhashyamForShlokaManthra,
+                              OtherTranslations: merged,
+                            },
                           },
-                        },
-                        editingManthra.padaId,
-                      )
-                    }
-                  />
-                  <div className="flex items-center justify-between mb-2 mt-3">
+                          editingManthra.padaId,
+                        )
+                      }
+                    />
+                  )}
+                  <div className={`flex items-center justify-between mb-2 ${isAdmin ? "mt-3" : ""}`}>
                     <Label className="text-xs">Other Language Translations</Label>
                     <Button
                       size="sm"
@@ -6540,26 +6613,28 @@ export default function GranthasPage() {
                           />
                         </div>
                         <div className="pt-2 border-t">
-                          <OtherTranslationsHermex
-                            sectionLabel={`Teeka ${teeka.TeekaName || tIdx + 1} — ${currentManthra.title}`}
-                            sanskritBlocks={teeka.TeekaEntry?.SanskritTextEntry}
-                            englishBlocks={teeka.TeekaEntry?.EnglishTranslationText}
-                            existing={teeka.TeekaEntry?.OtherTranslations ?? []}
-                            onApply={(merged) => {
-                              const updated = {
-                                ...teeka,
-                                TeekaEntry: { ...teeka.TeekaEntry, OtherTranslations: merged },
-                              };
-                              updateManthraContent(
-                                editingManthra.adhyayaId,
-                                editingManthra.khandaId,
-                                editingManthra.manthraId,
-                                { Teekas: buildUpdated(updated) },
-                                editingManthra.padaId,
-                              );
-                            }}
-                          />
-                          <div className="flex items-center justify-between mb-2 mt-3">
+                          {isAdmin && (
+                            <OtherTranslationsHermex
+                              sectionLabel={`Teeka ${teeka.TeekaName || tIdx + 1} — ${currentManthra.title}`}
+                              sanskritBlocks={teeka.TeekaEntry?.SanskritTextEntry}
+                              englishBlocks={teeka.TeekaEntry?.EnglishTranslationText}
+                              existing={teeka.TeekaEntry?.OtherTranslations ?? []}
+                              onApply={(merged) => {
+                                const updated = {
+                                  ...teeka,
+                                  TeekaEntry: { ...teeka.TeekaEntry, OtherTranslations: merged },
+                                };
+                                updateManthraContent(
+                                  editingManthra.adhyayaId,
+                                  editingManthra.khandaId,
+                                  editingManthra.manthraId,
+                                  { Teekas: buildUpdated(updated) },
+                                  editingManthra.padaId,
+                                );
+                              }}
+                            />
+                          )}
+                          <div className={`flex items-center justify-between mb-2 ${isAdmin ? "mt-3" : ""}`}>
                             <Label className="text-xs">Other Language Translations</Label>
                             <Button
                               size="sm"
@@ -6716,7 +6791,9 @@ export default function GranthasPage() {
             <AlertDialogTitle>Save this verse before closing?</AlertDialogTitle>
             <AlertDialogDescription>
               {currentManthra?._isNewLocal
-                ? "This is a newly inserted verse. Use Save & Publish so it is stored in the CMS with the correct number and text. Saving draft only keeps it in the portal until you publish."
+                ? editingGranthaStrapiDocumentId()
+                  ? "The CMS row and verse number are already in order. Save or Save & Publish here to store your text, or Save draft to keep edits in the portal only."
+                  : "This is a newly inserted verse. Use Save & Publish so it is stored in the CMS with the correct number and text."
                 : "You have unsaved edits. Save to the draft or publish to Strapi before closing."}
             </AlertDialogDescription>
           </AlertDialogHeader>

@@ -76,18 +76,14 @@ export function useDrafts(contentType: string) {
           clearPersistedPublishJob();
           return status.result;
         }
-        if (status.status === "failed_recoverable") {
-          const resumeRes = await apiRequest("POST", `/api/drafts/${draftId}/publish`);
-          const resumeData = await resumeRes.json();
-          if (resumeData?.async && resumeData?.jobId) {
-            persistPublishJob(draftId, resumeData.jobId);
-            return await pollPublishJob(draftId, resumeData.jobId);
-          }
-        }
-        if (status.status === "failed") {
+        if (status.status === "failed_recoverable" || status.status === "failed") {
           setPublishProgress(null);
           clearPersistedPublishJob();
-          throw new Error(status.error || "Publish failed");
+          const hint =
+            status.status === "failed_recoverable"
+              ? " Use Save & Publish again if you need to retry."
+              : "";
+          throw new Error((status.error || "Publish failed") + hint);
         }
       } catch (pollErr: any) {
         if (pollErr.message && !pollErr.message.includes("fetch")) throw pollErr;

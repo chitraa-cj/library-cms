@@ -679,7 +679,7 @@ export function normalizeEditorHierarchy<T extends SyncAdhyayaNode>(list: T[], c
             padaPath: true,
             levelTwoEnabled: levelTwo,
           };
-          const manthras = reindexMantrasInListOrder(sortNodesByOrder(p.manthras ?? []), ctx);
+          const manthras = reindexMantrasInListOrder(sortMantrasByDisplayOrder(p.manthras ?? []), ctx);
           return { ...p, order: pIdx, title: padaTitle, manthras };
         });
         return { ...k, order: ki + 1, title: khandaTitle, padas, manthras: [] };
@@ -693,12 +693,34 @@ export function normalizeEditorHierarchy<T extends SyncAdhyayaNode>(list: T[], c
         padaPath: false,
         levelTwoEnabled: levelTwo,
       };
-      const manthras = reindexMantrasInListOrder(sortNodesByOrder(k.manthras ?? []), ctx);
+      const manthras = reindexMantrasInListOrder(sortMantrasByDisplayOrder(k.manthras ?? []), ctx);
       return { ...k, order: ki + 1, title: khandaTitle, padas: [], manthras };
     });
 
     return { ...a, order: aIdx, title: adhyayaTitle, khandas } as T;
   });
+}
+
+/** Clear stale portal-only flags after load, save, or CMS link. */
+export function sanitizeHierarchyPortalMeta<T extends SyncAdhyayaNode>(list: T[]): T[] {
+  const fixManthra = <M extends SyncManthraNode & { _isNewLocal?: boolean }>(m: M): M => {
+    if (m._isNewLocal && m.strapiDocumentId && isPublishedStrapiDocId(m.strapiDocumentId)) {
+      const { _isNewLocal: _, ...rest } = m;
+      return rest as M;
+    }
+    return m;
+  };
+  return list.map((a) => ({
+    ...a,
+    khandas: (a.khandas ?? []).map((k) => ({
+      ...k,
+      manthras: (k.manthras ?? []).map(fixManthra),
+      padas: (k.padas ?? []).map((p) => ({
+        ...p,
+        manthras: (p.manthras ?? []).map(fixManthra),
+      })),
+    })),
+  })) as T[];
 }
 
 function newLocalId(): string {

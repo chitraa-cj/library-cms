@@ -74,6 +74,7 @@ import {
   fetchPublishedManthraForEdit,
   isManthraFetchAbortError,
 } from "@/lib/resolve-strapi-mantra-detail";
+import { collectUnlinkedMantrasFromGranthaDraft } from "@/lib/grantha-strapi-mantra-sync";
 import {
   invalidateManthraCache,
   invalidateManthraCacheOnDocIdCorrection,
@@ -220,6 +221,13 @@ export default function ManthrasPage() {
   const { unpublishedDrafts, isLoadingDrafts, saveDraft, publishDraft, deleteDraft } =
     useDrafts("manthras");
 
+  const { drafts: granthaDrafts, isLoadingDrafts: isLoadingGranthaDrafts } = useDrafts("granthas");
+
+  const pendingGranthaMantras = useMemo(
+    () => granthaDrafts.flatMap((d) => collectUnlinkedMantrasFromGranthaDraft(d)),
+    [granthaDrafts],
+  );
+
   const deleteMutation = useMutation({
     mutationFn: async (documentId: string) => {
       const res = await apiRequest("DELETE", `/api/strapi/manthras/${documentId}`);
@@ -251,8 +259,14 @@ export default function ManthrasPage() {
       const name = m.grantha?.GranthaName;
       if (name && !seen.has(name)) { seen.add(name); result.push({ name }); }
     });
+    pendingGranthaMantras.forEach((p) => {
+      if (p.granthaName && !seen.has(p.granthaName)) {
+        seen.add(p.granthaName);
+        result.push({ name: p.granthaName });
+      }
+    });
     return result.sort((a, b) => a.name.localeCompare(b.name));
-  }, [allSections, data]);
+  }, [allSections, data, pendingGranthaMantras]);
 
   // Sections filtered by selected grantha (for filter dropdown cascading)
   const sectionsForFilter = useMemo(() => {
@@ -608,6 +622,14 @@ export default function ManthrasPage() {
     return matchesSearch && matchesGrantha && matchesSection;
   });
 
+  const displayedPendingGrantha = pendingGranthaMantras.filter((p) => {
+    const matchesSearch =
+      p.title.toLowerCase().includes(searchLower) ||
+      p.granthaName.toLowerCase().includes(searchLower);
+    const matchesGrantha = filterGrantha === "__all__" || p.granthaName === filterGrantha;
+    return matchesSearch && matchesGrantha;
+  });
+
   const displayedPublished = strapiManthras.filter((m) => {
     const text = (m.ShlokaManthraNumber || blocksToText(m.ShlokaManthraEntry?.SanskritTextEntry) || "").toLowerCase();
     const matchesSearch = text.includes(searchLower);
@@ -629,7 +651,9 @@ export default function ManthrasPage() {
       <div className="flex items-center justify-between mb-6">
         <div>
           <h1 className="text-2xl font-bold text-foreground">Manthras</h1>
-          <p className="text-sm text-muted-foreground mt-0.5">Individual verse / mantra entries within a Section</p>
+          <p className="text-sm text-muted-foreground mt-0.5">
+            Individual verse / mantra entries within a Section. Rows inserted in the Grantha editor appear here after CMS sync (may show as &quot;No number&quot; until verse labels are synced).
+          </p>
         </div>
         <Button onClick={openAdd} data-testid="manthra-add">
           <Plus className="w-4 h-4 mr-2" />
@@ -678,11 +702,11 @@ export default function ManthrasPage() {
       </div>
 
       <div className="rounded-lg border border-border bg-card overflow-hidden">
-        {isLoading || isLoadingDrafts ? (
+        {isLoading || isLoadingDrafts || isLoadingGranthaDrafts ? (
           <div className="flex justify-center items-center py-20">
             <Loader2 className="w-6 h-6 animate-spin text-muted-foreground" />
           </div>
-        ) : displayedDrafts.length === 0 && displayedPublished.length === 0 ? (
+        ) : displayedDrafts.length === 0 && displayedPendingGrantha.length === 0 && displayedPublished.length === 0 ? (
           <div className="py-20 text-center text-muted-foreground">
             <Hash className="w-10 h-10 mx-auto mb-3 opacity-30" />
             <p>{hasActiveFilters ? "No manthras match the current filters." : "No manthras found. Add the first manthra above."}</p>
@@ -699,6 +723,30 @@ export default function ManthrasPage() {
               </tr>
             </thead>
             <tbody>
+              {displayedPendingGrantha.map((p) => (
+                <tr
+                  key={`pending-grantha-${p.granthaDraftId}-${p.manthraId}`}
+                  className="border-b border-border bg-amber-50/40 dark:bg-amber-950/20 hover:bg-amber-50/70 dark:hover:bg-amber-950/30 transition-colors"
+                  data-testid={`row-pending-grantha-${p.manthraId}`}
+                >
+                  <td className="px-4 py-3">
+                    <Badge className="bg-amber-100 text-amber-900 border-amber-300 text-xs">Grantha draft</Badge>
+                  </td>
+                  <td className="px-4 py-3">
+                    <p className="font-medium">{p.title}</p>
+                    <p className="text-xs text-muted-foreground mt-0.5">
+                      Not in CMS yet — open the grantha, Save, then Sync verse numbers to CMS.
+                    </p>
+                  </td>
+                  <td className="px-4 py-3 text-xs">
+                    <p className="font-medium text-foreground">{p.granthaName}</p>
+                    <p className="text-muted-foreground">Portal hierarchy only</p>
+                  </td>
+                  <td className="px-4 py-3 text-muted-foreground">—</td>
+                  <td className="px-4 py-3 text-muted-foreground text-xs text-right">Edit in Granthas</td>
+                </tr>
+              ))}
+
               {displayedDrafts.map((draft) => {
                 const isPub = publishDraft.isPending && publishDraft.variables === draft._draftId;
                 const section = allSections.find((s) => s.documentId === draft._section);

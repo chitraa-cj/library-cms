@@ -5,6 +5,7 @@ import {
 } from "@shared/mantra-sort-key";
 import {
   sortNodesByOrder,
+  sortMantrasByDisplayOrder,
   isPublishedStrapiDocId,
   pickPreferredStrapiMantraRef,
   titleUsesConfiguredLeaf,
@@ -77,9 +78,9 @@ export function getSortedMantrasFromSnapshot(
   if (!a || !k) return [];
   if (cfg.levelThreeEnabled && padaId) {
     const p = k.padas?.find((x) => x.id === padaId);
-    return sortNodesByOrder(p?.manthras ?? []);
+    return sortMantrasByDisplayOrder(p?.manthras ?? []);
   }
-  return sortNodesByOrder(k.manthras ?? []);
+  return sortMantrasByDisplayOrder(k.manthras ?? []);
 }
 
 export function mergeMantraStrapiDocumentIds<T extends SnapshotAdhyaya>(
@@ -534,6 +535,101 @@ export async function syncMantraSectionAfterStructuralEdits(
   // Pushing new ShlokaManthraNumber labels automatically would fail integrity when Strapi still
   // has the old verse numbers (497+ rows). Use "Sync verse numbers to CMS" when intentional.
   return { patches, failedDeleteIds, sortKeysUpdated, labelsUpdated: 0 };
+}
+
+/** Create Strapi rows for any portal mantras in this grantha that still lack a documentId. */
+export async function syncAllPendingNewMantrasToStrapi(
+  snapshot: SnapshotAdhyaya[],
+  cfg: GranthaStructureConfig,
+): Promise<Array<{ manthraId: string; strapiDocumentId: string; adhyayaId: string; khandaId: string; padaId?: string }>> {
+  const allPatches: Array<{ manthraId: string; strapiDocumentId: string; adhyayaId: string; khandaId: string; padaId?: string }> = [];
+  let snap = snapshot;
+
+  for (const ctx of collectMantraSectionSyncTargets(snapshot, cfg)) {
+    const sorted = getSortedMantrasFromSnapshot(snap, ctx.adhyayaId, ctx.khandaId, ctx.padaId, cfg);
+    if (!sorted.some((m) => !isPublishedStrapiDocId(m.strapiDocumentId))) continue;
+
+    const patches = await pushMantraSectionStructureToStrapi(
+      snap,
+      ctx.adhyayaId,
+      ctx.khandaId,
+      ctx.padaId,
+      cfg,
+    );
+    if (patches.length === 0) continue;
+
+    for (const p of patches) {
+      allPatches.push({ ...p, adhyayaId: ctx.adhyayaId, khandaId: ctx.khandaId, padaId: ctx.padaId });
+    }
+    snap = applyMantraDocIdPatches(
+      snap,
+      patches.map((p) => ({ ...ctx, manthraId: p.manthraId, strapiDocumentId: p.strapiDocumentId })),
+    );
+    await syncMantraSectionSortKeysToStrapi(snap, ctx.adhyayaId, ctx.khandaId, ctx.padaId, cfg);
+  }
+
+  return allPatches;
+}
+
+export type UnlinkedGranthaDraftMantra = {
+  granthaDraftId: number;
+  granthaName: string;
+  strapiGranthaDocId?: string;
+  adhyayaId: string;
+  khandaId: string;
+  padaId?: string;
+  manthraId: string;
+  title: string;
+  isNewLocal: boolean;
+};
+
+/** Portal-only rows saved in a grantha draft but not yet linked to a Strapi manthra documentId. */
+export function collectUnlinkedMantrasFromGranthaDraft(draft: {
+  id: number;
+  strapiDocumentId?: string | null;
+  data?: Record<string, unknown>;
+}): UnlinkedGranthaDraftMantra[] {
+  const d = (draft.data ?? {}) as Record<string, any>;
+  const cfg = (d.structureConfig ?? {}) as GranthaStructureConfig;
+  const hierarchy = (d.hierarchy ?? []) as SnapshotAdhyaya[];
+  const granthaName = String(d.GranthaName ?? "").trim() || `Draft #${draft.id}`;
+  const out: UnlinkedGranthaDraftMantra[] = [];
+
+  const visit = (
+    m: ManthraSnap & { _isNewLocal?: boolean },
+    ctx: { adhyayaId: string; khandaId: string; padaId?: string },
+  ) => {
+    if (isPublishedStrapiDocId(m.strapiDocumentId)) return;
+    const title = (m.title ?? "").trim();
+    if (!title && !m._isNewLocal) return;
+    out.push({
+      granthaDraftId: draft.id,
+      granthaName,
+      strapiGranthaDocId: draft.strapiDocumentId ?? undefined,
+      ...ctx,
+      manthraId: m.id,
+      title: title || "(blank new verse)",
+      isNewLocal: !!m._isNewLocal,
+    });
+  };
+
+  for (const a of hierarchy) {
+    for (const k of a.khandas ?? []) {
+      const padas = k.padas ?? [];
+      const skipKhanda = !!cfg.levelThreeEnabled && padas.length > 0;
+      if (!skipKhanda) {
+        for (const m of k.manthras ?? []) {
+          visit(m, { adhyayaId: a.id, khandaId: k.id });
+        }
+      }
+      for (const p of padas) {
+        for (const m of p.manthras ?? []) {
+          visit(m, { adhyayaId: a.id, khandaId: k.id, padaId: p.id });
+        }
+      }
+    }
+  }
+  return out;
 }
 
 /** @deprecated Alias */

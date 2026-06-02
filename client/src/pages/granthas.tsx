@@ -97,6 +97,8 @@ import {
   portalMantraTitleForLeaf,
   inferLeafNameFromStrapiMantras,
   strapiGranthaHasKhandaSections,
+  sanitizeHierarchyPortalMeta,
+  sortMantrasByDisplayOrder,
   type GranthaStructureConfig,
   type StrapiMantraRef,
 } from "@/lib/grantha-structure-sync";
@@ -104,6 +106,8 @@ import {
   mergeMantraStrapiDocumentIds,
   syncMantraSectionAfterStructuralEdits,
   syncAllMantraSectionLabelsInGrantha,
+  syncAllPendingNewMantrasToStrapi,
+  getSortedMantrasFromSnapshot,
   resolveMantraSectionStrapiDocumentId,
   type SnapshotAdhyaya,
 } from "@/lib/grantha-strapi-mantra-sync";
@@ -231,7 +235,9 @@ function ordinal(n: number) {
 
 /** After structural edits: sort siblings, contiguous section `order`, reindex all mantra titles. */
 function withNormalizedHierarchy(nodes: AdhyayaNode[], cfg: GranthaStructureConfig): AdhyayaNode[] {
-  return normalizeEditorHierarchy(nodes, cfg) as AdhyayaNode[];
+  return sanitizeHierarchyPortalMeta(
+    normalizeEditorHierarchy(nodes, cfg) as AdhyayaNode[],
+  );
 }
 
 function findManthraInTree(
@@ -632,7 +638,7 @@ function dedupeManthrasForEditor(manthras: ManthraNode[], leaf: string): Manthra
     if (isPublishedStrapiDocId(x.strapiDocumentId)) s += 1;
     return s;
   };
-  for (const m of sortNodesByOrder(manthras)) {
+  for (const m of sortMantrasByDisplayOrder(manthras)) {
     if (!titleUsesConfiguredLeaf(m.title, configured)) continue;
     const suffix = mantraNumberSuffix(m.title);
     const key = suffix ?? m.id;
@@ -2711,6 +2717,7 @@ export default function GranthasPage() {
                 shlokaIndex,
                 docId,
               );
+              if (docId) delete row._isNewLocal;
               if (!shouldKeepManthraInEditor(row, seenStrapiMantraDocIds)) return acc;
               acc.push(row);
               return acc;
@@ -2759,6 +2766,7 @@ export default function GranthasPage() {
                   shlokaIndex,
                   resolved.docId,
                 );
+                if (resolved.docId) delete row._isNewLocal;
                 if (!shouldKeepManthraInEditor(row, seenStrapiMantraDocIds)) return acc;
                 if (resolved.docId) {
                   markStrapiDocsMatchedByLeaf(m.title, padaStrapi, padaMatchedDocIds);
@@ -3901,9 +3909,26 @@ export default function GranthasPage() {
               title: "Verse slot synced to CMS",
               description:
                 patches.length > 0
-                  ? `Created ${patches.length} row(s) in Strapi${sortKeysUpdated > 0 ? ` and updated sort order for ${sortKeysUpdated} row(s)` : ""}. Use "Sync verse numbers to CMS" if labels need updating.`
+                  ? `Created ${patches.length} row(s) in Strapi${sortKeysUpdated > 0 ? ` and updated sort order for ${sortKeysUpdated} row(s)` : ""}. New rows appear in the Mantras tab as "No number" until you run Sync verse numbers to CMS.`
                   : `Updated sort order for ${sortKeysUpdated} row(s) in Strapi.`,
             });
+          } else if (patches.length === 0 && editingGranthaStrapiDocumentId()) {
+            const sorted = getSortedMantrasFromSnapshot(
+              snap,
+              ctx.adhyayaId,
+              ctx.khandaId,
+              ctx.padaId,
+              cfg,
+            );
+            const pending = sorted.filter((m) => !isPublishedStrapiDocId(m.strapiDocumentId));
+            if (pending.length > 0) {
+              toast({
+                variant: "destructive",
+                title: "CMS row not created",
+                description:
+                  `${pending.length} new verse(s) are still portal-only. Save the grantha to retry, or check that the section is linked to Strapi.`,
+              });
+            }
           }
         })
         .catch((e: unknown) => {
@@ -3913,6 +3938,39 @@ export default function GranthasPage() {
     }, 450);
   }
 
+
+  /** Retry CMS row creation for any portal-only verses (e.g. after a failed insert sync). */
+  async function flushPendingNewMantrasToStrapi(snapshot?: AdhyayaNode[]) {
+    if (!editingGranthaStrapiDocumentId()) return;
+    const snap = (snapshot ?? adhyayasRef.current) as SnapshotAdhyaya[];
+    const cfg = structureConfigRef.current;
+    try {
+      const patches = await syncAllPendingNewMantrasToStrapi(snap, cfg);
+      if (patches.length === 0) return;
+      setAdhyayas((prev) => {
+        let merged = prev as SnapshotAdhyaya[];
+        for (const p of patches) {
+          merged = mergeMantraStrapiDocumentIds(
+            merged,
+            p.adhyayaId,
+            p.khandaId,
+            p.padaId,
+            [{ manthraId: p.manthraId, strapiDocumentId: p.strapiDocumentId }],
+          ) as AdhyayaNode[];
+        }
+        adhyayasRef.current = merged as AdhyayaNode[];
+        return merged as AdhyayaNode[];
+      });
+      invalidateGranthaCmsCaches(queryClient);
+      toast({
+        title: "Pending verses synced to CMS",
+        description: `Created ${patches.length} row(s) in Strapi. They appear in the Mantras tab as "No number" until you run Sync verse numbers to CMS.`,
+      });
+    } catch (e: unknown) {
+      const msg = e instanceof Error ? e.message : String(e);
+      toast({ variant: "destructive", title: "Could not sync new verses to CMS", description: msg });
+    }
+  }
 
   /** Explicit action: write portal verse titles + spaced CMS sort keys (not run on every + insert). */
   async function handleSyncVerseNumbersToCms() {
@@ -4050,7 +4108,7 @@ export default function GranthasPage() {
                   padas: (k.padas ?? []).map((p) => {
                     if (p.id !== padaId) return p;
                     const merged = assignContiguousMantraOrders([
-                      ...sortNodesByOrder(p.manthras),
+                      ...sortMantrasByDisplayOrder(p.manthras),
                       newManthra,
                     ]);
                     return { ...p, manthras: merged };
@@ -4058,7 +4116,7 @@ export default function GranthasPage() {
                 };
               }
               const merged = assignContiguousMantraOrders([
-                ...sortNodesByOrder(k.manthras),
+                ...sortMantrasByDisplayOrder(k.manthras),
                 newManthra,
               ]);
               return { ...k, manthras: merged };
@@ -4100,7 +4158,7 @@ export default function GranthasPage() {
                   ...k,
                   padas: (k.padas ?? []).map((p) => {
                     if (p.id !== padaId) return p;
-                    const sorted = sortNodesByOrder(p.manthras);
+                    const sorted = sortMantrasByDisplayOrder(p.manthras);
                     const j = sorted.findIndex((m) => m.id === afterManthraId);
                     if (j < 0) return p;
                     const newManthra: ManthraNode = {
@@ -4120,7 +4178,7 @@ export default function GranthasPage() {
                 };
               }
 
-              const sorted = sortNodesByOrder(k.manthras);
+              const sorted = sortMantrasByDisplayOrder(k.manthras);
               const j = sorted.findIndex((m) => m.id === afterManthraId);
               if (j < 0) return k;
               const newManthra: ManthraNode = {
@@ -4370,6 +4428,85 @@ export default function GranthasPage() {
     }
   }
 
+  async function handleRecoverSnapshot() {
+    if (!editingDraftId) return;
+    recoverDraft.mutate(editingDraftId, {
+      onSuccess: (data: { draft?: { data?: Record<string, unknown> }; recoveredFrom?: string | null }) => {
+        const d = data.draft?.data as Record<string, any> | undefined;
+        if (d) {
+          applyDraftPayloadToEditor(d, { renormalize: true });
+        }
+        queryClient.invalidateQueries({ queryKey: ["/api/drafts", "granthas"] });
+        toast({
+          title: "Draft recovered",
+          description: data.recoveredFrom
+            ? `Reloaded editor from server snapshot (${new Date(data.recoveredFrom).toLocaleString()}).`
+            : "Reloaded editor from the latest server snapshot.",
+        });
+      },
+      onError: (err: Error) => {
+        toast({
+          variant: "destructive",
+          title: "Recover failed",
+          description: err.message || "Could not recover the draft snapshot.",
+        });
+      },
+    });
+  }
+
+  /** Apply saved draft JSON to the open editor (recover snapshot, without re-fetching Strapi). */
+  function applyDraftPayloadToEditor(d: Record<string, any>, opts?: { renormalize?: boolean }) {
+    setFormData({
+      GranthaName: d.GranthaName || "",
+      GranthaType: d.GranthaType || "",
+      BhashyamName: d.BhashyamName || "",
+      BhashyamAuthor: d.BhashyamAuthor || "",
+      IntroductionToTextEnglish: d.IntroductionToTextEnglish || [],
+      BhashyakaraIntroductionSanskrit: d.BhashyakaraIntroduction?.SanskritTextEntry || [],
+      BhashyakaraIntroductionEnglish: d.BhashyakaraIntroduction?.EnglishTranslationText || [],
+      BhashyakaraIntroductionIAST: d.BhashyakaraIntroduction?.IASTTransliteration || [],
+      slug: d.slug || "",
+      order: d.order != null ? String(d.order) : "",
+      introVideoId: d.introVideoId || "",
+      introVideoTitle: d.introVideoTitle || "",
+    });
+    setTeekas(d.teekas || []);
+    setOtherTranslations(
+      (d.otherTranslations || []).map((t: any) => ({
+        ...t,
+        text: t.text || [],
+      })),
+    );
+    setGranthaNameTranslations(d.granthaNameTranslations || []);
+    setDeletedStrapiSectionDocIds(
+      Array.isArray(d.deletedStrapiSectionDocIds) ? d.deletedStrapiSectionDocIds : [],
+    );
+    setDeletedStrapiManthraDocIds(
+      Array.isArray(d.deletedStrapiManthraDocIds) ? d.deletedStrapiManthraDocIds : [],
+    );
+    setDeletedStrapiTeekaDocIds(
+      Array.isArray(d.deletedStrapiTeekaDocIds) ? d.deletedStrapiTeekaDocIds : [],
+    );
+    const migratedCfg = migrateStructureConfig(d.structureConfig);
+    const rawHier = d.hierarchy || [];
+    const hier =
+      d.structureConfig?.leafName === "Khanda"
+        ? migrateHierarchyLeafName(rawHier, "Khanda", "Mantra")
+        : rawHier;
+    const prep = prepareHierarchyForContentStep(hier, migratedCfg);
+    setStructureConfig(migratedCfg);
+    const base = sanitizeHierarchyPortalMeta(prep.hierarchy as AdhyayaNode[]);
+    const normalized = opts?.renormalize
+      ? withNormalizedHierarchy(base, migratedCfg)
+      : base;
+    adhyayasRef.current = normalized;
+    setAdhyayas(normalized);
+    applyPublishScopeFromDraft(d);
+    publishScopeMetaEffectSkipRef.current = true;
+    setEditingManthra(null);
+    setManthraDialogViewOnly(false);
+  }
+
   function buildSavePayload(): Record<string, any> {
     const cfg = structureConfigRef.current ?? structureConfig;
     const tree = adhyayasRef.current.length > 0 ? adhyayasRef.current : adhyayas;
@@ -4466,6 +4603,7 @@ export default function GranthasPage() {
           if (!editingDraftId && saved?.id) {
             setEditingDraftId(saved.id);
           }
+          void flushPendingNewMantrasToStrapi(payload.hierarchy as AdhyayaNode[]);
         },
       }
     );
@@ -6089,7 +6227,7 @@ export default function GranthasPage() {
                     </p>
                     <div className="space-y-1">
                       {dedupeManthrasForEditor(
-                        sortNodesByOrder(flatFirstKhanda.manthras),
+                        sortMantrasByDisplayOrder(flatFirstKhanda.manthras),
                         leaf,
                       ).map((manthra, mIdx) => {
                         const hasContent = hasManthraContent(manthra);
@@ -6276,7 +6414,7 @@ export default function GranthasPage() {
                                 {pada.expanded && (
                                   <div className="px-4 pt-1.5 pb-2.5 border-t bg-muted/5">
                                     <div className="space-y-1">
-                                      {dedupeManthrasForEditor(sortNodesByOrder(pada.manthras), leaf).map((manthra, mIdx) => {
+                                      {dedupeManthrasForEditor(sortMantrasByDisplayOrder(pada.manthras), leaf).map((manthra, mIdx) => {
                                         const hasContent = hasManthraContent(manthra);
                                         return (
                                           <div
@@ -6355,7 +6493,7 @@ export default function GranthasPage() {
                               Manage {leaf}s
                             </p>
                             <div className="space-y-1">
-                              {dedupeManthrasForEditor(sortNodesByOrder(khanda.manthras), leaf).map((manthra, mIdx) => {
+                              {dedupeManthrasForEditor(sortMantrasByDisplayOrder(khanda.manthras), leaf).map((manthra, mIdx) => {
                                 const hasContent = hasManthraContent(manthra);
                                 return (
                                   <div
@@ -6520,7 +6658,7 @@ export default function GranthasPage() {
                 {isAdmin && editingDraftId && (
                   <Button
                     variant="secondary"
-                    onClick={() => recoverDraft.mutate(editingDraftId)}
+                    onClick={() => void handleRecoverSnapshot()}
                     disabled={recoverDraft.isPending || saveDraft.isPending || publishDraft.isPending}
                     data-testid="button-recover-latest-snapshot"
                   >

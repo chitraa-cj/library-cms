@@ -12,6 +12,12 @@ import {
   type GranthaStructureConfig,
   type StrapiMantraRef,
 } from "@/lib/grantha-structure-sync";
+import {
+  resolveMantraOwnerSectionDocId,
+  type MantraSectionResolveContext,
+} from "@shared/grantha-mantra-section-resolve";
+
+export type { MantraSectionResolveContext };
 
 /** Minimal hierarchy snapshot for Strapi section + mantra identity sync. */
 export type ManthraSnap = {
@@ -46,24 +52,9 @@ export function resolveMantraSectionStrapiDocumentId(
   khandaId: string,
   padaId: string | undefined,
   cfg: GranthaStructureConfig,
+  ctx?: MantraSectionResolveContext,
 ): string | undefined {
-  const a = snapshot.find((x) => x.id === adhyayaId);
-  const k = a?.khandas.find((x) => x.id === khandaId);
-  if (!a || !k) return undefined;
-  const levelThree = !!cfg.levelThreeEnabled;
-  const levelTwo = cfg.levelTwoEnabled !== false;
-  if (levelThree && padaId) {
-    const p = k.padas?.find((x) => x.id === padaId);
-    const d = p?.documentId;
-    return isPublishedStrapiDocId(d) ? d : undefined;
-  }
-  const isDefault = k.title === "_default" || !levelTwo;
-  if (isDefault) {
-    const d = a.documentId;
-    return isPublishedStrapiDocId(d) ? d : undefined;
-  }
-  const d = k.documentId;
-  return isPublishedStrapiDocId(d) ? d : undefined;
+  return resolveMantraOwnerSectionDocId(snapshot, adhyayaId, khandaId, padaId, cfg, ctx);
 }
 
 export function getSortedMantrasFromSnapshot(
@@ -348,8 +339,16 @@ export async function pushMantraSectionStructureToStrapi(
   khandaId: string,
   padaId: string | undefined,
   cfg: GranthaStructureConfig,
+  ctx?: MantraSectionResolveContext,
 ): Promise<Array<{ manthraId: string; strapiDocumentId: string }>> {
-  const sectionDocumentId = resolveMantraSectionStrapiDocumentId(snapshot, adhyayaId, khandaId, padaId, cfg);
+  const sectionDocumentId = resolveMantraSectionStrapiDocumentId(
+    snapshot,
+    adhyayaId,
+    khandaId,
+    padaId,
+    cfg,
+    ctx,
+  );
   if (!sectionDocumentId) return [];
 
   const sorted = getSortedMantrasFromSnapshot(snapshot, adhyayaId, khandaId, padaId, cfg);
@@ -506,6 +505,7 @@ export async function syncMantraSectionAfterStructuralEdits(
   padaId: string | undefined,
   cfg: GranthaStructureConfig,
   deleteDocumentIds: string[],
+  sectionCtx?: MantraSectionResolveContext,
 ): Promise<{
   patches: Array<{ manthraId: string; strapiDocumentId: string }>;
   failedDeleteIds: string[];
@@ -513,7 +513,14 @@ export async function syncMantraSectionAfterStructuralEdits(
   labelsUpdated: number;
 }> {
   const failedDeleteIds = await strapiDeleteMantrasBestEffort(deleteDocumentIds);
-  const patches = await pushMantraSectionStructureToStrapi(snapshot, adhyayaId, khandaId, padaId, cfg);
+  const patches = await pushMantraSectionStructureToStrapi(
+    snapshot,
+    adhyayaId,
+    khandaId,
+    padaId,
+    cfg,
+    sectionCtx,
+  );
   let snapForSort = snapshot;
   if (patches.length > 0) {
     snapForSort = applyMantraDocIdPatches(snapshot, patches.map((p) => ({
@@ -541,34 +548,67 @@ export async function syncMantraSectionAfterStructuralEdits(
 export async function syncAllPendingNewMantrasToStrapi(
   snapshot: SnapshotAdhyaya[],
   cfg: GranthaStructureConfig,
+  ctx?: MantraSectionResolveContext,
 ): Promise<Array<{ manthraId: string; strapiDocumentId: string; adhyayaId: string; khandaId: string; padaId?: string }>> {
   const allPatches: Array<{ manthraId: string; strapiDocumentId: string; adhyayaId: string; khandaId: string; padaId?: string }> = [];
   let snap = snapshot;
 
-  for (const ctx of collectMantraSectionSyncTargets(snapshot, cfg)) {
-    const sorted = getSortedMantrasFromSnapshot(snap, ctx.adhyayaId, ctx.khandaId, ctx.padaId, cfg);
+  for (const target of collectMantraSectionSyncTargets(snapshot, cfg)) {
+    const sorted = getSortedMantrasFromSnapshot(snap, target.adhyayaId, target.khandaId, target.padaId, cfg);
     if (!sorted.some((m) => !isPublishedStrapiDocId(m.strapiDocumentId))) continue;
 
     const patches = await pushMantraSectionStructureToStrapi(
       snap,
-      ctx.adhyayaId,
-      ctx.khandaId,
-      ctx.padaId,
+      target.adhyayaId,
+      target.khandaId,
+      target.padaId,
       cfg,
+      ctx,
     );
     if (patches.length === 0) continue;
 
     for (const p of patches) {
-      allPatches.push({ ...p, adhyayaId: ctx.adhyayaId, khandaId: ctx.khandaId, padaId: ctx.padaId });
+      allPatches.push({ ...p, adhyayaId: target.adhyayaId, khandaId: target.khandaId, padaId: target.padaId });
     }
     snap = applyMantraDocIdPatches(
       snap,
-      patches.map((p) => ({ ...ctx, manthraId: p.manthraId, strapiDocumentId: p.strapiDocumentId })),
+      patches.map((p) => ({ ...target, manthraId: p.manthraId, strapiDocumentId: p.strapiDocumentId })),
     );
-    await syncMantraSectionSortKeysToStrapi(snap, ctx.adhyayaId, ctx.khandaId, ctx.padaId, cfg);
+    await syncMantraSectionSortKeysToStrapi(snap, target.adhyayaId, target.khandaId, target.padaId, cfg);
   }
 
   return allPatches;
+}
+
+/** Server-authoritative sync: resolves Strapi sections like publish and creates CMS rows. */
+export async function syncMantraSlotsViaServer(
+  draftId: number,
+  scope?: {
+    adhyayaId?: string;
+    khandaId?: string;
+    padaId?: string;
+    hierarchy?: SnapshotAdhyaya[];
+  },
+): Promise<{
+  ok?: boolean;
+  patches: Array<{
+    manthraId: string;
+    strapiDocumentId: string;
+    adhyayaId: string;
+    khandaId: string;
+    padaId?: string;
+    sectionDocumentId: string;
+  }>;
+  hierarchy?: unknown[];
+  errors?: string[];
+  message?: string;
+}> {
+  const { hierarchy, ...rest } = scope ?? {};
+  const res = await apiRequest("POST", `/api/drafts/${draftId}/sync-mantra-slots`, {
+    ...rest,
+    hierarchy,
+  });
+  return res.json();
 }
 
 export type UnlinkedGranthaDraftMantra = {

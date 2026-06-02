@@ -108,6 +108,9 @@ import {
   syncAllMantraSectionLabelsInGrantha,
   syncAllPendingNewMantrasToStrapi,
   getSortedMantrasFromSnapshot,
+  syncMantraSlotsViaServer,
+  strapiDeleteMantrasBestEffort,
+  type MantraSectionResolveContext,
   resolveMantraSectionStrapiDocumentId,
   type SnapshotAdhyaya,
 } from "@/lib/grantha-strapi-mantra-sync";
@@ -1176,6 +1179,7 @@ export default function GranthasPage() {
   const mantraSyncTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const mantraSyncChainRef = useRef<Promise<void>>(Promise.resolve());
   const pendingMantraDeletesRef = useRef<Set<string>>(new Set());
+  const strapiSectionIndexRef = useRef<MantraSectionResolveContext>({});
 
   useEffect(() => {
     adhyayasRef.current = adhyayas;
@@ -2554,6 +2558,17 @@ export default function GranthasPage() {
         }
       }
 
+      const childrenByParentDocId = new Map<string, { documentId: string; title?: string }[]>();
+      for (const [parentId, secs] of strapiChildSectionsByParentDocId) {
+        childrenByParentDocId.set(
+          parentId,
+          secs
+            .filter((s) => typeof s.documentId === "string")
+            .map((s) => ({ documentId: s.documentId as string, title: s.title })),
+        );
+      }
+      strapiSectionIndexRef.current = { childrenByParentDocId };
+
       const allStrapiMantraRefs: StrapiMantraRef[] = [];
       const seenStrapiMantraDocIds = new Set<string>();
       for (const list of strapiMantrasBySecDocId.values()) {
@@ -3824,9 +3839,57 @@ export default function GranthasPage() {
 
   // ── Manthra functions (handle L2 and L3 paths) ──
 
+  function applyMantraSlotSyncResult(
+    patches: Array<{ manthraId: string; strapiDocumentId: string }>,
+    ctx: { adhyayaId: string; khandaId: string; padaId?: string },
+    hierarchy?: unknown[],
+  ) {
+    if (Array.isArray(hierarchy)) {
+      const next = hierarchy as AdhyayaNode[];
+      adhyayasRef.current = next;
+      setAdhyayas(next);
+    } else if (patches.length > 0) {
+      setAdhyayas((prev) => {
+        const merged = mergeMantraStrapiDocumentIds(
+          prev as SnapshotAdhyaya[],
+          ctx.adhyayaId,
+          ctx.khandaId,
+          ctx.padaId,
+          patches,
+        ) as AdhyayaNode[];
+        adhyayasRef.current = merged;
+        return merged.map((a) => {
+          if (a.id !== ctx.adhyayaId) return a;
+          return {
+            ...a,
+            khandas: a.khandas.map((k) => {
+              if (k.id !== ctx.khandaId) return k;
+              const patchIds = new Set(patches.map((p) => p.manthraId));
+              const clearNew = (m: ManthraNode) =>
+                patchIds.has(m.id) ? { ...m, _isNewLocal: false } : m;
+              if (ctx.padaId) {
+                return {
+                  ...k,
+                  padas: (k.padas ?? []).map((p) =>
+                    p.id === ctx.padaId
+                      ? { ...p, manthras: (p.manthras ?? []).map(clearNew) }
+                      : p,
+                  ),
+                };
+              }
+              return { ...k, manthras: (k.manthras ?? []).map(clearNew) };
+            }),
+          };
+        });
+      });
+    }
+    for (const p of patches) clearManthraFromChangedSet(p.manthraId);
+    if (patches.length > 0) invalidateGranthaCmsCaches(queryClient);
+  }
+
   /**
    * Debounced + serialized Strapi mantra sync. Coalesces rapid inserts/deletes into one pass:
-   * deletes removed rows first, insert-between for new rows, then spaced sort keys for portal order.
+   * deletes removed rows first, creates CMS rows (server-authoritative section resolution), then sort keys.
    */
   function scheduleStrapiMantraSectionIdentitySync(
     snapshot: AdhyayaNode[],
@@ -3847,63 +3910,63 @@ export default function GranthasPage() {
       const cfg = structureConfigRef.current;
       const toDelete = [...pendingMantraDeletesRef.current];
       pendingMantraDeletesRef.current.clear();
+      const draftId = editingDraftId;
 
       mantraSyncChainRef.current = mantraSyncChainRef.current
-        .then(() =>
-          syncMantraSectionAfterStructuralEdits(
-            snap,
-            ctx.adhyayaId,
-            ctx.khandaId,
-            ctx.padaId,
-            cfg,
-            toDelete,
-          ),
-        )
-        .then(({ patches, failedDeleteIds, sortKeysUpdated }) => {
+        .then(async () => {
+          if (draftId && isPublishedStrapiDocId(granthaDoc)) {
+            if (toDelete.length > 0) {
+              const failedDeleteIds = await strapiDeleteMantrasBestEffort(toDelete);
+              if (failedDeleteIds.length > 0) {
+                setDeletedStrapiManthraDocIds((prev) =>
+                  Array.from(new Set([...prev, ...failedDeleteIds])),
+                );
+              }
+            }
+            const result = await syncMantraSlotsViaServer(draftId, {
+              adhyayaId: ctx.adhyayaId,
+              khandaId: ctx.khandaId,
+              padaId: ctx.padaId,
+              hierarchy: snap,
+            });
+            const patches = (result.patches ?? []).map((p) => ({
+              manthraId: p.manthraId,
+              strapiDocumentId: p.strapiDocumentId,
+            }));
+            applyMantraSlotSyncResult(patches, ctx, result.hierarchy);
+            if (patches.length > 0) {
+              toast({
+                title: "Verse slot synced to CMS",
+                description:
+                  result.message ??
+                  `Created ${patches.length} row(s) in Strapi. Check the Mantras tab (labels sync separately).`,
+              });
+            } else if ((result.errors ?? []).length > 0) {
+              toast({
+                variant: "destructive",
+                title: "CMS row not created",
+                description: result.errors!.join("; "),
+              });
+            }
+            return;
+          }
+
+          const { patches, failedDeleteIds, sortKeysUpdated } =
+            await syncMantraSectionAfterStructuralEdits(
+              snap,
+              ctx.adhyayaId,
+              ctx.khandaId,
+              ctx.padaId,
+              cfg,
+              toDelete,
+              strapiSectionIndexRef.current,
+            );
           if (failedDeleteIds.length > 0) {
             setDeletedStrapiManthraDocIds((prev) =>
               Array.from(new Set([...prev, ...failedDeleteIds])),
             );
           }
-          if (patches.length > 0) {
-            for (const p of patches) {
-              clearManthraFromChangedSet(p.manthraId);
-            }
-            setAdhyayas((prev) => {
-              const merged = mergeMantraStrapiDocumentIds(
-                prev as SnapshotAdhyaya[],
-                ctx.adhyayaId,
-                ctx.khandaId,
-                ctx.padaId,
-                patches,
-              ) as AdhyayaNode[];
-              adhyayasRef.current = merged;
-              return merged.map((a) => {
-                if (a.id !== ctx.adhyayaId) return a;
-                return {
-                  ...a,
-                  khandas: a.khandas.map((k) => {
-                    if (k.id !== ctx.khandaId) return k;
-                    const patchIds = new Set(patches.map((p) => p.manthraId));
-                    const clearNew = (m: ManthraNode) =>
-                      patchIds.has(m.id) ? { ...m, _isNewLocal: false } : m;
-                    if (ctx.padaId) {
-                      return {
-                        ...k,
-                        padas: (k.padas ?? []).map((p) =>
-                          p.id === ctx.padaId
-                            ? { ...p, manthras: (p.manthras ?? []).map(clearNew) }
-                            : p,
-                        ),
-                      };
-                    }
-                    return { ...k, manthras: (k.manthras ?? []).map(clearNew) };
-                  }),
-                };
-              });
-            });
-          }
-          invalidateGranthaCmsCaches(queryClient);
+          applyMantraSlotSyncResult(patches, ctx);
           if ((patches.length > 0 || sortKeysUpdated > 0) && editingGranthaStrapiDocumentId()) {
             toast({
               title: "Verse slot synced to CMS",
@@ -3943,9 +4006,27 @@ export default function GranthasPage() {
   async function flushPendingNewMantrasToStrapi(snapshot?: AdhyayaNode[]) {
     if (!editingGranthaStrapiDocumentId()) return;
     const snap = (snapshot ?? adhyayasRef.current) as SnapshotAdhyaya[];
-    const cfg = structureConfigRef.current;
+    const draftId = editingDraftId;
     try {
-      const patches = await syncAllPendingNewMantrasToStrapi(snap, cfg);
+      if (draftId) {
+        const result = await syncMantraSlotsViaServer(draftId, { hierarchy: snap });
+        if ((result.patches ?? []).length > 0 && Array.isArray(result.hierarchy)) {
+          adhyayasRef.current = result.hierarchy as AdhyayaNode[];
+          setAdhyayas(result.hierarchy as AdhyayaNode[]);
+          invalidateGranthaCmsCaches(queryClient);
+          toast({
+            title: "Pending verses synced to CMS",
+            description: result.message ?? `Created ${result.patches!.length} row(s) in Strapi.`,
+          });
+        }
+        return;
+      }
+      const cfg = structureConfigRef.current;
+      const patches = await syncAllPendingNewMantrasToStrapi(
+        snap,
+        cfg,
+        strapiSectionIndexRef.current,
+      );
       if (patches.length === 0) return;
       setAdhyayas((prev) => {
         let merged = prev as SnapshotAdhyaya[];

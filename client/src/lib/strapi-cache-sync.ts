@@ -34,6 +34,7 @@ export function syncGranthaCmsCaches(
     for (const key of DRAFT_LIST_KEYS) {
       void queryClient.invalidateQueries({ queryKey: [...key] });
     }
+    void queryClient.invalidateQueries({ queryKey: ["/api/cms/manthras-unified"] });
     if (!refetchActive) return;
     for (const key of STRAPI_LIST_KEYS) {
       void queryClient.refetchQueries({ queryKey: [...key], type: "active" });

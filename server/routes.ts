@@ -43,6 +43,8 @@ import {
 } from "@shared/grantha-publish-integrity";
 import { readClientBuildId } from "./build-info";
 import { applyHierarchyRepairInPlace } from "./grantha-hierarchy-repair";
+import { syncPendingMantraSlotsFromDraft } from "./grantha-mantra-slot-sync";
+import { collectUnlinkedMantrasFromGranthaDraft } from "../client/src/lib/grantha-strapi-mantra-sync";
 
 /** Compress a snapshot payload for DB storage (gzip + base64 wrapper). */
 function compressBackupData(data: any): any {
@@ -4210,6 +4212,81 @@ export async function registerRoutes(
 
     return { returnedDocId, publishFailures, hierarchy, data };
   }
+
+  // ── Sync portal-only mantra slots to Strapi (server-authoritative section resolution) ──
+  app.post("/api/drafts/:id/sync-mantra-slots", requireAuth, async (req, res) => {
+    try {
+      const user = req.user as User;
+      const id = parseInt(req.params.id, 10);
+      if (Number.isNaN(id)) return res.status(400).json({ message: "Invalid draft ID" });
+
+      const draft = await storage.getDraft(id, user.id);
+      if (!draft) return res.status(404).json({ message: "Draft not found" });
+
+      const granthaDocId = draft.strapiDocumentId ?? undefined;
+      if (!granthaDocId || granthaDocId.length < 10) {
+        return res.status(400).json({
+          message: "Grantha must be published to Strapi before mantra slots can sync to CMS.",
+        });
+      }
+
+      const body = req.body as {
+        adhyayaId?: string;
+        khandaId?: string;
+        padaId?: string;
+        hierarchy?: unknown[];
+      };
+
+      const data = draft.data as Record<string, any>;
+      const result = await syncPendingMantraSlotsFromDraft({
+        draftData: data,
+        granthaDocId,
+        resolveSection,
+        mapSectionType,
+        scope: {
+          adhyayaId: body.adhyayaId,
+          khandaId: body.khandaId,
+          padaId: body.padaId,
+        },
+        hierarchyOverride: Array.isArray(body.hierarchy) ? body.hierarchy : undefined,
+      });
+
+      if (result.patches.length > 0 || result.hierarchy !== data.hierarchy) {
+        await storage.updateDraft(id, user.id, {
+          data: { ...data, hierarchy: result.hierarchy },
+          status: "draft",
+        });
+      }
+
+      res.json({
+        ok: result.errors.length === 0,
+        patches: result.patches,
+        hierarchy: result.hierarchy,
+        errors: result.errors,
+        message:
+          result.patches.length > 0
+            ? `Created ${result.patches.length} CMS row(s). They appear in the Mantras tab (labels may show as empty until verse sync).`
+            : result.errors.length > 0
+              ? result.errors.join("; ")
+              : "No pending portal-only verses to sync.",
+      });
+    } catch (error: any) {
+      console.error("[sync-mantra-slots]", error);
+      res.status(500).json({ message: error.message || "Mantra slot sync failed" });
+    }
+  });
+
+  // ── Unified mantras view: Strapi rows + portal-only grantha draft verses ─────────────
+  app.get("/api/cms/manthras-unified", requireAuth, async (req, res) => {
+    try {
+      const user = req.user as User;
+      const granthaDrafts = await storage.getDraftsByType("granthas", user.id);
+      const pending = granthaDrafts.flatMap((d) => collectUnlinkedMantrasFromGranthaDraft(d));
+      res.json({ pendingGranthaMantras: pending });
+    } catch (error: any) {
+      res.status(500).json({ message: error.message || "Failed to load unified mantras view" });
+    }
+  });
 
   // ── Publish preflight (integrity scan, no Strapi writes) ───────────────────
   app.post("/api/drafts/:id/publish-preflight", requireAuth, async (req, res) => {

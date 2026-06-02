@@ -223,10 +223,12 @@ export default function ManthrasPage() {
 
   const { drafts: granthaDrafts, isLoadingDrafts: isLoadingGranthaDrafts } = useDrafts("granthas");
 
-  const pendingGranthaMantras = useMemo(
-    () => granthaDrafts.flatMap((d) => collectUnlinkedMantrasFromGranthaDraft(d)),
-    [granthaDrafts],
-  );
+  const { data: unifiedPendingData, isLoading: isLoadingUnifiedPending } = useQuery<{
+    pendingGranthaMantras: import("@/lib/grantha-strapi-mantra-sync").UnlinkedGranthaDraftMantra[];
+  }>({
+    queryKey: ["/api/cms/manthras-unified"],
+    refetchOnWindowFocus: true,
+  });
 
   const deleteMutation = useMutation({
     mutationFn: async (documentId: string) => {
@@ -244,6 +246,18 @@ export default function ManthrasPage() {
   });
 
   const allSections = sectionsData?.data || [];
+
+  const pendingGranthaMantras = useMemo(() => {
+    const fromServer = unifiedPendingData?.pendingGranthaMantras;
+    if (fromServer) return fromServer;
+    return granthaDrafts.flatMap((d) =>
+      collectUnlinkedMantrasFromGranthaDraft({
+        id: d.id,
+        strapiDocumentId: d.strapiDocumentId,
+        data: d.data as Record<string, unknown>,
+      }),
+    );
+  }, [unifiedPendingData, granthaDrafts]);
 
   // Derive unique granthas from sections AND from manthras data
   const allGranthasFromSections = useMemo(() => {
@@ -702,7 +716,7 @@ export default function ManthrasPage() {
       </div>
 
       <div className="rounded-lg border border-border bg-card overflow-hidden">
-        {isLoading || isLoadingDrafts || isLoadingGranthaDrafts ? (
+        {isLoading || isLoadingDrafts || isLoadingGranthaDrafts || isLoadingUnifiedPending ? (
           <div className="flex justify-center items-center py-20">
             <Loader2 className="w-6 h-6 animate-spin text-muted-foreground" />
           </div>

@@ -2700,7 +2700,10 @@ async function publishGranthaWithHierarchy(
       hierarchy,
       configuredLeaf,
       granthaNameForIntegrity,
-      { maxErrors: 30 },
+      {
+        maxErrors: 30,
+        levelThreeEnabled: !!structureConfig?.levelThreeEnabled,
+      },
     );
     const hard = preflight.filter((v) => v.severity === "error");
     if (hard.length > 0) {
@@ -4228,7 +4231,10 @@ export async function registerRoutes(
       }
 
       const violations = isPublishIntegrityEnabled()
-        ? scanGranthaHierarchyMantras(hierarchy, configuredLeaf, granthaName, { maxErrors: 40 })
+        ? scanGranthaHierarchyMantras(hierarchy, configuredLeaf, granthaName, {
+            maxErrors: 40,
+            levelThreeEnabled: !!structureConfig?.levelThreeEnabled,
+          })
         : [];
 
       const errors = violations.filter((v) => v.severity === "error");

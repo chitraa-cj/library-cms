@@ -981,7 +981,7 @@ export function createStrapiRouter() {
       }
 
       const CONCURRENCY = 12;
-      const results: Array<{ documentId: string; ok: boolean; error?: string }> = [];
+      const results: Array<{ documentId: string; ok: boolean; error?: string; labelSkipped?: boolean }> = [];
 
       // One PUT per Strapi documentId (after insert/renumber every sibling needs its own update).
       const byDocumentId = new Map<string, { documentId: string; order: number; ShlokaManthraNumber: string }>();
@@ -1038,7 +1038,17 @@ export function createStrapiRouter() {
             if (existing) {
               const suffixViolation = assertVerseSuffixStable(existing, ShlokaManthraNumber);
               if (suffixViolation) {
-                results.push({ documentId, ok: false, error: suffixViolation.message });
+                // Portal renumbered (insert/delete) but Strapi row still has the old verse id —
+                // update fractional sort key only; do not rewrite ShlokaManthraNumber.
+                try {
+                  await strapiRequest(`/api/manthras/${documentId}`, {
+                    method: "PUT",
+                    body: JSON.stringify({ data: { order } }),
+                  });
+                  results.push({ documentId, ok: true, labelSkipped: true });
+                } catch (e: any) {
+                  results.push({ documentId, ok: false, error: e?.message || String(e) });
+                }
                 continue;
               }
             }

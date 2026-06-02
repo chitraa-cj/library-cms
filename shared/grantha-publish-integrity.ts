@@ -265,28 +265,34 @@ export function scanGranthaHierarchyMantras(
   hierarchy: unknown[],
   configuredLeaf: string,
   granthaName: string | undefined,
-  options?: { maxErrors?: number },
+  options?: { maxErrors?: number; levelThreeEnabled?: boolean },
 ): PublishIntegrityViolation[] {
   const max = options?.maxErrors ?? 25;
   const violations: PublishIntegrityViolation[] = [];
-  const seenSuffix = new Map<string, string>();
+  /** Per Strapi section bucket — suffixes may repeat across different sections (e.g. 1.4 in adhyaya 1 vs 2). */
+  const seenBySection = new Map<string, Map<string, { id?: string; label: string }>>();
 
-  const visit = (m: HierarchyMantraNode) => {
+  const visit = (m: HierarchyMantraNode, sectionKey: string) => {
     if (violations.filter((v) => v.severity === "error").length >= max) return;
     const label = (m.title ?? "").trim();
     if (!label) return;
     const suf = mantraNumberSuffix(label);
     if (suf && titleUsesConfiguredLeaf(label, configuredLeaf)) {
+      let seenSuffix = seenBySection.get(sectionKey);
+      if (!seenSuffix) {
+        seenSuffix = new Map();
+        seenBySection.set(sectionKey, seenSuffix);
+      }
       const prev = seenSuffix.get(suf);
-      if (prev && prev !== m.id) {
+      if (prev && prev.id !== m.id) {
         violations.push({
           code: "duplicate_suffix_in_draft",
           severity: "error",
-          message: `Draft has two mantras with verse number ${suf} ("${prev}" and "${label}"). Fix the hierarchy before publishing.`,
+          message: `Draft has two mantras with verse number ${suf} ("${prev.label}" and "${label}"). Re-index the section (add/remove a verse with renumber) or fix titles.`,
           mantraLabel: label,
         });
       } else if (suf) {
-        seenSuffix.set(suf, label);
+        seenSuffix.set(suf, { id: m.id, label });
       }
     }
     const { sk, en } = plainTextFromManthraEntry(m.ShlokaManthraEntry);
@@ -302,13 +308,28 @@ export function scanGranthaHierarchyMantras(
     }
   };
 
+  const levelThree = !!options?.levelThreeEnabled;
+
   for (const a of hierarchy ?? []) {
-    const adhyaya = a as { khandas?: unknown[] };
+    const adhyaya = a as { id?: string; khandas?: unknown[] };
+    const adhyayaKey = adhyaya.id ?? "adhyaya";
     for (const k of adhyaya.khandas ?? []) {
-      const khanda = k as { manthras?: HierarchyMantraNode[]; padas?: { manthras?: HierarchyMantraNode[] }[] };
-      for (const m of khanda.manthras ?? []) visit(m);
-      for (const p of khanda.padas ?? []) {
-        for (const m of p.manthras ?? []) visit(m);
+      const khanda = k as {
+        id?: string;
+        manthras?: HierarchyMantraNode[];
+        padas?: { id?: string; manthras?: HierarchyMantraNode[] }[];
+      };
+      const khandaKey = khanda.id ?? "khanda";
+      const padas = khanda.padas ?? [];
+      const skipKhandaMantras = levelThree && padas.length > 0;
+      if (!skipKhandaMantras) {
+        const sectionKey = `${adhyayaKey}/${khandaKey}`;
+        for (const m of khanda.manthras ?? []) visit(m, sectionKey);
+      }
+      for (const p of padas) {
+        const padaKey = p.id ?? "pada";
+        const sectionKey = `${adhyayaKey}/${khandaKey}/${padaKey}`;
+        for (const m of p.manthras ?? []) visit(m, sectionKey);
       }
     }
   }

@@ -298,11 +298,18 @@ export function applyMantraDocIdPatches<T extends SnapshotAdhyaya>(
   return result;
 }
 
+export type BatchIdentitySyncSummary = {
+  labelsUpdated: number;
+  orderOnly: number;
+  failed: number;
+};
+
 async function strapiBatchIdentitySync(
   updates: Array<{ documentId: string; order: number; ShlokaManthraNumber: string }>,
   options?: { sortKeysOnly?: boolean; configuredLeaf?: string },
-): Promise<void> {
-  if (updates.length === 0) return;
+): Promise<BatchIdentitySyncSummary> {
+  const summary: BatchIdentitySyncSummary = { labelsUpdated: 0, orderOnly: 0, failed: 0 };
+  if (updates.length === 0) return summary;
   const CHUNK = 500;
   for (let i = 0; i < updates.length; i += CHUNK) {
     const chunk = updates.slice(i, i + CHUNK);
@@ -312,13 +319,22 @@ async function strapiBatchIdentitySync(
       configuredLeaf: options?.configuredLeaf,
     });
     const json = await res.json().catch(() => ({}));
-    const results: Array<{ documentId: string; ok?: boolean; error?: string }> = json?.results ?? [];
-    const failedRows = results.filter((r) => r && r.ok === false);
-    if (failedRows.length > 0) {
-      const detail = failedRows[0]?.error ?? "unknown";
-      throw new Error(`${failedRows.length} mantra identity update(s) failed: ${detail}`);
+    const results: Array<{ documentId: string; ok?: boolean; error?: string; labelSkipped?: boolean }> =
+      json?.results ?? [];
+    for (const r of results) {
+      if (!r || r.ok === false) {
+        summary.failed += 1;
+        continue;
+      }
+      if (r.labelSkipped) summary.orderOnly += 1;
+      else summary.labelsUpdated += 1;
+    }
+    if (summary.failed > 0) {
+      const detail = results.find((r) => r && r.ok === false)?.error ?? "unknown";
+      throw new Error(`${summary.failed} mantra identity update(s) failed: ${detail}`);
     }
   }
+  return summary;
 }
 
 /**
@@ -386,9 +402,10 @@ export async function syncMantraSectionLabelsToStrapi(
   khandaId: string,
   padaId: string | undefined,
   cfg: GranthaStructureConfig,
-): Promise<number> {
+): Promise<BatchIdentitySyncSummary> {
+  const empty: BatchIdentitySyncSummary = { labelsUpdated: 0, orderOnly: 0, failed: 0 };
   const sectionDocumentId = resolveMantraSectionStrapiDocumentId(snapshot, adhyayaId, khandaId, padaId, cfg);
-  if (!sectionDocumentId) return 0;
+  if (!sectionDocumentId) return empty;
 
   const sorted = getSortedMantrasFromSnapshot(snapshot, adhyayaId, khandaId, padaId, cfg);
   const sortKeys = assignSpacedSortKeysFromPortalOrder(sorted);
@@ -407,8 +424,7 @@ export async function syncMantraSectionLabelsToStrapi(
   }
 
   const leaf = (cfg.leafName || "Mantra").trim() || "Mantra";
-  await strapiBatchIdentitySync(updates, { sortKeysOnly: false, configuredLeaf: leaf });
-  return updates.length;
+  return strapiBatchIdentitySync(updates, { sortKeysOnly: false, configuredLeaf: leaf });
 }
 
 /**
@@ -443,8 +459,8 @@ export async function syncMantraSectionSortKeysToStrapi(
 
   if (updates.length === 0) return 0;
   const leaf = (cfg.leafName || "Mantra").trim() || "Mantra";
-  await strapiBatchIdentitySync(updates, { sortKeysOnly: true, configuredLeaf: leaf });
-  return updates.length;
+  const summary = await strapiBatchIdentitySync(updates, { sortKeysOnly: true, configuredLeaf: leaf });
+  return summary.labelsUpdated + summary.orderOnly;
 }
 
 /** @deprecated Use pushMantraSectionStructureToStrapi — kept for callers migrating gradually. */
@@ -465,16 +481,19 @@ export async function pushMantraSectionIdentityToStrapi(
 export async function syncAllMantraSectionLabelsInGrantha(
   snapshot: SnapshotAdhyaya[],
   cfg: GranthaStructureConfig,
-): Promise<number> {
-  let total = 0;
+): Promise<BatchIdentitySyncSummary> {
+  const total: BatchIdentitySyncSummary = { labelsUpdated: 0, orderOnly: 0, failed: 0 };
   for (const ctx of collectMantraSectionSyncTargets(snapshot, cfg)) {
-    total += await syncMantraSectionLabelsToStrapi(
+    const part = await syncMantraSectionLabelsToStrapi(
       snapshot,
       ctx.adhyayaId,
       ctx.khandaId,
       ctx.padaId,
       cfg,
     );
+    total.labelsUpdated += part.labelsUpdated;
+    total.orderOnly += part.orderOnly;
+    total.failed += part.failed;
   }
   return total;
 }
@@ -511,16 +530,10 @@ export async function syncMantraSectionAfterStructuralEdits(
     padaId,
     cfg,
   );
-  // Renumbering in the editor updates every sibling title — sync labels + sort keys to Strapi
-  // (batch identity API) instead of requiring a full grantha publish.
-  const labelsUpdated = await syncMantraSectionLabelsToStrapi(
-    snapForSort,
-    adhyayaId,
-    khandaId,
-    padaId,
-    cfg,
-  );
-  return { patches, failedDeleteIds, sortKeysUpdated, labelsUpdated };
+  // After insert/delete the portal reindexes verse titles — only sync fractional sort keys here.
+  // Pushing new ShlokaManthraNumber labels automatically would fail integrity when Strapi still
+  // has the old verse numbers (497+ rows). Use "Sync verse numbers to CMS" when intentional.
+  return { patches, failedDeleteIds, sortKeysUpdated, labelsUpdated: 0 };
 }
 
 /** @deprecated Alias */

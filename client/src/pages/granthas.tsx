@@ -3851,7 +3851,7 @@ export default function GranthasPage() {
             toDelete,
           ),
         )
-        .then(({ patches, failedDeleteIds, labelsUpdated }) => {
+        .then(({ patches, failedDeleteIds, sortKeysUpdated }) => {
           if (failedDeleteIds.length > 0) {
             setDeletedStrapiManthraDocIds((prev) =>
               Array.from(new Set([...prev, ...failedDeleteIds])),
@@ -3896,13 +3896,13 @@ export default function GranthasPage() {
             });
           }
           invalidateGranthaCmsCaches(queryClient);
-          if (patches.length > 0 && editingGranthaStrapiDocumentId()) {
+          if ((patches.length > 0 || sortKeysUpdated > 0) && editingGranthaStrapiDocumentId()) {
             toast({
               title: "Verse slot synced to CMS",
               description:
-                labelsUpdated && labelsUpdated > 0
-                  ? `Created ${patches.length} row(s) in Strapi with correct order and labels. Add text, then Save in the editor or Save & Publish for content only.`
-                  : `Created ${patches.length} row(s) in Strapi in the correct position.`,
+                patches.length > 0
+                  ? `Created ${patches.length} row(s) in Strapi${sortKeysUpdated > 0 ? ` and updated sort order for ${sortKeysUpdated} row(s)` : ""}. Use "Sync verse numbers to CMS" if labels need updating.`
+                  : `Updated sort order for ${sortKeysUpdated} row(s) in Strapi.`,
             });
           }
         })
@@ -3928,13 +3928,18 @@ export default function GranthasPage() {
     setVerseLabelSyncPending(true);
     try {
       const snap = adhyayasRef.current as SnapshotAdhyaya[];
-      const n = await syncAllMantraSectionLabelsInGrantha(snap, structureConfigRef.current);
+      const summary = await syncAllMantraSectionLabelsInGrantha(snap, structureConfigRef.current);
       syncGranthaCmsCaches(queryClient);
+      const total = summary.labelsUpdated + summary.orderOnly;
       toast({
         title: "Verse numbers synced to CMS",
         description:
-          n > 0
-            ? `Updated ${n} ${structureConfigRef.current.leafName} label(s) in Strapi.`
+          total > 0
+            ? summary.orderOnly > 0 && summary.labelsUpdated === 0
+              ? `Updated sort order for ${summary.orderOnly} row(s); Strapi verse labels unchanged (suffix mismatch — use full publish to renumber).`
+              : summary.orderOnly > 0
+                ? `Updated ${summary.labelsUpdated} label(s) and sort order for ${summary.orderOnly} row(s) where the verse number could not change.`
+                : `Updated ${summary.labelsUpdated} ${structureConfigRef.current.leafName} label(s) in Strapi.`
             : "No linked CMS rows in this draft needed updating.",
       });
     } catch (e: unknown) {

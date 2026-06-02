@@ -480,7 +480,7 @@ export function buildMantraDisplayTitle(pfx: string, orderNum: number, ctx: Mant
 }
 
 /** Drop duplicate portal rows (same id or same Strapi documentId) before renumbering. */
-function dedupeMantrasInDisplayOrder<T extends { id: string; strapiDocumentId?: string }>(
+export function dedupeMantrasInDisplayOrder<T extends { id: string; strapiDocumentId?: string }>(
   manthrasInDisplayOrder: T[],
 ): T[] {
   const seenIds = new Set<string>();
@@ -545,6 +545,42 @@ export function reindexMantraOrdersPreservingTitles<T extends { id: string; titl
     ...m,
     order: idx + 1,
   }));
+}
+
+/**
+ * Persist/save prep: sort sections, fix contiguous `order`, dedupe linked rows — **without**
+ * rewriting ShlokaManthraNumber titles. Verse labels change only via explicit renumber or
+ * "Sync verse numbers to CMS".
+ */
+export function prepareHierarchyForSave<T extends SyncAdhyayaNode>(
+  list: T[],
+  cfg: GranthaStructureConfig,
+): T[] {
+  const levelThree = !!cfg.levelThreeEnabled;
+
+  return sortNodesByOrder(list).map((a, ai) => {
+    const khandas = sortNodesByOrder(a.khandas ?? []).map((k, ki) => {
+      if (levelThree && (k.padas ?? []).length > 0) {
+        const padas = sortNodesByOrder(k.padas ?? []).map((p, pi) => ({
+          ...p,
+          order: pi + 1,
+          manthras: reindexMantraOrdersPreservingTitles(
+            dedupeMantrasInDisplayOrder(sortMantrasByDisplayOrder(p.manthras ?? [])),
+          ),
+        }));
+        return { ...k, order: ki + 1, padas, manthras: [] as SyncManthraNode[] };
+      }
+      return {
+        ...k,
+        order: ki + 1,
+        padas: [] as SyncPadaNode[],
+        manthras: reindexMantraOrdersPreservingTitles(
+          dedupeMantrasInDisplayOrder(sortMantrasByDisplayOrder(k.manthras ?? [])),
+        ),
+      };
+    });
+    return { ...a, order: ai + 1, khandas } as T;
+  });
 }
 
 /** Assign `order` 1…n in the given list sequence (use after splice insert/delete before normalize). */

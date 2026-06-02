@@ -22,6 +22,7 @@ import {
   syncPortalSectionTitle,
   editorOrdinalLabel,
   reindexMantraOrdersPreservingTitles,
+  prepareHierarchyForSave,
   assignContiguousMantraOrders,
   sortNodesByOrder,
   portalMantraTitleForLeaf,
@@ -283,6 +284,40 @@ assert.deepEqual(
     { id: "a", order: 2, title: "Shloka 1.1.99" },
   ],
 );
+
+// prepareHierarchyForSave: insert order changes must not rewrite verse labels
+const afterInsertSave = prepareHierarchyForSave(
+  [
+    {
+      id: "a1",
+      title: "Prathama Adhyaya",
+      order: 1,
+      expanded: true,
+      khandas: [
+        {
+          id: "k1",
+          title: "Prathama Khanda",
+          order: 1,
+          expanded: true,
+          padas: [],
+          manthras: [
+            { id: "m1", title: "Shloka 1.1.268", order: 1 },
+            { id: "new", title: "", order: 2, _isNewLocal: true },
+            { id: "m2", title: "Shloka 1.1.269", order: 3 },
+          ],
+        },
+      ],
+    },
+  ],
+  { levelTwoEnabled: true, levelThreeEnabled: false, leafName: "Shloka" },
+);
+const savedMantras = afterInsertSave[0].khandas[0].manthras;
+assert.equal(savedMantras[0].title, "Shloka 1.1.268");
+assert.equal(savedMantras[1].title, "");
+assert.equal(savedMantras[2].title, "Shloka 1.1.269");
+assert.equal(savedMantras[0].order, 1);
+assert.equal(savedMantras[1].order, 2);
+assert.equal(savedMantras[2].order, 3);
 
 const flatTree = normalizeEditorHierarchy(
   [

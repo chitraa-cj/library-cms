@@ -25,6 +25,7 @@ export type ManthraSnap = {
   title: string;
   order: number;
   strapiDocumentId?: string;
+  _isNewLocal?: boolean;
 };
 
 export type SnapshotAdhyaya = {
@@ -340,6 +341,7 @@ export async function pushMantraSectionStructureToStrapi(
   padaId: string | undefined,
   cfg: GranthaStructureConfig,
   ctx?: MantraSectionResolveContext,
+  opts?: { onlyManthraIds?: string[] },
 ): Promise<Array<{ manthraId: string; strapiDocumentId: string }>> {
   const sectionDocumentId = resolveMantraSectionStrapiDocumentId(
     snapshot,
@@ -354,6 +356,7 @@ export async function pushMantraSectionStructureToStrapi(
   const sorted = getSortedMantrasFromSnapshot(snapshot, adhyayaId, khandaId, padaId, cfg);
   const patches: Array<{ manthraId: string; strapiDocumentId: string }> = [];
   const resolved = new Map<string, string>();
+  const onlySet = opts?.onlyManthraIds?.length ? new Set(opts.onlyManthraIds) : null;
 
   for (let i = 0; i < sorted.length; i++) {
     const m = sorted[i];
@@ -362,6 +365,9 @@ export async function pushMantraSectionStructureToStrapi(
       resolved.set(m.id, m.strapiDocumentId!);
       continue;
     }
+
+    const isExplicitTarget = onlySet ? onlySet.has(m.id) : !!m._isNewLocal;
+    if (!isExplicitTarget) continue;
 
     const prevWithStrapi = sorted
       .slice(0, i)
@@ -506,6 +512,7 @@ export async function syncMantraSectionAfterStructuralEdits(
   cfg: GranthaStructureConfig,
   deleteDocumentIds: string[],
   sectionCtx?: MantraSectionResolveContext,
+  opts?: { onlyManthraIds?: string[] },
 ): Promise<{
   patches: Array<{ manthraId: string; strapiDocumentId: string }>;
   failedDeleteIds: string[];
@@ -520,6 +527,7 @@ export async function syncMantraSectionAfterStructuralEdits(
     padaId,
     cfg,
     sectionCtx,
+    opts,
   );
   let snapForSort = snapshot;
   if (patches.length > 0) {
@@ -531,16 +539,16 @@ export async function syncMantraSectionAfterStructuralEdits(
       strapiDocumentId: p.strapiDocumentId,
     })));
   }
-  const sortKeysUpdated = await syncMantraSectionSortKeysToStrapi(
-    snapForSort,
-    adhyayaId,
-    khandaId,
-    padaId,
-    cfg,
-  );
-  // After insert/delete the portal reindexes verse titles — only sync fractional sort keys here.
-  // Pushing new ShlokaManthraNumber labels automatically would fail integrity when Strapi still
-  // has the old verse numbers (497+ rows). Use "Sync verse numbers to CMS" when intentional.
+  // insert-between positions a single new row; skip whole-section sort-key PUTs on + insert.
+  const sortKeysUpdated = opts?.onlyManthraIds?.length
+    ? 0
+    : await syncMantraSectionSortKeysToStrapi(
+        snapForSort,
+        adhyayaId,
+        khandaId,
+        padaId,
+        cfg,
+      );
   return { patches, failedDeleteIds, sortKeysUpdated, labelsUpdated: 0 };
 }
 
@@ -564,6 +572,7 @@ export async function syncAllPendingNewMantrasToStrapi(
       target.padaId,
       cfg,
       ctx,
+      { onlyManthraIds: sorted.filter((m) => m._isNewLocal).map((m) => m.id) },
     );
     if (patches.length === 0) continue;
 
@@ -574,7 +583,6 @@ export async function syncAllPendingNewMantrasToStrapi(
       snap,
       patches.map((p) => ({ ...target, manthraId: p.manthraId, strapiDocumentId: p.strapiDocumentId })),
     );
-    await syncMantraSectionSortKeysToStrapi(snap, target.adhyayaId, target.khandaId, target.padaId, cfg);
   }
 
   return allPatches;

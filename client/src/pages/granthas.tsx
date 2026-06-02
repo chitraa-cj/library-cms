@@ -78,6 +78,7 @@ import {
   collectPublishedManthraDocIdsFromKhanda,
   collectPublishedManthraDocIdsFromAdhyaya,
   prepareHierarchyForContentStep,
+  prepareHierarchyForSave,
   normalizeEditorHierarchy,
   editorOrdinalLabel,
   reindexMantraOrdersPreservingTitles,
@@ -115,6 +116,7 @@ import {
   type SnapshotAdhyaya,
 } from "@/lib/grantha-strapi-mantra-sync";
 import { invalidateGranthaCmsCaches, syncGranthaCmsCaches } from "@/lib/strapi-cache-sync";
+import { resolveMantraOwnerSectionDocId } from "@shared/grantha-mantra-section-resolve";
 import { usePortalVocabulary } from "@/hooks/use-portal-vocabulary";
 import OtherTranslationsHermex from "@/components/other-translations-hermex";
 import {
@@ -236,10 +238,17 @@ function ordinal(n: number) {
   return editorOrdinalLabel(n);
 }
 
-/** After structural edits: sort siblings, contiguous section `order`, reindex all mantra titles. */
+/** After structural section edits: sort siblings, reindex all mantra titles from position. */
 function withNormalizedHierarchy(nodes: AdhyayaNode[], cfg: GranthaStructureConfig): AdhyayaNode[] {
   return sanitizeHierarchyPortalMeta(
     normalizeEditorHierarchy(nodes, cfg) as AdhyayaNode[],
+  );
+}
+
+/** Save/sync prep: fix order and dedupe without rewriting verse labels. */
+function hierarchyForSave(nodes: AdhyayaNode[], cfg: GranthaStructureConfig): AdhyayaNode[] {
+  return sanitizeHierarchyPortalMeta(
+    prepareHierarchyForSave(nodes, cfg) as AdhyayaNode[],
   );
 }
 
@@ -631,7 +640,6 @@ function reconstructHierarchyFromStrapi(sections: any[], leafName = "Mantra"): A
     });
 }
 
-/** Keep only rows for the configured leaf; one row per verse number. */
 function dedupeManthrasForEditor(manthras: ManthraNode[], leaf: string): ManthraNode[] {
   const configured = (leaf || "Mantra").trim();
   const bySuffix = new Map<string, ManthraNode>();
@@ -649,6 +657,38 @@ function dedupeManthrasForEditor(manthras: ManthraNode[], leaf: string): Manthra
     if (!prev || score(m) > score(prev)) bySuffix.set(key, m);
   }
   return sortNodesByOrder([...bySuffix.values()]);
+}
+
+/**
+ * Vivekachudamani-style granthas store mantras under `_default` in the portal but on a real
+ * khanda section in Strapi. enrichHierarchy used to also supplement that khanda — duplicating
+ * the entire mantra list. Drop the redundant named khanda when `_default` already owns that section.
+ */
+function dropKhandasDuplicatingDefaultMantraSection(
+  hier: AdhyayaNode[],
+  cfg: GranthaStructureConfig,
+  childrenByParentDocId: Map<string, { documentId: string; title?: string }[]>,
+): AdhyayaNode[] {
+  const ctx: MantraSectionResolveContext = { childrenByParentDocId };
+  const snap = hier as SnapshotAdhyaya[];
+  return hier.map((a) => {
+    const defaultK = a.khandas?.find((k) => k.title === "_default");
+    if (!defaultK || (defaultK.manthras?.length ?? 0) === 0) return a;
+    const ownerDocId = resolveMantraOwnerSectionDocId(
+      snap,
+      a.id,
+      defaultK.id,
+      undefined,
+      cfg,
+      ctx,
+    );
+    if (!ownerDocId) return a;
+    const khandas = (a.khandas ?? []).filter((k) => {
+      if (k.title === "_default") return true;
+      return k.documentId !== ownerDocId;
+    });
+    return khandas.length === (a.khandas ?? []).length ? a : { ...a, khandas };
+  });
 }
 
 function hasManthraContent(m: ManthraNode): boolean {
@@ -2342,7 +2382,7 @@ export default function GranthasPage() {
       }
       setStructureConfig(effectiveStructureConfig);
       setAdhyayas(
-        withNormalizedHierarchy(prepEarly.hierarchy as AdhyayaNode[], effectiveStructureConfig),
+        hierarchyForSave(prepEarly.hierarchy as AdhyayaNode[], effectiveStructureConfig),
       );
       setStep(1);
       setView("form");
@@ -2681,10 +2721,25 @@ export default function GranthasPage() {
             // ALL three rendered Tritiya Mundaka's "Mantra 3.1.X" manthras).
             let strapiMantrasForKhanda: { title: string; docId: string; order: number }[];
             if (k.title === "_default") {
-              // Flat section: the "_default" synthetic khanda maps to the adhyaya itself.
-              // Prefer docId-based lookup (survives title renames), fall back to title.
-              const kDocId: string | undefined = (a as any).documentId;
-              strapiMantrasForKhanda = kDocId ? (strapiMantrasBySecDocId.get(kDocId) ?? []) : [];
+              // Flat portal khanda — mantras may live on a child Strapi section (Vivekachudamani et al.).
+              const partialSnap = [{ ...a, khandas: a.khandas }] as SnapshotAdhyaya[];
+              const sectionCtx = { childrenByParentDocId: strapiChildSectionsByParentDocId };
+              const resolvedSecId = resolveMantraOwnerSectionDocId(
+                partialSnap,
+                a.id,
+                k.id,
+                undefined,
+                effectiveStructureConfig,
+                sectionCtx,
+              );
+              const adhyayaDocId: string | undefined = (a as any).documentId;
+              if (resolvedSecId) {
+                strapiMantrasForKhanda = strapiMantrasBySecDocId.get(resolvedSecId) ?? [];
+              } else if (adhyayaDocId) {
+                strapiMantrasForKhanda = strapiMantrasBySecDocId.get(adhyayaDocId) ?? [];
+              } else {
+                strapiMantrasForKhanda = [];
+              }
             } else if (adhyaDocId) {
               // Real khanda: find this khanda's specific Strapi section.
               // Try documentId first (most reliable — survives title changes in Strapi),
@@ -2915,6 +2970,7 @@ export default function GranthasPage() {
           const strapiAdhyaya = strapiSectionByTitle.get(a.title)
             ?? (aDraftDocId ? fetchedSections.find((s: any) => s.documentId === aDraftDocId) : undefined);
           const supplementKhandas: KhandaNode[] = [];
+          const defaultKhandaForSupplement = enrichedKhandas.find((k) => k.title === "_default");
           if (strapiAdhyaya?.documentId) {
             const strapiChildren = (strapiChildSectionsByParentDocId.get(strapiAdhyaya.documentId) ?? [])
               .sort((x: any, y: any) => (x.order ?? 0) - (y.order ?? 0));
@@ -2924,6 +2980,23 @@ export default function GranthasPage() {
               if (sec.documentId && existingKhandaDocIds.has(sec.documentId)) continue;
               // Skip explicitly deleted sections — do not re-add them from Strapi
               if (sec.documentId && deletedDocIdsSet.has(sec.documentId)) continue;
+              // _default already holds mantras for this Strapi khanda — do not duplicate the tree.
+              if (
+                defaultKhandaForSupplement &&
+                (defaultKhandaForSupplement.manthras?.length ?? 0) > 0 &&
+                sec.documentId
+              ) {
+                const partialSnap = [{ ...a, khandas: enrichedKhandas }] as SnapshotAdhyaya[];
+                const ownerSec = resolveMantraOwnerSectionDocId(
+                  partialSnap,
+                  a.id,
+                  defaultKhandaForSupplement.id,
+                  undefined,
+                  effectiveStructureConfig,
+                  { childrenByParentDocId: strapiChildSectionsByParentDocId },
+                );
+                if (ownerSec === sec.documentId) continue;
+              }
               // Check if this section has level-3 sub-sections (e.g. Adhikaranams under a Pada).
               const secGrandChildren = sec.documentId
                 ? (strapiChildSectionsByParentDocId.get(sec.documentId) ?? [])
@@ -3074,7 +3147,13 @@ export default function GranthasPage() {
         ? [...enrichedHier2, ...missingAdhyayas].sort((a, b) => (a.order ?? 0) - (b.order ?? 0))
         : enrichedHier2;
 
-      const prunedHier2 = stripOrphanPortalMantrasFromHierarchy(finalHier2, seenStrapiMantraDocIds);
+      const collapsedHier2 = dropKhandasDuplicatingDefaultMantraSection(
+        finalHier2,
+        effectiveStructureConfig,
+        strapiChildSectionsByParentDocId,
+      );
+
+      const prunedHier2 = stripOrphanPortalMantrasFromHierarchy(collapsedHier2, seenStrapiMantraDocIds);
       const prep = prepareHierarchyForContentStep(prunedHier2, effectiveStructureConfig);
       if (!isCurrentOpenEditLoad(openEditLoadGen)) {
         return;
@@ -3083,7 +3162,7 @@ export default function GranthasPage() {
         setDeletedStrapiSectionDocIds((prev) => Array.from(new Set([...prev, ...prep.sectionDocIdsToMarkDeleted])));
       }
       setStructureConfig(effectiveStructureConfig);
-      const normalizedOpen = withNormalizedHierarchy(prep.hierarchy as AdhyayaNode[], effectiveStructureConfig);
+      const normalizedOpen = hierarchyForSave(prep.hierarchy as AdhyayaNode[], effectiveStructureConfig);
       setAdhyayas(normalizedOpen);
       bindGranthaMantraPrefetchContext();
       prefetchGranthaMantrasFromHierarchy(normalizedOpen);
@@ -3927,11 +4006,28 @@ export default function GranthasPage() {
       const cfg = structureConfigRef.current;
       const toDelete = [...pendingMantraDeletesRef.current];
       pendingMantraDeletesRef.current.clear();
-      const draftId = editingDraftId;
+      const syncOpts = opts;
 
       mantraSyncChainRef.current = mantraSyncChainRef.current
         .then(async () => {
           if (publishInProgressRef.current) return;
+
+          let draftId = editingDraftId;
+          if (!draftId && isPublishedStrapiDocId(granthaDoc)) {
+            try {
+              const payload = buildSavePayload();
+              const saved = await saveDraft.mutateAsync({
+                title: formDataRef.current.GranthaName || payload.GranthaName || "Grantha",
+                data: payload,
+                strapiDocumentId: granthaDoc,
+              });
+              draftId = saved?.id ?? null;
+              if (draftId) setEditingDraftId(draftId);
+            } catch {
+              return;
+            }
+          }
+
           if (draftId && isPublishedStrapiDocId(granthaDoc)) {
             if (toDelete.length > 0) {
               const failedDeleteIds = await strapiDeleteMantrasBestEffort(toDelete);
@@ -3946,7 +4042,7 @@ export default function GranthasPage() {
               khandaId: ctx.khandaId,
               padaId: ctx.padaId,
               hierarchy: snap,
-              onlyManthraIds: opts?.onlyManthraIds,
+              onlyManthraIds: syncOpts?.onlyManthraIds,
             });
             const patches = (result.patches ?? []).map((p) => ({
               manthraId: p.manthraId,
@@ -3979,6 +4075,7 @@ export default function GranthasPage() {
               cfg,
               toDelete,
               strapiSectionIndexRef.current,
+              syncOpts,
             );
           if (failedDeleteIds.length > 0) {
             setDeletedStrapiManthraDocIds((prev) =>
@@ -4190,49 +4287,64 @@ export default function GranthasPage() {
     });
   }
 
+  function spliceMantraIntoKhanda(
+    prev: AdhyayaNode[],
+    adhyayaId: string,
+    khandaId: string,
+    padaId: string | undefined,
+    newManthra: ManthraNode,
+    afterManthraId?: string,
+  ): AdhyayaNode[] {
+    const cfg = structureConfigRef.current;
+    return prev.map((a) => {
+      if (a.id !== adhyayaId) return a;
+      return {
+        ...a,
+        khandas: a.khandas.map((k) => {
+          if (k.id !== khandaId) return k;
+
+          const mergeIntoList = (list: ManthraNode[]) => {
+            const sorted = sortMantrasByDisplayOrder(list);
+            if (afterManthraId) {
+              const j = sorted.findIndex((m) => m.id === afterManthraId);
+              if (j < 0) return sorted;
+              return assignContiguousMantraOrders([
+                ...sorted.slice(0, j + 1),
+                newManthra,
+                ...sorted.slice(j + 1),
+              ]);
+            }
+            return assignContiguousMantraOrders([...sorted, newManthra]);
+          };
+
+          if (cfg.levelThreeEnabled && padaId) {
+            return {
+              ...k,
+              padas: (k.padas ?? []).map((p) =>
+                p.id === padaId ? { ...p, manthras: mergeIntoList(p.manthras) } : p,
+              ),
+            };
+          }
+          return { ...k, manthras: mergeIntoList(k.manthras) };
+        }),
+      };
+    });
+  }
+
   function addManthra(adhyayaId: string, khandaId: string, padaId?: string) {
     const newManthraId = uid();
     const adhyayaTitle = adhyayas.find((a) => a.id === adhyayaId)?.title || "";
     track("manthra_added", { grantha_name: formData.GranthaName, adhyaya: adhyayaTitle });
+    markRequiresFullPublish();
     setAdhyayas((prev) => {
-      const cfg = structureConfigRef.current;
-      const next = withNormalizedHierarchy(
-        prev.map((a) => {
-          if (a.id !== adhyayaId) return a;
-          return {
-            ...a,
-            khandas: a.khandas.map((k) => {
-              if (k.id !== khandaId) return k;
-              const newManthra: ManthraNode = {
-                id: newManthraId,
-                title: "",
-                order: 0,
-                _isNewLocal: true,
-                Teekas: teekas.map((t) => ({ TeekaName: t.TeekaName, TeekaAuthor: t.TeekaAuthor })),
-              };
-              if (cfg.levelThreeEnabled && padaId) {
-                return {
-                  ...k,
-                  padas: (k.padas ?? []).map((p) => {
-                    if (p.id !== padaId) return p;
-                    const merged = assignContiguousMantraOrders([
-                      ...sortMantrasByDisplayOrder(p.manthras),
-                      newManthra,
-                    ]);
-                    return { ...p, manthras: merged };
-                  }),
-                };
-              }
-              const merged = assignContiguousMantraOrders([
-                ...sortMantrasByDisplayOrder(k.manthras),
-                newManthra,
-              ]);
-              return { ...k, manthras: merged };
-            }),
-          };
-        }),
-        cfg,
-      );
+      const newManthra: ManthraNode = {
+        id: newManthraId,
+        title: "",
+        order: 0,
+        _isNewLocal: true,
+        Teekas: teekas.map((t) => ({ TeekaName: t.TeekaName, TeekaAuthor: t.TeekaAuthor })),
+      };
+      const next = spliceMantraIntoKhanda(prev, adhyayaId, khandaId, padaId, newManthra);
       adhyayasRef.current = next;
       scheduleStrapiMantraSectionIdentitySync(next, { adhyayaId, khandaId, padaId }, {
         onlyManthraIds: [newManthraId],
@@ -4243,8 +4355,8 @@ export default function GranthasPage() {
   }
 
   /**
-   * Insert a single blank manthra immediately after `afterManthraId`.
-   * Full-tree normalization runs so every sibling `order` and mantra label stays consistent.
+   * Insert a blank manthra after `afterManthraId`. Updates portal **order** only — verse labels
+   * stay unchanged until "Sync verse numbers to CMS" or publish-with-renumber.
    */
   function insertManthraAfter(
     adhyayaId: string,
@@ -4253,61 +4365,22 @@ export default function GranthasPage() {
     padaId?: string,
   ) {
     const newManthraId = uid();
+    markRequiresFullPublish();
     setAdhyayas((prev) => {
-      const cfg = structureConfigRef.current;
-      const next = withNormalizedHierarchy(
-        prev.map((a) => {
-          if (a.id !== adhyayaId) return a;
-          return {
-            ...a,
-            khandas: a.khandas.map((k) => {
-              if (k.id !== khandaId) return k;
-
-              if (cfg.levelThreeEnabled && padaId) {
-                return {
-                  ...k,
-                  padas: (k.padas ?? []).map((p) => {
-                    if (p.id !== padaId) return p;
-                    const sorted = sortMantrasByDisplayOrder(p.manthras);
-                    const j = sorted.findIndex((m) => m.id === afterManthraId);
-                    if (j < 0) return p;
-                    const newManthra: ManthraNode = {
-                      id: newManthraId,
-                      title: "",
-                      order: 0,
-                      _isNewLocal: true,
-                      Teekas: teekas.map((t) => ({ TeekaName: t.TeekaName, TeekaAuthor: t.TeekaAuthor })),
-                    };
-                    const merged = assignContiguousMantraOrders([
-                      ...sorted.slice(0, j + 1),
-                      newManthra,
-                      ...sorted.slice(j + 1),
-                    ]);
-                    return { ...p, manthras: merged };
-                  }),
-                };
-              }
-
-              const sorted = sortMantrasByDisplayOrder(k.manthras);
-              const j = sorted.findIndex((m) => m.id === afterManthraId);
-              if (j < 0) return k;
-              const newManthra: ManthraNode = {
-                id: newManthraId,
-                title: "",
-                order: 0,
-                _isNewLocal: true,
-                Teekas: teekas.map((t) => ({ TeekaName: t.TeekaName, TeekaAuthor: t.TeekaAuthor })),
-              };
-              const merged = assignContiguousMantraOrders([
-                ...sorted.slice(0, j + 1),
-                newManthra,
-                ...sorted.slice(j + 1),
-              ]);
-              return { ...k, manthras: merged };
-            }),
-          };
-        }),
-        cfg,
+      const newManthra: ManthraNode = {
+        id: newManthraId,
+        title: "",
+        order: 0,
+        _isNewLocal: true,
+        Teekas: teekas.map((t) => ({ TeekaName: t.TeekaName, TeekaAuthor: t.TeekaAuthor })),
+      };
+      const next = spliceMantraIntoKhanda(
+        prev,
+        adhyayaId,
+        khandaId,
+        padaId,
+        newManthra,
+        afterManthraId,
       );
       adhyayasRef.current = next;
       scheduleStrapiMantraSectionIdentitySync(next, { adhyayaId, khandaId, padaId }, {
@@ -4622,8 +4695,15 @@ export default function GranthasPage() {
   function buildSavePayload(): Record<string, any> {
     const cfg = structureConfigRef.current ?? structureConfig;
     const tree = adhyayasRef.current.length > 0 ? adhyayasRef.current : adhyayas;
-    const normalizedHierarchy = withNormalizedHierarchy(tree, cfg);
-    adhyayasRef.current = normalizedHierarchy;
+    let hierarchyForPayload = hierarchyForSave(tree as AdhyayaNode[], cfg);
+    if (strapiSectionIndexRef.current.childrenByParentDocId?.size) {
+      hierarchyForPayload = dropKhandasDuplicatingDefaultMantraSection(
+        hierarchyForPayload,
+        cfg,
+        strapiSectionIndexRef.current.childrenByParentDocId!,
+      );
+    }
+    adhyayasRef.current = hierarchyForPayload;
 
     const payload: Record<string, any> = {
       GranthaName: formData.GranthaName,
@@ -4634,7 +4714,7 @@ export default function GranthasPage() {
       otherTranslations,
       granthaNameTranslations,
       structureConfig: cfg,
-      hierarchy: normalizedHierarchy,
+      hierarchy: hierarchyForPayload,
       deletedStrapiSectionDocIds: deletedStrapiSectionDocIds.length > 0 ? deletedStrapiSectionDocIds : undefined,
       deletedStrapiManthraDocIds: deletedStrapiManthraDocIds.length > 0 ? deletedStrapiManthraDocIds : undefined,
       deletedStrapiTeekaDocIds: deletedStrapiTeekaDocIds.length > 0 ? deletedStrapiTeekaDocIds : undefined,

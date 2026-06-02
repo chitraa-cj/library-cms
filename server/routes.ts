@@ -2695,7 +2695,9 @@ async function publishGranthaWithHierarchy(
   const granthaNameForIntegrity = String(granthaPayload.GranthaName || draft.title || "").trim();
 
   if (Array.isArray(hierarchy)) {
-    applyHierarchyRepairInPlace(hierarchy, structureConfig, configuredLeaf);
+    applyHierarchyRepairInPlace(hierarchy, structureConfig, configuredLeaf, {
+      renumberVerseLabels: !!allowRenumber,
+    });
   }
 
   if (isPublishIntegrityEnabled() && Array.isArray(hierarchy)) {

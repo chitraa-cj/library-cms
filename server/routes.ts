@@ -42,6 +42,7 @@ import {
   sectionSuffixCollision,
 } from "@shared/grantha-publish-integrity";
 import { readClientBuildId } from "./build-info";
+import { applyHierarchyRepairInPlace } from "./grantha-hierarchy-repair";
 
 /** Compress a snapshot payload for DB storage (gzip + base64 wrapper). */
 function compressBackupData(data: any): any {
@@ -2692,7 +2693,7 @@ async function publishGranthaWithHierarchy(
   const granthaNameForIntegrity = String(granthaPayload.GranthaName || draft.title || "").trim();
 
   if (Array.isArray(hierarchy)) {
-    normalizeHierarchyMantraLeafTitles(hierarchy, configuredLeaf);
+    applyHierarchyRepairInPlace(hierarchy, structureConfig, configuredLeaf);
   }
 
   if (isPublishIntegrityEnabled() && Array.isArray(hierarchy)) {
@@ -4227,7 +4228,10 @@ export async function registerRoutes(
       const granthaName = String(data?.GranthaName || draft.title || "").trim();
 
       if (Array.isArray(hierarchy)) {
-        normalizeHierarchyMantraLeafTitles(hierarchy, configuredLeaf);
+        const repaired = applyHierarchyRepairInPlace(hierarchy, structureConfig, configuredLeaf);
+        if (repaired) {
+          await storage.updateDraft(id, user.id, { data: { ...data, hierarchy } });
+        }
       }
 
       const violations = isPublishIntegrityEnabled()

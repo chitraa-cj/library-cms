@@ -479,11 +479,29 @@ export function buildMantraDisplayTitle(pfx: string, orderNum: number, ctx: Mant
   return `${pfx} ${ctx.aIdx}.${orderNum}`;
 }
 
+/** Drop duplicate portal rows (same id or same Strapi documentId) before renumbering. */
+function dedupeMantrasInDisplayOrder<T extends { id: string; strapiDocumentId?: string }>(
+  manthrasInDisplayOrder: T[],
+): T[] {
+  const seenIds = new Set<string>();
+  const seenDocIds = new Set<string>();
+  const out: T[] = [];
+  for (const m of manthrasInDisplayOrder) {
+    if (m.id && seenIds.has(m.id)) continue;
+    const docId = (m.strapiDocumentId ?? "").trim();
+    if (docId.length >= STRAPI_DOCUMENT_ID_MIN_LENGTH && seenDocIds.has(docId)) continue;
+    if (m.id) seenIds.add(m.id);
+    if (docId.length >= STRAPI_DOCUMENT_ID_MIN_LENGTH) seenDocIds.add(docId);
+    out.push(m);
+  }
+  return out;
+}
+
 function assignContiguousOrderAndTitles<T extends { id: string; title: string; order: number }>(
   manthrasInDisplayOrder: T[],
   ctx: MantraTitleCtx,
 ): T[] {
-  return manthrasInDisplayOrder.map((m, idx) => {
+  return dedupeMantrasInDisplayOrder(manthrasInDisplayOrder).map((m, idx) => {
     const orderNum = idx + 1;
     const pfx = titlePrefixFromMantraTitle(m.title, ctx.leaf);
     return {

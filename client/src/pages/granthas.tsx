@@ -4067,6 +4067,7 @@ export default function GranthasPage() {
         }),
         cfg,
       );
+      adhyayasRef.current = next;
       scheduleStrapiMantraSectionIdentitySync(next, { adhyayaId, khandaId, padaId });
       return next;
     });
@@ -4140,6 +4141,7 @@ export default function GranthasPage() {
         }),
         cfg,
       );
+      adhyayasRef.current = next;
       scheduleStrapiMantraSectionIdentitySync(next, { adhyayaId, khandaId, padaId });
       return next;
     });
@@ -4369,6 +4371,11 @@ export default function GranthasPage() {
   }
 
   function buildSavePayload(): Record<string, any> {
+    const cfg = structureConfigRef.current ?? structureConfig;
+    const tree = adhyayasRef.current.length > 0 ? adhyayasRef.current : adhyayas;
+    const normalizedHierarchy = withNormalizedHierarchy(tree, cfg);
+    adhyayasRef.current = normalizedHierarchy;
+
     const payload: Record<string, any> = {
       GranthaName: formData.GranthaName,
       GranthaType: formData.GranthaType || undefined,
@@ -4377,8 +4384,8 @@ export default function GranthasPage() {
       teekas,
       otherTranslations,
       granthaNameTranslations,
-      structureConfig,
-      hierarchy: adhyayas,
+      structureConfig: cfg,
+      hierarchy: normalizedHierarchy,
       deletedStrapiSectionDocIds: deletedStrapiSectionDocIds.length > 0 ? deletedStrapiSectionDocIds : undefined,
       deletedStrapiManthraDocIds: deletedStrapiManthraDocIds.length > 0 ? deletedStrapiManthraDocIds : undefined,
       deletedStrapiTeekaDocIds: deletedStrapiTeekaDocIds.length > 0 ? deletedStrapiTeekaDocIds : undefined,
@@ -4434,6 +4441,7 @@ export default function GranthasPage() {
       return;
     }
     const payload = buildSavePayload();
+    setAdhyayas(payload.hierarchy as AdhyayaNode[]);
     const strapiDocId =
       editingItem && !editingItem._isDraft
         ? editingItem.documentId
@@ -4470,6 +4478,7 @@ export default function GranthasPage() {
       return;
     }
     const payload = buildSavePayload();
+    setAdhyayas(payload.hierarchy as AdhyayaNode[]);
     const strapiDocId =
       editingItem && !editingItem._isDraft
         ? editingItem.documentId

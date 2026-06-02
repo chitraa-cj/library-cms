@@ -117,6 +117,7 @@ import {
   strapiDeleteMantrasThenSections,
   deleteStrapiTeekaBestEffort,
   syncStrapiSectionOrderAndTitles,
+  stripOrphanedSectionDocIdsFromAdhyayas,
   collectAllSectionOrderSyncRowsFromHierarchy,
 } from "@/lib/grantha-strapi-section-sync";
 import {
@@ -3956,10 +3957,26 @@ export default function GranthasPage() {
     force = false,
   ): Promise<void> {
     if (!force && !editingGranthaStrapiDocumentId()) return;
-    await syncStrapiSectionOrderAndTitles(
+    const { updated, notFoundDocumentIds } = await syncStrapiSectionOrderAndTitles(
       collectAllSectionOrderSyncRowsFromHierarchy(snapshot, cfg),
     );
-    invalidateGranthaCmsCaches(queryClient);
+    if (notFoundDocumentIds.length > 0) {
+      const cleaned = stripOrphanedSectionDocIdsFromAdhyayas(snapshot, notFoundDocumentIds);
+      setAdhyayas(cleaned);
+      console.warn(
+        `[grantha] Cleared ${notFoundDocumentIds.length} stale section link(s) missing in Strapi`,
+        notFoundDocumentIds,
+      );
+      toast({
+        title: "Some CMS section links were stale",
+        description:
+          `${notFoundDocumentIds.length} section(s) no longer exist in Strapi and were unlinked in this draft. ` +
+            "Use Save & Publish to recreate structure if needed.",
+      });
+    }
+    if (updated > 0) {
+      invalidateGranthaCmsCaches(queryClient);
+    }
   }
 
   /** Debounced: mirror full section tree order+titles to Strapi (e.g. after renaming sections). */

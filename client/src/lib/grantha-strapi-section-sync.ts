@@ -54,23 +54,72 @@ export function effectiveStrapiSectionTypeFromPortalName(name: string): string |
 
 export type SectionOrderSyncRow = { documentId: string; order: number; title: string };
 
+export type SectionOrderSyncResult = {
+  updated: number;
+  /** Section documentIds that no longer exist in Strapi (stale draft links). */
+  notFoundDocumentIds: string[];
+};
+
 /**
  * Push portal `order` + `title` to Strapi for every sibling section that already has a
  * `documentId` — required when inserting between existing sections so Strapi ordering
  * matches the editor (contiguous orders after normalization).
+ *
+ * 404 responses are treated as stale CMS links (section deleted in Strapi) and do not fail
+ * the whole sync — callers should clear those documentIds from the draft hierarchy.
  */
-export async function syncStrapiSectionOrderAndTitles(rows: SectionOrderSyncRow[]): Promise<void> {
+export async function syncStrapiSectionOrderAndTitles(
+  rows: SectionOrderSyncRow[],
+): Promise<SectionOrderSyncResult> {
   const valid = rows.filter((r) => isPublishedStrapiDocId(r.documentId));
+  const notFoundDocumentIds: string[] = [];
+  let updated = 0;
   const CHUNK = 5;
+
   for (let i = 0; i < valid.length; i += CHUNK) {
     await Promise.all(
-      valid.slice(i, i + CHUNK).map((r) =>
-        apiRequest("PUT", `/api/strapi/sections/${r.documentId}`, {
-          data: { order: r.order, title: r.title.trim() },
-        }),
-      ),
+      valid.slice(i, i + CHUNK).map(async (r) => {
+        try {
+          await apiRequest("PUT", `/api/strapi/sections/${r.documentId}`, {
+            data: { order: r.order, title: r.title.trim() },
+          });
+          updated += 1;
+        } catch (e: unknown) {
+          if (e instanceof ApiError && e.status === 404) {
+            notFoundDocumentIds.push(r.documentId);
+            return;
+          }
+          throw e;
+        }
+      }),
     );
   }
+
+  return { updated, notFoundDocumentIds };
+}
+
+/** Remove Strapi section links that returned 404 so the editor stops retrying dead PUTs. */
+export function stripOrphanedSectionDocIdsFromAdhyayas<T extends SnapshotAdhyaya>(
+  adhyayas: T[],
+  orphanedDocIds: string[],
+): T[] {
+  if (orphanedDocIds.length === 0) return adhyayas;
+  const gone = new Set(orphanedDocIds);
+  const strip = (docId: string | undefined) =>
+    docId && gone.has(docId) ? undefined : docId;
+
+  return adhyayas.map((a) => ({
+    ...a,
+    documentId: strip(a.documentId),
+    khandas: (a.khandas ?? []).map((k) => ({
+      ...k,
+      documentId: strip(k.documentId),
+      padas: (k.padas ?? []).map((p) => ({
+        ...p,
+        documentId: strip(p.documentId),
+      })),
+    })),
+  }));
 }
 
 export function l1SectionSyncRowsFromAdhyayas(

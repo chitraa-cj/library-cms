@@ -27,11 +27,19 @@ export default function BackupsPage() {
     refetchInterval: polling ? 5000 : false,
   });
 
-  const { data: statusData } = useQuery<{ inProgress: boolean }>({
+  const { data: statusData } = useQuery<{ inProgress: boolean; lastError?: string | null }>({
     queryKey: ["/api/admin/backup/status"],
     refetchInterval: polling ? 5000 : false,
-    enabled: polling,
+    enabled: polling || isAdmin,
   });
+
+  // Resume polling after refresh if a snapshot is still running server-side.
+  useEffect(() => {
+    if (statusData?.inProgress && !polling) {
+      setPrevCount((prev) => (prev === null ? backups.length : prev));
+      setPolling(true);
+    }
+  }, [statusData?.inProgress]);
 
   // Stop polling once the server signals done AND the new backup appears in the list.
   useEffect(() => {
@@ -57,34 +65,61 @@ export default function BackupsPage() {
     }
   }, [polling, statusData, backups, prevCount]);
 
+  const startBackupPolling = () => {
+    setPrevCount(backups.length);
+    setPolling(true);
+  };
+
   const createBackupMutation = useMutation({
     mutationFn: async () => {
-      const res = await apiRequest("POST", "/api/admin/backup");
-      return res.json();
+      const res = await fetch("/api/admin/backup", {
+        method: "POST",
+        credentials: "include",
+        cache: "no-store",
+      });
+      const data = await res.json().catch(() => ({}));
+      if (res.status === 409) {
+        return { status: "already_running" as const, message: data.message };
+      }
+      if (!res.ok) {
+        throw new Error(data.message || `Snapshot request failed (${res.status})`);
+      }
+      return data;
     },
     onSuccess: (data) => {
+      if (data?.status === "already_running") {
+        startBackupPolling();
+        toast({
+          title: "Snapshot in progress",
+          description:
+            data.message ||
+            "A snapshot is already running. The list will refresh when it finishes.",
+        });
+        return;
+      }
       if (data?.status === "started") {
-        setPrevCount(backups.length);
-        setPolling(true);
+        startBackupPolling();
         toast({
           title: "Snapshot started",
-          description: "Fetching all content from Strapi — this takes 1–3 minutes. The list will refresh automatically.",
+          description:
+            "Fetching all content from Strapi — this can take several minutes for large libraries. The list will refresh automatically.",
         });
       } else {
         queryClient.invalidateQueries({ queryKey: ["/api/admin/backups"] });
         toast({
           title: "Snapshot created",
-          description: data?.granthaCount != null
-            ? `Backed up ${data.granthaCount} granthas, ${data.sectionCount} sections, ${data.manthraCount} manthras.`
-            : "Snapshot saved.",
+          description:
+            data?.granthaCount != null
+              ? `Backed up ${data.granthaCount} granthas, ${data.sectionCount} sections, ${data.manthraCount} manthras.`
+              : "Snapshot saved.",
         });
       }
     },
     onError: (err: any) => {
       setPolling(false);
       toast({
-        title: "Backup failed",
-        description: err.message || "Could not create snapshot.",
+        title: "Snapshot failed",
+        description: err.message || "Could not start snapshot.",
         variant: "destructive",
       });
     },
@@ -205,8 +240,8 @@ export default function BackupsPage() {
               <div>
                 <p className="text-sm font-medium">Creating snapshot…</p>
                 <p className="text-xs text-muted-foreground">
-                  Fetching all granthas, sections, and manthras from Strapi. This typically takes 1–3 minutes.
-                  The list will update automatically when done.
+                  Fetching all granthas, sections, and manthras from Strapi. Large libraries may take 5–10
+                  minutes. The list will update automatically when done.
                 </p>
               </div>
             </div>

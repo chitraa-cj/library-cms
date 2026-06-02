@@ -1,4 +1,26 @@
-import { type User, type InsertUser, type Draft, type InsertDraft, users, contentDrafts, granthaBackups, type GranthaBackup, type GranthaBackupMeta, granthaLocks, type GranthaLock, publishJobs, type PublishJobRecord, idempotencyKeys, type IdempotencyKeyRecord, publishJobTasks, type PublishJobTaskRecord, publishManthraResolutions } from "@shared/schema";
+import {
+  type User,
+  type InsertUser,
+  type Draft,
+  type InsertDraft,
+  users,
+  contentDrafts,
+  granthaBackups,
+  type GranthaBackup,
+  type GranthaBackupMeta,
+  granthaLocks,
+  type GranthaLock,
+  publishJobs,
+  type PublishJobRecord,
+  idempotencyKeys,
+  type IdempotencyKeyRecord,
+  publishJobTasks,
+  type PublishJobTaskRecord,
+  publishManthraResolutions,
+  cmsPortalVocabulary,
+  type PortalVocabularyCustom,
+  type PortalVocabularyKey,
+} from "@shared/schema";
 import { db } from "./db";
 import { eq, and, desc, sql, inArray, gte, lte, lt } from "drizzle-orm";
 import { discardDraftWithDependencies, getDraftDiscardPlan, type DraftDiscardPlan, type DraftDiscardResult } from "./draft-discard";
@@ -52,6 +74,9 @@ export interface IStorage {
   updatePublishJobTask(taskId: number, patch: Partial<PublishJobTaskRecord>): Promise<PublishJobTaskRecord | null>;
   completePublishJobTask(taskId: number, result?: unknown): Promise<PublishJobTaskRecord | null>;
   failPublishJobTask(taskId: number, error: string): Promise<PublishJobTaskRecord | null>;
+  getPortalVocabularyCustom(): Promise<PortalVocabularyCustom>;
+  addPortalVocabularyEntry(key: PortalVocabularyKey, value: string, userId: string): Promise<PortalVocabularyCustom>;
+  removePortalVocabularyEntry(key: PortalVocabularyKey, value: string, userId: string): Promise<PortalVocabularyCustom>;
 }
 
 export class DatabaseStorage implements IStorage {
@@ -481,6 +506,61 @@ export class DatabaseStorage implements IStorage {
       .where(eq(publishJobTasks.id, taskId))
       .returning();
     return failed ?? null;
+  }
+
+  private async ensurePortalVocabularyRow(): Promise<PortalVocabularyCustom> {
+    const [row] = await db.select().from(cmsPortalVocabulary).where(eq(cmsPortalVocabulary.id, 1));
+    if (row) return (row.custom as PortalVocabularyCustom) ?? {};
+    const [created] = await db
+      .insert(cmsPortalVocabulary)
+      .values({ id: 1, custom: {} })
+      .onConflictDoNothing()
+      .returning();
+    if (created) return (created.custom as PortalVocabularyCustom) ?? {};
+    const [again] = await db.select().from(cmsPortalVocabulary).where(eq(cmsPortalVocabulary.id, 1));
+    return (again?.custom as PortalVocabularyCustom) ?? {};
+  }
+
+  async getPortalVocabularyCustom(): Promise<PortalVocabularyCustom> {
+    return this.ensurePortalVocabularyRow();
+  }
+
+  async addPortalVocabularyEntry(
+    key: PortalVocabularyKey,
+    value: string,
+    userId: string,
+  ): Promise<PortalVocabularyCustom> {
+    const current = await this.ensurePortalVocabularyRow();
+    const list = [...(current[key] ?? [])];
+    const exists = list.some((v) => v.toLowerCase() === value.toLowerCase());
+    if (!exists) list.push(value);
+    const custom: PortalVocabularyCustom = { ...current, [key]: list };
+    await db
+      .insert(cmsPortalVocabulary)
+      .values({ id: 1, custom, updatedBy: userId, updatedAt: new Date() })
+      .onConflictDoUpdate({
+        target: cmsPortalVocabulary.id,
+        set: { custom, updatedBy: userId, updatedAt: new Date() },
+      });
+    return custom;
+  }
+
+  async removePortalVocabularyEntry(
+    key: PortalVocabularyKey,
+    value: string,
+    userId: string,
+  ): Promise<PortalVocabularyCustom> {
+    const current = await this.ensurePortalVocabularyRow();
+    const list = (current[key] ?? []).filter((v) => v.toLowerCase() !== value.toLowerCase());
+    const custom: PortalVocabularyCustom = { ...current, [key]: list };
+    await db
+      .insert(cmsPortalVocabulary)
+      .values({ id: 1, custom, updatedBy: userId, updatedAt: new Date() })
+      .onConflictDoUpdate({
+        target: cmsPortalVocabulary.id,
+        set: { custom, updatedBy: userId, updatedAt: new Date() },
+      });
+    return custom;
   }
 }
 

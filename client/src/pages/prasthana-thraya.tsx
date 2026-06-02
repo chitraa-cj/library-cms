@@ -37,7 +37,6 @@ import TextTranslationFields from "@/components/text-translation-fields";
 import BhashyaEntryFields from "@/components/bhashya-entry-fields";
 import {
   prasthanaGranthaTypes,
-  prasthanaBhashyamAuthors,
   type StrapiPrasthanaScreen,
   type StrapiResponse,
   type TextAndTranslation,
@@ -46,6 +45,7 @@ import {
 import { Loader2, AlertTriangle } from "lucide-react";
 import StrapiSyncBar from "@/components/strapi-sync-bar";
 import { STRAPI_POLL_INTERVAL } from "@/hooks/use-strapi-sync";
+import { usePortalVocabulary } from "@/hooks/use-portal-vocabulary";
 
 const EMPTY_TT: TextAndTranslation = {
   SanskritTextEntry: "",
@@ -56,6 +56,7 @@ const EMPTY_TT: TextAndTranslation = {
 
 export default function PrasthanaThraya() {
   const { toast } = useToast();
+  const { vocabulary } = usePortalVocabulary();
   const [formOpen, setFormOpen] = useState(false);
   const [deleteTarget, setDeleteTarget] = useState<any>(null);
   const [editingItem, setEditingItem] = useState<any>(null);
@@ -78,6 +79,13 @@ export default function PrasthanaThraya() {
   });
 
   const { unpublishedDrafts, isLoadingDrafts, saveDraft, publishDraft, deleteDraft } = useDrafts("prasthana-thraya-screens");
+
+  const bhashyamAuthorOptions = (() => {
+    const cur = (formData.BhashyamAuthor ?? "").trim();
+    const base = vocabulary.bhashyamAuthors;
+    if (!cur || base.some((a) => a.toLowerCase() === cur.toLowerCase())) return base;
+    return [...base, cur];
+  })();
 
   const deleteStrapiMutation = useMutation({
     mutationFn: async (documentId: string) => {
@@ -315,7 +323,7 @@ export default function PrasthanaThraya() {
                     <SelectValue placeholder="Select author" />
                   </SelectTrigger>
                   <SelectContent>
-                    {prasthanaBhashyamAuthors.map((author) => (
+                    {bhashyamAuthorOptions.map((author) => (
                       <SelectItem key={author} value={author}>{author}</SelectItem>
                     ))}
                   </SelectContent>

@@ -220,15 +220,12 @@ export async function strapiRequest(
   throw lastErr;
 }
 
-/**
- * GET endpoints that can return very large payloads (e.g. full populate of manthras
- * with rich-text blocks). Native fetch streams the response body — no maxBuffer
- * limit and no temp-file round-trip required.
- */
-export async function strapiRequestLarge(path: string): Promise<any> {
-  const url = `${STRAPI_URL}${path}`;
+/** Full-populate mantra/backup pages can exceed 30s — allow 2 min per page. */
+const STRAPI_LARGE_HTTP_TIMEOUT_MS = 120_000;
+
+async function fetchLargeOnce(url: string): Promise<any> {
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(new Error("max-time exceeded")), 30_000);
+  const timer = setTimeout(() => controller.abort(new Error("max-time exceeded")), STRAPI_LARGE_HTTP_TIMEOUT_MS);
   try {
     const res = await fetch(url, {
       method: "GET",
@@ -254,12 +251,42 @@ export async function strapiRequestLarge(path: string): Promise<any> {
   } catch (e: any) {
     if (e?.status) throw e;
     if (e?.name === "AbortError" || e?.message?.includes("max-time")) {
-      throw new Error("curl large failed: max-time exceeded after 30000ms");
+      throw new Error(
+        `curl large failed: max-time exceeded after ${STRAPI_LARGE_HTTP_TIMEOUT_MS}ms`,
+      );
     }
     throw new Error(`curl large failed: ${e?.message || String(e)}`);
   } finally {
     clearTimeout(timer);
   }
+}
+
+/**
+ * GET endpoints that can return very large payloads (e.g. full populate of manthras
+ * with rich-text blocks). Native fetch streams the response body — no maxBuffer
+ * limit and no temp-file round-trip required.
+ */
+export async function strapiRequestLarge(path: string, maxRetries = 3): Promise<any> {
+  const url = `${STRAPI_URL}${path}`;
+  let lastErr: any;
+  for (let attempt = 1; attempt <= maxRetries; attempt++) {
+    try {
+      return await fetchLargeOnce(url);
+    } catch (e: any) {
+      const isNetwork =
+        e?.message?.includes("curl large failed") && !e?.status;
+      if (!isNetwork) throw e;
+      lastErr = e;
+      if (attempt < maxRetries) {
+        const waitMs = attempt * 2000;
+        console.warn(
+          `[strapi] large GET attempt ${attempt}/${maxRetries} failed — retrying in ${waitMs}ms…`,
+        );
+        await new Promise((r) => setTimeout(r, waitMs));
+      }
+    }
+  }
+  throw lastErr;
 }
 
 export function createStrapiRouter() {

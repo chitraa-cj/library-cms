@@ -1,6 +1,6 @@
 import { build as esbuild } from "esbuild";
 import { build as viteBuild } from "vite";
-import { rm, readFile, writeFile } from "fs/promises";
+import { rm, readFile, writeFile, copyFile } from "fs/promises";
 import path from "path";
 
 // server deps to bundle to reduce openat(2) syscalls
@@ -70,6 +70,18 @@ async function buildAll() {
     external: externals,
     logLevel: "info",
   });
+
+  // connect-pg-simple reads its session-table DDL from a non-JS asset at runtime:
+  //   fs.readFile(path.resolve(__dirname, './table.sql'))
+  // esbuild bundles the JS but not the .sql file, and at runtime __dirname is dist/.
+  // Without this copy, the first session write (login) when the "session" table is
+  // missing throws ENOENT: .../dist/table.sql. Copy it next to the bundle so deploys
+  // self-heal. connect-pg-simple is in the bundle allowlist, so __dirname === dist/.
+  await copyFile(
+    path.join("node_modules", "connect-pg-simple", "table.sql"),
+    path.join("dist", "table.sql"),
+  );
+  console.log("copied connect-pg-simple/table.sql -> dist/table.sql");
 }
 
 buildAll().catch((err) => {

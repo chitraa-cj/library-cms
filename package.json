@@ -22,6 +22,7 @@
     "discard:grantha-draft": "tsx script/discard-grantha-portal-draft.ts",
     "discard:draft-deps": "tsx script/discard-draft-dependencies.ts",
     "migrate:draft-fk-cascade": "psql \"$DATABASE_URL\" -f script/migrations/20260527_draft_fk_on_delete_cascade.sql",
+    "migrate:portal-vocabulary": "psql \"$DATABASE_URL\" -f script/migrations/20260601_cms_portal_vocabulary.sql",
     "test:publish-integrity": "tsx script/test-grantha-publish-integrity.ts",
     "test:grantha-payload-strip": "tsx script/test-grantha-strapi-payload-strip.ts",
     "db:push": "drizzle-kit push",

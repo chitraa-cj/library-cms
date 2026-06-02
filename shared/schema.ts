@@ -293,6 +293,78 @@ export const teekaAuthors = [
   "Vidyaranya",
 ] as const;
 
+/** Default top-level division labels (grantha structure wizard). */
+export const defaultStructureLevelOneNames = [
+  "Kanda",
+  "Skandha",
+  "Adhyaya",
+  "Valli",
+  "Prapathaka",
+  "Mundaka",
+  "Prashna",
+] as const;
+
+/** Default sub-section labels (grantha structure wizard). */
+export const defaultStructureLevelTwoNames = [
+  "Valli",
+  "Anuvaka",
+  "Khanda",
+  "Brahmana",
+  "Adhyaya",
+  "Adhikarana",
+  "Varnaka",
+  "Pada",
+] as const;
+
+/** Default sub-sub-section labels (grantha structure wizard). */
+export const defaultStructureLevelThreeNames = [
+  "Pada",
+  "Varga",
+  "Anuvaka",
+  "Khanda",
+  "Section",
+  "Part",
+  "Sukta",
+  "Adhikaranam",
+] as const;
+
+/** Default leaf entry labels (Mantra, Shloka, etc.). */
+export const defaultStructureLeafNames = [
+  "Mantra",
+  "Manthra",
+  "Shloka",
+  "Sutra",
+  "Anuvaka",
+  "Pada",
+  "Tirtha",
+  "Utsava",
+  "Vivarana",
+] as const;
+
+export const portalVocabularyKeys = [
+  "teekaAuthors",
+  "bhashyamAuthors",
+  "structureLevelOneNames",
+  "structureLevelTwoNames",
+  "structureLevelThreeNames",
+  "structureLeafNames",
+] as const;
+
+export type PortalVocabularyKey = (typeof portalVocabularyKeys)[number];
+
+export type PortalVocabulary = Record<PortalVocabularyKey, string[]>;
+
+export type PortalVocabularyCustom = Partial<Record<PortalVocabularyKey, string[]>>;
+
+export const cmsPortalVocabulary = pgTable("cms_portal_vocabulary", {
+  id: integer("id").primaryKey().default(1),
+  custom: jsonb("custom").$type<PortalVocabularyCustom>().notNull().default({}),
+  updatedAt: timestamp("updated_at").defaultNow(),
+  updatedBy: varchar("updated_by").references(() => users.id),
+});
+
+export type CmsPortalVocabularyRow = typeof cmsPortalVocabulary.$inferSelect;
+
 // ---------- Strapi block / rich-text primitives ----------
 
 /** A single node in Strapi's block (rich-text) editor format. */

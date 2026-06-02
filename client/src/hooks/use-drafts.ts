@@ -245,15 +245,25 @@ export function useDrafts(contentType: string) {
   });
 
   const publishMutation = useMutation({
-    mutationFn: async (draftId: number) => {
+    // Accepts a bare draftId (the common case) or an object carrying `allowRenumber`,
+    // which the onError handler below sets when re-publishing after the editor confirms
+    // an intentional verse renumber (e.g. a deletion shifted the following verses).
+    mutationFn: async (vars: number | { draftId: number; allowRenumber?: boolean }) => {
+      const draftId = typeof vars === "number" ? vars : vars.draftId;
+      const allowRenumber = typeof vars === "number" ? false : !!vars.allowRenumber;
       setPublishProgress(null);
 
       const idempotencyKey = `publish:${contentType}:${draftId}:${Date.now()}`;
       const res = await withTransientRetries(
         () =>
-          apiRequest("POST", `/api/drafts/${draftId}/publish`, undefined, {
-            headers: { "Idempotency-Key": idempotencyKey },
-          }),
+          apiRequest(
+            "POST",
+            `/api/drafts/${draftId}/publish`,
+            allowRenumber ? { allowRenumber: true } : undefined,
+            {
+              headers: { "Idempotency-Key": idempotencyKey },
+            },
+          ),
         4,
       );
       const data = await res.json();
@@ -309,9 +319,32 @@ export function useDrafts(contentType: string) {
         });
       }
     },
-    onError: (err: any) => {
+    onError: (err: any, vars: number | { draftId: number; allowRenumber?: boolean }) => {
       setPublishProgress(null);
       clearPersistedPublishJob();
+
+      // Auto-detect the verse-renumber block. After an intentional deletion every
+      // following verse shifts number, which the server's suffix-stability guard
+      // rejects (one error per verse). Offer a one-click confirm to re-publish with
+      // the renumber approved. Duplicate-suffix and cross-grantha checks still apply.
+      const alreadyAllowed = typeof vars === "object" && !!vars.allowRenumber;
+      const draftId = typeof vars === "number" ? vars : vars.draftId;
+      const isRenumberBlock = /Verse number cannot change/i.test(err?.message ?? "");
+      if (
+        !alreadyAllowed &&
+        isRenumberBlock &&
+        typeof window !== "undefined" &&
+        window.confirm(
+          "Publish was blocked because verse numbers changed.\n\n" +
+            "This is expected when you intentionally delete a verse — every following " +
+            "verse shifts down by one. Re-publish and apply the renumber?\n\n" +
+            "(Verses ending up with duplicate numbers are still blocked.)",
+        )
+      ) {
+        publishMutation.mutate({ draftId, allowRenumber: true });
+        return;
+      }
+
       toast({
         variant: "destructive",
         title: "Publish failed",

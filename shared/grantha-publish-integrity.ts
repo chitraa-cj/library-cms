@@ -92,6 +92,10 @@ export type MantraPublishScanInput = {
   englishPlain?: string;
   /** When true, allow changing only the leaf prefix (Shloka ↔ Mantra) but not the numeric suffix. */
   allowLeafPrefixOnlyRelabel?: boolean;
+  /** When true, the editor has explicitly approved a verse renumber (e.g. an intentional
+   *  deletion shifted every following verse down by one). Skips the suffix-stability check
+   *  only; duplicate-suffix and cross-grantha checks still apply. */
+  allowRenumber?: boolean;
 };
 
 /** Plain text from Strapi blocks or string. */
@@ -207,7 +211,7 @@ export function scanMantraForPublish(input: MantraPublishScanInput): PublishInte
   if (leafViolation) out.push(leafViolation);
 
   const existing = (input.existingStrapiLabel ?? "").trim();
-  if (existing && label) {
+  if (existing && label && !input.allowRenumber) {
     const suffixViolation = assertVerseSuffixStable(existing, label);
     if (suffixViolation) {
       out.push({ ...suffixViolation, documentId: input.targetDocumentId });

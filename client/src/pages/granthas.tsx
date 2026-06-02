@@ -36,9 +36,8 @@ import {
 } from "@/components/ui/alert-dialog";
 import {
   granthaTypes,
-  bhashyamAuthors,
-  teekaAuthors,
   translationLanguages,
+  type PortalVocabularyKey,
   type StrapiGrantha,
   type StrapiTeeka,
   type StrapiResponse,
@@ -109,6 +108,7 @@ import {
   type SnapshotAdhyaya,
 } from "@/lib/grantha-strapi-mantra-sync";
 import { invalidateGranthaCmsCaches, syncGranthaCmsCaches } from "@/lib/strapi-cache-sync";
+import { usePortalVocabulary } from "@/hooks/use-portal-vocabulary";
 import OtherTranslationsHermex from "@/components/other-translations-hermex";
 import {
   postStrapiSection,
@@ -1222,6 +1222,15 @@ export default function GranthasPage() {
   const [manthraDialogViewOnly, setManthraDialogViewOnly] = useState(false);
   const [pendingCloseManthra, setPendingCloseManthra] = useState(false);
   const [mantraPublishStatus, setMantraPublishStatus] = useState<string | null>(null);
+  const [newSharedOption, setNewSharedOption] = useState<Record<PortalVocabularyKey, string>>({
+    teekaAuthors: "",
+    bhashyamAuthors: "",
+    structureLevelOneNames: "",
+    structureLevelTwoNames: "",
+    structureLevelThreeNames: "",
+    structureLeafNames: "",
+  });
+  const [addingSharedOptionKey, setAddingSharedOptionKey] = useState<PortalVocabularyKey | null>(null);
   const [manthraLoading, setManthraLoading] = useState(false);
   const mantraFetchGenRef = useRef(0);
   const openEditLoadGenRef = useRef(0);
@@ -1755,6 +1764,71 @@ export default function GranthasPage() {
   });
 
   const isAdmin = user?.role === "admin";
+  const { vocabulary } = usePortalVocabulary();
+  const addSharedOptionMutation = useMutation({
+    mutationFn: async (params: { key: PortalVocabularyKey; value: string }) => {
+      const res = await apiRequest("POST", "/api/admin/cms/vocabulary", params);
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/cms/vocabulary"] });
+    },
+  });
+
+  const withCurrentSelection = (options: string[], current: string | undefined) => {
+    const cur = (current ?? "").trim();
+    if (!cur) return options;
+    if (options.some((o) => o.toLowerCase() === cur.toLowerCase())) return options;
+    return [...options, cur];
+  };
+
+  const levelOneOptions = withCurrentSelection(
+    vocabulary.structureLevelOneNames,
+    structureConfig.levelOneName,
+  );
+  const levelTwoOptions = withCurrentSelection(
+    vocabulary.structureLevelTwoNames,
+    structureConfig.levelTwoName,
+  );
+  const levelThreeOptions = withCurrentSelection(
+    vocabulary.structureLevelThreeNames,
+    structureConfig.levelThreeName,
+  );
+  const leafNameOptions = withCurrentSelection(vocabulary.structureLeafNames, structureConfig.leafName);
+  const bhashyamAuthorOptions = withCurrentSelection(
+    vocabulary.bhashyamAuthors,
+    formData.BhashyamAuthor,
+  );
+
+  const updateSharedOptionDraft = (key: PortalVocabularyKey, value: string) => {
+    setNewSharedOption((prev) => ({ ...prev, [key]: value }));
+  };
+
+  const addSharedOption = async (
+    key: PortalVocabularyKey,
+    onApply?: (value: string) => void,
+  ) => {
+    const value = (newSharedOption[key] ?? "").trim();
+    if (!value) {
+      toast({ variant: "destructive", title: "Enter a value first" });
+      return;
+    }
+    try {
+      setAddingSharedOptionKey(key);
+      await addSharedOptionMutation.mutateAsync({ key, value });
+      updateSharedOptionDraft(key, "");
+      onApply?.(value);
+      toast({ title: "Added to shared list", description: `"${value}" is now available to all users.` });
+    } catch (err: any) {
+      toast({
+        variant: "destructive",
+        title: "Could not add option",
+        description: err?.message || "Please try again.",
+      });
+    } finally {
+      setAddingSharedOptionKey(null);
+    }
+  };
 
   const publishChangedMantrasMutation = useMutation({
     mutationFn: async (params: {
@@ -5001,11 +5075,45 @@ export default function GranthasPage() {
                   <SelectValue placeholder="Select author" />
                 </SelectTrigger>
                 <SelectContent>
-                  {bhashyamAuthors.map((a) => (
+                  {bhashyamAuthorOptions.map((a) => (
                     <SelectItem key={a} value={a}>{a}</SelectItem>
                   ))}
                 </SelectContent>
               </Select>
+              {isAdmin && (
+                <div className="mt-2 flex gap-2">
+                  <Input
+                    value={newSharedOption.bhashyamAuthors}
+                    onChange={(e) => updateSharedOptionDraft("bhashyamAuthors", e.target.value)}
+                    placeholder="Add new Bhashyam author"
+                    className="h-9"
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter") {
+                        e.preventDefault();
+                        void addSharedOption("bhashyamAuthors", (value) =>
+                          setFormData({ ...formData, BhashyamAuthor: value }),
+                        );
+                      }
+                    }}
+                  />
+                  <Button
+                    type="button"
+                    size="sm"
+                    disabled={addingSharedOptionKey === "bhashyamAuthors"}
+                    onClick={() =>
+                      void addSharedOption("bhashyamAuthors", (value) =>
+                        setFormData({ ...formData, BhashyamAuthor: value }),
+                      )
+                    }
+                  >
+                    {addingSharedOptionKey === "bhashyamAuthors" ? (
+                      <Loader2 className="w-4 h-4 animate-spin" />
+                    ) : (
+                      <Plus className="w-4 h-4" />
+                    )}
+                  </Button>
+                </div>
+              )}
             </div>
           </div>
 
@@ -5237,7 +5345,7 @@ export default function GranthasPage() {
                             <SelectValue placeholder="Select author" />
                           </SelectTrigger>
                           <SelectContent>
-                            {teekaAuthors.map((a) => (
+                            {vocabulary.teekaAuthors.map((a) => (
                               <SelectItem key={a} value={a}>{a}</SelectItem>
                             ))}
                           </SelectContent>
@@ -5461,7 +5569,7 @@ export default function GranthasPage() {
               <div>
                 <p className="text-xs text-muted-foreground mb-2">What are these top-level divisions called?</p>
                 <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
-                  {["Kanda", "Skandha", "Adhyaya", "Valli", "Prapathaka", "Mundaka", "Prashna"].map((name) => (
+                  {levelOneOptions.map((name) => (
                     <button
                       key={name}
                       type="button"
@@ -5477,6 +5585,42 @@ export default function GranthasPage() {
                     </button>
                   ))}
                 </div>
+                {isAdmin && (
+                  <div className="mt-3 flex gap-2">
+                    <Input
+                      value={newSharedOption.structureLevelOneNames}
+                      onChange={(e) =>
+                        updateSharedOptionDraft("structureLevelOneNames", e.target.value)
+                      }
+                      placeholder="Add new top-level heading"
+                      className="h-9"
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter") {
+                          e.preventDefault();
+                          void addSharedOption("structureLevelOneNames", (value) =>
+                            setStructureConfig({ ...structureConfig, levelOneName: value }),
+                          );
+                        }
+                      }}
+                    />
+                    <Button
+                      type="button"
+                      size="sm"
+                      disabled={addingSharedOptionKey === "structureLevelOneNames"}
+                      onClick={() =>
+                        void addSharedOption("structureLevelOneNames", (value) =>
+                          setStructureConfig({ ...structureConfig, levelOneName: value }),
+                        )
+                      }
+                    >
+                      {addingSharedOptionKey === "structureLevelOneNames" ? (
+                        <Loader2 className="w-4 h-4 animate-spin" />
+                      ) : (
+                        <Plus className="w-4 h-4" />
+                      )}
+                    </Button>
+                  </div>
+                )}
               </div>
             )}
           </div>
@@ -5511,7 +5655,7 @@ export default function GranthasPage() {
               <div>
                 <p className="text-xs text-muted-foreground mb-2">What are these sub-sections called?</p>
                 <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
-                  {["Valli", "Anuvaka", "Khanda", "Brahmana", "Adhyaya", "Adhikarana", "Varnaka", "Pada"].map((name) => (
+                  {levelTwoOptions.map((name) => (
                     <button
                       key={name}
                       type="button"
@@ -5527,6 +5671,42 @@ export default function GranthasPage() {
                     </button>
                   ))}
                 </div>
+                {isAdmin && (
+                  <div className="mt-3 flex gap-2">
+                    <Input
+                      value={newSharedOption.structureLevelTwoNames}
+                      onChange={(e) =>
+                        updateSharedOptionDraft("structureLevelTwoNames", e.target.value)
+                      }
+                      placeholder="Add new sub-section heading"
+                      className="h-9"
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter") {
+                          e.preventDefault();
+                          void addSharedOption("structureLevelTwoNames", (value) =>
+                            setStructureConfig({ ...structureConfig, levelTwoName: value }),
+                          );
+                        }
+                      }}
+                    />
+                    <Button
+                      type="button"
+                      size="sm"
+                      disabled={addingSharedOptionKey === "structureLevelTwoNames"}
+                      onClick={() =>
+                        void addSharedOption("structureLevelTwoNames", (value) =>
+                          setStructureConfig({ ...structureConfig, levelTwoName: value }),
+                        )
+                      }
+                    >
+                      {addingSharedOptionKey === "structureLevelTwoNames" ? (
+                        <Loader2 className="w-4 h-4 animate-spin" />
+                      ) : (
+                        <Plus className="w-4 h-4" />
+                      )}
+                    </Button>
+                  </div>
+                )}
               </div>
             )}
           </div>
@@ -5560,7 +5740,7 @@ export default function GranthasPage() {
                 <div>
                   <p className="text-xs text-muted-foreground mb-2">What are these sub-sub-sections called?</p>
                   <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
-                    {["Pada", "Varga", "Anuvaka", "Khanda", "Section", "Part", "Sukta", "Adhikaranam"].map((name) => (
+                    {levelThreeOptions.map((name) => (
                       <button
                         key={name}
                         type="button"
@@ -5576,6 +5756,42 @@ export default function GranthasPage() {
                       </button>
                     ))}
                   </div>
+                  {isAdmin && (
+                    <div className="mt-3 flex gap-2">
+                      <Input
+                        value={newSharedOption.structureLevelThreeNames}
+                        onChange={(e) =>
+                          updateSharedOptionDraft("structureLevelThreeNames", e.target.value)
+                        }
+                        placeholder="Add new sub-sub-section heading"
+                        className="h-9"
+                        onKeyDown={(e) => {
+                          if (e.key === "Enter") {
+                            e.preventDefault();
+                            void addSharedOption("structureLevelThreeNames", (value) =>
+                              setStructureConfig({ ...structureConfig, levelThreeName: value }),
+                            );
+                          }
+                        }}
+                      />
+                      <Button
+                        type="button"
+                        size="sm"
+                        disabled={addingSharedOptionKey === "structureLevelThreeNames"}
+                        onClick={() =>
+                          void addSharedOption("structureLevelThreeNames", (value) =>
+                            setStructureConfig({ ...structureConfig, levelThreeName: value }),
+                          )
+                        }
+                      >
+                        {addingSharedOptionKey === "structureLevelThreeNames" ? (
+                          <Loader2 className="w-4 h-4 animate-spin" />
+                        ) : (
+                          <Plus className="w-4 h-4" />
+                        )}
+                      </Button>
+                    </div>
+                  )}
                 </div>
               )}
             </div>
@@ -5590,7 +5806,7 @@ export default function GranthasPage() {
               </p>
             </div>
             <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
-              {["Mantra", "Manthra", "Shloka", "Sutra", "Anuvaka", "Pada", "Tirtha", "Utsava", "Vivarana"].map((name) => (
+              {leafNameOptions.map((name) => (
                 <button
                   key={name}
                   type="button"
@@ -5617,6 +5833,58 @@ export default function GranthasPage() {
                 </button>
               ))}
             </div>
+            {isAdmin && (
+              <div className="mt-3 flex gap-2">
+                <Input
+                  value={newSharedOption.structureLeafNames}
+                  onChange={(e) => updateSharedOptionDraft("structureLeafNames", e.target.value)}
+                  placeholder="Add new entry type"
+                  className="h-9"
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") {
+                      e.preventDefault();
+                      void addSharedOption("structureLeafNames", (value) => {
+                        const prevLeaf = structureConfig.leafName;
+                        const nextCfg = { ...structureConfig, leafName: value };
+                        setStructureConfig(nextCfg);
+                        if (prevLeaf !== value && adhyayas.length > 0) {
+                          setAdhyayas((prev) => {
+                            const migrated =
+                              prevLeaf !== value ? migrateHierarchyLeafName(prev, prevLeaf, value) : prev;
+                            return normalizeEditorHierarchy(migrated, nextCfg);
+                          });
+                        }
+                      });
+                    }
+                  }}
+                />
+                <Button
+                  type="button"
+                  size="sm"
+                  disabled={addingSharedOptionKey === "structureLeafNames"}
+                  onClick={() =>
+                    void addSharedOption("structureLeafNames", (value) => {
+                      const prevLeaf = structureConfig.leafName;
+                      const nextCfg = { ...structureConfig, leafName: value };
+                      setStructureConfig(nextCfg);
+                      if (prevLeaf !== value && adhyayas.length > 0) {
+                        setAdhyayas((prev) => {
+                          const migrated =
+                            prevLeaf !== value ? migrateHierarchyLeafName(prev, prevLeaf, value) : prev;
+                          return normalizeEditorHierarchy(migrated, nextCfg);
+                        });
+                      }
+                    })
+                  }
+                >
+                  {addingSharedOptionKey === "structureLeafNames" ? (
+                    <Loader2 className="w-4 h-4 animate-spin" />
+                  ) : (
+                    <Plus className="w-4 h-4" />
+                  )}
+                </Button>
+              </div>
+            )}
           </div>
 
           {/* Preview */}

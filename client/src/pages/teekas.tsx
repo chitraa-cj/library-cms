@@ -36,8 +36,8 @@ import {
   type StrapiTeeka,
   type StrapiGrantha,
   type StrapiResponse,
-  teekaAuthors,
 } from "@shared/schema";
+import { usePortalVocabulary } from "@/hooks/use-portal-vocabulary";
 import {
   Loader2,
   Plus,
@@ -54,6 +54,8 @@ import { STRAPI_POLL_INTERVAL } from "@/hooks/use-strapi-sync";
 export default function TeekasPage() {
   const { toast } = useToast();
   const { user } = useAuth();
+  const { vocabulary } = usePortalVocabulary();
+  const teekaAuthorOptions = vocabulary.teekaAuthors;
   const [formOpen, setFormOpen] = useState(false);
   const [deleteTarget, setDeleteTarget] = useState<any>(null);
   const [editingItem, setEditingItem] = useState<any>(null);
@@ -400,11 +402,13 @@ export default function TeekasPage() {
                 </SelectTrigger>
                 <SelectContent>
                   <SelectItem value="__none__"><span className="text-muted-foreground italic">Not specified</span></SelectItem>
-                  {teekaAuthors.map((a) => <SelectItem key={a} value={a}>{a}</SelectItem>)}
+                  {teekaAuthorOptions.map((a) => <SelectItem key={a} value={a}>{a}</SelectItem>)}
                   <SelectItem value="__custom__">Other</SelectItem>
                 </SelectContent>
               </Select>
-              {formData.TeekaAuthor && !teekaAuthors.includes(formData.TeekaAuthor as any) && formData.TeekaAuthor !== "__custom__" && (
+              {formData.TeekaAuthor &&
+                !teekaAuthorOptions.some((a) => a.toLowerCase() === formData.TeekaAuthor.toLowerCase()) &&
+                formData.TeekaAuthor !== "__custom__" && (
                 <Input
                   value={formData.TeekaAuthor}
                   onChange={(e) => setFormData({ ...formData, TeekaAuthor: e.target.value })}

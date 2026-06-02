@@ -6,6 +6,14 @@ import { createMigrateRouter } from "./migrate-vivekachudamani";
 import { activityLogger } from "./activity-log";
 import { readLatestDraftSnapshot, writeDraftSnapshot } from "./data-safety";
 import { storage } from "./storage";
+import {
+  addPortalVocabularyEntry,
+  getPortalVocabulary,
+  getPortalVocabularyDefaults,
+  getTeekaAuthorsAllowlist,
+  removePortalVocabularyEntry,
+} from "./cms-vocabulary";
+import { portalVocabularyKeys, type PortalVocabularyKey } from "@shared/schema";
 import Database from "better-sqlite3";
 import type { User } from "@shared/schema";
 import { gzipSync, gunzipSync } from "node:zlib";
@@ -616,16 +624,6 @@ function mapSectionType(name: string): string | undefined {
   const key = name.toLowerCase().trim();
   return SECTION_TYPE_MAP[key];
 }
-
-// Strapi teekas.TeekaAuthor enum — exact values the API accepts
-const STRAPI_TEEKA_AUTHORS = new Set([
-  "Anandagiri", "Ananda Gana", "Bharathi Theertha",
-  "Raagavendra", "Sadanandha", "Srimad Devagnya Pandiya", "Shreedharaswami", "Upanishad Brahmendra", "Keshava Bhattacharya",
-  "Vachaspati Mishra", "Padmapada", "Sureshvaracharya",
-  "Prakasatman", "Govindananda", "Ramananda Saraswati", "Madhusudana Saraswati",
-  "Dhanapati Suri", "Amalananda", "Appayya Dikshita", "Shankarananda",
-  "Shriharsha", "Chitsukha", "Vidyaranya",
-]);
 
 function cleanPayloadForStrapi(data: Record<string, any>): Record<string, any> {
   const cleaned: Record<string, any> = {};
@@ -1707,8 +1705,8 @@ function strapiErrorMessage(e: any): string {
     } catch { /* fall through to raw */ }
   }
   // Simplify network/curl errors into something actionable
-  if (raw.includes("curl failed") || raw.includes("max-time")) {
-    return "Network timeout reaching Strapi — check server connectivity";
+  if (raw.includes("curl large failed") || raw.includes("curl failed") || raw.includes("max-time")) {
+    return "Strapi took too long to respond (large content fetch). Retry the snapshot in a minute.";
   }
   return raw;
 }
@@ -2101,6 +2099,8 @@ async function publishManthraToStrapi(
     portalSiblings?: PortalManthraSibling[];
     configuredLeaf?: string;
     granthaName?: string;
+    /** Editor explicitly approved a verse renumber — relaxes the suffix-stability guard only. */
+    allowRenumber?: boolean;
   },
 ): Promise<string | undefined> {
   try {
@@ -2130,6 +2130,8 @@ async function publishManthraToStrapiInner(
     portalSiblings?: PortalManthraSibling[];
     configuredLeaf?: string;
     granthaName?: string;
+    /** Editor explicitly approved a verse renumber — relaxes the suffix-stability guard only. */
+    allowRenumber?: boolean;
   },
 ): Promise<string | undefined> {
   const configuredLeaf = (options?.configuredLeaf || "Mantra").trim() || "Mantra";
@@ -2215,6 +2217,7 @@ async function publishManthraToStrapiInner(
       existingStrapiLabel,
       sanskritPlain: sk,
       englishPlain: en,
+      allowRenumber: options?.allowRenumber,
     });
     const hard = violations.filter((v) => v.severity === "error");
     if (hard.length > 0) {
@@ -2384,6 +2387,7 @@ async function publishGranthaWithHierarchy(
   draft: any,
   jobId?: string,
   onProgress?: (done: number, total: number, current: string) => void,
+  allowRenumber?: boolean,
 ): Promise<any> {
   await assertGranthaPublishNotLocked(draft.strapiDocumentId);
   const rawData = draft.data as Record<string, any>;
@@ -2544,12 +2548,13 @@ async function publishGranthaWithHierarchy(
   // without extra API lookups, even for teekas created for the first time right now.
   const teekaNameToDocId: Map<string, string> = new Map();
   if (Array.isArray(teekaDefinitions) && granthaDocId) {
+    const teekaAuthorAllow = await getTeekaAuthorsAllowlist();
     // Normalize wizard entries first (skip duplicates / blanks).
     type TeekaCandidate = { effectiveName: string; validAuthor?: string };
     const candidates: TeekaCandidate[] = [];
     const seen = new Set<string>();
     for (const teeka of teekaDefinitions) {
-      const validAuthor = teeka.TeekaAuthor && STRAPI_TEEKA_AUTHORS.has(teeka.TeekaAuthor)
+      const validAuthor = teeka.TeekaAuthor && teekaAuthorAllow.has(teeka.TeekaAuthor)
         ? teeka.TeekaAuthor : undefined;
       const effectiveName = (teeka.TeekaName || "").trim() || (validAuthor ? `${validAuthor} Teeka` : "");
       if (!effectiveName) continue;
@@ -2782,7 +2787,7 @@ async function publishGranthaWithHierarchy(
         granthaDocId,
         teekaNameToDocId,
         publishFailures,
-        { portalSiblings, configuredLeaf, granthaName: granthaNameForIntegrity },
+        { portalSiblings, configuredLeaf, granthaName: granthaNameForIntegrity, allowRenumber },
       );
       if (returnedDocId && manthra.id) {
         manthraIdToDocId.set(manthra.id, returnedDocId);
@@ -4053,8 +4058,9 @@ export async function registerRoutes(
     }
 
     const teekaNameToDocId: Map<string, string> = await loadGranthaTeekaNameToDocId(granthaDocId);
+    const teekaAuthorAllow = await getTeekaAuthorsAllowlist();
     for (const teeka of teekaDefinitions) {
-      const validAuthor = teeka.TeekaAuthor && STRAPI_TEEKA_AUTHORS.has(teeka.TeekaAuthor)
+      const validAuthor = teeka.TeekaAuthor && teekaAuthorAllow.has(teeka.TeekaAuthor)
         ? teeka.TeekaAuthor
         : undefined;
       const effectiveName = (teeka.TeekaName || "").trim() || (validAuthor ? `${validAuthor} Teeka` : "");
@@ -4431,6 +4437,10 @@ export async function registerRoutes(
       const user = req.user as User;
       const id = parseInt(req.params.id);
       if (isNaN(id)) return res.status(400).json({ message: "Invalid draft ID" });
+      // Editor opt-in: after an intentional verse deletion the following verses shift
+      // number, which the suffix-stability guard would otherwise block. The client sets
+      // this only after the user confirms the renumber.
+      const { allowRenumber } = (req.body ?? {}) as { allowRenumber?: boolean };
       let idem = await loadOrReplayIdempotency(req, `/api/drafts/${id}/publish`);
       if (idem?.replay) {
         // If the cached response references a publish job that is now failed/missing,
@@ -4785,6 +4795,48 @@ export async function registerRoutes(
     });
   });
 
+  // ───────────────── Portal vocabulary (dropdowns) ─────────────────
+
+  app.get("/api/cms/vocabulary", requireAuth, async (_req, res) => {
+    try {
+      res.json(await getPortalVocabulary());
+    } catch (error: any) {
+      res.status(500).json({ message: error.message || "Failed to load vocabulary" });
+    }
+  });
+
+  app.post("/api/admin/cms/vocabulary", requireAuth, requireAdmin, async (req, res) => {
+    try {
+      const user = req.user as User;
+      const key = req.body?.key as PortalVocabularyKey;
+      const value = typeof req.body?.value === "string" ? req.body.value : "";
+      if (!portalVocabularyKeys.includes(key)) {
+        return res.status(400).json({ message: "Invalid vocabulary key" });
+      }
+      const vocabulary = await addPortalVocabularyEntry(key, value, user.id);
+      res.json(vocabulary);
+    } catch (error: any) {
+      const status = error?.status ?? 500;
+      res.status(status).json({ message: error.message || "Failed to add vocabulary entry" });
+    }
+  });
+
+  app.delete("/api/admin/cms/vocabulary", requireAuth, requireAdmin, async (req, res) => {
+    try {
+      const user = req.user as User;
+      const key = req.body?.key as PortalVocabularyKey;
+      const value = typeof req.body?.value === "string" ? req.body.value : "";
+      if (!portalVocabularyKeys.includes(key)) {
+        return res.status(400).json({ message: "Invalid vocabulary key" });
+      }
+      const vocabulary = await removePortalVocabularyEntry(key, value, user.id);
+      res.json(vocabulary);
+    } catch (error: any) {
+      const status = error?.status ?? 500;
+      res.status(status).json({ message: error.message || "Failed to remove vocabulary entry" });
+    }
+  });
+
   // ───────────────── Admin: User Management ─────────────────
 
   // List all users (admin only)
@@ -4877,9 +4929,15 @@ export async function registerRoutes(
     return [first.data, ...pages.map((r) => (r?.data ?? []))].flat();
   }
 
-  async function fetchAllStrapiPagesLarge(basePath: string, concurrency = 5): Promise<any[]> {
+  async function fetchAllStrapiPagesLarge(
+    basePath: string,
+    options?: { pageSize?: number; concurrency?: number },
+  ): Promise<any[]> {
+    const pageSize = options?.pageSize ?? 50;
+    const concurrency = options?.concurrency ?? 2;
     const sep = basePath.includes("?") ? "&" : "?";
-    const firstUrl = `${basePath}${sep}pagination[page]=1&pagination[pageSize]=100`;
+    const pageQuery = `pagination[pageSize]=${pageSize}`;
+    const firstUrl = `${basePath}${sep}pagination[page]=1&${pageQuery}`;
     const first = await strapiRequestLarge(firstUrl);
     if (!first?.data || !Array.isArray(first.data)) return [];
     const { pageCount } = first.meta?.pagination ?? {};
@@ -4891,9 +4949,13 @@ export async function registerRoutes(
     for (let i = 0; i < remaining.length; i += concurrency) {
       const batch = remaining.slice(i, i + concurrency);
       const batchResults = await Promise.all(
-        batch.map((p) => strapiRequestLarge(`${basePath}${sep}pagination[page]=${p}&pagination[pageSize]=100`))
+        batch.map((p) =>
+          strapiRequestLarge(`${basePath}${sep}pagination[page]=${p}&${pageQuery}`),
+        ),
       );
-      batchResults.forEach((r, j) => { results[i + j] = r?.data ?? []; });
+      batchResults.forEach((r, j) => {
+        results[i + j] = r?.data ?? [];
+      });
       console.log(`[backup] Fetched manthra pages ${batch[0]}–${batch[batch.length - 1]} of ${pageCount}`);
     }
 
@@ -5640,6 +5702,7 @@ export async function registerRoutes(
         );
 
         console.log(`[backup] Saved as backup #${backup.id}`);
+        backupLastError = null;
       } catch (e: any) {
         const msg = e?.message ?? String(e);
         backupLastError = msg;

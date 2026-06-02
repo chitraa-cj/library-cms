@@ -1180,6 +1180,16 @@ export default function GranthasPage() {
   const mantraSyncChainRef = useRef<Promise<void>>(Promise.resolve());
   const pendingMantraDeletesRef = useRef<Set<string>>(new Set());
   const strapiSectionIndexRef = useRef<MantraSectionResolveContext>({});
+  const publishInProgressRef = useRef(false);
+
+  /** Block debounced mantra slot sync while publish is running (avoids 504 during large publishes). */
+  function armPublishSyncGuard() {
+    publishInProgressRef.current = true;
+    if (mantraSyncTimerRef.current) {
+      clearTimeout(mantraSyncTimerRef.current);
+      mantraSyncTimerRef.current = null;
+    }
+  }
 
   useEffect(() => {
     adhyayasRef.current = adhyayas;
@@ -1692,6 +1702,10 @@ export default function GranthasPage() {
     deleteDraft,
     recoverDraft,
   } = useDrafts("granthas");
+
+  useEffect(() => {
+    publishInProgressRef.current = publishDraft.isPending;
+  }, [publishDraft.isPending]);
 
   const saveManthraPatchMutation = useMutation({
     mutationFn: async (params: {
@@ -3894,18 +3908,21 @@ export default function GranthasPage() {
   function scheduleStrapiMantraSectionIdentitySync(
     snapshot: AdhyayaNode[],
     ctx: { adhyayaId: string; khandaId: string; padaId?: string },
+    opts?: { onlyManthraIds?: string[] },
   ) {
     const granthaDoc =
       editingItem && !editingItem._isDraft
         ? editingItem.documentId
         : editingItem?._strapiDocId;
     if (!isPublishedStrapiDocId(granthaDoc)) return;
+    if (publishInProgressRef.current) return;
 
     adhyayasRef.current = snapshot;
 
     if (mantraSyncTimerRef.current) clearTimeout(mantraSyncTimerRef.current);
     mantraSyncTimerRef.current = setTimeout(() => {
       mantraSyncTimerRef.current = null;
+      if (publishInProgressRef.current) return;
       const snap = adhyayasRef.current as SnapshotAdhyaya[];
       const cfg = structureConfigRef.current;
       const toDelete = [...pendingMantraDeletesRef.current];
@@ -3914,6 +3931,7 @@ export default function GranthasPage() {
 
       mantraSyncChainRef.current = mantraSyncChainRef.current
         .then(async () => {
+          if (publishInProgressRef.current) return;
           if (draftId && isPublishedStrapiDocId(granthaDoc)) {
             if (toDelete.length > 0) {
               const failedDeleteIds = await strapiDeleteMantrasBestEffort(toDelete);
@@ -3928,6 +3946,7 @@ export default function GranthasPage() {
               khandaId: ctx.khandaId,
               padaId: ctx.padaId,
               hierarchy: snap,
+              onlyManthraIds: opts?.onlyManthraIds,
             });
             const patches = (result.patches ?? []).map((p) => ({
               manthraId: p.manthraId,
@@ -3995,6 +4014,7 @@ export default function GranthasPage() {
           }
         })
         .catch((e: unknown) => {
+          if (publishInProgressRef.current) return;
           const msg = e instanceof Error ? e.message : String(e);
           toast({ variant: "destructive", title: "Strapi mantra sync failed", description: msg });
         });
@@ -4003,13 +4023,20 @@ export default function GranthasPage() {
 
 
   /** Retry CMS row creation for any portal-only verses (e.g. after a failed insert sync). */
-  async function flushPendingNewMantrasToStrapi(snapshot?: AdhyayaNode[]) {
+  async function flushPendingNewMantrasToStrapi(
+    snapshot?: AdhyayaNode[],
+    onlyManthraIds?: string[],
+  ) {
     if (!editingGranthaStrapiDocumentId()) return;
+    if (publishInProgressRef.current) return;
     const snap = (snapshot ?? adhyayasRef.current) as SnapshotAdhyaya[];
     const draftId = editingDraftId;
     try {
       if (draftId) {
-        const result = await syncMantraSlotsViaServer(draftId, { hierarchy: snap });
+        const result = await syncMantraSlotsViaServer(draftId, {
+          hierarchy: snap,
+          onlyManthraIds,
+        });
         if ((result.patches ?? []).length > 0 && Array.isArray(result.hierarchy)) {
           adhyayasRef.current = result.hierarchy as AdhyayaNode[];
           setAdhyayas(result.hierarchy as AdhyayaNode[]);
@@ -4207,7 +4234,9 @@ export default function GranthasPage() {
         cfg,
       );
       adhyayasRef.current = next;
-      scheduleStrapiMantraSectionIdentitySync(next, { adhyayaId, khandaId, padaId });
+      scheduleStrapiMantraSectionIdentitySync(next, { adhyayaId, khandaId, padaId }, {
+        onlyManthraIds: [newManthraId],
+      });
       return next;
     });
     openManthraEditor({ adhyayaId, khandaId, manthraId: newManthraId, padaId });
@@ -4281,7 +4310,9 @@ export default function GranthasPage() {
         cfg,
       );
       adhyayasRef.current = next;
-      scheduleStrapiMantraSectionIdentitySync(next, { adhyayaId, khandaId, padaId });
+      scheduleStrapiMantraSectionIdentitySync(next, { adhyayaId, khandaId, padaId }, {
+        onlyManthraIds: [newManthraId],
+      });
       return next;
     });
     openManthraEditor({ adhyayaId, khandaId, manthraId: newManthraId, padaId });
@@ -4684,7 +4715,6 @@ export default function GranthasPage() {
           if (!editingDraftId && saved?.id) {
             setEditingDraftId(saved.id);
           }
-          void flushPendingNewMantrasToStrapi(payload.hierarchy as AdhyayaNode[]);
         },
       }
     );
@@ -4801,6 +4831,7 @@ export default function GranthasPage() {
                 return;
               }
 
+              armPublishSyncGuard();
               publishDraft.mutate(resolvedDraftId, {
               onSuccess: (result: any) => {
                 resetPublishScope();
@@ -5027,7 +5058,10 @@ export default function GranthasPage() {
   }
 
   function handlePublish(item: any) {
-    if (item._draftId) publishDraft.mutate(item._draftId);
+    if (item._draftId) {
+      armPublishSyncGuard();
+      publishDraft.mutate(item._draftId);
+    }
   }
 
   // Collect which Strapi documentIds are currently being edited by a draft

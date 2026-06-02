@@ -588,6 +588,7 @@ export async function syncMantraSlotsViaServer(
     khandaId?: string;
     padaId?: string;
     hierarchy?: SnapshotAdhyaya[];
+    onlyManthraIds?: string[];
   },
 ): Promise<{
   ok?: boolean;
@@ -601,12 +602,14 @@ export async function syncMantraSlotsViaServer(
   }>;
   hierarchy?: unknown[];
   errors?: string[];
+  remainingPending?: number;
   message?: string;
 }> {
-  const { hierarchy, ...rest } = scope ?? {};
+  const { hierarchy, onlyManthraIds, ...rest } = scope ?? {};
   const res = await apiRequest("POST", `/api/drafts/${draftId}/sync-mantra-slots`, {
     ...rest,
     hierarchy,
+    onlyManthraIds,
   });
   return res.json();
 }

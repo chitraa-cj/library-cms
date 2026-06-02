@@ -4235,6 +4235,7 @@ export async function registerRoutes(
         khandaId?: string;
         padaId?: string;
         hierarchy?: unknown[];
+        onlyManthraIds?: string[];
       };
 
       const data = draft.data as Record<string, any>;
@@ -4249,6 +4250,7 @@ export async function registerRoutes(
           padaId: body.padaId,
         },
         hierarchyOverride: Array.isArray(body.hierarchy) ? body.hierarchy : undefined,
+        onlyManthraIds: Array.isArray(body.onlyManthraIds) ? body.onlyManthraIds : undefined,
       });
 
       if (result.patches.length > 0 || result.hierarchy !== data.hierarchy) {
@@ -4258,11 +4260,16 @@ export async function registerRoutes(
         });
       }
 
+      const hardErrors = result.errors.filter(
+        (e) => !e.includes("still pending CMS slot sync"),
+      );
+
       res.json({
-        ok: result.errors.length === 0,
+        ok: hardErrors.length === 0,
         patches: result.patches,
         hierarchy: result.hierarchy,
         errors: result.errors,
+        remainingPending: result.remainingPending ?? 0,
         message:
           result.patches.length > 0
             ? `Created ${result.patches.length} CMS row(s). They appear in the Mantras tab (labels may show as empty until verse sync).`

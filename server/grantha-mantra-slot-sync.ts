@@ -18,7 +18,11 @@ type MantraRow = {
   title?: string;
   order?: number;
   strapiDocumentId?: string;
+  _isNewLocal?: boolean;
 };
+
+/** Safety cap — large granthas must not create hundreds of CMS rows in one HTTP request. */
+const MAX_SLOT_CREATES_PER_REQUEST = 15;
 
 type MantraPadaNode = {
   id: string;
@@ -301,8 +305,11 @@ export async function syncPendingMantraSlotsFromDraft(opts: {
   mapSectionType: MapSectionTypeFn;
   scope?: { adhyayaId?: string; khandaId?: string; padaId?: string };
   hierarchyOverride?: unknown[];
-}): Promise<{ patches: MantraSlotPatch[]; hierarchy: any[]; errors: string[] }> {
-  const { draftData, granthaDocId, resolveSection, mapSectionType, scope, hierarchyOverride } = opts;
+  /** When set, only these portal rows may get new CMS slots (insert-after flow). */
+  onlyManthraIds?: string[];
+}): Promise<{ patches: MantraSlotPatch[]; hierarchy: any[]; errors: string[]; remainingPending?: number }> {
+  const { draftData, granthaDocId, resolveSection, mapSectionType, scope, hierarchyOverride, onlyManthraIds } =
+    opts;
   const structureConfig = (draftData.structureConfig ?? {}) as GranthaStructureConfig;
   const configuredLeaf = String(structureConfig.leafName || "Mantra").trim() || "Mantra";
   let hierarchy: any[] = Array.isArray(hierarchyOverride)
@@ -316,8 +323,10 @@ export async function syncPendingMantraSlotsFromDraft(opts: {
   const { childrenByParentDocId } = await fetchGranthaSectionTree(granthaDocId);
   const patches: MantraSlotPatch[] = [];
   const errors: string[] = [];
+  const onlySet = onlyManthraIds?.length ? new Set(onlyManthraIds) : null;
+  let remainingPending = 0;
 
-  for (const adhyaya of hierarchy as MantraSectionNode[]) {
+  outer: for (const adhyaya of hierarchy as MantraSectionNode[]) {
     for (const khanda of adhyaya.khandas ?? []) {
       const padas = khanda.padas ?? [];
       const targets: Array<{ padaId?: string; pada?: MantraPadaNode }> =
@@ -357,9 +366,17 @@ export async function syncPendingMantraSlotsFromDraft(opts: {
         const resolved = new Map<string, string>();
 
         for (let i = 0; i < sorted.length; i++) {
-          const m = sorted[i];
+          const m = sorted[i] as MantraRow;
           if (isPublishedStrapiDocId(m.strapiDocumentId)) {
             resolved.set(m.id, m.strapiDocumentId!);
+            continue;
+          }
+
+          const isExplicitTarget = onlySet ? onlySet.has(m.id) : !!m._isNewLocal;
+          if (!isExplicitTarget) continue;
+
+          if (patches.length >= MAX_SLOT_CREATES_PER_REQUEST) {
+            remainingPending++;
             continue;
           }
 
@@ -395,13 +412,20 @@ export async function syncPendingMantraSlotsFromDraft(opts: {
             errors.push(`Failed to create CMS row for "${portalLabel || m.id}" in section ${sectionDocId}.`);
           }
         }
+        if (patches.length >= MAX_SLOT_CREATES_PER_REQUEST) break outer;
       }
     }
+  }
+
+  if (remainingPending > 0) {
+    errors.push(
+      `${remainingPending} portal-only verse(s) still pending CMS slot sync — use + insert or Save after publish completes (max ${MAX_SLOT_CREATES_PER_REQUEST} per request).`,
+    );
   }
 
   if (patches.length > 0) {
     hierarchy = applyPatchesToHierarchy(hierarchy, patches);
   }
 
-  return { patches, hierarchy, errors };
+  return { patches, hierarchy, errors, remainingPending };
 }

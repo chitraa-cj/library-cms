@@ -105,6 +105,7 @@ import {
   countLeafMantrasInKhanda,
   countLeafMantrasInAdhyaya,
   countMantrasOnLeafSections,
+  strapiMantrasForResolvedSection,
   enforceMantraPlacementByStructure,
   type GranthaStructureConfig,
   type StrapiMantraRef,
@@ -2655,19 +2656,29 @@ export default function GranthasPage() {
           sm.docId,
         );
 
+      const leafForStrapiIndex =
+        (effectiveStructureConfig.leafName || "Mantra").trim() || "Mantra";
       for (const sec of fetchedSections) {
         if (sec.title) strapiSectionByTitle.set(sec.title, sec);
         if (Array.isArray(sec.manthras)) {
           const list: StrapiMantraRef[] = [];
           for (const m of sec.manthras) {
-            if (m.ShlokaManthraNumber && m.documentId) {
-              list.push({
-                title: m.ShlokaManthraNumber,
-                docId: m.documentId,
-                order: m.order ?? 0,
-                contentScore: scoreStrapiManthraRowContent(m.ShlokaManthraEntry),
-              });
-            }
+            if (!m.documentId) continue;
+            const sortKey =
+              typeof m.order === "number" && !Number.isNaN(m.order)
+                ? m.order
+                : (list.length + 1) * STRAPI_SORT_GAP;
+            const title =
+              (m.ShlokaManthraNumber ?? "").trim() ||
+              flatMantraLabelFromSpacedSortKey(sortKey, leafForStrapiIndex) ||
+              "";
+            if (!title) continue;
+            list.push({
+              title,
+              docId: m.documentId,
+              order: m.order ?? 0,
+              contentScore: scoreStrapiManthraRowContent(m.ShlokaManthraEntry),
+            });
           }
           if (sec.title) strapiMantrasBySecTitle.set(sec.title, list);
           if (sec.documentId) strapiMantrasBySecDocId.set(sec.documentId, list);
@@ -2801,13 +2812,11 @@ export default function GranthasPage() {
                 sectionCtx,
               );
               const adhyayaDocId: string | undefined = (a as any).documentId;
-              if (resolvedSecId) {
-                strapiMantrasForKhanda = strapiMantrasBySecDocId.get(resolvedSecId) ?? [];
-              } else if (adhyayaDocId) {
-                strapiMantrasForKhanda = strapiMantrasBySecDocId.get(adhyayaDocId) ?? [];
-              } else {
-                strapiMantrasForKhanda = [];
-              }
+              strapiMantrasForKhanda = strapiMantrasForResolvedSection(
+                strapiMantrasBySecDocId,
+                resolvedSecId,
+                adhyayaDocId,
+              );
             } else if (adhyaDocId) {
               // Real khanda: find this khanda's specific Strapi section.
               // Try documentId first (most reliable — survives title changes in Strapi),
@@ -3247,29 +3256,6 @@ export default function GranthasPage() {
       setStructureConfig(effectiveStructureConfig);
       const normalizedOpen = hierarchyForSave(prep.hierarchy as AdhyayaNode[], effectiveStructureConfig);
       setAdhyayas(normalizedOpen);
-
-      const strapiMantraTotal = [...strapiMantrasBySecDocId.values()].reduce(
-        (sum, list) => sum + list.length,
-        0,
-      );
-      const portalMantraTotal = normalizedOpen.reduce(
-        (sum, a) => sum + countLeafMantrasInAdhyaya(a, effectiveStructureConfig),
-        0,
-      );
-      if (
-        strapiMantraTotal > 0 &&
-        portalMantraTotal > 0 &&
-        portalMantraTotal < strapiMantraTotal * 0.9
-      ) {
-        console.warn(
-          `[granthas] Mantra count mismatch after enrich: portal=${portalMantraTotal}, strapi=${strapiMantraTotal}`,
-        );
-        toast({
-          variant: "destructive",
-          title: "Fewer mantras loaded than CMS",
-          description: `Editor shows ${portalMantraTotal} but Strapi has ${strapiMantraTotal} for this grantha. Hard-refresh the page (Cmd+Shift+R) or discard the draft and re-open so all ${strapiMantraTotal} verses sync in.`,
-        });
-      }
 
       bindGranthaMantraPrefetchContext();
       prefetchGranthaMantrasFromHierarchy(normalizedOpen);

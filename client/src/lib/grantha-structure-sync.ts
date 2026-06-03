@@ -843,6 +843,30 @@ export function countLeafMantrasInAdhyaya(
  * Parent sections (e.g. Khanda) often still carry legacy inline mantras while children
  * (Pada) hold the canonical rows — summing every section double-counts (549 vs 13).
  */
+/**
+ * Mantras for a portal khanda/pada after section resolution.
+ * When Strapi has a single leaf section (e.g. Atma Bodha "Shloka") but the portal adhyaya has no
+ * linked documentId, resolution returns empty — fall back to that sole section's list.
+ */
+export function strapiMantrasForResolvedSection(
+  strapiMantrasBySecDocId: Map<string, StrapiMantraRef[]>,
+  resolvedSecId: string | undefined,
+  adhyayaDocId: string | undefined,
+): StrapiMantraRef[] {
+  if (resolvedSecId) {
+    const list = strapiMantrasBySecDocId.get(resolvedSecId);
+    if (list && list.length > 0) return list;
+  }
+  if (adhyayaDocId) {
+    const list = strapiMantrasBySecDocId.get(adhyayaDocId);
+    if (list && list.length > 0) return list;
+  }
+  if (strapiMantrasBySecDocId.size === 1) {
+    return [...strapiMantrasBySecDocId.values()][0] ?? [];
+  }
+  return [];
+}
+
 export function countMantrasOnLeafSections(
   sections: Array<{ documentId?: string; parent?: { documentId?: string }; manthras?: unknown[] }>,
 ): number {

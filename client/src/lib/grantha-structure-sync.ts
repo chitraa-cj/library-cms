@@ -1041,6 +1041,99 @@ export function dedupePublishedMantrasForDisplay<
   return deduped.filter((m) => !drop.has(m));
 }
 
+export type ManthraTabRow = {
+  documentId?: string;
+  ShlokaManthraNumber?: string;
+  ShlokaManthraEntry?: unknown;
+  order?: number;
+  section?: { documentId?: string; title?: string };
+  grantha?: { documentId?: string; GranthaName?: string };
+};
+
+/** Mantras tab: attach grantha from sections, dedupe duplicates, canonicalize khanda paths. */
+export function normalizeManthrasForMantrasTab<
+  T extends ManthraTabRow,
+  S extends StrapiSectionNode & { grantha?: { documentId?: string; GranthaName?: string } },
+>(rows: T[], allSections: S[]): T[] {
+  const sectionByDocId = buildSectionByDocIdMap(allSections);
+  const normalized = rows.map((m) => {
+    if (m.grantha) return m;
+    const sectionDocId = m.section?.documentId;
+    if (!sectionDocId) return m;
+    const sec = sectionByDocId.get(sectionDocId);
+    if (!sec?.grantha) return m;
+    return { ...m, grantha: sec.grantha };
+  });
+  const deduped = dedupePublishedMantrasForDisplay(normalized);
+
+  const sectionHasDottedVerse = new Map<string, boolean>();
+  for (const m of deduped) {
+    const sec = m.section?.documentId;
+    if (!sec) continue;
+    const suf = mantraNumberSuffix(m.ShlokaManthraNumber);
+    if (suf?.includes(".")) sectionHasDottedVerse.set(sec, true);
+  }
+
+  const byCanonicalDisplayKey = new Map<string, { row: T; score: number }>();
+  for (const m of deduped) {
+    const sectionDocId = m.section?.documentId;
+    const label = String(m.ShlokaManthraNumber ?? "");
+    if (
+      sectionDocId &&
+      sectionHasDottedVerse.get(sectionDocId) &&
+      isBareLeafCounterTitle(label)
+    ) {
+      continue;
+    }
+    const granthaId = m.grantha?.documentId || "__none__";
+    const granthaSections = allSections.filter(
+      (s) =>
+        s.grantha?.documentId === granthaId ||
+        (s.grantha?.GranthaName && s.grantha?.GranthaName === m.grantha?.GranthaName),
+    );
+    const hasKhandaStructure = strapiGranthaHasKhandaSections(granthaSections);
+    if (!hasKhandaStructure || !sectionDocId) {
+      byCanonicalDisplayKey.set(`${m.documentId}`, { row: m, score: 0 });
+      continue;
+    }
+
+    const suffix = mantraNumberSuffix(m.ShlokaManthraNumber);
+    const leafOrd = mantraSuffixLeafOrder(suffix);
+    if (leafOrd == null) {
+      byCanonicalDisplayKey.set(`${m.documentId}`, { row: m, score: 0 });
+      continue;
+    }
+
+    const path = buildSectionAncestorPath(sectionDocId, sectionByDocId);
+    const pathKey = path.map((p) => p.documentId).join("/") || sectionDocId;
+    const canonicalKey = `${granthaId}:${pathKey}:${leafOrd}`;
+
+    const contentScore = scoreStrapiManthraRowContent(m.ShlokaManthraEntry);
+    const suffixDepth = suffix?.split(".").length ?? 0;
+    const misplacedPenalty = isMantraSectionMisplacedOnAdhyaya(sectionDocId, granthaSections)
+      ? -5000
+      : 0;
+    const score =
+      contentScore + suffixDepth * 100 + (path.length > 1 ? 1000 : 0) + misplacedPenalty;
+
+    const prev = byCanonicalDisplayKey.get(canonicalKey);
+    if (!prev || score > prev.score) {
+      byCanonicalDisplayKey.set(canonicalKey, { row: m, score });
+    }
+  }
+
+  return [...byCanonicalDisplayKey.values()]
+    .map((x) => x.row)
+    .sort((a, b) => {
+      const bySuffix = compareMantraNumberSuffix(
+        mantraNumberSuffix(a.ShlokaManthraNumber),
+        mantraNumberSuffix(b.ShlokaManthraNumber),
+      );
+      if (bySuffix !== 0) return bySuffix;
+      return (a.order ?? 0) - (b.order ?? 0);
+    });
+}
+
 /** Section row from Strapi `sections/by-grantha` (metadata + optional manthras). */
 export type StrapiSectionNode = {
   documentId?: string;

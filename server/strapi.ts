@@ -619,6 +619,7 @@ export function createStrapiRouter() {
       const firstPage = await strapiRequest(`/api/manthras?${MANTHRA_LIST_POPULATE}&pagination[page]=1`);
       const allManthras: any[] = (firstPage.data || []).map(normaliseManthra);
       const pageCount: number = firstPage.meta?.pagination?.pageCount ?? 1;
+      const strapiTotal: number = firstPage.meta?.pagination?.total ?? allManthras.length;
 
       // Fetch remaining pages in parallel if there are more
       if (pageCount > 1) {
@@ -633,7 +634,33 @@ export function createStrapiRouter() {
         }
       }
 
-      res.json({ ...firstPage, data: allManthras });
+      const fetchComplete = allManthras.length >= strapiTotal;
+      if (!fetchComplete) {
+        console.warn(
+          `[strapi] Manthras list incomplete: fetched ${allManthras.length}/${strapiTotal} (${pageCount} pages)`,
+        );
+      }
+
+      res.json({
+        ...firstPage,
+        data: allManthras,
+        meta: {
+          ...(firstPage.meta ?? {}),
+          pagination: {
+            ...(firstPage.meta?.pagination ?? {}),
+            total: strapiTotal,
+            pageCount,
+            pageSize: allManthras.length,
+          },
+          cmsFetch: {
+            rowsReturned: allManthras.length,
+            strapiTotal,
+            pagesExpected: pageCount,
+            pagesFetched: pageCount,
+            complete: fetchComplete,
+          },
+        },
+      });
     } catch (error: any) {
       res.status(500).json({ message: error.message || "Failed to fetch manthras" });
     }

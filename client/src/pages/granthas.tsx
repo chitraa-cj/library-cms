@@ -852,7 +852,21 @@ function GranthaCard({
   onPublish: () => void;
   onResetDraftFromStrapi?: () => void;
   isPublishing: boolean;
-  publishProgress?: { done: number; total: number; current: string } | null;
+  publishProgress?: {
+    done: number;
+    total: number;
+    current: string;
+    breakdown?: {
+      grantha: number;
+      teekas: number;
+      adhyayas: number;
+      khandas: number;
+      padas: number;
+      mantras: number;
+      total: number;
+    };
+    summary?: string;
+  } | null;
   isResettingDraft?: boolean;
   currentUserId?: string | null;
   isDuplicate?: boolean;
@@ -1034,6 +1048,11 @@ function GranthaCard({
             <div className="text-[10px] text-muted-foreground mt-1 truncate">
               {publishProgress.done}/{publishProgress.total} · {publishProgress.current}
             </div>
+            {publishProgress.summary && (
+              <div className="text-[10px] text-muted-foreground/80 mt-0.5 truncate" title={publishProgress.summary}>
+                {publishProgress.summary}
+              </div>
+            )}
           </div>
         );
       })()}
@@ -3228,6 +3247,30 @@ export default function GranthasPage() {
       setStructureConfig(effectiveStructureConfig);
       const normalizedOpen = hierarchyForSave(prep.hierarchy as AdhyayaNode[], effectiveStructureConfig);
       setAdhyayas(normalizedOpen);
+
+      const strapiMantraTotal = [...strapiMantrasBySecDocId.values()].reduce(
+        (sum, list) => sum + list.length,
+        0,
+      );
+      const portalMantraTotal = normalizedOpen.reduce(
+        (sum, a) => sum + countLeafMantrasInAdhyaya(a, effectiveStructureConfig),
+        0,
+      );
+      if (
+        strapiMantraTotal > 0 &&
+        portalMantraTotal > 0 &&
+        portalMantraTotal < strapiMantraTotal * 0.9
+      ) {
+        console.warn(
+          `[granthas] Mantra count mismatch after enrich: portal=${portalMantraTotal}, strapi=${strapiMantraTotal}`,
+        );
+        toast({
+          variant: "destructive",
+          title: "Fewer mantras loaded than CMS",
+          description: `Editor shows ${portalMantraTotal} but Strapi has ${strapiMantraTotal} for this grantha. Hard-refresh the page (Cmd+Shift+R) or discard the draft and re-open so all ${strapiMantraTotal} verses sync in.`,
+        });
+      }
+
       bindGranthaMantraPrefetchContext();
       prefetchGranthaMantrasFromHierarchy(normalizedOpen);
       if (isPublishedStrapiDocId(granthaDocId)) {
@@ -7104,6 +7147,14 @@ export default function GranthasPage() {
                     <div className="text-xs text-muted-foreground truncate">
                       {publishProgress.done}/{publishProgress.total} — {publishProgress.current}
                     </div>
+                    {publishProgress.summary && (
+                      <div
+                        className="text-[11px] text-muted-foreground/80 mt-1 leading-snug"
+                        data-testid="publish-progress-summary"
+                      >
+                        {publishProgress.summary}
+                      </div>
+                    )}
                   </div>
                 )}
                 </div>

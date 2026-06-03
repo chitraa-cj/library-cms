@@ -55,19 +55,18 @@ import {
   ChevronRight,
   Lock,
   Eye,
+  AlertTriangle,
 } from "lucide-react";
 import { blocksToText, textToBlocks } from "@/lib/strapi-blocks";
 import {
-  dedupePublishedMantrasForDisplay,
+  normalizeManthrasForMantrasTab,
   compareMantraNumberSuffix,
   mantraNumberSuffix,
-  mantraSuffixLeafOrder,
   MANTRA_LINK_MIN_CONTENT_SCORE,
   buildSectionByDocIdMap,
   buildSectionAncestorPath,
   sectionPathLabel,
   isMantraSectionMisplacedOnAdhyaya,
-  scoreStrapiManthraRowContent,
   strapiGranthaHasKhandaSections,
 } from "@/lib/grantha-structure-sync";
 import {
@@ -80,7 +79,6 @@ import {
   invalidateManthraCacheOnDocIdCorrection,
 } from "@/lib/mantra-cms-cache";
 import { STRAPI_POLL_INTERVAL } from "@/hooks/use-strapi-sync";
-import { isBareLeafCounterTitle } from "@shared/grantha-publish-integrity";
 
 const EMPTY_TT: TextAndTranslation = {
   SanskritTextEntry: "",
@@ -205,6 +203,7 @@ export default function ManthrasPage() {
     queryKey: ["/api/strapi", "manthras"],
     refetchInterval: STRAPI_POLL_INTERVAL,
     refetchOnWindowFocus: true,
+    refetchOnMount: "always",
   });
 
   const { data: sectionsData } = useQuery<StrapiResponse<StrapiSection>>({
@@ -296,93 +295,21 @@ export default function ManthrasPage() {
   const sectionByDocId = useMemo(() => buildSectionByDocIdMap(allSections), [allSections]);
 
   const strapiManthras = useMemo(() => {
-    const normalized = [...(data?.data || [])].map((m: any) => {
-      // If the server normalization already gave us a grantha, use it.
-      if (m.grantha) return m;
-      // Otherwise supplement from the sections list using the section documentId.
-      const sectionDocId = m.section?.documentId;
-      if (!sectionDocId) return m;
-      const sec = sectionByDocId.get(sectionDocId);
-      if (!sec?.grantha) return m;
-      return { ...m, grantha: sec.grantha };
-    });
-    const deduped = dedupePublishedMantrasForDisplay(normalized);
+    return normalizeManthrasForMantrasTab([...(data?.data || [])], allSections as any[]);
+  }, [data, allSections]);
 
-    const sectionHasDottedVerse = new Map<string, boolean>();
-    for (const m of deduped) {
-      const sec = m.section?.documentId;
-      if (!sec) continue;
-      const suf = mantraNumberSuffix(m.ShlokaManthraNumber);
-      if (suf?.includes(".")) sectionHasDottedVerse.set(sec, true);
-    }
+  const manthrasFetchMeta = (data as { meta?: { cmsFetch?: {
+    rowsReturned?: number;
+    strapiTotal?: number;
+    complete?: boolean;
+  } } } | undefined)?.meta?.cmsFetch;
 
-    // One more canonicalization pass for granthas that now have khanda-level sections:
-    // keep exactly one best row per section-path + verse leaf index (e.g. 13),
-    // so legacy ghosts like "1.13" don't appear alongside canonical "1.1.13".
-    const byCanonicalDisplayKey = new Map<string, { row: any; score: number }>();
-    for (const m of deduped) {
-      const sectionDocId = m.section?.documentId;
-      const label = String(m.ShlokaManthraNumber ?? "");
-      if (
-        sectionDocId &&
-        sectionHasDottedVerse.get(sectionDocId) &&
-        isBareLeafCounterTitle(label)
-      ) {
-        continue;
-      }
-      const granthaId = m.grantha?.documentId || "__none__";
-      const granthaSections = allSections.filter(
-        (s) =>
-          (s as any).grantha?.documentId === granthaId ||
-          ((s as any).grantha?.GranthaName &&
-            (s as any).grantha?.GranthaName === m.grantha?.GranthaName),
-      );
-      const hasKhandaStructure = strapiGranthaHasKhandaSections(granthaSections as any[]);
-      if (!hasKhandaStructure || !sectionDocId) {
-        byCanonicalDisplayKey.set(`${m.documentId}`, { row: m, score: 0 });
-        continue;
-      }
-
-      const suffix = mantraNumberSuffix(m.ShlokaManthraNumber);
-      const leafOrd = mantraSuffixLeafOrder(suffix);
-      if (leafOrd == null) {
-        byCanonicalDisplayKey.set(`${m.documentId}`, { row: m, score: 0 });
-        continue;
-      }
-
-      const path = buildSectionAncestorPath(sectionDocId, sectionByDocId);
-      const pathKey = path.map((p) => p.documentId).join("/") || sectionDocId;
-      const canonicalKey = `${granthaId}:${pathKey}:${leafOrd}`;
-
-      const contentScore = scoreStrapiManthraRowContent(m.ShlokaManthraEntry);
-      const suffixDepth = suffix?.split(".").length ?? 0;
-      const misplacedPenalty = isMantraSectionMisplacedOnAdhyaya(sectionDocId, granthaSections as any[])
-        ? -5000
-        : 0;
-      const score =
-        contentScore +
-        suffixDepth * 100 +
-        (path.length > 1 ? 1000 : 0) +
-        misplacedPenalty;
-
-      const prev = byCanonicalDisplayKey.get(canonicalKey);
-      if (!prev || score > prev.score) {
-        byCanonicalDisplayKey.set(canonicalKey, { row: m, score });
-      }
-    }
-    const canonicalRows = [...byCanonicalDisplayKey.values()].map((x) => x.row);
-
-    return canonicalRows.sort(
-      (a: any, b: any) => {
-        const bySuffix = compareMantraNumberSuffix(
-          mantraNumberSuffix(a.ShlokaManthraNumber),
-          mantraNumberSuffix(b.ShlokaManthraNumber),
-        );
-        if (bySuffix !== 0) return bySuffix;
-        return (a.order ?? 0) - (b.order ?? 0);
-      },
-    );
-  }, [data, sectionByDocId, allSections]);
+  const rawManthraCount = data?.data?.length ?? 0;
+  const fetchLooksIncomplete =
+    !!manthrasFetchMeta &&
+    (manthrasFetchMeta.complete === false ||
+      (typeof manthrasFetchMeta.strapiTotal === "number" &&
+        rawManthraCount < manthrasFetchMeta.strapiTotal));
 
   function getGranthaForSection(sectionDocId: string) {
     const sec = allSections.find((s) => s.documentId === sectionDocId);
@@ -731,6 +658,23 @@ export default function ManthrasPage() {
           </Button>
         )}
       </div>
+
+      {fetchLooksIncomplete && (
+        <div
+          className="mb-4 flex items-start gap-2 rounded-md border border-amber-300 bg-amber-50 dark:bg-amber-950/30 dark:border-amber-800 px-3 py-2 text-sm text-amber-900 dark:text-amber-200"
+          data-testid="manthras-incomplete-fetch-banner"
+        >
+          <AlertTriangle className="w-4 h-4 shrink-0 mt-0.5" />
+          <div>
+            <p className="font-medium">Incomplete mantra list loaded</p>
+            <p className="text-xs mt-0.5 opacity-90">
+              CMS returned {rawManthraCount} of {manthrasFetchMeta?.strapiTotal ?? "?"} rows.
+              Refresh the page (or use the &quot;Update available&quot; prompt after deploy).
+              Large granthas like Vivekachudamani need all pages — showing a partial list can look like 13 instead of 548.
+            </p>
+          </div>
+        </div>
+      )}
 
       <div className="rounded-lg border border-border bg-card overflow-hidden">
         {isLoading || isLoadingDrafts || isLoadingGranthaDrafts || isLoadingUnifiedPending ? (

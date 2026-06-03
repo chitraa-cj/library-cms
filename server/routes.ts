@@ -47,6 +47,7 @@ import {
 import { readClientBuildId } from "./build-info";
 import { applyHierarchyRepairInPlace } from "./grantha-hierarchy-repair";
 import { syncPendingMantraSlotsFromDraft } from "./grantha-mantra-slot-sync";
+import { buildGranthaPublishProgressPlan } from "@shared/grantha-publish-progress";
 import { collectUnlinkedMantrasFromGranthaDraft } from "../client/src/lib/grantha-strapi-mantra-sync";
 
 /** Compress a snapshot payload for DB storage (gzip + base64 wrapper). */
@@ -108,7 +109,13 @@ const STRAPI_INTERNAL_KEYS = new Set(["id", "_id", "__component", "createdAt", "
 // ─── Background publish job store ────────────────────────────────────────────
 interface PublishJob {
   status: "running" | "done" | "failed" | "failed_recoverable";
-  progress: { done: number; total: number; current: string };
+  progress: {
+    done: number;
+    total: number;
+    current: string;
+    breakdown?: import("@shared/grantha-publish-progress").GranthaPublishProgressBreakdown;
+    summary?: string;
+  };
   result?: any;
   error?: string;
   startedAt: Date;
@@ -2413,7 +2420,15 @@ async function assertGranthaPublishNotLocked(strapiGranthaDocId: string | null |
 async function publishGranthaWithHierarchy(
   draft: any,
   jobId?: string,
-  onProgress?: (done: number, total: number, current: string) => void,
+  onProgress?: (
+    done: number,
+    total: number,
+    current: string,
+    meta?: {
+      breakdown?: import("@shared/grantha-publish-progress").GranthaPublishProgressBreakdown;
+      summary?: string;
+    },
+  ) => void,
   allowRenumber?: boolean,
 ): Promise<any> {
   await assertGranthaPublishNotLocked(draft.strapiDocumentId);
@@ -2441,29 +2456,40 @@ async function publishGranthaWithHierarchy(
   // ReferenceError on the function name itself — making the dependency chain
   // self-enforcing rather than relying on code placement conventions.
   let _progressDone = 0;
-  const countHierarchyItems = (hier: any[]): number => {
-    const l3 = !!structureConfig?.levelThreeEnabled;
-    let n = 0;
-    for (const a of (hier ?? [])) {
-      n++; // adhyaya section
-      for (const k of (a.khandas ?? [])) {
-        if (k.title && k.title !== "_default") n++; // khanda section
-        if (l3 && Array.isArray(k.padas) && k.padas.length > 0) {
-          for (const p of k.padas) { n++; n += (p.manthras ?? []).length; }
-        } else {
-          n += (k.manthras ?? []).length;
-        }
-      }
-    }
-    return n;
-  };
-  const _progressTotal = 1 /* grantha */ +
-    (Array.isArray(teekaDefinitions) ? teekaDefinitions.length : 0) +
-    (Array.isArray(hierarchy) ? countHierarchyItems(hierarchy) : 0);
-  const reportProgress = (current: string): void => {
+  const _publishProgressPlan = buildGranthaPublishProgressPlan({
+    hierarchy,
+    teekaDefinitions,
+    levelThreeEnabled: !!structureConfig?.levelThreeEnabled,
+    levelTwoEnabled: structureConfig?.levelTwoEnabled !== false,
+  });
+  const _progressTotal = _publishProgressPlan.total;
+  console.log("[publish] progress plan", {
+    granthaId: draft.strapiDocumentId ?? draft.id,
+    draftTitle: draft.title,
+    totalItems: _progressTotal,
+    breakdown: {
+      grantha: _publishProgressPlan.grantha,
+      teekas: _publishProgressPlan.teekas,
+      adhyayas: _publishProgressPlan.adhyayas,
+      khandas: _publishProgressPlan.khandas,
+      padas: _publishProgressPlan.padas,
+      mantras: _publishProgressPlan.mantras,
+    },
+    summary: _publishProgressPlan.summary,
+  });
+  const reportProgress = (current: string, entityType?: string): void => {
     _progressDone++;
+    if (entityType) {
+      console.log(
+        `[publish][progress] ${_progressDone}/${_progressTotal} ${entityType}: ${current}`,
+      );
+    }
     onProgress?.(_progressDone, _progressTotal, current);
   };
+  onProgress?.(0, _progressTotal, _publishProgressPlan.summary, {
+    breakdown: _publishProgressPlan,
+    summary: _publishProgressPlan.summary,
+  });
 
   // Strapi requires BhashyakaraIntroduction.SanskritTextEntry to always be present
   // when BhashyakaraIntroduction is included. cleanPayloadForStrapi may have stripped
@@ -2568,7 +2594,7 @@ async function publishGranthaWithHierarchy(
   }
 
   const granthaDocId: string | undefined = strapiResult?.data?.documentId;
-  reportProgress("Grantha record");
+  reportProgress("Grantha record", "grantha");
 
   // 2. Publish teekas (best-effort) — create each teeka and link to this grantha.
   // Also build a TeekaName→Strapi-documentId map so step 3 can resolve teekas instantly
@@ -2609,7 +2635,7 @@ async function publishGranthaWithHierarchy(
         if (docId) {
           console.log(`[publish] Teeka "${c.effectiveName}" already exists (${docId}) — reusing`);
           teekaNameToDocId.set(c.effectiveName.toLowerCase(), docId);
-          reportProgress(`Teeka: ${c.effectiveName}`);
+          reportProgress(`Teeka: ${c.effectiveName}`, "teeka");
         } else {
           toCreate.push(c);
         }
@@ -2644,7 +2670,7 @@ async function publishGranthaWithHierarchy(
             } catch (e: any) {
               console.error(`[publish] Teeka "${c.effectiveName}" failed:`, e.message);
             } finally {
-              reportProgress(`Teeka: ${c.effectiveName}`);
+              reportProgress(`Teeka: ${c.effectiveName}`, "teeka");
             }
           }),
         );
@@ -2864,7 +2890,7 @@ async function publishGranthaWithHierarchy(
         await Promise.all(
           batch.map(async (m) => {
             await publishManthra(m, sectionDocId, portalSiblings);
-            reportProgress(m.title || m.id);
+            reportProgress(m.title || m.id, "mantra");
           }),
         );
       }
@@ -2931,7 +2957,7 @@ async function publishGranthaWithHierarchy(
           }
         } finally {
           if (terminal) {
-            reportProgress(qManthra?.title || qManthra?.id || "manthra");
+            reportProgress(qManthra?.title || qManthra?.id || "manthra", "mantra");
           }
         }
       }
@@ -3016,7 +3042,7 @@ async function publishGranthaWithHierarchy(
       }
       if (!adhyayaDocId) return;
       if (adhyaya.id) adhyayaIdToDocId.set(adhyaya.id, adhyayaDocId);
-      reportProgress(adhyaya.title);
+      reportProgress(adhyaya.title, "adhyaya");
 
       for (const khanda of (adhyaya.khandas ?? [])) {
         const isDefaultKhanda = khanda.title === "_default" || !levelTwoEnabled;
@@ -3071,7 +3097,7 @@ async function publishGranthaWithHierarchy(
           }
           if (!khandaDocId) continue;
           if (khanda.id) khandaIdToDocId.set(khanda.id, khandaDocId);
-          reportProgress(khanda.title);
+          reportProgress(khanda.title, "khanda");
         } else if (!khandaDocId) {
           khandaDocId = adhyayaDocId;
         }
@@ -3105,7 +3131,7 @@ async function publishGranthaWithHierarchy(
             }
             if (!padaDocId) continue;
             if (pada.id) padaIdToDocId.set(pada.id, padaDocId);
-            reportProgress(pada.title);
+            reportProgress(pada.title, "pada");
             await publishManthrasBatch(pada.manthras ?? [], padaDocId);
           }
         } else {
@@ -4698,8 +4724,14 @@ export async function registerRoutes(
         // Single attempt: retrying re-runs the entire grantha walk (progress resets to 0).
         withPublishRetries(
           () =>
-            publishGranthaWithHierarchy(draft, jobId, (done, total, current) => {
-              job.progress = { done, total, current };
+            publishGranthaWithHierarchy(draft, jobId, (done, total, current, meta) => {
+              job.progress = {
+                done,
+                total,
+                current,
+                breakdown: meta?.breakdown ?? job.progress.breakdown,
+                summary: meta?.summary ?? job.progress.summary,
+              };
               void storage.updatePublishJob(jobId, {
                 status: "running",
                 progressDone: done,

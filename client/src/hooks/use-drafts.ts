@@ -9,6 +9,16 @@ export interface PublishProgress {
   done: number;
   total: number;
   current: string;
+  breakdown?: {
+    grantha: number;
+    teekas: number;
+    adhyayas: number;
+    khandas: number;
+    padas: number;
+    mantras: number;
+    total: number;
+  };
+  summary?: string;
 }
 
 export function useDrafts(contentType: string) {
@@ -80,6 +90,8 @@ export function useDrafts(contentType: string) {
             done: status.progress.done,
             total: status.progress.total,
             current: status.progress.current,
+            breakdown: status.progress.breakdown,
+            summary: status.progress.summary,
           });
         }
         if (status.status === "done") {

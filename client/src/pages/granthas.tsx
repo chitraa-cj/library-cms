@@ -106,6 +106,7 @@ import {
   countLeafMantrasInAdhyaya,
   countMantrasOnLeafSections,
   strapiMantrasForResolvedSection,
+  linkFlatGranthaAdhyayasToSoleStrapiSection,
   enforceMantraPlacementByStructure,
   type GranthaStructureConfig,
   type StrapiMantraRef,
@@ -2827,7 +2828,11 @@ export default function GranthasPage() {
                 (kDocId ? childSecs.find((c: any) => c.documentId === kDocId) : undefined)
                 ?? childSecs.find((c: any) => c.title === k.title);
               strapiMantrasForKhanda = matchSec?.documentId
-                ? (strapiMantrasBySecDocId.get(matchSec.documentId) ?? [])
+                ? strapiMantrasForResolvedSection(
+                    strapiMantrasBySecDocId,
+                    matchSec.documentId,
+                    adhyaDocId,
+                  )
                 : [];
             } else {
               // No adhyaya docId — cannot scope khanda; skip title-only map (collides across adhyayas).
@@ -2914,7 +2919,11 @@ export default function GranthasPage() {
                       (s: any) => s.title === p.title
                     )?.documentId
                   : undefined);
-              const padaStrapi = padaDocId ? (strapiMantrasBySecDocId.get(padaDocId) ?? []) : [];
+              const padaStrapi = strapiMantrasForResolvedSection(
+                strapiMantrasBySecDocId,
+                padaDocId,
+                khandaDocId,
+              );
               const { byOrder: padaByOrder, ambiguousOrders: padaAmbiguousOrders } =
                 buildUniqueStrapiOrderMap(padaStrapi);
               const padaResolveOpts = {
@@ -3134,7 +3143,10 @@ export default function GranthasPage() {
           };
         }); // end of hier.map
       }
-      let hierInputForEnrich = hierToUse2;
+      let hierInputForEnrich = linkFlatGranthaAdhyayasToSoleStrapiSection(
+        hierToUse2,
+        fetchedSections,
+      );
       const configuredLeaf = (effectiveStructureConfig.leafName || "Mantra").trim() || "Mantra";
       if (rawCfg2?.leafName === "Khanda") {
         hierInputForEnrich = migrateHierarchyLeafName(hierInputForEnrich, "Khanda", "Mantra");

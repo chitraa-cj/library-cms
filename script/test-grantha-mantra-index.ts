@@ -35,6 +35,8 @@ import {
   countLeafMantrasInSectionTree,
   enforceMantraPlacementByStructure,
   dedupePublishedMantrasForDisplay,
+  strapiMantrasForResolvedSection,
+  linkFlatGranthaAdhyayasToSoleStrapiSection,
   type MantraTitleCtx,
 } from "../client/src/lib/grantha-structure-sync.ts";
 import {
@@ -634,5 +636,20 @@ const vedantaRows = dedupePublishedMantrasForDisplay([
 ]);
 assert.equal(vedantaRows.length, 1);
 assert.equal(vedantaRows[0].documentId, "good-vaakhyaa");
+
+const flatMap = new Map<string, StrapiMantraRef[]>([
+  ["shloka-sec", [{ title: "Mantra 1.1", docId: "doc-111111111111", order: 100_000 }]],
+  ["empty-adhyaya", []],
+]);
+assert.equal(
+  strapiMantrasForResolvedSection(flatMap, undefined, undefined).length,
+  1,
+  "sole non-empty Strapi section used when portal has no docId",
+);
+const linked = linkFlatGranthaAdhyayasToSoleStrapiSection(
+  [{ id: "a1", title: "Adhyaya 1", khandas: [{ id: "k1", title: "_default", manthras: [] }] }],
+  [{ documentId: "shloka-sec", manthras: [{ documentId: "doc-111111111111" }] }],
+);
+assert.equal(linked[0].documentId, "shloka-sec");
 
 console.log("test-grantha-mantra-index: all ok (insert/delete/order)");

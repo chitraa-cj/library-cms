@@ -670,7 +670,6 @@ export default function ManthrasPage() {
             <p className="text-xs mt-0.5 opacity-90">
               CMS returned {rawManthraCount} of {manthrasFetchMeta?.strapiTotal ?? "?"} rows.
               Refresh the page (or use the &quot;Update available&quot; prompt after deploy).
-              Large granthas like Vivekachudamani need all pages — showing a partial list can look like 13 instead of 548.
             </p>
           </div>
         </div>

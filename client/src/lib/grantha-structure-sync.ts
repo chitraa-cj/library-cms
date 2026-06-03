@@ -845,26 +845,54 @@ export function countLeafMantrasInAdhyaya(
  */
 /**
  * Mantras for a portal khanda/pada after section resolution.
- * When Strapi has a single leaf section (e.g. Atma Bodha "Shloka") but the portal adhyaya has no
- * linked documentId, resolution returns empty — fall back to that sole section's list.
+ * When the portal node has no linked Strapi section (common on flat books), fall back to the
+ * grantha's only section that actually has mantras so enrich never leaves verses behind.
  */
 export function strapiMantrasForResolvedSection(
   strapiMantrasBySecDocId: Map<string, StrapiMantraRef[]>,
   resolvedSecId: string | undefined,
-  adhyayaDocId: string | undefined,
+  parentSecId: string | undefined,
 ): StrapiMantraRef[] {
   if (resolvedSecId) {
     const list = strapiMantrasBySecDocId.get(resolvedSecId);
     if (list && list.length > 0) return list;
   }
-  if (adhyayaDocId) {
-    const list = strapiMantrasBySecDocId.get(adhyayaDocId);
+  if (parentSecId) {
+    const list = strapiMantrasBySecDocId.get(parentSecId);
     if (list && list.length > 0) return list;
   }
+  const nonEmpty = [...strapiMantrasBySecDocId.values()].filter((list) => list.length > 0);
+  if (nonEmpty.length === 1) return nonEmpty[0]!;
   if (strapiMantrasBySecDocId.size === 1) {
     return [...strapiMantrasBySecDocId.values()][0] ?? [];
   }
   return [];
+}
+
+/**
+ * Flat granthas (one top-level Strapi section with all mantras, e.g. Atma Bodha "Shloka") often
+ * have portal adhyayas with no documentId. Link them so enrich and publish resolve the same rows.
+ */
+export function linkFlatGranthaAdhyayasToSoleStrapiSection<
+  T extends { documentId?: string; khandas?: unknown[] },
+>(
+  hierarchy: T[],
+  sections: Array<{
+    documentId?: string;
+    parent?: { documentId?: string };
+    manthras?: unknown[];
+  }>,
+): T[] {
+  const topWithMantras = sections.filter(
+    (s) => !s.parent?.documentId && Array.isArray(s.manthras) && s.manthras.length > 0,
+  );
+  if (topWithMantras.length !== 1) return hierarchy;
+  const soleDocId = topWithMantras[0]?.documentId;
+  if (!isPublishedStrapiDocId(soleDocId)) return hierarchy;
+  return hierarchy.map((a) => {
+    if (isPublishedStrapiDocId(a.documentId)) return a;
+    return { ...a, documentId: soleDocId };
+  });
 }
 
 export function countMantrasOnLeafSections(

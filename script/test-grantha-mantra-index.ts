@@ -161,6 +161,44 @@ const remap = resolvePortalMantraToStrapiDoc(
 );
 assert.equal(remap?.docId, "doc-aaaa1111111111");
 
+// After renumber: trust portal strapiDocumentId even when Strapi label suffix differs.
+const renumberSection: StrapiMantraRef[] = [
+  { title: "Shloka 1.3", docId: "doc-3333333333333333", order: 300000 },
+  { title: "Shloka 1.4", docId: "doc-4444444444444444", order: 400000 },
+];
+const { byOrder: renumberByOrder, ambiguousOrders: renumberAmbiguous } =
+  buildUniqueStrapiOrderMap(renumberSection);
+const renumberLink = resolvePortalMantraToStrapiDoc(
+  { title: "Shloka 1.2", strapiDocumentId: "doc-4444444444444444", order: 400000 },
+  {
+    configuredLeaf: "Shloka",
+    sectionMantras: renumberSection,
+    byOrder: renumberByOrder,
+    ambiguousOrders: renumberAmbiguous,
+  },
+);
+assert.equal(
+  renumberLink?.docId,
+  "doc-4444444444444444",
+  "must trust documentId after renumber, not remap by stale Strapi order",
+);
+
+// Order-only fallback removed: no title suffix match and no stored docId → no link.
+const noOrderFallback = resolvePortalMantraToStrapiDoc(
+  { title: "Shloka 1.2", order: 400000 },
+  {
+    configuredLeaf: "Shloka",
+    sectionMantras: renumberSection,
+    byOrder: renumberByOrder,
+    ambiguousOrders: renumberAmbiguous,
+  },
+);
+assert.equal(
+  noOrderFallback?.docId,
+  undefined,
+  "must not match by Strapi sort order when suffix is missing in CMS",
+);
+
 // Same verse label in two sections must not cross-link (no grantha-wide title map).
 const sectionARefs: StrapiMantraRef[] = [
   { title: "Mantra 1.1.1", docId: "doc-aaaa1111111111", order: 1, contentScore: 50 },

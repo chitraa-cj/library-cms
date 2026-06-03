@@ -380,7 +380,7 @@ export function resolvePortalMantraToStrapiDoc(
   portal: { title?: string; order?: number; strapiDocumentId?: string },
   opts: ResolvePortalMantraStrapiOptions,
 ): { docId: string | undefined } | undefined {
-  const { configuredLeaf, byExactTitle, sectionMantras, byOrder, ambiguousOrders } = opts;
+  const { configuredLeaf, byExactTitle, sectionMantras } = opts;
   const leaf = (configuredLeaf || "Mantra").trim();
 
   if (portal.title) {
@@ -416,40 +416,10 @@ export function resolvePortalMantraToStrapiDoc(
   if (portal.strapiDocumentId) {
     const sm = sectionMantras.find((s) => s.docId === portal.strapiDocumentId);
     if (sm) {
-      if (
-        !portal.title ||
-        (portal.title.trim().toLowerCase() === sm.title.trim().toLowerCase()) ||
-        mantrasShareLeafAndSuffix(portal.title, sm.title, leaf)
-      ) {
-        return { docId: portal.strapiDocumentId };
-      }
-      return { docId: undefined };
-    }
-    if (
-      portal.order != null &&
-      isStrapiFractionalSortKey(portal.order) &&
-      !ambiguousOrders.has(portal.order) &&
-      byOrder.has(portal.order)
-    ) {
-      const remapped = byOrder.get(portal.order)!;
-      if (titleUsesConfiguredLeaf(remapped.title, leaf)) {
-        return { docId: remapped.docId };
-      }
-      return { docId: undefined };
+      // documentId is the stable identity — title/suffix may lag after renumber or deletion.
+      return { docId: portal.strapiDocumentId };
     }
     return { docId: undefined };
-  }
-
-  if (
-    portal.order != null &&
-    isStrapiFractionalSortKey(portal.order) &&
-    !ambiguousOrders.has(portal.order) &&
-    byOrder.has(portal.order)
-  ) {
-    const sm = byOrder.get(portal.order)!;
-    if (titleUsesConfiguredLeaf(sm.title, leaf)) {
-      return { docId: sm.docId };
-    }
   }
 
   return undefined;
@@ -1065,8 +1035,7 @@ export function dedupePublishedMantrasForDisplay<
     for (const m of secRows) {
       const label = String(m.ShlokaManthraNumber ?? "");
       if (!isBareLeafCounterTitle(label)) continue;
-      const score = scoreStrapiManthraRowContent(m.ShlokaManthraEntry);
-      if (score < MANTRA_LINK_MIN_CONTENT_SCORE) drop.add(m);
+      drop.add(m);
     }
   }
   return deduped.filter((m) => !drop.has(m));

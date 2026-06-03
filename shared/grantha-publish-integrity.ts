@@ -131,6 +131,9 @@ export type MantraPublishScanInput = {
    *  deletion shifted every following verse down by one). Skips the suffix-stability check
    *  only; duplicate-suffix and cross-grantha checks still apply. */
   allowRenumber?: boolean;
+  /** Portal hierarchy `strapiDocumentId` — when it matches `targetDocumentId`, suffix
+   *  changes are intentional renumber on the same CMS row (not a cross-verse overwrite). */
+  portalLinkedDocumentId?: string;
 };
 
 /** Plain text from Strapi blocks or string. */
@@ -157,6 +160,17 @@ export function plainTextFromManthraEntry(entry: unknown): { sk: string; en: str
   };
 }
 
+/**
+ * True when `newSuf` adds hierarchy depth without renumbering the logical path
+ * (e.g. after inserting Khanda: `1.1` → `1.1.1`, or flat `1` → `1.1`).
+ * Blocks arbitrary renumber such as `1.372` → `1.2.4`.
+ */
+export function isStructuralSuffixExtension(oldSuf: string, newSuf: string): boolean {
+  if (!oldSuf || !newSuf) return false;
+  if (oldSuf === newSuf) return true;
+  return newSuf.startsWith(`${oldSuf}.`);
+}
+
 /** Verse suffix must not change when updating an existing CMS row (prevents 1.372 → 1.2.4). */
 export function assertVerseSuffixStable(
   existingLabel: string,
@@ -165,6 +179,7 @@ export function assertVerseSuffixStable(
   const oldSuf = mantraNumberSuffix(existingLabel);
   const newSuf = mantraNumberSuffix(newLabel);
   if (!oldSuf || !newSuf || oldSuf === newSuf) return null;
+  if (isStructuralSuffixExtension(oldSuf, newSuf)) return null;
   return {
     code: "suffix_changed",
     severity: "error",
@@ -246,7 +261,11 @@ export function scanMantraForPublish(input: MantraPublishScanInput): PublishInte
   if (leafViolation) out.push(leafViolation);
 
   const existing = (input.existingStrapiLabel ?? "").trim();
-  if (existing && label && !input.allowRenumber) {
+  const portalLinked = (input.portalLinkedDocumentId ?? "").trim();
+  const targetDoc = (input.targetDocumentId ?? "").trim();
+  const portalOwnsTargetRow =
+    portalLinked.length >= 10 && targetDoc.length >= 10 && portalLinked === targetDoc;
+  if (existing && label && !input.allowRenumber && !portalOwnsTargetRow) {
     const suffixViolation = assertVerseSuffixStable(existing, label);
     if (suffixViolation) {
       out.push({ ...suffixViolation, documentId: input.targetDocumentId });

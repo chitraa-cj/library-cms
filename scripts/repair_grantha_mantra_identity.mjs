@@ -100,9 +100,18 @@ async function countMantrasInSection(sectionDocId) {
   const s = encodeURIComponent(sectionDocId);
   const { body } = await strapiReq(
     "GET",
-    `/api/manthras?filters[Section][documentId][$eq]=${s}&pagination[pageSize]=1`,
+    `/api/manthras?filters[Section][documentId][$eq]=${s}&fields[0]=ShlokaManthraNumber&pagination[pageSize]=100`,
   );
-  return body.meta?.pagination?.total ?? 0;
+  return body.data ?? [];
+}
+
+function inferLeafFromMantras(manthras) {
+  for (const m of manthras) {
+    const label = String(m.ShlokaManthraNumber ?? "").trim();
+    const m2 = label.match(/^(.+?)\s+\d+(?:\.\d+)+\s*$/);
+    if (m2) return m2[1].trim();
+  }
+  return "Mantra";
 }
 
 async function main() {
@@ -133,8 +142,8 @@ async function main() {
   const repairScript = path.join(path.dirname(fileURLToPath(import.meta.url)), "repair_section_mantra_identity.mjs");
   const withMantras = [];
   for (const sec of leafSections) {
-    const n = await countMantrasInSection(sec.documentId);
-    if (n > 0) withMantras.push({ ...sec, mantraCount: n });
+    const mantras = await countMantrasInSection(sec.documentId);
+    if (mantras.length > 0) withMantras.push({ ...sec, mantraCount: mantras.length, mantras });
   }
 
   if (withMantras.length === 0) {
@@ -143,11 +152,12 @@ async function main() {
   }
 
   for (const sec of withMantras) {
-    console.log(`\n=== ${sec.title} (${sec.documentId}) — ${sec.mantraCount} mantras ===`);
+    const inferredLeaf = inferLeafFromMantras(sec.mantras ?? []);
+    console.log(`\n=== ${sec.title} (${sec.documentId}) — ${sec.mantraCount} mantras (leaf: ${inferredLeaf}) ===`);
     const args = [
       repairScript,
       `--section=${sec.documentId}`,
-      "--leaf=Mantra",
+      `--leaf=${inferredLeaf}`,
       "--suffix-prefix=1",
     ];
     if (APPLY) args.push("--apply");

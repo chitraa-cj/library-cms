@@ -2,6 +2,7 @@ import {
   assertVerseSuffixStable,
   detectSuspectCrossGranthaContent,
   isBareLeafCounterTitle,
+  isStructuralSuffixExtension,
   portalMantraTitleForConfiguredLeaf,
   scanMantraForPublish,
   scanGranthaHierarchyMantras,
@@ -58,6 +59,44 @@ assert(
 assert(
   assertVerseSuffixStable("Shloka 1.372", "Mantra 1.372") === null,
   "leaf-only relabel ok",
+);
+assert(
+  assertVerseSuffixStable("Vaakhyaa 1.1", "Mantra 1.1.1") === null,
+  "hierarchy migration 1.1 → 1.1.1 must be allowed",
+);
+assert(
+  isStructuralSuffixExtension("1.1", "1.1.1") === true,
+  "1.1 → 1.1.1 is structural extension",
+);
+assert(
+  isStructuralSuffixExtension("1.372", "1.2.4") === false,
+  "1.372 → 1.2.4 is not structural extension",
+);
+
+// Portal-owned row: intentional renumber after deletion (1.4 → 1.2 on same documentId)
+const portalRenumber = scanMantraForPublish({
+  portalLabel: "Shloka 1.2",
+  configuredLeaf: "Shloka",
+  existingStrapiLabel: "Shloka 1.4",
+  targetDocumentId: "doc-444444444444",
+  portalLinkedDocumentId: "doc-444444444444",
+});
+assert(
+  !portalRenumber.some((x) => x.code === "suffix_changed"),
+  "portal-owned row must allow suffix renumber",
+);
+
+// Heuristic match without portal link: still blocked (1.372 → 1.2.4 style cross-write)
+const crossWrite = scanMantraForPublish({
+  portalLabel: "Shloka 1.2",
+  configuredLeaf: "Shloka",
+  existingStrapiLabel: "Shloka 1.4",
+  targetDocumentId: "doc-444444444444",
+  portalLinkedDocumentId: "doc-other99999999",
+});
+assert(
+  crossWrite.some((x) => x.code === "suffix_changed"),
+  "non-owned row must block suffix change",
 );
 
 // BG cross-text

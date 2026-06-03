@@ -106,6 +106,25 @@ function suffixFromLabel(label) {
   return m ? m[1] : null;
 }
 
+/** e.g. "Vaakhyaa 1", "Mantra 2" — leaf + integer, no dotted verse suffix. */
+function isBareLeafCounterTitle(label) {
+  const t = String(label ?? "").trim();
+  if (!t || suffixFromLabel(t)) return false;
+  return /^.+\s+\d+$/.test(t);
+}
+
+function sanskritHasContent(raw) {
+  if (!raw) return false;
+  const s = String(raw);
+  return s.length > 20 && !/^\[\]$/.test(s.trim());
+}
+
+function leafPrefixFromDottedLabel(label) {
+  const t = String(label ?? "").trim();
+  const m = t.match(/^(.+?)\s+\d+(?:\.\d+)+\s*$/);
+  return m ? m[1].trim() : null;
+}
+
 function expectedLabel(leaf, suffixPrefix, index1) {
   return `${leaf} ${suffixPrefix}.${index1}`.trim();
 }
@@ -209,6 +228,22 @@ async function main() {
   }
   await loadSanskritForDuplicates();
 
+  const hasDottedVerse = normalized.some((r) => !!suffixFromLabel(r.label));
+  const bareStubOrphans = [];
+  if (hasDottedVerse) {
+    for (const r of normalized) {
+      if (!isBareLeafCounterTitle(r.label)) continue;
+      if (!r.sanskrit) r.sanskrit = await fetchMantraSanskrit(r.docId);
+      if (!sanskritHasContent(r.sanskrit)) bareStubOrphans.push(r);
+    }
+  }
+  if (bareStubOrphans.length > 0) {
+    console.log("\n── Bare stub rows (empty + leaf-only label — will delete on --apply) ──");
+    for (const r of bareStubOrphans) {
+      console.log(`  ${r.docId} order=${r.order} label="${r.label}"`);
+    }
+  }
+
   function keeperScore(row, orderNum) {
     let s = 0;
     const expectedSuffix = `${args.suffixPrefix}.${orderNum}`;
@@ -223,10 +258,18 @@ async function main() {
     return s;
   }
 
-  const canonical = [];
-  const orphans = [];
+  const stubIds = new Set(bareStubOrphans.map((r) => r.docId));
+  const working = normalized.filter((r) => !stubIds.has(r.docId));
 
-  for (const [order, list] of byOrder.entries()) {
+  const byOrderWorking = new Map();
+  for (const r of working) {
+    byOrderWorking.set(r.order, [...(byOrderWorking.get(r.order) ?? []), r]);
+  }
+
+  const canonical = [];
+  const orphans = [...bareStubOrphans];
+
+  for (const [order, list] of byOrderWorking.entries()) {
     const orderNum = Math.round(order / STRAPI_SORT_GAP) || canonical.length + 1;
     if (list.length === 1) {
       canonical.push(list[0]);
@@ -252,20 +295,43 @@ async function main() {
     }
   }
 
-  // Build repair plan from canonical sequence
-  const plan = canonical.map((r, idx) => {
-    const pos = idx + 1;
-    const wantOrder = expectedOrder(pos);
-    const wantLabel = expectedLabel(args.leaf, args.suffixPrefix, pos);
-    return {
-      docId: r.docId,
-      currentOrder: r.order,
-      currentLabel: r.label,
-      wantOrder,
-      wantLabel,
-      needsFix: r.order !== wantOrder || (r.label || "").trim() !== wantLabel,
-    };
-  });
+  // Build repair plan from canonical sequence (skip relabel when dotted labels already unique).
+  const nonStubCanonical = canonical;
+  const labelsUnique =
+    new Set(nonStubCanonical.map((r) => (r.label || "").trim()).filter(Boolean)).size ===
+    nonStubCanonical.length;
+  const ordersUnique =
+    new Set(nonStubCanonical.map((r) => r.order)).size === nonStubCanonical.length;
+  const allDotted =
+    nonStubCanonical.length > 0 && nonStubCanonical.every((r) => !!suffixFromLabel(r.label));
+  const skipRelabel = allDotted && labelsUnique && ordersUnique && bareStubOrphans.length > 0;
+
+  const plan = skipRelabel
+    ? nonStubCanonical.map((r) => ({
+        docId: r.docId,
+        currentOrder: r.order,
+        currentLabel: r.label,
+        wantOrder: r.order,
+        wantLabel: r.label,
+        needsFix: false,
+      }))
+    : nonStubCanonical.map((r, idx) => {
+        const pos = idx + 1;
+        const wantOrder = expectedOrder(pos);
+        const wantLabel = expectedLabel(args.leaf, args.suffixPrefix, pos);
+        return {
+          docId: r.docId,
+          currentOrder: r.order,
+          currentLabel: r.label,
+          wantOrder,
+          wantLabel,
+          needsFix: r.order !== wantOrder || (r.label || "").trim() !== wantLabel,
+        };
+      });
+
+  if (skipRelabel) {
+    console.log("\n── Relabel skipped: canonical dotted labels already unique (stubs only) ──");
+  }
 
   const toFix = plan.filter((p) => p.needsFix);
   console.log(`\n── Repair plan: ${toFix.length} / ${plan.length} rows need updates ──`);
@@ -289,7 +355,7 @@ async function main() {
   if (!args.apply) {
     console.log("\nDry run complete. Re-run with --apply to write fixes.");
     if (orphans.length > 0) {
-      console.log("Orphan duplicate-order rows will be deleted on --apply.");
+      console.log("Orphan / bare-stub rows will be deleted on --apply.");
     }
     return;
   }

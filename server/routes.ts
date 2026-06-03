@@ -42,6 +42,7 @@ import {
   scanGranthaHierarchyMantras,
   scanMantraForPublish,
   sectionSuffixCollision,
+  mantraNumberSuffix,
 } from "@shared/grantha-publish-integrity";
 import { readClientBuildId } from "./build-info";
 import { applyHierarchyRepairInPlace } from "./grantha-hierarchy-repair";
@@ -1953,10 +1954,13 @@ async function resolveManthraDocIdForPublish(
   if (stored) {
     try {
       const ok = await manthraDocIdMatchesPublishContext(stored, granthaDocId, sectionDocId);
-      if (ok) return stored;
-      console.warn(
-        `[publish] Ignoring strapiDocumentId ${stored} — mantra belongs to a different grantha/section than this publish`,
-      );
+      if (ok) {
+        return stored;
+      } else {
+        console.warn(
+          `[publish] Ignoring strapiDocumentId ${stored} — mantra belongs to a different grantha/section than this publish`,
+        );
+      }
     } catch (e: any) {
       if (!isOrphanedDocError(e)) {
         console.warn(`[publish] Stored doc ${stored} lookup failed:`, e?.message || e);
@@ -2227,6 +2231,10 @@ async function publishManthraToStrapiInner(
         : undefined;
     const entry = mData.ShlokaManthraEntry ?? manthra.ShlokaManthraEntry;
     const { sk, en } = plainTextFromManthraEntry(entry);
+    const portalLinkedDocumentId =
+      typeof manthra.strapiDocumentId === "string" && manthra.strapiDocumentId.length >= 10
+        ? manthra.strapiDocumentId
+        : undefined;
     const violations = scanMantraForPublish({
       portalLabel: fullLabel,
       configuredLeaf,
@@ -2236,6 +2244,7 @@ async function publishManthraToStrapiInner(
       sanskritPlain: sk,
       englishPlain: en,
       allowRenumber: options?.allowRenumber,
+      portalLinkedDocumentId,
     });
     const hard = violations.filter((v) => v.severity === "error");
     if (hard.length > 0) {

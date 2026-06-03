@@ -80,6 +80,7 @@ import {
   invalidateManthraCacheOnDocIdCorrection,
 } from "@/lib/mantra-cms-cache";
 import { STRAPI_POLL_INTERVAL } from "@/hooks/use-strapi-sync";
+import { isBareLeafCounterTitle } from "@shared/grantha-publish-integrity";
 
 const EMPTY_TT: TextAndTranslation = {
   SanskritTextEntry: "",
@@ -307,12 +308,28 @@ export default function ManthrasPage() {
     });
     const deduped = dedupePublishedMantrasForDisplay(normalized);
 
+    const sectionHasDottedVerse = new Map<string, boolean>();
+    for (const m of deduped) {
+      const sec = m.section?.documentId;
+      if (!sec) continue;
+      const suf = mantraNumberSuffix(m.ShlokaManthraNumber);
+      if (suf?.includes(".")) sectionHasDottedVerse.set(sec, true);
+    }
+
     // One more canonicalization pass for granthas that now have khanda-level sections:
     // keep exactly one best row per section-path + verse leaf index (e.g. 13),
     // so legacy ghosts like "1.13" don't appear alongside canonical "1.1.13".
     const byCanonicalDisplayKey = new Map<string, { row: any; score: number }>();
     for (const m of deduped) {
       const sectionDocId = m.section?.documentId;
+      const label = String(m.ShlokaManthraNumber ?? "");
+      if (
+        sectionDocId &&
+        sectionHasDottedVerse.get(sectionDocId) &&
+        isBareLeafCounterTitle(label)
+      ) {
+        continue;
+      }
       const granthaId = m.grantha?.documentId || "__none__";
       const granthaSections = allSections.filter(
         (s) =>
@@ -365,7 +382,7 @@ export default function ManthrasPage() {
         return (a.order ?? 0) - (b.order ?? 0);
       },
     );
-  }, [data, sectionByDocId]);
+  }, [data, sectionByDocId, allSections]);
 
   function getGranthaForSection(sectionDocId: string) {
     const sec = allSections.find((s) => s.documentId === sectionDocId);

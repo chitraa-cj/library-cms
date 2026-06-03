@@ -72,6 +72,7 @@ import {
 import {
   buildMantraShlokaIndexFromSections,
   hydrateManthraShlokaFromIndex,
+  prepareManthraAfterStrapiResolve,
   mantraNodeHasHydratedShloka,
 } from "@/lib/strapi-mantra-hydration";
 import {
@@ -85,6 +86,8 @@ import {
   editorOrdinalLabel,
   reindexMantraOrdersPreservingTitles,
   assignContiguousMantraOrders,
+  reindexMantrasInListOrder,
+  buildMantraTitleCtx,
   buildUniqueStrapiOrderMap,
   mantrasShareNumberSuffix,
   mantrasShareLeafAndSuffix,
@@ -114,6 +117,7 @@ import {
 import {
   mergeMantraStrapiDocumentIds,
   syncMantraSectionAfterStructuralEdits,
+  syncMantraSectionLabelsToStrapi,
   syncAllMantraSectionLabelsInGrantha,
   syncAllPendingNewMantrasToStrapi,
   getSortedMantrasFromSnapshot,
@@ -2891,14 +2895,11 @@ export default function GranthasPage() {
               const resolved = resolveDocId(m);
               if (!resolved) return acc; // dropped: Strapi record was deleted, no order remap
               const { docId } = resolved;
-              const row = hydrateManthraShlokaFromIndex(
-                {
-                  ...m,
-                  title: portalMantraTitleForLeaf(m.title, leafLabel),
-                  strapiDocumentId: docId,
-                },
-                shlokaIndex,
+              const row = prepareManthraAfterStrapiResolve(
+                m,
                 docId,
+                shlokaIndex,
+                portalMantraTitleForLeaf(m.title, leafLabel),
               );
               if (docId) delete row._isNewLocal;
               if (!shouldKeepManthraInEditor(row, seenStrapiMantraDocIds)) return acc;
@@ -2937,14 +2938,11 @@ export default function GranthasPage() {
                 const resolved = resolvePortalMantraToStrapiDoc(m, padaResolveOpts);
                 if (!resolved) return acc;
                 if (resolved.docId) padaMatchedDocIds.add(resolved.docId);
-                const row = hydrateManthraShlokaFromIndex(
-                  {
-                    ...m,
-                    title: portalMantraTitleForLeaf(m.title, leafLabel),
-                    strapiDocumentId: resolved.docId,
-                  },
-                  shlokaIndex,
+                const row = prepareManthraAfterStrapiResolve(
+                  m,
                   resolved.docId,
+                  shlokaIndex,
+                  portalMantraTitleForLeaf(m.title, leafLabel),
                 );
                 if (resolved.docId) delete row._isNewLocal;
                 if (!shouldKeepManthraInEditor(row, seenStrapiMantraDocIds)) return acc;
@@ -4093,7 +4091,7 @@ export default function GranthasPage() {
   function scheduleStrapiMantraSectionIdentitySync(
     snapshot: AdhyayaNode[],
     ctx: { adhyayaId: string; khandaId: string; padaId?: string },
-    opts?: { onlyManthraIds?: string[] },
+    opts?: { onlyManthraIds?: string[]; renumberSectionLabels?: boolean },
   ) {
     const granthaDoc =
       editingItem && !editingItem._isDraft
@@ -4155,12 +4153,33 @@ export default function GranthasPage() {
               strapiDocumentId: p.strapiDocumentId,
             }));
             applyMantraSlotSyncResult(patches, ctx, result.hierarchy);
-            if (patches.length > 0) {
+            if (syncOpts?.renumberSectionLabels) {
+              const snapAfter = adhyayasRef.current as SnapshotAdhyaya[];
+              const labelSummary = await syncMantraSectionLabelsToStrapi(
+                snapAfter,
+                ctx.adhyayaId,
+                ctx.khandaId,
+                ctx.padaId,
+                cfg,
+                { allowRenumber: true },
+              );
+              syncGranthaCmsCaches(queryClient);
+              const n = labelSummary.labelsUpdated + labelSummary.orderOnly;
+              if (n > 0 || patches.length > 0) {
+                toast({
+                  title: "Verses synced to CMS",
+                  description:
+                    patches.length > 0
+                      ? `Created ${patches.length} row(s) and updated ${labelSummary.labelsUpdated} label(s) in Strapi (spreadsheet-style renumber).`
+                      : `Updated ${labelSummary.labelsUpdated} ${cfg.leafName} label(s) in Strapi.`,
+                });
+              }
+            } else if (patches.length > 0) {
               toast({
                 title: "Verse slot synced to CMS",
                 description:
                   result.message ??
-                  `Created ${patches.length} row(s) in Strapi. Check the Mantras tab (labels sync separately).`,
+                  `Created ${patches.length} row(s) in Strapi.`,
               });
             } else if ((result.errors ?? []).length > 0) {
               toast({
@@ -4172,7 +4191,7 @@ export default function GranthasPage() {
             return;
           }
 
-          const { patches, failedDeleteIds, sortKeysUpdated } =
+          const { patches, failedDeleteIds, sortKeysUpdated, labelsUpdated, labelSyncOrderOnly } =
             await syncMantraSectionAfterStructuralEdits(
               snap,
               ctx.adhyayaId,
@@ -4189,13 +4208,24 @@ export default function GranthasPage() {
             );
           }
           applyMantraSlotSyncResult(patches, ctx);
-          if ((patches.length > 0 || sortKeysUpdated > 0) && editingGranthaStrapiDocumentId()) {
+          if (
+            (patches.length > 0 ||
+              sortKeysUpdated > 0 ||
+              labelsUpdated > 0 ||
+              labelSyncOrderOnly > 0) &&
+            editingGranthaStrapiDocumentId()
+          ) {
+            const leaf = cfg.leafName || "Mantra";
             toast({
-              title: "Verse slot synced to CMS",
+              title: syncOpts?.renumberSectionLabels ? "Verses synced to CMS" : "Verse slot synced to CMS",
               description:
-                patches.length > 0
-                  ? `Created ${patches.length} row(s) in Strapi${sortKeysUpdated > 0 ? ` and updated sort order for ${sortKeysUpdated} row(s)` : ""}. New rows appear in the Mantras tab as "No number" until you run Sync verse numbers to CMS.`
-                  : `Updated sort order for ${sortKeysUpdated} row(s) in Strapi.`,
+                syncOpts?.renumberSectionLabels && labelsUpdated > 0
+                  ? `Created ${patches.length} row(s) where needed; updated ${labelsUpdated} ${leaf} label(s) in Strapi.`
+                  : patches.length > 0
+                    ? `Created ${patches.length} row(s) in Strapi${sortKeysUpdated > 0 ? ` and updated sort order for ${sortKeysUpdated} row(s)` : ""}.`
+                    : labelsUpdated > 0
+                      ? `Updated ${labelsUpdated} ${leaf} label(s) in Strapi.`
+                      : `Updated sort order for ${sortKeysUpdated || labelSyncOrderOnly} row(s) in Strapi.`,
             });
           } else if (patches.length === 0 && editingGranthaStrapiDocumentId()) {
             const sorted = getSortedMantrasFromSnapshot(
@@ -4221,7 +4251,7 @@ export default function GranthasPage() {
           const msg = e instanceof Error ? e.message : String(e);
           toast({ variant: "destructive", title: "Strapi mantra sync failed", description: msg });
         });
-    }, 450);
+    }, 280);
   }
 
 
@@ -4297,7 +4327,9 @@ export default function GranthasPage() {
     setVerseLabelSyncPending(true);
     try {
       const snap = adhyayasRef.current as SnapshotAdhyaya[];
-      const summary = await syncAllMantraSectionLabelsInGrantha(snap, structureConfigRef.current);
+      const summary = await syncAllMantraSectionLabelsInGrantha(snap, structureConfigRef.current, {
+        allowRenumber: true,
+      });
       syncGranthaCmsCaches(queryClient);
       const total = summary.labelsUpdated + summary.orderOnly;
       toast({
@@ -4401,34 +4433,49 @@ export default function GranthasPage() {
     padaId: string | undefined,
     newManthra: ManthraNode,
     afterManthraId?: string,
+    options?: { renumberTitles?: boolean },
   ): AdhyayaNode[] {
     const cfg = structureConfigRef.current;
-    return prev.map((a) => {
+    const adhyayaIndex = prev.findIndex((a) => a.id === adhyayaId);
+    return prev.map((a, aIdx) => {
       if (a.id !== adhyayaId) return a;
       return {
         ...a,
-        khandas: a.khandas.map((k) => {
+        khandas: a.khandas.map((k, kIdx) => {
           if (k.id !== khandaId) return k;
 
-          const mergeIntoList = (list: ManthraNode[]) => {
+          const mergeIntoList = (list: ManthraNode[], padaIndex?: number) => {
             const sorted = sortMantrasByDisplayOrder(list);
+            let spliced: ManthraNode[];
             if (afterManthraId) {
               const j = sorted.findIndex((m) => m.id === afterManthraId);
               if (j < 0) return sorted;
-              return assignContiguousMantraOrders([
+              spliced = [
                 ...sorted.slice(0, j + 1),
                 newManthra,
                 ...sorted.slice(j + 1),
-              ]);
+              ];
+            } else {
+              spliced = [...sorted, newManthra];
             }
-            return assignContiguousMantraOrders([...sorted, newManthra]);
+            if (options?.renumberTitles && adhyayaIndex >= 0) {
+              const titleCtx = buildMantraTitleCtx(
+                adhyayaIndex,
+                k,
+                kIdx,
+                cfg,
+                padaIndex,
+              );
+              return reindexMantrasInListOrder(spliced, titleCtx);
+            }
+            return assignContiguousMantraOrders(spliced);
           };
 
           if (cfg.levelThreeEnabled && padaId) {
             return {
               ...k,
-              padas: (k.padas ?? []).map((p) =>
-                p.id === padaId ? { ...p, manthras: mergeIntoList(p.manthras) } : p,
+              padas: (k.padas ?? []).map((p, pIdx) =>
+                p.id === padaId ? { ...p, manthras: mergeIntoList(p.manthras, pIdx) } : p,
               ),
             };
           }
@@ -4462,8 +4509,8 @@ export default function GranthasPage() {
   }
 
   /**
-   * Insert a blank manthra after `afterManthraId`. Updates portal **order** only — verse labels
-   * stay unchanged until "Sync verse numbers to CMS" or publish-with-renumber.
+   * Insert a blank manthra after `afterManthraId` (spreadsheet-style): renumber portal titles
+   * in the section, create the CMS row, then batch-update all linked labels in Strapi.
    */
   function insertManthraAfter(
     adhyayaId: string,
@@ -4488,10 +4535,12 @@ export default function GranthasPage() {
         padaId,
         newManthra,
         afterManthraId,
+        { renumberTitles: true },
       );
       adhyayasRef.current = next;
       scheduleStrapiMantraSectionIdentitySync(next, { adhyayaId, khandaId, padaId }, {
         onlyManthraIds: [newManthraId],
+        renumberSectionLabels: true,
       });
       return next;
     });
@@ -4572,7 +4621,9 @@ export default function GranthasPage() {
             };
           });
 
-      scheduleStrapiMantraSectionIdentitySync(finalTree, { adhyayaId, khandaId, padaId });
+      scheduleStrapiMantraSectionIdentitySync(finalTree, { adhyayaId, khandaId, padaId }, {
+        renumberSectionLabels: renumber,
+      });
       return finalTree;
     });
 
@@ -6589,9 +6640,11 @@ export default function GranthasPage() {
               {structureConfig.leafName}
               {" — click any "}
               {structureConfig.leafName}
-              {" to enter its text content. Use + to insert rows (order only in the editor); "}
+              {" to enter its text content. "}
+              <strong>+ between verses</strong>
+              {" renumbers labels in the editor and syncs them to CMS (like inserting a row in a spreadsheet). "}
               <strong>Sync verse numbers to CMS</strong>
-              {" updates Strapi labels when you are ready."}
+              {" refreshes every section if labels drifted."}
             </p>
           </div>
 

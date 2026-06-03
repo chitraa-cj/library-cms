@@ -8,7 +8,8 @@ import {
   sortMantrasByDisplayOrder,
   isPublishedStrapiDocId,
   pickPreferredStrapiMantraRef,
-  titleUsesConfiguredLeaf,
+  findStrapiMantraByExactTitleInSection,
+  findStrapiMantraByVerseSuffix,
   buildMantraTitleCtx,
   mantraLabelForCmsSync,
   type GranthaStructureConfig,
@@ -210,9 +211,10 @@ export async function lookupStrapiMantraDocIdByLabel(
   if (!trimmed || !isPublishedStrapiDocId(sectionDocumentId)) return undefined;
 
   const refs = cachedSectionList ?? (await listStrapiMantrasInSection(sectionDocumentId));
-  const exact = refs.filter((r) => r.title.trim().toLowerCase() === trimmed.toLowerCase());
-  const exactPick = pickPreferredStrapiMantraRef(exact, preferredDocId);
+  const exactPick = findStrapiMantraByExactTitleInSection(refs, trimmed, preferredDocId);
   if (exactPick) return exactPick.docId;
+  const suffixPick = findStrapiMantraByVerseSuffix(refs, trimmed, leaf, preferredDocId);
+  if (suffixPick) return suffixPick.docId;
   return undefined;
 }
 
@@ -303,7 +305,7 @@ export type BatchIdentitySyncSummary = {
 
 async function strapiBatchIdentitySync(
   updates: Array<{ documentId: string; order: number; ShlokaManthraNumber: string }>,
-  options?: { sortKeysOnly?: boolean; configuredLeaf?: string },
+  options?: { sortKeysOnly?: boolean; configuredLeaf?: string; allowRenumber?: boolean },
 ): Promise<BatchIdentitySyncSummary> {
   const summary: BatchIdentitySyncSummary = { labelsUpdated: 0, orderOnly: 0, failed: 0 };
   if (updates.length === 0) return summary;
@@ -314,6 +316,7 @@ async function strapiBatchIdentitySync(
       updates: chunk,
       sortKeysOnly: options?.sortKeysOnly === true,
       configuredLeaf: options?.configuredLeaf,
+      allowRenumber: options?.allowRenumber === true,
     });
     const json = await res.json().catch(() => ({}));
     const results: Array<{ documentId: string; ok?: boolean; error?: string; labelSkipped?: boolean }> =
@@ -434,6 +437,7 @@ export async function syncMantraSectionLabelsToStrapi(
   khandaId: string,
   padaId: string | undefined,
   cfg: GranthaStructureConfig,
+  options?: { allowRenumber?: boolean },
 ): Promise<BatchIdentitySyncSummary> {
   const empty: BatchIdentitySyncSummary = { labelsUpdated: 0, orderOnly: 0, failed: 0 };
   const sectionDocumentId = resolveMantraSectionStrapiDocumentId(snapshot, adhyayaId, khandaId, padaId, cfg);
@@ -479,7 +483,11 @@ export async function syncMantraSectionLabelsToStrapi(
   });
 
   const leaf = (cfg.leafName || "Mantra").trim() || "Mantra";
-  return strapiBatchIdentitySync(updates, { sortKeysOnly: false, configuredLeaf: leaf });
+  return strapiBatchIdentitySync(updates, {
+    sortKeysOnly: false,
+    configuredLeaf: leaf,
+    allowRenumber: options?.allowRenumber === true,
+  });
 }
 
 /**
@@ -536,6 +544,7 @@ export async function pushMantraSectionIdentityToStrapi(
 export async function syncAllMantraSectionLabelsInGrantha(
   snapshot: SnapshotAdhyaya[],
   cfg: GranthaStructureConfig,
+  options?: { allowRenumber?: boolean },
 ): Promise<BatchIdentitySyncSummary> {
   const total: BatchIdentitySyncSummary = { labelsUpdated: 0, orderOnly: 0, failed: 0 };
   for (const ctx of collectMantraSectionSyncTargets(snapshot, cfg)) {
@@ -545,6 +554,7 @@ export async function syncAllMantraSectionLabelsInGrantha(
       ctx.khandaId,
       ctx.padaId,
       cfg,
+      { allowRenumber: options?.allowRenumber },
     );
     total.labelsUpdated += part.labelsUpdated;
     total.orderOnly += part.orderOnly;
@@ -561,12 +571,13 @@ export async function syncMantraSectionAfterStructuralEdits(
   cfg: GranthaStructureConfig,
   deleteDocumentIds: string[],
   sectionCtx?: MantraSectionResolveContext,
-  opts?: { onlyManthraIds?: string[] },
+  opts?: { onlyManthraIds?: string[]; renumberSectionLabels?: boolean },
 ): Promise<{
   patches: Array<{ manthraId: string; strapiDocumentId: string }>;
   failedDeleteIds: string[];
   sortKeysUpdated: number;
   labelsUpdated: number;
+  labelSyncOrderOnly: number;
 }> {
   const failedDeleteIds = await strapiDeleteMantrasBestEffort(deleteDocumentIds);
   const patches = await pushMantraSectionStructureToStrapi(
@@ -588,17 +599,30 @@ export async function syncMantraSectionAfterStructuralEdits(
       strapiDocumentId: p.strapiDocumentId,
     })));
   }
-  // insert-between positions a single new row; skip whole-section sort-key PUTs on + insert.
-  const sortKeysUpdated = opts?.onlyManthraIds?.length
-    ? 0
-    : await syncMantraSectionSortKeysToStrapi(
-        snapForSort,
-        adhyayaId,
-        khandaId,
-        padaId,
-        cfg,
-      );
-  return { patches, failedDeleteIds, sortKeysUpdated, labelsUpdated: 0 };
+  // insert-between: fractional key on new row only unless full section renumber runs below.
+  const sortKeysUpdated =
+    opts?.renumberSectionLabels || !opts?.onlyManthraIds?.length
+      ? opts?.renumberSectionLabels
+        ? 0
+        : await syncMantraSectionSortKeysToStrapi(snapForSort, adhyayaId, khandaId, padaId, cfg)
+      : 0;
+
+  let labelsUpdated = 0;
+  let labelSyncOrderOnly = 0;
+  if (opts?.renumberSectionLabels) {
+    const labelSummary = await syncMantraSectionLabelsToStrapi(
+      snapForSort,
+      adhyayaId,
+      khandaId,
+      padaId,
+      cfg,
+      { allowRenumber: true },
+    );
+    labelsUpdated = labelSummary.labelsUpdated;
+    labelSyncOrderOnly = labelSummary.orderOnly;
+  }
+
+  return { patches, failedDeleteIds, sortKeysUpdated, labelsUpdated, labelSyncOrderOnly };
 }
 
 /** Create Strapi rows for any portal mantras in this grantha that still lack a documentId. */

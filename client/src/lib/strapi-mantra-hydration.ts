@@ -50,6 +50,39 @@ export function hydrateManthraShlokaFromIndex<T extends { strapiDocumentId?: str
   return { ...node, ShlokaManthraEntry: remote };
 }
 
+/**
+ * After enrich relinks a portal row to a different CMS documentId, drop stale draft bodies
+ * so View/Edit show the linked Strapi verse (not text from a previous wrong match).
+ */
+export function prepareManthraAfterStrapiResolve<
+  T extends {
+    strapiDocumentId?: string;
+    ShlokaManthraEntry?: unknown;
+    BhashyamForShlokaManthra?: unknown;
+    title?: string;
+  },
+>(
+  node: T,
+  resolvedDocId: string | undefined,
+  index: StrapiMantraShlokaIndex,
+  normalizedTitle?: string,
+): T {
+  const id = resolvedDocId ?? node.strapiDocumentId;
+  const prevId = node.strapiDocumentId;
+  const relinked = !!id && !!prevId && prevId !== id;
+  const titled = normalizedTitle !== undefined ? { ...node, title: normalizedTitle } : node;
+  const base = relinked
+    ? {
+        ...titled,
+        strapiDocumentId: id,
+        ShlokaManthraEntry: undefined,
+        BhashyamForShlokaManthra: undefined,
+      }
+    : { ...titled, strapiDocumentId: id };
+  if (!id) return base;
+  return hydrateManthraShlokaFromIndex(base, index, id);
+}
+
 export function mantraNodeHasHydratedShloka(node: {
   ShlokaManthraEntry?: unknown;
 }): boolean {

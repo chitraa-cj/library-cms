@@ -997,11 +997,13 @@ export function createStrapiRouter() {
   // Batch PUT order + ShlokaManthraNumber only (Strapi v5 merges; omits rich fields).
   router.post("/manthras/batch-identity-sync", async (req, res) => {
     try {
-      const { updates, sortKeysOnly, configuredLeaf } = req.body as {
+      const { updates, sortKeysOnly, configuredLeaf, allowRenumber } = req.body as {
         updates?: Array<{ documentId?: string; order?: number; ShlokaManthraNumber?: string }>;
         /** When true, only PUT `order` (fractional sort key) — labels unchanged. */
         sortKeysOnly?: boolean;
         configuredLeaf?: string;
+        /** Insert/delete renumber: allow ShlokaManthraNumber suffix changes on existing rows. */
+        allowRenumber?: boolean;
       };
       if (!Array.isArray(updates) || updates.length === 0) {
         res.status(400).json({ message: "updates must be a non-empty array" });
@@ -1053,6 +1055,7 @@ export function createStrapiRouter() {
 
       const labelCache = new Map<string, string>();
       const integrityOn = isPublishIntegrityEnabled() && !sortKeysOnly;
+      const renumberAllowed = !!allowRenumber;
       const leaf = (configuredLeaf || "Mantra").trim() || "Mantra";
 
       async function runChunk(chunk: typeof sortedUpdates) {
@@ -1090,7 +1093,7 @@ export function createStrapiRouter() {
               results.push({ documentId, ok: false, error: leafViolation.message });
               continue;
             }
-            if (existing) {
+            if (existing && !renumberAllowed) {
               const suffixViolation = assertVerseSuffixStable(existing, ShlokaManthraNumber);
               if (suffixViolation) {
                 // Portal renumbered (insert/delete) but Strapi row still has the old verse id —

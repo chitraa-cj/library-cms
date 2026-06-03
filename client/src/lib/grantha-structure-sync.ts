@@ -341,26 +341,43 @@ export function findStrapiMantraByExactTitleInSection(
   return pickBestStrapiMantraRefForLink(hits, preferredDocId);
 }
 
-export function findStrapiMantraByLeafAndSuffix(
+/**
+ * Match CMS rows by verse suffix (1.1.2, etc.). Prefers the grantha's configured leaf;
+ * when the portal title uses that leaf but CMS rows still use another prefix (Mantra → Shloka),
+ * still links by suffix so fetch/view/edit show the correct row.
+ */
+export function findStrapiMantraByVerseSuffix(
   mantras: StrapiMantraRef[],
   portalTitle: string | undefined,
   configuredLeaf: string,
   preferredDocId?: string,
 ): StrapiMantraRef | undefined {
   const leaf = (configuredLeaf || "Mantra").trim();
-  let label = (portalTitle ?? "").trim();
+  const label = (portalTitle ?? "").trim();
   const suffix = mantraNumberSuffix(label);
   if (!suffix) return undefined;
-  if (!titleUsesConfiguredLeaf(label, leaf)) {
-    label = canonicalMantraTitle(leaf, suffix);
-  }
-  const hits = mantras.filter(
-    (sm) =>
-      mantraNumberSuffix(sm.title) === suffix &&
-      titleUsesConfiguredLeaf(sm.title, leaf),
-  );
+  const hits = mantras.filter((sm) => mantraNumberSuffix(sm.title) === suffix);
   if (hits.length === 0) return undefined;
-  return pickBestStrapiMantraRefForLink(hits, preferredDocId);
+  const leafHits = hits.filter((sm) => titleUsesConfiguredLeaf(sm.title, leaf));
+  const portalUsesLeaf = titleUsesConfiguredLeaf(label, leaf);
+  const pool =
+    leafHits.length > 0
+      ? leafHits
+      : portalUsesLeaf
+        ? hits
+        : [];
+  if (pool.length === 0) return undefined;
+  return pickBestStrapiMantraRefForLink(pool, preferredDocId);
+}
+
+/** @deprecated Use findStrapiMantraByVerseSuffix — kept for existing imports/tests. */
+export function findStrapiMantraByLeafAndSuffix(
+  mantras: StrapiMantraRef[],
+  portalTitle: string | undefined,
+  configuredLeaf: string,
+  preferredDocId?: string,
+): StrapiMantraRef | undefined {
+  return findStrapiMantraByVerseSuffix(mantras, portalTitle, configuredLeaf, preferredDocId);
 }
 
 export interface ResolvePortalMantraStrapiOptions {
@@ -374,7 +391,8 @@ export interface ResolvePortalMantraStrapiOptions {
 
 /**
  * Map a portal mantra node to the correct Strapi documentId.
- * Only matches Strapi rows with the same configured leaf + verse number (never Mantra ↔ Shloka).
+ * Portal verse title (suffix) is authoritative for fetch/display; stored documentId is trusted
+ * only when it matches that suffix or no other row owns the suffix (renumber / in-flight label).
  */
 export function resolvePortalMantraToStrapiDoc(
   portal: { title?: string; order?: number; strapiDocumentId?: string },
@@ -382,42 +400,44 @@ export function resolvePortalMantraToStrapiDoc(
 ): { docId: string | undefined } | undefined {
   const { configuredLeaf, byExactTitle, sectionMantras } = opts;
   const leaf = (configuredLeaf || "Mantra").trim();
+  const portalTitle = (portal.title ?? "").trim();
+  const portalSuf = mantraNumberSuffix(portalTitle);
+  const preferred = portal.strapiDocumentId;
 
-  if (portal.title) {
+  if (portalTitle) {
     const exactInSection = findStrapiMantraByExactTitleInSection(
       sectionMantras,
-      portal.title,
-      portal.strapiDocumentId,
+      portalTitle,
+      preferred,
     );
     if (exactInSection) {
       return { docId: exactInSection.docId };
     }
-    if (sectionMantras.length === 0 && byExactTitle?.has(portal.title)) {
-      return { docId: byExactTitle.get(portal.title)! };
+    if (sectionMantras.length === 0 && byExactTitle?.has(portalTitle)) {
+      return { docId: byExactTitle.get(portalTitle)! };
+    }
+    const bySuffix = findStrapiMantraByVerseSuffix(
+      sectionMantras,
+      portalTitle,
+      leaf,
+      preferred,
+    );
+    if (bySuffix) {
+      return { docId: bySuffix.docId };
     }
   }
 
-  const byLeafAndSuffix = portal.title
-    ? findStrapiMantraByLeafAndSuffix(
-        sectionMantras,
-        portal.title,
-        leaf,
-        portal.strapiDocumentId,
-      )
-    : undefined;
-
-  if (byLeafAndSuffix) {
-    if (!portal.strapiDocumentId || portal.strapiDocumentId !== byLeafAndSuffix.docId) {
-      return { docId: byLeafAndSuffix.docId };
-    }
-    return { docId: byLeafAndSuffix.docId };
-  }
-
-  if (portal.strapiDocumentId) {
-    const sm = sectionMantras.find((s) => s.docId === portal.strapiDocumentId);
+  if (preferred) {
+    const sm = sectionMantras.find((s) => s.docId === preferred);
     if (sm) {
-      // documentId is the stable identity — title/suffix may lag after renumber or deletion.
-      return { docId: portal.strapiDocumentId };
+      const strapiSuf = mantraNumberSuffix(sm.title);
+      if (portalSuf && strapiSuf && portalSuf !== strapiSuf && portalTitle) {
+        const owner = findStrapiMantraByVerseSuffix(sectionMantras, portalTitle, leaf);
+        if (owner && owner.docId !== preferred) {
+          return { docId: owner.docId };
+        }
+      }
+      return { docId: preferred };
     }
     return { docId: undefined };
   }

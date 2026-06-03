@@ -1,11 +1,14 @@
 import {
   assertVerseSuffixStable,
   detectSuspectCrossGranthaContent,
+  findDocIdByExactLabelInRows,
   isBareLeafCounterTitle,
   isStructuralSuffixExtension,
+  pickDocIdForSuffixInSectionRows,
   portalMantraTitleForConfiguredLeaf,
   scanMantraForPublish,
   scanGranthaHierarchyMantras,
+  sectionSuffixCollision,
 } from "../shared/grantha-publish-integrity";
 
 function assert(cond: boolean, msg: string) {
@@ -140,5 +143,42 @@ const hier = [
 ];
 const dup = scanGranthaHierarchyMantras(hier, "Shloka", "Test");
 assert(dup.some((x) => x.code === "duplicate_suffix_in_draft"), "draft dup suffix");
+
+// Leaf relabel: same suffix, different prefix — publish updates one row
+const sectionRows = [
+  { documentId: "doc-m-1", label: "Mantra 1.1.1" },
+  { documentId: "doc-m-2", label: "Mantra 1.1.2" },
+];
+assert(
+  pickDocIdForSuffixInSectionRows(sectionRows, "Vaakhyaa 1.1.1") === "doc-m-1",
+  "suffix match must resolve Mantra row for Vaakhyaa publish",
+);
+assert(
+  findDocIdByExactLabelInRows(sectionRows, "Vaakhyaa 1.1.1") === undefined,
+  "exact label must not match cross-leaf title",
+);
+const labelMap = new Map(sectionRows.map((r) => [r.label, r.documentId]));
+assert(
+  sectionSuffixCollision(
+    sectionRows.map((r) => r.label),
+    "Vaakhyaa 1.1.1",
+    "doc-m-1",
+    labelMap,
+  ) === null,
+  "collision must skip the row being updated on leaf relabel",
+);
+const sectionWithThree = [
+  ...sectionRows,
+  { documentId: "doc-m-3", label: "Mantra 1.1.3" },
+];
+assert(
+  sectionSuffixCollision(
+    sectionWithThree.map((r) => r.label),
+    "Vaakhyaa 1.1.3",
+    undefined,
+    new Map(sectionWithThree.map((r) => [r.label, r.documentId])),
+  )?.code === "duplicate_suffix_in_section",
+  "collision must block when suffix row exists but publish target is unresolved",
+);
 
 console.log("grantha-publish-integrity: all tests passed");

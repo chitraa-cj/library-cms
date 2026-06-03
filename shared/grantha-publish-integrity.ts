@@ -284,6 +284,39 @@ export function scanMantraForPublish(input: MantraPublishScanInput): PublishInte
   return out;
 }
 
+export type SectionMantraRow = { documentId: string; label: string };
+
+/** Case-insensitive ShlokaManthraNumber match within a section listing. */
+export function findDocIdByExactLabelInRows(
+  rows: SectionMantraRow[],
+  label: string,
+  preferredDocId?: string,
+): string | undefined {
+  const t = label.trim().toLowerCase();
+  if (!t) return undefined;
+  const matches = rows.filter((r) => r.label.trim().toLowerCase() === t);
+  if (matches.length === 0) return undefined;
+  if (preferredDocId && matches.some((m) => m.documentId === preferredDocId)) return preferredDocId;
+  return matches[0]!.documentId;
+}
+
+/**
+ * One Strapi row per verse suffix per section — leaf prefix may change (Mantra → Vaakhyaa).
+ * Used on publish to update the existing row instead of treating a relabel as a duplicate.
+ */
+export function pickDocIdForSuffixInSectionRows(
+  rows: SectionMantraRow[],
+  portalLabel: string,
+  preferredDocId?: string,
+): string | undefined {
+  const suffix = mantraNumberSuffix(portalLabel);
+  if (!suffix) return undefined;
+  const hits = rows.filter((r) => mantraNumberSuffix(r.label) === suffix);
+  if (hits.length === 0) return undefined;
+  if (preferredDocId && hits.some((h) => h.documentId === preferredDocId)) return preferredDocId;
+  return hits[0]!.documentId;
+}
+
 export function sectionSuffixCollision(
   sectionLabels: Iterable<string | undefined>,
   newLabel: string,

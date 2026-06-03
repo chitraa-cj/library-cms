@@ -43,6 +43,8 @@ import {
   scanMantraForPublish,
   sectionSuffixCollision,
   mantraNumberSuffix,
+  findDocIdByExactLabelInRows,
+  pickDocIdForSuffixInSectionRows,
 } from "@shared/grantha-publish-integrity";
 import { readClientBuildId } from "./build-info";
 import { applyHierarchyRepairInPlace } from "./grantha-hierarchy-repair";
@@ -1976,6 +1978,15 @@ async function resolveManthraDocIdForPublish(
   }
 
   if (portalLabel) {
+    const rows = await listSectionMantraLabels(sectionDocId);
+    const preferred =
+      typeof manthra.strapiDocumentId === "string" && manthra.strapiDocumentId.length >= 10
+        ? manthra.strapiDocumentId
+        : undefined;
+    const byExact = findDocIdByExactLabelInRows(rows, portalLabel, preferred);
+    if (byExact) return byExact;
+    const bySuffix = pickDocIdForSuffixInSectionRows(rows, portalLabel, preferred);
+    if (bySuffix) return bySuffix;
     const byLabel = await findManthraDocIdByLabelInSection(
       sectionDocId,
       portalLabel,
@@ -2323,19 +2334,42 @@ async function createOrUpdateManthra(
   if (!skipLookup && sectionDocId) {
     const s = encodeURIComponent(sectionDocId);
 
-    if (isPublishIntegrityEnabled() && number?.trim()) {
+    if (number?.trim()) {
       const rows = await listSectionMantraLabels(sectionDocId);
-      const collision = sectionSuffixCollision(
-        rows.map((r) => r.label),
-        number.trim(),
-        undefined,
-        new Map(rows.map((r) => [r.label, r.documentId])),
-      );
-      if (collision) {
-        const msg = collision.message;
-        console.warn(`[publish] Manthra "${label}" blocked: ${msg}`);
-        warnings?.push({ manthra: label, error: msg });
-        return undefined;
+      const labelMap = new Map(rows.map((r) => [r.label, r.documentId]));
+      const reuseDocId =
+        findDocIdByExactLabelInRows(rows, number.trim()) ??
+        pickDocIdForSuffixInSectionRows(rows, number.trim());
+      if (reuseDocId) {
+        console.log(
+          `[publish] Manthra "${label}" already exists in section (by label or suffix) — updating`,
+        );
+        try {
+          return await updateExistingManthra(reuseDocId, mData, label, warnings);
+        } catch (updateErr: any) {
+          if (isOrphanedDocError(updateErr)) {
+            console.warn(
+              `[publish] Manthra "${label}" — found by label/suffix but docId ${reuseDocId} is orphaned, deleting then recreating`,
+            );
+            await deleteOrphanedManthra(reuseDocId, label);
+          } else {
+            throw updateErr;
+          }
+        }
+      }
+      if (isPublishIntegrityEnabled()) {
+        const collision = sectionSuffixCollision(
+          rows.map((r) => r.label),
+          number.trim(),
+          undefined,
+          labelMap,
+        );
+        if (collision) {
+          const msg = collision.message;
+          console.warn(`[publish] Manthra "${label}" blocked: ${msg}`);
+          warnings?.push({ manthra: label, error: msg });
+          return undefined;
+        }
       }
     }
 

@@ -37,6 +37,8 @@ import {
   normalizeHierarchyMantraLeafTitles,
   plainTextFromManthraEntry,
   portalMantraTitleForConfiguredLeaf,
+  canonicalMantraTitle,
+  isBareLeafCounterLabel,
   scanGranthaHierarchyMantras,
   scanMantraForPublish,
   sectionSuffixCollision,
@@ -2138,11 +2140,24 @@ async function publishManthraToStrapiInner(
   },
 ): Promise<string | undefined> {
   const configuredLeaf = (options?.configuredLeaf || "Mantra").trim() || "Mantra";
-  const normalizedTitle = portalMantraTitleForConfiguredLeaf(
+  let normalizedTitle = portalMantraTitleForConfiguredLeaf(
     manthra.title || manthra.ShlokaManthraNumber,
     configuredLeaf,
     manthra.ShlokaManthraNumber,
   );
+  if (!normalizedTitle.trim() && options?.portalSiblings?.length) {
+    const sorted = [...options.portalSiblings].sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
+    const idx = sorted.findIndex((s) => s.id === manthra.id);
+    if (idx >= 0) {
+      normalizedTitle = canonicalMantraTitle(configuredLeaf, `1.${idx + 1}`);
+    }
+  }
+  if (
+    !normalizedTitle.trim() &&
+    isBareLeafCounterLabel(manthra.title || manthra.ShlokaManthraNumber, configuredLeaf)
+  ) {
+    normalizedTitle = "";
+  }
   if (normalizedTitle !== (manthra.title ?? "").trim()) {
     manthra = { ...manthra, title: normalizedTitle };
   }
@@ -4290,7 +4305,13 @@ export async function registerRoutes(
     try {
       const user = req.user as User;
       const granthaDrafts = await storage.getDraftsByType("granthas", user.id);
-      const pending = granthaDrafts.flatMap((d) => collectUnlinkedMantrasFromGranthaDraft(d));
+      const pending = granthaDrafts.flatMap((d) =>
+        collectUnlinkedMantrasFromGranthaDraft({
+          id: d.id,
+          strapiDocumentId: d.strapiDocumentId,
+          data: d.data as Record<string, unknown> | undefined,
+        }),
+      );
       res.json({ pendingGranthaMantras: pending });
     } catch (error: any) {
       res.status(500).json({ message: error.message || "Failed to load unified mantras view" });

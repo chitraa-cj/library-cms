@@ -12,10 +12,14 @@ import {
   isPublishIntegrityEnabled,
   mantraNumberSuffix,
   portalMantraTitleForConfiguredLeaf,
+  flatMantraLabelFromSpacedSortKey,
+  isBareLeafCounterTitle,
   sectionSuffixCollision,
 } from "@shared/grantha-publish-integrity";
 
 const STRAPI_URL = process.env.STRAPI_URL || "http://13.53.121.15:1337";
+const STRAPI_ADMIN_NOTE =
+  "This collection type is not available via the CMS portal REST proxy. Manage it in Strapi Content Manager.";
 
 /**
  * Per-section serialization for read-modify-write operations on Strapi mantra `order`
@@ -904,10 +908,11 @@ export function createStrapiRouter() {
   // observe the same prev/next snapshot and pick the same fractional key.
   router.post("/manthras/insert-between", async (req, res) => {
     try {
-      const { afterDocumentId, sectionDocId, afterNum } = req.body as {
+      const { afterDocumentId, sectionDocId, afterNum, ShlokaManthraNumber } = req.body as {
         afterDocumentId: string;
         sectionDocId: string;
         afterNum?: string;
+        ShlokaManthraNumber?: string;
       };
       if (!afterDocumentId || !sectionDocId) {
         res.status(400).json({ message: "afterDocumentId and sectionDocId are required" });
@@ -947,7 +952,7 @@ export function createStrapiRouter() {
           method: "POST",
           body: JSON.stringify({
             data: {
-              ShlokaManthraNumber: "",
+              ShlokaManthraNumber: (ShlokaManthraNumber ?? "").trim(),
               order: newSortKey,
               Section: sectionDocId,
             },
@@ -997,6 +1002,24 @@ export function createStrapiRouter() {
       }
       const dedupedUpdates = [...byDocumentId.values()];
 
+      const orderToDocIds = new Map<number, string[]>();
+      for (const u of dedupedUpdates) {
+        if (!u.order) continue;
+        const ids = orderToDocIds.get(u.order) ?? [];
+        ids.push(u.documentId);
+        orderToDocIds.set(u.order, ids);
+      }
+      const duplicateOrders = [...orderToDocIds.entries()].filter(([, ids]) => ids.length > 1);
+      if (duplicateOrders.length > 0) {
+        res.status(409).json({
+          message: `Batch contains duplicate order values: ${duplicateOrders
+            .map(([order, ids]) => `${order} (${ids.join(", ")})`)
+            .join("; ")}`,
+          code: "duplicate_order_in_batch",
+        });
+        return;
+      }
+
       const sortedUpdates = dedupedUpdates.sort(
         (a, b) => (Number(b?.order) || 0) - (Number(a?.order) || 0),
       );
@@ -1013,10 +1036,15 @@ export function createStrapiRouter() {
             continue;
           }
           const order = typeof u.order === "number" && !Number.isNaN(u.order) ? u.order : 0;
-          const ShlokaManthraNumber = portalMantraTitleForConfiguredLeaf(
-            u.ShlokaManthraNumber ?? "",
-            leaf,
-          );
+          const rawLabel = (u.ShlokaManthraNumber ?? "").trim();
+          let ShlokaManthraNumber = rawLabel
+            ? portalMantraTitleForConfiguredLeaf(rawLabel, leaf)
+            : "";
+          if (isBareLeafCounterTitle(ShlokaManthraNumber)) ShlokaManthraNumber = "";
+          if (!mantraNumberSuffix(ShlokaManthraNumber)) {
+            const fromOrder = flatMantraLabelFromSpacedSortKey(order, leaf);
+            if (fromOrder) ShlokaManthraNumber = fromOrder;
+          }
           if (integrityOn && ShlokaManthraNumber.trim()) {
             let existing = labelCache.get(documentId);
             if (existing === undefined) {
@@ -1053,7 +1081,10 @@ export function createStrapiRouter() {
               }
             }
           }
-          const data = sortKeysOnly ? { order } : { order, ShlokaManthraNumber };
+          const data =
+            sortKeysOnly || !ShlokaManthraNumber.trim()
+              ? { order }
+              : { order, ShlokaManthraNumber };
           try {
             await strapiRequest(`/api/manthras/${documentId}`, {
               method: "PUT",
@@ -1089,36 +1120,55 @@ export function createStrapiRouter() {
         res.status(400).json({ message: "sectionDocumentId is required" });
         return;
       }
-      const all = await listSectionMantraOrders(sid);
-      const label = (ShlokaManthraNumber ?? "").trim();
-      if (isPublishIntegrityEnabled() && label) {
-        const suf = mantraNumberSuffix(label);
-        if (suf) {
-          const collision = sectionSuffixCollision(
-            all.map((r) => r.ShlokaManthraNumber),
-            label,
+
+      const { created, sortKey } = await withSectionLock(sid, async () => {
+        const all = await listSectionMantraOrders(sid);
+        const label = (ShlokaManthraNumber ?? "").trim();
+        if (isPublishIntegrityEnabled() && label && isBareLeafCounterTitle(label)) {
+          const err: any = new Error(
+            `Bare verse labels like "${label}" are not allowed — use a dotted suffix (e.g. Vaakhyaa 1.1.1).`,
           );
-          if (collision) {
-            res.status(409).json({ message: collision.message, code: "duplicate_suffix_in_section" });
-            return;
+          err.status = 400;
+          err.code = "bare_leaf_counter_label";
+          throw err;
+        }
+        if (isPublishIntegrityEnabled() && label) {
+          const suf = mantraNumberSuffix(label);
+          if (suf) {
+            const collision = sectionSuffixCollision(
+              all.map((r) => r.ShlokaManthraNumber),
+              label,
+            );
+            if (collision) {
+              const err: any = new Error(collision.message);
+              err.status = 409;
+              err.code = "duplicate_suffix_in_section";
+              throw err;
+            }
           }
         }
-      }
-      const maxOrder = all.length > 0 ? Math.max(...all.map((r) => r.order)) : 0;
-      const newSortKey = maxOrder > 0 ? maxOrder + STRAPI_SORT_GAP : STRAPI_SORT_GAP;
-      const created = await strapiRequest("/api/manthras", {
-        method: "POST",
-        body: JSON.stringify({
-          data: {
-            Section: sid,
-            order: newSortKey,
-            ShlokaManthraNumber: ShlokaManthraNumber ?? "",
-          },
-        }),
+        const maxOrder = all.length > 0 ? Math.max(...all.map((r) => r.order)) : 0;
+        const newSortKey = maxOrder > 0 ? maxOrder + STRAPI_SORT_GAP : STRAPI_SORT_GAP;
+        const created = await strapiRequest("/api/manthras", {
+          method: "POST",
+          body: JSON.stringify({
+            data: {
+              Section: sid,
+              order: newSortKey,
+              ShlokaManthraNumber: ShlokaManthraNumber ?? "",
+            },
+          }),
+        });
+        return { created, sortKey: newSortKey };
       });
-      res.json({ data: created.data, sortKey: newSortKey });
+
+      res.json({ data: created.data, sortKey });
     } catch (error: any) {
-      res.status(error.status || 500).json({ message: error.message });
+      const status = error.status || 500;
+      res.status(status).json({
+        message: error.message,
+        ...(error.code ? { code: error.code } : {}),
+      });
     }
   });
 

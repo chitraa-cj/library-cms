@@ -1,0 +1,61 @@
+-- Mantra section identity diagnostics (Strapi PostgreSQL)
+--
+-- Strapi v5 stores mantras in `manthras` (table name may vary by install).
+-- Fields: order (integer sort key), shloka_manthra_number (label), document_id.
+-- Section relation is via link table — adjust join names to match your Strapi schema.
+--
+-- Replace :section_document_id with the target section's documentId
+-- (e.g. the khanda section for Jeevan Mukthanandhalahari).
+
+-- ── Duplicate orders within a section ───────────────────────────────────────
+-- SELECT m.order, COUNT(*) AS cnt, ARRAY_AGG(m.document_id ORDER BY m.document_id) AS doc_ids
+-- FROM manthras m
+-- INNER JOIN manthras_section_lnk l ON l.manthra_id = m.id
+-- INNER JOIN sections s ON s.id = l.section_id
+-- WHERE s.document_id = :section_document_id
+-- GROUP BY m.order
+-- HAVING COUNT(*) > 1
+-- ORDER BY m.order;
+
+-- ── Duplicate labels within a section ───────────────────────────────────────
+-- SELECT m.shloka_manthra_number AS label, COUNT(*) AS cnt
+-- FROM manthras m
+-- INNER JOIN manthras_section_lnk l ON l.manthra_id = m.id
+-- INNER JOIN sections s ON s.id = l.section_id
+-- WHERE s.document_id = :section_document_id
+--   AND COALESCE(TRIM(m.shloka_manthra_number), '') <> ''
+-- GROUP BY m.shloka_manthra_number
+-- HAVING COUNT(*) > 1
+-- ORDER BY label;
+
+-- ── Full section listing (order vs label) ───────────────────────────────────
+-- SELECT
+--   m.document_id,
+--   m.order,
+--   m.shloka_manthra_number AS label,
+--   m.order / 100000 AS implied_1based_index
+-- FROM manthras m
+-- INNER JOIN manthras_section_lnk l ON l.manthra_id = m.id
+-- INNER JOIN sections s ON s.id = l.section_id
+-- WHERE s.document_id = :section_document_id
+-- ORDER BY m.order ASC, m.document_id ASC;
+
+-- ── Label/order mismatch (flat Mantra 1.N grantha) ──────────────────────────
+-- Rows where trailing suffix N != order/100000:
+-- SELECT
+--   m.document_id,
+--   m.order,
+--   m.shloka_manthra_number,
+--   (m.order / 100000)::int AS expected_n,
+--   (regexp_match(m.shloka_manthra_number, '(\d+(?:\.\d+)+)\s*$'))[1] AS actual_suffix
+-- FROM manthras m
+-- INNER JOIN manthras_section_lnk l ON l.manthra_id = m.id
+-- INNER JOIN sections s ON s.id = l.section_id
+-- WHERE s.document_id = :section_document_id
+--   AND (m.order / 100000)::int <> COALESCE(
+--     (regexp_match(m.shloka_manthra_number, '\.(\d+)\s*$'))[1]::int, -1
+--   )
+-- ORDER BY m.order;
+
+-- Prefer the Strapi REST repair script for production fixes:
+--   node scripts/repair_section_mantra_identity.mjs --section=<id> --apply

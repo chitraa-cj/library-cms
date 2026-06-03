@@ -9,6 +9,8 @@ import {
   isPublishedStrapiDocId,
   pickPreferredStrapiMantraRef,
   titleUsesConfiguredLeaf,
+  buildMantraTitleCtx,
+  mantraLabelForCmsSync,
   type GranthaStructureConfig,
   type StrapiMantraRef,
 } from "@/lib/grantha-structure-sync";
@@ -133,11 +135,13 @@ async function strapiInsertMantraAfter(params: {
   sectionDocumentId: string;
   afterDocumentId: string;
   afterNum: string;
+  ShlokaManthraNumber?: string;
 }): Promise<string | undefined> {
   const res = await apiRequest("POST", "/api/strapi/manthras/insert-between", {
     sectionDocId: params.sectionDocumentId,
     afterDocumentId: params.afterDocumentId,
     afterNum: params.afterNum,
+    ShlokaManthraNumber: params.ShlokaManthraNumber ?? "",
   });
   const json = await res.json();
   const docId = json?.data?.documentId ?? json?.data?.document?.documentId;
@@ -358,6 +362,25 @@ export async function pushMantraSectionStructureToStrapi(
   const resolved = new Map<string, string>();
   const onlySet = opts?.onlyManthraIds?.length ? new Set(opts.onlyManthraIds) : null;
 
+  const adhyayaIndex = snapshot.findIndex((x) => x.id === adhyayaId);
+  const adhyaya = snapshot[adhyayaIndex];
+  const khandaIndex = adhyaya?.khandas.findIndex((x) => x.id === khandaId) ?? -1;
+  const khanda = adhyaya?.khandas[khandaIndex];
+  const padaIndex =
+    cfg.levelThreeEnabled && padaId
+      ? khanda?.padas?.findIndex((x) => x.id === padaId) ?? -1
+      : undefined;
+  const titleCtx =
+    adhyayaIndex >= 0 && khanda && khandaIndex >= 0
+      ? buildMantraTitleCtx(
+          adhyayaIndex,
+          khanda,
+          khandaIndex,
+          cfg,
+          padaIndex != null && padaIndex >= 0 ? padaIndex : undefined,
+        )
+      : null;
+
   for (let i = 0; i < sorted.length; i++) {
     const m = sorted[i];
 
@@ -368,6 +391,8 @@ export async function pushMantraSectionStructureToStrapi(
 
     const isExplicitTarget = onlySet ? onlySet.has(m.id) : !!m._isNewLocal;
     if (!isExplicitTarget) continue;
+
+    const cmsLabel = titleCtx ? mantraLabelForCmsSync(m.title, i + 1, titleCtx) : (m.title ?? "").trim();
 
     const prevWithStrapi = sorted
       .slice(0, i)
@@ -381,11 +406,12 @@ export async function pushMantraSectionStructureToStrapi(
         sectionDocumentId,
         afterDocumentId: afterDocId,
         afterNum: prevWithStrapi.title ?? "",
+        ShlokaManthraNumber: cmsLabel,
       });
     } else {
       docId = await strapiCreateBlankMantraAtEnd({
         sectionDocumentId,
-        ShlokaManthraNumber: "",
+        ShlokaManthraNumber: cmsLabel,
       });
     }
 
@@ -416,18 +442,41 @@ export async function syncMantraSectionLabelsToStrapi(
   const sorted = getSortedMantrasFromSnapshot(snapshot, adhyayaId, khandaId, padaId, cfg);
   const sortKeys = assignSpacedSortKeysFromPortalOrder(sorted);
 
+  const adhyayaIndex = snapshot.findIndex((x) => x.id === adhyayaId);
+  const adhyaya = snapshot[adhyayaIndex];
+  const khandaIndex = adhyaya?.khandas.findIndex((x) => x.id === khandaId) ?? -1;
+  const khanda = adhyaya?.khandas[khandaIndex];
+  const padaIndex =
+    cfg.levelThreeEnabled && padaId
+      ? khanda?.padas?.findIndex((x) => x.id === padaId) ?? -1
+      : undefined;
+  const titleCtx =
+    adhyayaIndex >= 0 && khanda && khandaIndex >= 0
+      ? buildMantraTitleCtx(
+          adhyayaIndex,
+          khanda,
+          khandaIndex,
+          cfg,
+          padaIndex != null && padaIndex >= 0 ? padaIndex : undefined,
+        )
+      : null;
+
   const updates: Array<{ documentId: string; order: number; ShlokaManthraNumber: string }> = [];
   const seenDocIds = new Set<string>();
-  for (const m of sorted) {
+  sorted.forEach((m, idx) => {
     const documentId = m.strapiDocumentId;
-    if (!isPublishedStrapiDocId(documentId) || seenDocIds.has(documentId)) continue;
+    if (!isPublishedStrapiDocId(documentId) || seenDocIds.has(documentId)) return;
     seenDocIds.add(documentId);
+    const orderNum = idx + 1;
+    const label = titleCtx
+      ? mantraLabelForCmsSync(m.title, orderNum, titleCtx)
+      : (m.title ?? "").trim();
     updates.push({
       documentId,
       order: sortKeys.get(m.id) ?? portalIndexToStrapiSortKey(m.order),
-      ShlokaManthraNumber: (m.title ?? "").trim(),
+      ShlokaManthraNumber: label,
     });
-  }
+  });
 
   const leaf = (cfg.leafName || "Mantra").trim() || "Mantra";
   return strapiBatchIdentitySync(updates, { sortKeysOnly: false, configuredLeaf: leaf });

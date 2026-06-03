@@ -24,6 +24,8 @@
     "migrate:draft-fk-cascade": "psql \"$DATABASE_URL\" -f script/migrations/20260527_draft_fk_on_delete_cascade.sql",
     "migrate:portal-vocabulary": "psql \"$DATABASE_URL\" -f script/migrations/20260601_cms_portal_vocabulary.sql",
     "test:publish-integrity": "tsx script/test-grantha-publish-integrity.ts",
+    "repair:section-mantras": "node scripts/repair_section_mantra_identity.mjs",
+    "repair:grantha-mantras": "node scripts/repair_grantha_mantra_identity.mjs",
     "test:grantha-payload-strip": "tsx script/test-grantha-strapi-payload-strip.ts",
     "db:push": "drizzle-kit push",
     "hermex:install": "python3 -m venv .venv-hermex && .venv-hermex/bin/pip install -r python/hermex_translate/requirements.txt",

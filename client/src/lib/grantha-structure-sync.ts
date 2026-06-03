@@ -6,6 +6,7 @@
 
 import { entryContentCharCount } from "./strapi-blocks";
 import { portalIndexToStrapiSortKey, STRAPI_SORT_GAP } from "@shared/mantra-sort-key";
+import { isBareLeafCounterTitle } from "@shared/grantha-publish-integrity";
 
 export const STRAPI_DOCUMENT_ID_MIN_LENGTH = 10;
 
@@ -479,6 +480,45 @@ export function buildMantraDisplayTitle(pfx: string, orderNum: number, ctx: Mant
   return `${pfx} ${ctx.aIdx}.${orderNum}`;
 }
 
+export function buildMantraTitleCtx(
+  adhyayaIndex: number,
+  khanda: { title?: string },
+  khandaIndex: number,
+  cfg: GranthaStructureConfig,
+  padaIndex?: number,
+): MantraTitleCtx {
+  const leaf = (cfg.leafName || "Mantra").trim() || "Mantra";
+  const levelTwo = cfg.levelTwoEnabled !== false;
+  const levelThree = !!cfg.levelThreeEnabled;
+  const aIdx = adhyayaIndex + 1;
+  const isDefaultKhanda = khanda.title === "_default";
+  const kIdx = levelTwo && !isDefaultKhanda ? khandaIndex + 1 : aIdx;
+  return {
+    leaf,
+    aIdx,
+    kIdx,
+    pIdx: padaIndex != null ? padaIndex + 1 : undefined,
+    isDefaultKhanda,
+    padaPath: levelThree && padaIndex != null,
+    levelTwoEnabled: levelTwo,
+  };
+}
+
+/**
+ * CMS/portal label for identity sync. Uses the portal suffix when present; otherwise derives
+ * Mantra 1.7-style title from list position — never defaults every blank row to "Mantra 1".
+ */
+export function mantraLabelForCmsSync(
+  portalTitle: string | undefined,
+  orderNum: number,
+  ctx: MantraTitleCtx,
+): string {
+  if (mantraNumberSuffix(portalTitle)) {
+    return portalMantraTitleForLeaf(portalTitle, ctx.leaf);
+  }
+  return buildMantraDisplayTitle(ctx.leaf, orderNum, ctx);
+}
+
 /** Drop duplicate portal rows (same id or same Strapi documentId) before renumbering. */
 export function dedupeMantrasInDisplayOrder<T extends { id: string; strapiDocumentId?: string }>(
   manthrasInDisplayOrder: T[],
@@ -547,10 +587,21 @@ export function reindexMantraOrdersPreservingTitles<T extends { id: string; titl
   }));
 }
 
+/** When a row has no proper verse suffix (e.g. blank or duplicate "Mantra 1"), derive Mantra 1.n from position. */
+function manthrasWithPositionTitlesIfNeeded<T extends { title: string }>(
+  manthras: T[],
+  ctx: MantraTitleCtx,
+): T[] {
+  return manthras.map((m, idx) =>
+    mantraNumberSuffix(m.title)
+      ? m
+      : { ...m, title: mantraLabelForCmsSync(m.title, idx + 1, ctx) },
+  );
+}
+
 /**
- * Persist/save prep: sort sections, fix contiguous `order`, dedupe linked rows — **without**
- * rewriting ShlokaManthraNumber titles. Verse labels change only via explicit renumber or
- * "Sync verse numbers to CMS".
+ * Persist/save prep: sort sections, fix contiguous `order`, dedupe linked rows.
+ * Fills missing/broken verse labels (no x.y suffix) from list position — does not renumber valid labels.
  */
 export function prepareHierarchyForSave<T extends SyncAdhyayaNode>(
   list: T[],
@@ -560,23 +611,29 @@ export function prepareHierarchyForSave<T extends SyncAdhyayaNode>(
 
   return sortNodesByOrder(list).map((a, ai) => {
     const khandas = sortNodesByOrder(a.khandas ?? []).map((k, ki) => {
+      const khandaCtx = buildMantraTitleCtx(ai, k, ki, cfg);
       if (levelThree && (k.padas ?? []).length > 0) {
-        const padas = sortNodesByOrder(k.padas ?? []).map((p, pi) => ({
-          ...p,
-          order: pi + 1,
-          manthras: reindexMantraOrdersPreservingTitles(
+        const padas = sortNodesByOrder(k.padas ?? []).map((p, pi) => {
+          const padaCtx = buildMantraTitleCtx(ai, k, ki, cfg, pi);
+          const ordered = reindexMantraOrdersPreservingTitles(
             dedupeMantrasInDisplayOrder(sortMantrasByDisplayOrder(p.manthras ?? [])),
-          ),
-        }));
+          );
+          return {
+            ...p,
+            order: pi + 1,
+            manthras: manthrasWithPositionTitlesIfNeeded(ordered, padaCtx),
+          };
+        });
         return { ...k, order: ki + 1, padas, manthras: [] as SyncManthraNode[] };
       }
+      const ordered = reindexMantraOrdersPreservingTitles(
+        dedupeMantrasInDisplayOrder(sortMantrasByDisplayOrder(k.manthras ?? [])),
+      );
       return {
         ...k,
         order: ki + 1,
         padas: [] as SyncPadaNode[],
-        manthras: reindexMantraOrdersPreservingTitles(
-          dedupeMantrasInDisplayOrder(sortMantrasByDisplayOrder(k.manthras ?? [])),
-        ),
+        manthras: manthrasWithPositionTitlesIfNeeded(ordered, khandaCtx),
       };
     });
     return { ...a, order: ai + 1, khandas } as T;
@@ -785,6 +842,85 @@ export function collectPublishedManthraDocIdsFromAdhyaya(a: SyncAdhyayaNode): st
 }
 
 /**
+ * Leaf-entry count for one khanda — when L3 padas exist, counts mantras under padas only
+ * (never khanda.manthras, which must stay empty in 3-level books).
+ */
+export function countLeafMantrasInKhanda(
+  k: Pick<SyncKhandaNode, "manthras" | "padas">,
+  cfg: Pick<GranthaStructureConfig, "levelThreeEnabled">,
+): number {
+  if (cfg.levelThreeEnabled && (k.padas ?? []).length > 0) {
+    return (k.padas ?? []).reduce((s, p) => s + (p.manthras ?? []).length, 0);
+  }
+  return (k.manthras ?? []).length;
+}
+
+/** Leaf-entry count for an adhyaya (respects flat vs L2 vs L3 structure config). */
+export function countLeafMantrasInAdhyaya(
+  a: Pick<SyncAdhyayaNode, "khandas">,
+  cfg: Pick<GranthaStructureConfig, "levelTwoEnabled" | "levelThreeEnabled">,
+): number {
+  const levelTwo = cfg.levelTwoEnabled !== false;
+  if (!levelTwo) {
+    const k = a.khandas?.[0];
+    return k ? countLeafMantrasInKhanda(k, cfg) : 0;
+  }
+  return (a.khandas ?? []).reduce((s, k) => s + countLeafMantrasInKhanda(k, cfg), 0);
+}
+
+/**
+ * Strapi section flat list: sum mantras on tree leaves only.
+ * Parent sections (e.g. Khanda) often still carry legacy inline mantras while children
+ * (Pada) hold the canonical rows — summing every section double-counts (549 vs 13).
+ */
+export function countMantrasOnLeafSections(
+  sections: Array<{ documentId?: string; parent?: { documentId?: string }; manthras?: unknown[] }>,
+): number {
+  if (!sections?.length) return 0;
+  const parentDocIds = new Set<string>();
+  for (const s of sections) {
+    const pid = s.parent?.documentId;
+    if (pid) parentDocIds.add(pid);
+  }
+  return sections
+    .filter((s) => s.documentId && !parentDocIds.has(s.documentId))
+    .reduce((sum, s) => sum + (Array.isArray(s.manthras) ? s.manthras.length : 0), 0);
+}
+
+/** Count mantras on a section node and all descendants (for Sections admin tree). */
+export function countLeafMantrasInSectionTree(
+  node: { documentId?: string; manthras?: unknown[] },
+  childrenByParentDocId: Map<string, Array<{ documentId?: string; manthras?: unknown[] }>>,
+): number {
+  const children = node.documentId ? childrenByParentDocId.get(node.documentId) ?? [] : [];
+  if (children.length === 0) {
+    return Array.isArray(node.manthras) ? node.manthras.length : 0;
+  }
+  return children.reduce(
+    (sum, child) => sum + countLeafMantrasInSectionTree(child, childrenByParentDocId),
+    0,
+  );
+}
+
+/**
+ * When L3 is enabled and a khanda has padas, mantras belong on padas only.
+ * Clears stray khanda.manthras left by Strapi supplement / legacy flat imports.
+ */
+export function enforceMantraPlacementByStructure<T extends SyncAdhyayaNode>(
+  list: T[],
+  cfg: GranthaStructureConfig,
+): T[] {
+  if (!cfg.levelThreeEnabled) return list;
+  return list.map((a) => ({
+    ...a,
+    khandas: (a.khandas ?? []).map((k) => {
+      if ((k.padas ?? []).length === 0) return k;
+      return { ...k, manthras: [] as SyncManthraNode[] };
+    }),
+  })) as T[];
+}
+
+/**
  * When the book structure is "flat" (no real khandas), ensure each adhyaya has a single `_default` khanda.
  * When L3 is off, collapse padas into khanda.manthras. Collect Strapi section documentIds that are removed
  * from the logical tree so the client can queue them for DELETE on publish.
@@ -905,11 +1041,35 @@ export function dedupePublishedMantrasForDisplay<
         ? 500
         : 0;
     const emptyPenalty = score < 8 ? -2000 : 0;
-    const totalScore = score + orderBonus + emptyPenalty;
+    const bareLabelPenalty = isBareLeafCounterTitle(String(m.ShlokaManthraNumber ?? "")) ? -3000 : 0;
+    const totalScore = score + orderBonus + emptyPenalty + bareLabelPenalty;
     const prev = byKey.get(key);
     if (!prev || totalScore > prev.score) byKey.set(key, { row: m, score: totalScore });
   }
-  return [...byKey.values()].map((v) => v.row);
+  const deduped = [...byKey.values()].map((v) => v.row);
+
+  // Drop bare leaf-counter stubs (e.g. "Vaakhyaa 1") when the same section has real dotted verses.
+  const bySection = new Map<string, T[]>();
+  for (const m of deduped) {
+    const sec = m.section?.documentId ?? "__none__";
+    if (!bySection.has(sec)) bySection.set(sec, []);
+    bySection.get(sec)!.push(m);
+  }
+  const drop = new Set<T>();
+  for (const secRows of bySection.values()) {
+    const hasDottedVerse = secRows.some((m) => {
+      const suf = mantraNumberSuffix(String(m.ShlokaManthraNumber ?? ""));
+      return !!suf && suf.includes(".");
+    });
+    if (!hasDottedVerse) continue;
+    for (const m of secRows) {
+      const label = String(m.ShlokaManthraNumber ?? "");
+      if (!isBareLeafCounterTitle(label)) continue;
+      const score = scoreStrapiManthraRowContent(m.ShlokaManthraEntry);
+      if (score < MANTRA_LINK_MIN_CONTENT_SCORE) drop.add(m);
+    }
+  }
+  return deduped.filter((m) => !drop.has(m));
 }
 
 /** Section row from Strapi `sections/by-grantha` (metadata + optional manthras). */

@@ -23,10 +23,18 @@ import {
   editorOrdinalLabel,
   reindexMantraOrdersPreservingTitles,
   prepareHierarchyForSave,
+  buildMantraTitleCtx,
+  mantraLabelForCmsSync,
   assignContiguousMantraOrders,
   sortNodesByOrder,
   portalMantraTitleForLeaf,
   inferLeafNameFromStrapiMantras,
+  countLeafMantrasInKhanda,
+  countLeafMantrasInAdhyaya,
+  countMantrasOnLeafSections,
+  countLeafMantrasInSectionTree,
+  enforceMantraPlacementByStructure,
+  dedupePublishedMantrasForDisplay,
   type MantraTitleCtx,
 } from "../client/src/lib/grantha-structure-sync.ts";
 import {
@@ -313,11 +321,19 @@ const afterInsertSave = prepareHierarchyForSave(
 );
 const savedMantras = afterInsertSave[0].khandas[0].manthras;
 assert.equal(savedMantras[0].title, "Shloka 1.1.268");
-assert.equal(savedMantras[1].title, "");
+assert.equal(savedMantras[1].title, "Shloka 1.1.2");
 assert.equal(savedMantras[2].title, "Shloka 1.1.269");
 assert.equal(savedMantras[0].order, 1);
 assert.equal(savedMantras[1].order, 2);
 assert.equal(savedMantras[2].order, 3);
+
+const flatCtx = buildMantraTitleCtx(0, { title: "_default" }, 0, {
+  levelTwoEnabled: false,
+  leafName: "Mantra",
+});
+assert.equal(mantraLabelForCmsSync("", 7, flatCtx), "Mantra 1.7");
+assert.equal(mantraLabelForCmsSync("Mantra 1", 7, flatCtx), "Mantra 1.7");
+assert.equal(mantraLabelForCmsSync("Mantra 1.5", 5, flatCtx), "Mantra 1.5");
 
 const flatTree = normalizeEditorHierarchy(
   [
@@ -498,5 +514,87 @@ const dupRefsByRichness: StrapiMantraRef[] = [
   { title: "Shloka 1.1.3", docId: "full-doc", order: 3, contentScore: 120 },
 ];
 assert.equal(pickBestStrapiMantraRefForLink(dupRefsByRichness, "empty-doc")?.docId, "full-doc");
+
+// ── Leaf mantra counts: parent sections must not inflate totals (549 vs 13) ──
+const l3Khanda = {
+  id: "khanda1",
+  title: "Khanda 1",
+  order: 1,
+  expanded: true,
+  manthras: Array.from({ length: 549 }, (_, i) => ({
+    id: `legacy-${i}`,
+    title: `Shloka 1.${i + 1}`,
+    order: i + 1,
+  })),
+  padas: [
+    {
+      id: "p1",
+      title: "Pada 1",
+      order: 1,
+      expanded: true,
+      manthras: [{ id: "m1", title: "Shloka 1.1.1", order: 1 }],
+    },
+    {
+      id: "p2",
+      title: "Pada 2",
+      order: 2,
+      expanded: true,
+      manthras: [{ id: "m2", title: "Shloka 1.1.2", order: 1 }],
+    },
+  ],
+};
+assert.equal(countLeafMantrasInKhanda(l3Khanda, { levelThreeEnabled: true }), 2);
+assert.equal(countLeafMantrasInKhanda(l3Khanda, { levelThreeEnabled: false }), 549);
+
+const l3Adhyaya = { khandas: [l3Khanda] };
+assert.equal(
+  countLeafMantrasInAdhyaya(l3Adhyaya, { levelTwoEnabled: true, levelThreeEnabled: true }),
+  2,
+);
+
+const strapiSections = [
+  { documentId: "khanda", parent: { documentId: "adhyaya" }, manthras: [{ id: 1 }] },
+  { documentId: "pada1", parent: { documentId: "khanda" }, manthras: [{ id: 2 }, { id: 3 }] },
+  { documentId: "pada2", parent: { documentId: "khanda" }, manthras: [{ id: 4 }] },
+  { documentId: "adhyaya", manthras: [] },
+];
+assert.equal(countMantrasOnLeafSections(strapiSections as any), 3);
+
+const childrenOf = new Map<string, any[]>([
+  ["khanda", [{ documentId: "pada1", manthras: [] }, { documentId: "pada2", manthras: [] }]],
+  ["pada1", []],
+  ["pada2", []],
+]);
+assert.equal(
+  countLeafMantrasInSectionTree({ documentId: "khanda", manthras: [{ id: 1 }] }, childrenOf as any),
+  0,
+);
+
+const cleared = enforceMantraPlacementByStructure(
+  [{ id: "a", title: "A", order: 1, expanded: true, khandas: [l3Khanda as any] }],
+  { levelThreeEnabled: true, leafName: "Shloka" },
+);
+assert.equal(cleared[0].khandas[0].manthras.length, 0);
+assert.equal(cleared[0].khandas[0].padas.length, 2);
+
+const vedantaSection = "mangala-sec";
+const vedantaRows = dedupePublishedMantrasForDisplay([
+  {
+    documentId: "good-vaakhyaa",
+    ShlokaManthraNumber: "Vaakhyaa 1.1.1",
+    order: 100_000,
+    section: { documentId: vedantaSection },
+    ShlokaManthraEntry: { SanskritTextEntry: [{ type: "paragraph", children: [{ type: "text", text: "यदविद्याविलासेन" }] }] },
+  },
+  {
+    documentId: "stub-vaakhyaa",
+    ShlokaManthraNumber: "Vaakhyaa 1",
+    order: 200_000,
+    section: { documentId: vedantaSection },
+    ShlokaManthraEntry: undefined,
+  },
+]);
+assert.equal(vedantaRows.length, 1);
+assert.equal(vedantaRows[0].documentId, "good-vaakhyaa");
 
 console.log("test-grantha-mantra-index: all ok (insert/delete/order)");

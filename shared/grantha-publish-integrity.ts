@@ -3,6 +3,8 @@
  * verse-number renames on identity sync, and duplicate suffix rows in a section.
  */
 
+import { STRAPI_SORT_GAP } from "./mantra-sort-key";
+
 export function mantraNumberSuffix(title: string | undefined): string | null {
   const t = (title ?? "").trim();
   if (!t) return null;
@@ -29,6 +31,36 @@ export function canonicalMantraTitle(configuredLeaf: string, numericSuffix: stri
   return `${(configuredLeaf || "Mantra").trim()} ${numericSuffix}`.trim();
 }
 
+/** True for placeholder labels like "Mantra 1" / "Shloka 2" — leaf + integer, no x.y verse suffix. */
+export function isBareLeafCounterLabel(title: string | undefined, configuredLeaf: string): boolean {
+  const t = (title ?? "").trim();
+  if (!t || mantraNumberSuffix(t)) return false;
+  const prefix = mantraTitleLeafPrefix(t);
+  const leaf = (configuredLeaf || "Mantra").trim();
+  return !!prefix && prefix.toLowerCase() === leaf.toLowerCase();
+}
+
+/** Infer leaf from title and test for bare counter — e.g. "Vaakhyaa 1", "Mantra 2". */
+export function isBareLeafCounterTitle(title: string | undefined): boolean {
+  const t = (title ?? "").trim();
+  if (!t || mantraNumberSuffix(t)) return false;
+  const leaf = mantraTitleLeafPrefix(t);
+  if (!leaf) return false;
+  return isBareLeafCounterLabel(t, leaf);
+}
+
+/** Flat grantha: derive Mantra 1.N from spaced Strapi sort key N × 100_000. */
+export function flatMantraLabelFromSpacedSortKey(
+  order: number,
+  configuredLeaf: string,
+  suffixPrefix = "1",
+): string {
+  if (order < STRAPI_SORT_GAP || order % STRAPI_SORT_GAP !== 0) return "";
+  const n = Math.round(order / STRAPI_SORT_GAP);
+  if (n < 1) return "";
+  return canonicalMantraTitle(configuredLeaf, `${suffixPrefix}.${n}`);
+}
+
 /** Rewrite portal/Strapi label to use the grantha's configured leaf while keeping the verse suffix. */
 export function portalMantraTitleForConfiguredLeaf(
   portalTitle: string | undefined,
@@ -39,10 +71,13 @@ export function portalMantraTitleForConfiguredLeaf(
   const suffix = mantraNumberSuffix(portalTitle) ?? mantraNumberSuffix(strapiTitle);
   if (suffix) return canonicalMantraTitle(leaf, suffix);
   const st = (strapiTitle ?? "").trim();
-  if (st && titleUsesConfiguredLeaf(st, leaf)) return st;
+  if (st && titleUsesConfiguredLeaf(st, leaf) && mantraNumberSuffix(st)) return st;
   const pt = (portalTitle ?? "").trim();
-  if (pt && titleUsesConfiguredLeaf(pt, leaf)) return pt;
-  return pt || canonicalMantraTitle(leaf, "1");
+  if (pt && titleUsesConfiguredLeaf(pt, leaf) && mantraNumberSuffix(pt)) return pt;
+  if (isBareLeafCounterLabel(pt, leaf) || isBareLeafCounterLabel(st, leaf)) return "";
+  // Never invent "Mantra 1" from a blank title — positional label must come from
+  // mantraLabelForCmsSync / prepareHierarchyForSave with sibling index.
+  return pt || st || "";
 }
 
 /** In-place: align all hierarchy mantra titles with configuredLeaf (Shloka ↔ Mantra relabel). */

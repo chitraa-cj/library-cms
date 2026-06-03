@@ -55,11 +55,13 @@ import {
 } from "@/lib/strapi-blocks";
 import { fetchManthraForGranthaEditor } from "@/lib/resolve-strapi-mantra-detail";
 import { invalidateManthraCache } from "@/lib/mantra-cms-cache";
+import { parsePublishScopeFromDraft } from "@/lib/grantha-publish-scope";
 import {
-  parsePublishScopeFromDraft,
-  resolveGranthaPublishStrategy,
-  collectManthraPublishTargets,
-} from "@/lib/grantha-publish-scope";
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
 import {
   cancelGranthaMantraPrefetch,
   prefetchGranthaMantrasFromHierarchy,
@@ -100,6 +102,10 @@ import {
   strapiGranthaHasKhandaSections,
   sanitizeHierarchyPortalMeta,
   sortMantrasByDisplayOrder,
+  countLeafMantrasInKhanda,
+  countLeafMantrasInAdhyaya,
+  countMantrasOnLeafSections,
+  enforceMantraPlacementByStructure,
   type GranthaStructureConfig,
   type StrapiMantraRef,
 } from "@/lib/grantha-structure-sync";
@@ -117,6 +123,11 @@ import {
 } from "@/lib/grantha-strapi-mantra-sync";
 import { invalidateGranthaCmsCaches, syncGranthaCmsCaches } from "@/lib/strapi-cache-sync";
 import { resolveMantraOwnerSectionDocId } from "@shared/grantha-mantra-section-resolve";
+import {
+  flatMantraLabelFromSpacedSortKey,
+  isBareLeafCounterTitle,
+} from "@shared/grantha-publish-integrity";
+import { STRAPI_SORT_GAP } from "@shared/mantra-sort-key";
 import { usePortalVocabulary } from "@/hooks/use-portal-vocabulary";
 import OtherTranslationsHermex from "@/components/other-translations-hermex";
 import {
@@ -537,12 +548,21 @@ function reconstructHierarchyFromStrapi(sections: any[], leafName = "Mantra"): A
   const topLevel = sections.filter((s) => !s.parent?.documentId);
 
   // Shared helper: convert a Strapi manthra to a ManthraNode.
-  const toManthra = (m: any, mi: number): ManthraNode => ({
-    id: uid(),
-    title: m.ShlokaManthraNumber || `${leafLabel} ${mi + 1}`,
-    order: m.order ?? mi + 1,
-    strapiDocumentId: m.documentId || undefined,
-  });
+  const toManthra = (m: any, mi: number): ManthraNode => {
+    const strapiLabel = (m.ShlokaManthraNumber ?? "").trim();
+    const sortKey =
+      typeof m.order === "number" && !Number.isNaN(m.order) ? m.order : (mi + 1) * STRAPI_SORT_GAP;
+    const title =
+      strapiLabel && !isBareLeafCounterTitle(strapiLabel)
+        ? strapiLabel
+        : flatMantraLabelFromSpacedSortKey(sortKey, leafLabel) || "";
+    return {
+      id: uid(),
+      title,
+      order: m.order ?? mi + 1,
+      strapiDocumentId: m.documentId || undefined,
+    };
+  };
 
   // Build a KhandaNode from a Strapi section.
   // If the section has sub-children those become padas (3-level grantha);
@@ -1036,10 +1056,7 @@ function GranthaCard({
             const leafSections = item.sections.filter(
               (s: any) => !parentDocIds.has(s.documentId)
             );
-            const totalManthras = item.sections.reduce(
-              (sum: number, s: any) => sum + (Array.isArray(s.manthras) ? s.manthras.length : 0),
-              0
-            );
+            const totalManthras = countMantrasOnLeafSections(item.sections);
             // Show leaf sections sorted by order; cap at 12 to keep card compact.
             const sorted = [...(leafSections.length > 0 ? leafSections : item.sections)]
               .sort((a: any, b: any) => (a.order ?? 999) - (b.order ?? 999));
@@ -1152,6 +1169,8 @@ export default function GranthasPage() {
   const [viewOnly, setViewOnly] = useState(false);
   const [editingItem, setEditingItem] = useState<any>(null);
   const [editingDraftId, setEditingDraftId] = useState<number | null>(null);
+  /** True when portal draft on disk matches the editor (after Save or open). Required before Save & Publish. */
+  const [draftSyncedForPublish, setDraftSyncedForPublish] = useState(false);
   const [deleteTarget, setDeleteTarget] = useState<any>(null);
   const [resetDraftTarget, setResetDraftTarget] = useState<any>(null);
   const [resettingDraftId, setResettingDraftId] = useState<number | null>(null);
@@ -1294,6 +1313,11 @@ export default function GranthasPage() {
   const [addingSharedOptionKey, setAddingSharedOptionKey] = useState<PortalVocabularyKey | null>(null);
   const [manthraLoading, setManthraLoading] = useState(false);
   const mantraFetchGenRef = useRef(0);
+  /** Deep copy of the open mantra when the dialog opened — used to discard unsaved edits. */
+  const mantraOpenSnapshotRef = useRef<{
+    node: ManthraNode | null;
+    wasNewLocal: boolean;
+  } | null>(null);
   const openEditLoadGenRef = useRef(0);
 
   function isCurrentOpenEditLoad(gen: number): boolean {
@@ -1318,13 +1342,24 @@ export default function GranthasPage() {
     granthaMetaDirtyRef.current = false;
   }
 
+  function markEditorUnsyncedForPublish() {
+    if (viewOnly) return;
+    setDraftSyncedForPublish(false);
+  }
+
+  function markEditorSyncedForPublish() {
+    setDraftSyncedForPublish(true);
+  }
+
   function markManthraContentChanged(manthraId: string) {
     if (!manthraId) return;
     changedManthraIdsRef.current.add(manthraId);
+    markEditorUnsyncedForPublish();
   }
 
   function markRequiresFullPublish() {
     requiresFullPublishRef.current = true;
+    markEditorUnsyncedForPublish();
   }
 
   function clearManthraFromChangedSet(manthraId: string) {
@@ -1347,6 +1382,7 @@ export default function GranthasPage() {
       return;
     }
     granthaMetaDirtyRef.current = true;
+    markEditorUnsyncedForPublish();
   }, [formData, teekas, otherTranslations, granthaNameTranslations, structureConfig]);
 
   const manthraDialogDirtyRef = useRef(false);
@@ -1374,6 +1410,12 @@ export default function GranthasPage() {
     setManthraDialogViewOnly(!!opts?.viewOnly);
     const snap = adhyayasRef.current as AdhyayaNode[];
     const node = findManthraInTree(snap, ctx.adhyayaId, ctx.khandaId, ctx.manthraId, ctx.padaId);
+    mantraOpenSnapshotRef.current = node
+      ? {
+          node: JSON.parse(JSON.stringify(node)) as ManthraNode,
+          wasNewLocal: !!node._isNewLocal,
+        }
+      : { node: null, wasNewLocal: true };
     const needsCmsShloka =
       isPublishedStrapiDocId(ctx.strapiDocumentId) &&
       !(node && mantraNodeHasHydratedShloka(node));
@@ -2110,6 +2152,7 @@ export default function GranthasPage() {
     setStructureConfig(DEFAULT_STRUCTURE);
     setAdhyayas([]);
     setEditingDraftId(null);
+    setDraftSyncedForPublish(false);
     setEditingItem(null);
     setViewOnly(false);
     setDeletedStrapiSectionDocIds([]);
@@ -2129,6 +2172,8 @@ export default function GranthasPage() {
     const openEditLoadGen = ++openEditLoadGenRef.current;
     publishScopeReadyRef.current = false;
     publishScopeMetaEffectSkipRef.current = true;
+    setDraftSyncedForPublish(false);
+    let loadedDraftId: number | null = null;
     let publishScopeDraftData: unknown = item._draftData;
     const granthaDocId = item.documentId || item._strapiDocId;
     const isItemLocked = !!(granthaDocId && lockedDocIds.has(granthaDocId));
@@ -2149,6 +2194,7 @@ export default function GranthasPage() {
 
     // New drafts with no Strapi link: use draft hierarchy directly and return early.
     if (item._isDraft && !item._strapiDocId) {
+      loadedDraftId = item._draftId;
       setEditingDraftId(item._draftId);
       const d = item._draftData as any;
       setFormData({
@@ -2190,6 +2236,7 @@ export default function GranthasPage() {
       applyPublishScopeFromDraft(d);
       publishScopeMetaEffectSkipRef.current = true;
       publishScopeReadyRef.current = true;
+      if (loadedDraftId != null) markEditorSyncedForPublish();
       setStep(1);
       setView("form");
       return;
@@ -2215,6 +2262,7 @@ export default function GranthasPage() {
 
     if (item._isDraft) {
       // Local draft that is editing an existing Strapi grantha.
+      loadedDraftId = item._draftId;
       setEditingDraftId(item._draftId);
       const d = item._draftData as any;
       setFormData({
@@ -2266,7 +2314,8 @@ export default function GranthasPage() {
       const savedData = matchingDraft?.data as any;
       publishScopeDraftData = savedData ?? item._draftData;
 
-      setEditingDraftId(matchingDraft?.id ?? null);
+      loadedDraftId = matchingDraft?.id ?? null;
+      setEditingDraftId(loadedDraftId);
 
       // For each field: prefer saved portal draft value (already in portal format)
       // and fall back to Strapi data (which needs mapping) when draft has nothing.
@@ -2788,7 +2837,24 @@ export default function GranthasPage() {
               return resolved;
             }
 
-            const enrichedManthras = k.manthras.reduce<ManthraNode[]>((acc, m) => {
+            const khandaDocId: string | undefined =
+              (k as any).documentId
+              ?? (adhyaDocId
+                ? (strapiChildSectionsByParentDocId.get(adhyaDocId) ?? []).find(
+                    (s: any) => s.title === k.title
+                  )?.documentId
+                : undefined);
+            const strapiPadaChildCount = khandaDocId
+              ? (strapiChildSectionsByParentDocId.get(khandaDocId) ?? []).length
+              : 0;
+            /** L3 books: mantras live on pada sections — never duplicate onto khanda.manthras. */
+            const mantraRowsOnPadasOnly =
+              !!effectiveStructureConfig.levelThreeEnabled &&
+              ((k.padas ?? []).length > 0 || strapiPadaChildCount > 0);
+
+            const enrichedManthras = mantraRowsOnPadasOnly
+              ? []
+              : k.manthras.reduce<ManthraNode[]>((acc, m) => {
               const resolved = resolveDocId(m);
               if (!resolved) return acc; // dropped: Strapi record was deleted, no order remap
               const { docId } = resolved;
@@ -2810,13 +2876,6 @@ export default function GranthasPage() {
             // Prefer docId-based lookup for the pada's own section to avoid title collisions.
             // FALLBACK: if draft khanda has no stored documentId, look it up from Strapi by title
             // under the parent adhyaya — needed so the L3 supplement can find missing Adhikaranas.
-            const khandaDocId: string | undefined =
-              (k as any).documentId
-              ?? (adhyaDocId
-                ? (strapiChildSectionsByParentDocId.get(adhyaDocId) ?? []).find(
-                    (s: any) => s.title === k.title
-                  )?.documentId
-                : undefined);
             const enrichedPadas = (k.padas ?? []).map((p) => {
               // FALLBACK: if draft pada has no stored documentId, look it up from Strapi by title
               // under the parent khanda (Pada-level section) — needed for manthra supplement.
@@ -2925,6 +2984,7 @@ export default function GranthasPage() {
 
             // Supplement: add Strapi mantras that aren't already covered by a local node.
             const newManthras: ManthraNode[] = [];
+            if (!mantraRowsOnPadasOnly) {
             for (const sm of strapiMantrasForKhanda) {
               const smSuffix = mantraNumberSuffix(sm.title);
               if (smSuffix && knownSuffixes.has(smSuffix)) continue;
@@ -2947,8 +3007,11 @@ export default function GranthasPage() {
                 if (suf) knownSuffixes.add(suf);
               }
             }
+            }
 
-            const finalManthras = dedupeManthrasForEditor(
+            const finalManthras = mantraRowsOnPadasOnly
+              ? []
+              : dedupeManthrasForEditor(
               [...enrichedManthras, ...newManthras],
               leafLabel,
             );
@@ -3154,7 +3217,8 @@ export default function GranthasPage() {
       );
 
       const prunedHier2 = stripOrphanPortalMantrasFromHierarchy(collapsedHier2, seenStrapiMantraDocIds);
-      const prep = prepareHierarchyForContentStep(prunedHier2, effectiveStructureConfig);
+      const placedHier2 = enforceMantraPlacementByStructure(prunedHier2, effectiveStructureConfig);
+      const prep = prepareHierarchyForContentStep(placedHier2, effectiveStructureConfig);
       if (!isCurrentOpenEditLoad(openEditLoadGen)) {
         return;
       }
@@ -3172,6 +3236,7 @@ export default function GranthasPage() {
       applyPublishScopeFromDraft(publishScopeDraftData);
       publishScopeMetaEffectSkipRef.current = true;
       publishScopeReadyRef.current = true;
+      if (loadedDraftId != null) markEditorSyncedForPublish();
       setStep(1);
       setView("form");
       setEditingGranthaSectionsLoading(false);
@@ -4238,8 +4303,9 @@ export default function GranthasPage() {
       toast({
         title: "Some CMS section links were stale",
         description:
-          `${notFoundDocumentIds.length} section(s) no longer exist in Strapi and were unlinked in this draft. ` +
-            "Use Save & Publish to recreate structure if needed.",
+          `${notFoundDocumentIds.length} section(s) no longer exist in Strapi and were unlinked in this draft ` +
+          `(${notFoundDocumentIds.slice(0, 3).join(", ")}${notFoundDocumentIds.length > 3 ? "…" : ""}). ` +
+          "Use Save & Publish to recreate structure if needed.",
       });
     }
     if (updated > 0) {
@@ -4585,22 +4651,39 @@ export default function GranthasPage() {
       return;
     }
     const draftId = item._draftId as number;
+    const strapiDocId = item._strapiDocId as string;
     setResettingDraftId(draftId);
     try {
-      // Strapi is already live — remove the portal overlay draft so the list shows "Published".
       await apiRequest("DELETE", `/api/drafts/${draftId}`);
       await queryClient.invalidateQueries({ queryKey: ["/api/drafts", "granthas"] });
       await queryClient.invalidateQueries({ queryKey: ["/api/strapi", "granthas"] });
       syncGranthaCmsCaches(queryClient);
+      closeMantraDialog();
       if (editingDraftId === draftId) {
-        resetForm();
-        setView("list");
+        const published = (data?.data ?? []).find((g) => g.documentId === strapiDocId);
+        if (published && view === "form") {
+          await openEdit({ ...published, _isDraft: false });
+          toast({
+            title: "Portal draft discarded",
+            description:
+              "Reloaded the published CMS version in the editor. No publish was run.",
+          });
+        } else {
+          resetForm();
+          setView("list");
+          toast({
+            title: "Portal draft discarded",
+            description:
+              "The published Strapi entry is shown again in the list. Open it to work from live CMS data.",
+          });
+        }
+      } else {
+        toast({
+          title: "Portal draft discarded",
+          description:
+            "The published Strapi entry is shown again in the list. Open it to work from live CMS data.",
+        });
       }
-      toast({
-        title: "Portal draft discarded",
-        description:
-          "The published Strapi entry is shown again in the list. Open it to work from live CMS data.",
-      });
     } catch (err: any) {
       toast({
         variant: "destructive",
@@ -4795,197 +4878,131 @@ export default function GranthasPage() {
           if (!editingDraftId && saved?.id) {
             setEditingDraftId(saved.id);
           }
+          markEditorSyncedForPublish();
         },
       }
     );
   }
 
-  // "Save & Publish" — persist draft then publish to Strapi, stay on page
+  function runGranthaPublishAfterPreflight(resolvedDraftId: number) {
+    void (async () => {
+      try {
+        const preRes = await apiRequest(
+          "POST",
+          `/api/drafts/${resolvedDraftId}/publish-preflight`,
+        );
+        const pre = await preRes.json();
+        if (!pre.ok) {
+          toast({
+            variant: "destructive",
+            title: "Publish blocked — integrity check",
+            description:
+              pre.message ||
+              "Fix verse labels and content issues shown in the draft before publishing.",
+          });
+          return;
+        }
+      } catch (e: unknown) {
+        const msg = e instanceof Error ? e.message : String(e);
+        toast({
+          variant: "destructive",
+          title: "Publish preflight failed",
+          description: msg,
+        });
+        return;
+      }
+
+      armPublishSyncGuard();
+      publishDraft.mutate(resolvedDraftId, {
+        onSuccess: (result: any) => {
+          resetPublishScope();
+          markEditorSyncedForPublish();
+          track("grantha_published", {
+            grantha_name: formData.GranthaName,
+            grantha_type: formData.GranthaType,
+            teeka_count: teekas.length,
+          });
+          const updatedHierarchy = result?.draft?.data?.hierarchy;
+          const newStrapiDocId = result?.draft?.strapiDocumentId;
+          const granthaSidForFlush =
+            newStrapiDocId ||
+            (editingItem && !editingItem._isDraft ? editingItem.documentId : editingItem?._strapiDocId);
+          if (Array.isArray(updatedHierarchy)) {
+            const merged = mergePublishedHierarchyPreservingContent(
+              adhyayasRef.current,
+              updatedHierarchy as AdhyayaNode[],
+            );
+            const nh = withNormalizedHierarchy(merged, structureConfig);
+            setAdhyayas(nh);
+            if (isPublishedStrapiDocId(granthaSidForFlush)) {
+              void runStrapiFullHierarchySectionOrderSync(nh, structureConfig, true);
+            }
+          }
+          syncGranthaCmsCaches(queryClient);
+          queryClient.setQueryData(["/api/drafts", "granthas"], (old: any[] | undefined) =>
+            old?.map((d) =>
+              d.id === resolvedDraftId ? { ...d, status: "published", strapiDocumentId: newStrapiDocId ?? d.strapiDocumentId } : d,
+            ),
+          );
+          if (newStrapiDocId && editingItem) {
+            setEditingItem({
+              ...editingItem,
+              _isDraft: false,
+              documentId: newStrapiDocId,
+              _strapiDocId: newStrapiDocId,
+            });
+          } else if (editingItem) {
+            setEditingItem({ ...editingItem, _isDraft: false });
+          }
+          setDeletedStrapiSectionDocIds([]);
+          setDeletedStrapiTeekaDocIds([]);
+          setDeletedStrapiManthraDocIds([]);
+        },
+        onError: (err: any) => {
+          track("publish_failed", {
+            grantha_name: formData.GranthaName,
+            error: err?.message || "unknown",
+          });
+          const violations = err?.violations as Array<{ message?: string }> | undefined;
+          if (Array.isArray(violations) && violations.length > 0) {
+            toast({
+              variant: "destructive",
+              title: "Publish blocked",
+              description: violations
+                .slice(0, 3)
+                .map((v) => v.message)
+                .filter(Boolean)
+                .join(" "),
+            });
+          }
+        },
+      });
+    })();
+  }
+
+  // "Save & Publish" — requires an up-to-date portal draft, then full publish to Strapi
   function handleSaveAndPublish() {
     if (!formData.GranthaName.trim()) {
       toast({ variant: "destructive", title: "Grantha Name is required" });
       return;
     }
-    const payload = buildSavePayload();
-    setAdhyayas(payload.hierarchy as AdhyayaNode[]);
-    const strapiDocId =
-      editingItem && !editingItem._isDraft
-        ? editingItem.documentId
-        : editingItem?._strapiDocId || undefined;
-
-    saveDraft.mutate(
-      {
-        title: formData.GranthaName,
-        data: payload,
-        strapiDocumentId: strapiDocId,
-        draftId: editingDraftId ?? undefined,
-      },
-      {
-        onSuccess: (saved: any) => {
-          const resolvedDraftId = editingDraftId ?? saved?.id;
-          if (!editingDraftId && saved?.id) {
-            setEditingDraftId(saved.id);
-          }
-          if (resolvedDraftId) {
-            void (async () => {
-              try {
-                const preRes = await apiRequest(
-                  "POST",
-                  `/api/drafts/${resolvedDraftId}/publish-preflight`,
-                );
-                const pre = await preRes.json();
-                if (!pre.ok) {
-                  toast({
-                    variant: "destructive",
-                    title: "Publish blocked — integrity check",
-                    description:
-                      pre.message ||
-                      "Fix verse labels and content issues shown in the draft before publishing.",
-                  });
-                  return;
-                }
-              } catch (e: unknown) {
-                const msg = e instanceof Error ? e.message : String(e);
-                toast({
-                  variant: "destructive",
-                  title: "Publish preflight failed",
-                  description: msg,
-                });
-                return;
-              }
-
-              const strategy = resolveGranthaPublishStrategy(publishScopeForPayload(), {
-                hasPublishedGrantha:
-                  isPublishedStrapiDocId(strapiDocId) || !!editingGranthaStrapiDocumentId(),
-                hasPendingDeletions:
-                  deletedStrapiSectionDocIds.length > 0 ||
-                  deletedStrapiManthraDocIds.length > 0 ||
-                  deletedStrapiTeekaDocIds.length > 0,
-              });
-
-              if (strategy === "none") {
-                toast({
-                  title: "Draft saved",
-                  description: "No tracked changes to publish to CMS since the last publish.",
-                });
-                return;
-              }
-
-              if (strategy === "incremental") {
-                const targets = collectManthraPublishTargets(
-                  adhyayasRef.current,
-                  changedManthraIdsRef.current,
-                );
-                if (targets.length === 0) {
-                  toast({
-                    variant: "destructive",
-                    title: "Could not resolve changed verses",
-                    description: "Use full Save & Publish to sync the grantha.",
-                  });
-                  return;
-                }
-                publishChangedMantrasMutation.mutate(
-                  { draftId: resolvedDraftId, mantras: targets },
-                  {
-                    onSuccess: (batch: any) => {
-                      track("grantha_incremental_publish", {
-                        grantha_name: formData.GranthaName,
-                        published_count: batch?.publishedCount ?? 0,
-                      });
-                      for (const row of batch?.published ?? []) {
-                        if (!row?.manthraId || !row?.strapiDocumentId) continue;
-                        const t = targets.find((x) => x.manthraId === row.manthraId);
-                        if (!t) continue;
-                        updateManthraContent(
-                          t.adhyayaId,
-                          t.khandaId,
-                          t.manthraId,
-                          { strapiDocumentId: row.strapiDocumentId, _isNewLocal: false },
-                          t.padaId,
-                          { markDirty: false },
-                        );
-                      }
-                    },
-                  },
-                );
-                return;
-              }
-
-              armPublishSyncGuard();
-              publishDraft.mutate(resolvedDraftId, {
-              onSuccess: (result: any) => {
-                resetPublishScope();
-                track("grantha_published", {
-                  grantha_name: formData.GranthaName,
-                  grantha_type: formData.GranthaType,
-                  teeka_count: teekas.length,
-                });
-                // ── Post-publish sync ──────────────────────────────────────────────
-                // The server enriches the draft hierarchy with Strapi documentIds
-                // during publish (manthras & sections get their IDs back-filled).
-                // Sync those IDs into memory so the next "Save & Publish" does
-                // direct PUT updates instead of re-creating records in Strapi.
-                const updatedHierarchy = result?.draft?.data?.hierarchy;
-                const newStrapiDocId = result?.draft?.strapiDocumentId;
-                const granthaSidForFlush =
-                  newStrapiDocId ||
-                  (editingItem && !editingItem._isDraft ? editingItem.documentId : editingItem?._strapiDocId);
-                // Publish already wrote mantra content + labels; skip post-publish
-                // full-grantha identity re-sync (was duplicating 1000+ Strapi PUTs).
-                if (Array.isArray(updatedHierarchy)) {
-                  const merged = mergePublishedHierarchyPreservingContent(
-                    adhyayasRef.current,
-                    updatedHierarchy as AdhyayaNode[],
-                  );
-                  const nh = withNormalizedHierarchy(merged, structureConfig);
-                  setAdhyayas(nh);
-                  if (isPublishedStrapiDocId(granthaSidForFlush)) {
-                    void runStrapiFullHierarchySectionOrderSync(nh, structureConfig, true);
-                  }
-                }
-                // Ensure list/metadata and any CMS-backed tabs reflect the
-                // newly published version without requiring logout/login.
-                syncGranthaCmsCaches(queryClient);
-
-                // If this was a brand-new grantha (no prior Strapi link), the publish
-                // created a Strapi record. Capture its docId so subsequent saves
-                // correctly store the strapiDocumentId on the draft.
-                if (newStrapiDocId && editingItem) {
-                  setEditingItem({ ...editingItem, documentId: newStrapiDocId, _strapiDocId: newStrapiDocId });
-                }
-
-                // Sections that were deleted are now gone from Strapi — clear the list
-                // so a re-publish doesn't attempt to DELETE already-removed sections.
-                setDeletedStrapiSectionDocIds([]);
-                setDeletedStrapiTeekaDocIds([]);
-                setDeletedStrapiManthraDocIds([]);
-              },
-              onError: (err: any) => {
-                track("publish_failed", {
-                  grantha_name: formData.GranthaName,
-                  error: err?.message || "unknown",
-                });
-                const violations = err?.violations as Array<{ message?: string }> | undefined;
-                if (Array.isArray(violations) && violations.length > 0) {
-                  toast({
-                    variant: "destructive",
-                    title: "Publish blocked",
-                    description: violations
-                      .slice(0, 3)
-                      .map((v) => v.message)
-                      .filter(Boolean)
-                      .join(" "),
-                  });
-                }
-              },
-            });
-            })();
-          } else {
-            toast({ variant: "destructive", title: "Could not resolve draft ID for publish" });
-          }
-        },
-      }
-    );
+    if (!editingDraftId) {
+      toast({
+        variant: "destructive",
+        title: "Save draft first",
+        description: "Use Save to store your work in the portal before publishing to the CMS.",
+      });
+      return;
+    }
+    if (!draftSyncedForPublish) {
+      toast({
+        variant: "destructive",
+        title: "Unsaved changes",
+        description: "Save draft first — your latest edits are not in the portal draft yet.",
+      });
+      return;
+    }
+    runGranthaPublishAfterPreflight(editingDraftId);
   }
 
   // Save the full grantha draft from inside the manthra modal (prevents data loss on session timeout)
@@ -5014,6 +5031,7 @@ export default function GranthasPage() {
         {
           onSuccess: () => {
             setManthraDialogDirty(false);
+            markEditorSyncedForPublish();
             toast({ title: "Draft saved", description: "Content saved to database." });
             onDone?.();
           },
@@ -5030,6 +5048,7 @@ export default function GranthasPage() {
                 onSuccess: (saved: any) => {
                   if (!editingDraftId && saved?.id) setEditingDraftId(saved.id);
                   setManthraDialogDirty(false);
+                  markEditorSyncedForPublish();
                   toast({ title: "Draft saved", description: "Content saved to database." });
                   onDone?.();
                 },
@@ -5052,6 +5071,7 @@ export default function GranthasPage() {
         onSuccess: (saved: any) => {
           if (!editingDraftId && saved?.id) setEditingDraftId(saved.id);
           setManthraDialogDirty(false);
+          markEditorSyncedForPublish();
           toast({ title: "Draft saved", description: "Content saved to database." });
           onDone?.();
         },
@@ -5067,6 +5087,191 @@ export default function GranthasPage() {
     setManthraDialogDirty(false);
     setManthraDialogViewOnly(false);
     setPendingCloseManthra(false);
+    mantraOpenSnapshotRef.current = null;
+  }
+
+  /** Remove one mantra row from the tree (portal order only; titles unchanged). */
+  function removeManthraRowFromTree(
+    adhyayaId: string,
+    khandaId: string,
+    manthraId: string,
+    padaId?: string,
+  ) {
+    setAdhyayas((prev) =>
+      prev.map((a) => {
+        if (a.id !== adhyayaId) return a;
+        return {
+          ...a,
+          khandas: a.khandas.map((kh) => {
+            if (kh.id !== khandaId) return kh;
+            if (padaId) {
+              return {
+                ...kh,
+                padas: (kh.padas ?? []).map((p) => {
+                  if (p.id !== padaId) return p;
+                  return {
+                    ...p,
+                    manthras: reindexMantraOrdersPreservingTitles(
+                      p.manthras.filter((m) => m.id !== manthraId),
+                    ),
+                  };
+                }),
+              };
+            }
+            return {
+              ...kh,
+              manthras: reindexMantraOrdersPreservingTitles(
+                kh.manthras.filter((m) => m.id !== manthraId),
+              ),
+            };
+          }),
+        };
+      }),
+    );
+    clearManthraFromChangedSet(manthraId);
+  }
+
+  /** Revert this verse to how it was when the dialog opened; close without save or publish. */
+  function discardMantraEditsAndClose() {
+    if (!editingManthra) {
+      closeMantraDialog();
+      return;
+    }
+    const { adhyayaId, khandaId, manthraId, padaId } = editingManthra;
+    const openSnap = mantraOpenSnapshotRef.current;
+    setPendingCloseManthra(false);
+
+    if (openSnap?.wasNewLocal && !openSnap.node?.strapiDocumentId) {
+      removeManthraRowFromTree(adhyayaId, khandaId, manthraId, padaId);
+    } else if (openSnap?.node) {
+      const prior = openSnap.node;
+      updateManthraContent(
+        adhyayaId,
+        khandaId,
+        manthraId,
+        {
+          title: prior.title,
+          order: prior.order,
+          strapiDocumentId: prior.strapiDocumentId,
+          ShlokaManthraEntry: prior.ShlokaManthraEntry,
+          BhashyamForShlokaManthra: prior.BhashyamForShlokaManthra,
+          Teekas: prior.Teekas,
+          _isNewLocal: prior._isNewLocal,
+        },
+        padaId,
+        { markDirty: false },
+      );
+      clearManthraFromChangedSet(manthraId);
+    }
+
+    manthraDialogDirtyRef.current = false;
+    setManthraDialogDirty(false);
+    closeMantraDialog();
+    toast({
+      title: "Changes discarded",
+      description: "This verse was restored to how it was when you opened it.",
+    });
+  }
+
+  /** Reload this verse from published CMS content — no publish. */
+  async function restoreMantraFromPublishedCms() {
+    if (!editingManthra) return;
+    const docId =
+      editingManthra.strapiDocumentId ||
+      findManthraInTree(
+        adhyayasRef.current,
+        editingManthra.adhyayaId,
+        editingManthra.khandaId,
+        editingManthra.manthraId,
+        editingManthra.padaId,
+      )?.strapiDocumentId;
+    if (!isPublishedStrapiDocId(docId)) {
+      toast({
+        variant: "destructive",
+        title: "Not in CMS yet",
+        description: "This verse has no published Strapi row to restore from.",
+      });
+      return;
+    }
+
+    setPendingCloseManthra(false);
+    setManthraLoading(true);
+    try {
+      const result = await fetchManthraForGranthaEditor({ documentId: docId });
+      if (!result?.data) {
+        toast({
+          variant: "destructive",
+          title: "Restore failed",
+          description: "Could not load this verse from the CMS.",
+        });
+        return;
+      }
+      const configuredLeaf = (structureConfigRef.current.leafName || "Mantra").trim() || "Mantra";
+      const strapiLabel = String(result.data.ShlokaManthraNumber ?? "");
+      const cmsShloka = stripStubTextAndTranslationEntry(result.data.ShlokaManthraEntry);
+      const cmsBhashyam = stripStubTextAndTranslationEntry(result.data.BhashyamEntry);
+      updateManthraContent(
+        editingManthra.adhyayaId,
+        editingManthra.khandaId,
+        editingManthra.manthraId,
+        {
+          strapiDocumentId: docId,
+          title: portalMantraTitleForLeaf("", configuredLeaf, strapiLabel),
+          ShlokaManthraEntry: cmsShloka as TextAndTranslation | undefined,
+          BhashyamForShlokaManthra: cmsBhashyam as TextAndTranslation | undefined,
+          _isNewLocal: false,
+        },
+        editingManthra.padaId,
+        { markDirty: false },
+      );
+      clearManthraFromChangedSet(editingManthra.manthraId);
+      manthraDialogDirtyRef.current = false;
+      setManthraDialogDirty(false);
+      closeMantraDialog();
+      toast({
+        title: "Restored from CMS",
+        description: "This verse now matches the published Strapi version. Nothing was published.",
+      });
+    } catch (e: unknown) {
+      const msg = e instanceof Error ? e.message : String(e);
+      toast({ variant: "destructive", title: "Restore failed", description: msg });
+    } finally {
+      setManthraLoading(false);
+    }
+  }
+
+  /** Reload entire grantha editor from the last server draft snapshot (admin). */
+  function restoreDraftSnapshotAndCloseMantra() {
+    if (!editingDraftId) return;
+    setPendingCloseManthra(false);
+    recoverDraft.mutate(editingDraftId, {
+      onSuccess: (data: { draft?: { data?: Record<string, unknown> }; recoveredFrom?: string | null }) => {
+        const d = data.draft?.data as Record<string, any> | undefined;
+        if (d) {
+          applyDraftPayloadToEditor(d, { renormalize: false });
+        }
+        manthraDialogDirtyRef.current = false;
+        setManthraDialogDirty(false);
+        closeMantraDialog();
+        toast({
+          title: "Draft restored",
+          description: data.recoveredFrom
+            ? `Reloaded from server snapshot (${new Date(data.recoveredFrom).toLocaleString()}). No publish was run.`
+            : "Reloaded from the latest server snapshot. No publish was run.",
+        });
+      },
+    });
+  }
+
+  function requestDiscardPortalDraftFromMantra() {
+    if (!editingDraftId || !editingGranthaStrapiDocumentId()) return;
+    setPendingCloseManthra(false);
+    setResetDraftTarget({
+      ...(editingItem ?? {}),
+      _draftId: editingDraftId,
+      _strapiDocId: editingGranthaStrapiDocumentId(),
+      GranthaName: formData.GranthaName || editingItem?.GranthaName,
+    });
   }
 
   function requestCloseMantraDialog() {
@@ -5088,42 +5293,31 @@ export default function GranthasPage() {
       toast({ variant: "destructive", title: "Grantha Name is required" });
       return;
     }
-
-    const runPublish = (draftId: number) => {
-      publishMantraMutation.mutate({
-        draftId,
-        adhyayaId: editingManthra.adhyayaId,
-        khandaId: editingManthra.khandaId,
-        padaId: editingManthra.padaId,
-        manthraId: editingManthra.manthraId,
-        manthraData: currentManthra,
+    if (!editingDraftId) {
+      toast({
+        variant: "destructive",
+        title: "Save draft first",
+        description: "Save the grantha draft before publishing this verse to the CMS.",
       });
-    };
-
-    if (editingDraftId) {
-      runPublish(editingDraftId);
+      return;
+    }
+    if (manthraDialogDirty) {
+      toast({
+        variant: "destructive",
+        title: "Unsaved verse changes",
+        description: "Use Save in this dialog before publishing this verse.",
+      });
       return;
     }
 
-    const payload = buildSavePayload();
-    const strapiDocId =
-      editingItem && !editingItem._isDraft
-        ? editingItem.documentId
-        : editingItem?._strapiDocId || undefined;
-    saveDraft.mutate(
-      { title: formData.GranthaName, data: payload, strapiDocumentId: strapiDocId },
-      {
-        onSuccess: (saved: any) => {
-          const resolvedDraftId = saved?.id;
-          if (!resolvedDraftId) {
-            toast({ variant: "destructive", title: "Could not determine draft ID" });
-            return;
-          }
-          setEditingDraftId(resolvedDraftId);
-          runPublish(resolvedDraftId);
-        },
-      }
-    );
+    publishMantraMutation.mutate({
+      draftId: editingDraftId,
+      adhyayaId: editingManthra.adhyayaId,
+      khandaId: editingManthra.khandaId,
+      padaId: editingManthra.padaId,
+      manthraId: editingManthra.manthraId,
+      manthraData: currentManthra,
+    });
   }
 
   function confirmDelete() {
@@ -5165,6 +5359,28 @@ export default function GranthasPage() {
       seenDraftNames.add(name);
       return true;
     });
+
+  const saveAndPublishReady =
+    editingDraftId != null &&
+    draftSyncedForPublish &&
+    !saveDraft.isPending &&
+    !publishDraft.isPending;
+  const saveAndPublishHint = !editingDraftId
+    ? "Save draft first to enable Save & Publish"
+    : !draftSyncedForPublish
+      ? "Save your latest changes before publishing"
+      : undefined;
+  const mantraSaveAndPublishReady =
+    editingDraftId != null &&
+    !manthraDialogDirty &&
+    !saveDraft.isPending &&
+    !saveManthraPatchMutation.isPending &&
+    !publishMantraMutation.isPending;
+  const mantraSaveAndPublishHint = !editingDraftId
+    ? "Save the grantha draft first"
+    : manthraDialogDirty
+      ? "Save this verse before publishing"
+      : undefined;
 
   const mergedData = [
     ...deduplicatedDrafts.map((d) => ({
@@ -6347,11 +6563,7 @@ export default function GranthasPage() {
               const hideL1Row = !structureConfig.levelOneEnabled;
               const sortedKhandasForAdhyaya = sortNodesByOrder(adhyaya.khandas);
               const flatFirstKhanda = sortedKhandasForAdhyaya[0];
-              const flatLeafCount = !structureConfig.levelTwoEnabled
-                ? (flatFirstKhanda?.manthras.length ?? 0)
-                : structureConfig.levelThreeEnabled
-                  ? adhyaya.khandas.reduce((s, k) => s + (k.padas ?? []).reduce((ps, p) => ps + p.manthras.length, 0), 0)
-                  : adhyaya.khandas.reduce((s, k) => s + k.manthras.length, 0);
+              const flatLeafCount = countLeafMantrasInAdhyaya(adhyaya, structureConfig);
               return (
               <div key={adhyaya.id} className={hideL1Row ? "space-y-3" : "border rounded-xl overflow-hidden"} data-testid={`adhyaya-${aIdx}`}>
                 {/* Level-1 row — hidden when L1 is disabled */}
@@ -6502,10 +6714,10 @@ export default function GranthasPage() {
                           />
                           <div className="flex items-center gap-1 ml-auto shrink-0">
                             <span className="text-xs text-muted-foreground">
-                              {structureConfig.levelThreeEnabled
-                                ? `${(khanda.padas ?? []).length} ${L3.toLowerCase()}${(khanda.padas ?? []).length !== 1 ? "s" : ""}`
-                                : `${khanda.manthras.length} ${leaf.toLowerCase()}${khanda.manthras.length !== 1 ? "s" : ""}`
-                              }
+                              {(() => {
+                                const n = countLeafMantrasInKhanda(khanda, structureConfig);
+                                return `${n} ${leaf.toLowerCase()}${n !== 1 ? "s" : ""}`;
+                              })()}
                             </span>
                             {!viewOnly && (
                               <>
@@ -6532,9 +6744,7 @@ export default function GranthasPage() {
                                   className="h-6 w-6 text-destructive hover:text-destructive"
                                   onClick={(e) => {
                                     e.stopPropagation();
-                                    const totalManthras = structureConfig.levelThreeEnabled
-                                      ? (khanda.padas ?? []).reduce((s, p) => s + p.manthras.length, 0)
-                                      : khanda.manthras.length;
+                                    const totalManthras = countLeafMantrasInKhanda(khanda, structureConfig);
                                     if (totalManthras > 0 && !window.confirm(`Delete "${khanda.title}" and all ${totalManthras} ${leaf.toLowerCase()}${totalManthras !== 1 ? "s" : ""} inside? This cannot be undone.`)) return;
                                     removeKhanda(adhyaya.id, khanda.id);
                                   }}
@@ -6842,14 +7052,27 @@ export default function GranthasPage() {
                   {saveDraft.isPending && !publishDraft.isPending && <Loader2 className="w-4 h-4 mr-2 animate-spin" />}
                   Save
                 </Button>
-                <Button
-                  onClick={handleSaveAndPublish}
-                  disabled={saveDraft.isPending || publishDraft.isPending}
-                  data-testid="button-save-and-publish"
-                >
-                  {(saveDraft.isPending || publishDraft.isPending) && <Loader2 className="w-4 h-4 mr-2 animate-spin" />}
-                  {publishDraft.isPending ? "Publishing…" : "Save & Publish"}
-                </Button>
+                <TooltipProvider delayDuration={200}>
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <span className="inline-flex">
+                        <Button
+                          onClick={handleSaveAndPublish}
+                          disabled={!saveAndPublishReady || publishDraft.isPending}
+                          data-testid="button-save-and-publish"
+                        >
+                          {publishDraft.isPending && <Loader2 className="w-4 h-4 mr-2 animate-spin" />}
+                          {publishDraft.isPending ? "Publishing…" : "Save & Publish"}
+                        </Button>
+                      </span>
+                    </TooltipTrigger>
+                    {saveAndPublishHint && (
+                      <TooltipContent side="top" className="max-w-xs text-xs">
+                        {saveAndPublishHint}
+                      </TooltipContent>
+                    )}
+                  </Tooltip>
+                </TooltipProvider>
                 {isAdmin && editingDraftId && (
                   <Button
                     variant="secondary"
@@ -7414,19 +7637,49 @@ export default function GranthasPage() {
               )}
 
               <div className="flex items-center justify-between pt-2 gap-2 border-t mt-2">
-                <Button
-                  variant="outline"
-                  onClick={() => requestCloseMantraDialog()}
-                  data-testid="button-manthra-close"
-                  disabled={
-                    !manthraDialogViewOnly &&
-                    (saveDraft.isPending ||
-                      saveManthraPatchMutation.isPending ||
-                      publishMantraMutation.isPending)
-                  }
-                >
-                  Close
-                </Button>
+                <div className="flex flex-wrap gap-2">
+                  <Button
+                    variant="outline"
+                    onClick={() => requestCloseMantraDialog()}
+                    data-testid="button-manthra-close"
+                    disabled={
+                      !manthraDialogViewOnly &&
+                      (saveDraft.isPending ||
+                        saveManthraPatchMutation.isPending ||
+                        publishMantraMutation.isPending)
+                    }
+                  >
+                    Close
+                  </Button>
+                  {!manthraDialogViewOnly &&
+                    (manthraDialogDirty || isNewLocalManthra(currentManthra ?? ({} as ManthraNode))) && (
+                      <>
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          className="text-muted-foreground"
+                          onClick={() => discardMantraEditsAndClose()}
+                          data-testid="button-manthra-discard-changes"
+                        >
+                          Discard changes
+                        </Button>
+                        {isPublishedStrapiDocId(
+                          editingManthra?.strapiDocumentId || currentManthra?.strapiDocumentId,
+                        ) && (
+                          <Button
+                            type="button"
+                            variant="ghost"
+                            className="text-muted-foreground"
+                            onClick={() => void restoreMantraFromPublishedCms()}
+                            disabled={manthraLoading}
+                            data-testid="button-manthra-restore-cms"
+                          >
+                            Restore from CMS
+                          </Button>
+                        )}
+                      </>
+                    )}
+                </div>
                 {manthraDialogViewOnly ? (
                   !viewOnly && (
                     <Button
@@ -7460,21 +7713,30 @@ export default function GranthasPage() {
                           )}
                         Save
                       </Button>
-                      <Button
-                        onClick={handleSaveAndPublishManthra}
-                        disabled={
-                          saveDraft.isPending ||
-                          saveManthraPatchMutation.isPending ||
-                          publishMantraMutation.isPending
-                        }
-                        data-testid="button-manthra-save-publish"
-                      >
-                        {publishMantraMutation.isPending && (
-                          <Loader2 className="w-4 h-4 mr-2 animate-spin" />
-                        )}
-                        <Send className="w-4 h-4 mr-2" />
-                        Save & Publish
-                      </Button>
+                      <TooltipProvider delayDuration={200}>
+                        <Tooltip>
+                          <TooltipTrigger asChild>
+                            <span className="inline-flex">
+                              <Button
+                                onClick={handleSaveAndPublishManthra}
+                                disabled={!mantraSaveAndPublishReady || publishMantraMutation.isPending}
+                                data-testid="button-manthra-save-publish"
+                              >
+                                {publishMantraMutation.isPending && (
+                                  <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                                )}
+                                <Send className="w-4 h-4 mr-2" />
+                                Save & Publish
+                              </Button>
+                            </span>
+                          </TooltipTrigger>
+                          {mantraSaveAndPublishHint && (
+                            <TooltipContent side="top" className="max-w-xs text-xs">
+                              {mantraSaveAndPublishHint}
+                            </TooltipContent>
+                          )}
+                        </Tooltip>
+                      </TooltipProvider>
                     </div>
                     {mantraPublishStatus && publishMantraMutation.isPending && (
                       <p className="text-xs text-muted-foreground max-w-[280px] text-right">
@@ -7491,37 +7753,100 @@ export default function GranthasPage() {
 
       {/* Unsaved / new verse — confirm before closing mantra dialog */}
       <AlertDialog open={pendingCloseManthra} onOpenChange={(open) => { if (!open) setPendingCloseManthra(false); }}>
-        <AlertDialogContent>
+        <AlertDialogContent className="max-w-lg">
           <AlertDialogHeader>
             <AlertDialogTitle>Save this verse before closing?</AlertDialogTitle>
-            <AlertDialogDescription>
-              {currentManthra?._isNewLocal
-                ? editingGranthaStrapiDocumentId()
-                  ? "The CMS row and verse number are already in order. Save or Save & Publish here to store your text, or Save draft to keep edits in the portal only."
-                  : "This is a newly inserted verse. Use Save & Publish so it is stored in the CMS with the correct number and text."
-                : "You have unsaved edits. Save to the draft or publish to Strapi before closing."}
+            <AlertDialogDescription asChild>
+              <div className="space-y-2 text-sm text-muted-foreground">
+                <p>
+                  {currentManthra?._isNewLocal
+                    ? "This is a newly inserted verse. Save to keep it in the portal draft, or publish to push it to the CMS."
+                    : "You have unsaved edits on this verse."}
+                </p>
+                <p>
+                  To undo without publishing: discard changes (this verse only), restore from CMS
+                  (published text), or discard portal draft (whole grantha overlay — returns to the
+                  live CMS version).
+                </p>
+              </div>
             </AlertDialogDescription>
           </AlertDialogHeader>
-          <AlertDialogFooter className="flex-col sm:flex-row gap-2">
-            <AlertDialogCancel data-testid="button-manthra-close-cancel">Keep editing</AlertDialogCancel>
-            <AlertDialogAction
-              onClick={() => {
-                setPendingCloseManthra(false);
-                handleSaveManthra(() => closeMantraDialog());
-              }}
-              data-testid="button-manthra-close-save-draft"
-            >
-              Save draft
-            </AlertDialogAction>
-            <AlertDialogAction
-              onClick={() => {
-                setPendingCloseManthra(false);
-                handleSaveAndPublishManthra();
-              }}
-              data-testid="button-manthra-close-save-publish"
-            >
-              Save &amp; Publish
-            </AlertDialogAction>
+          <AlertDialogFooter className="flex-col gap-2 sm:flex-col sm:space-x-0">
+            <div className="flex flex-wrap gap-2 justify-end w-full">
+              <AlertDialogCancel data-testid="button-manthra-close-cancel">Keep editing</AlertDialogCancel>
+              <Button
+                type="button"
+                variant="outline"
+                onClick={() => discardMantraEditsAndClose()}
+                data-testid="button-manthra-close-discard-changes"
+              >
+                Discard changes
+              </Button>
+              {isPublishedStrapiDocId(
+                editingManthra?.strapiDocumentId ||
+                  findManthraInTree(
+                    adhyayas,
+                    editingManthra?.adhyayaId ?? "",
+                    editingManthra?.khandaId ?? "",
+                    editingManthra?.manthraId ?? "",
+                    editingManthra?.padaId,
+                  )?.strapiDocumentId,
+              ) && (
+                <Button
+                  type="button"
+                  variant="outline"
+                  onClick={() => void restoreMantraFromPublishedCms()}
+                  disabled={manthraLoading}
+                  data-testid="button-manthra-close-restore-cms"
+                >
+                  Restore from CMS
+                </Button>
+              )}
+            </div>
+            <div className="flex flex-wrap gap-2 justify-end w-full">
+              {isAdmin && editingDraftId && (
+                <Button
+                  type="button"
+                  variant="outline"
+                  onClick={() => restoreDraftSnapshotAndCloseMantra()}
+                  disabled={recoverDraft.isPending}
+                  data-testid="button-manthra-close-restore-snapshot"
+                >
+                  {recoverDraft.isPending && <Loader2 className="w-4 h-4 mr-2 animate-spin" />}
+                  Restore draft snapshot
+                </Button>
+              )}
+              {editingDraftId && editingGranthaStrapiDocumentId() && (
+                <Button
+                  type="button"
+                  variant="destructive"
+                  onClick={() => requestDiscardPortalDraftFromMantra()}
+                  data-testid="button-manthra-close-discard-portal-draft"
+                >
+                  Discard portal draft
+                </Button>
+              )}
+            </div>
+            <div className="flex flex-wrap gap-2 justify-end w-full border-t pt-2">
+              <AlertDialogAction
+                onClick={() => {
+                  setPendingCloseManthra(false);
+                  handleSaveManthra(() => closeMantraDialog());
+                }}
+                data-testid="button-manthra-close-save-draft"
+              >
+                Save draft
+              </AlertDialogAction>
+              <AlertDialogAction
+                onClick={() => {
+                  setPendingCloseManthra(false);
+                  handleSaveAndPublishManthra();
+                }}
+                data-testid="button-manthra-close-save-publish"
+              >
+                Save &amp; Publish
+              </AlertDialogAction>
+            </div>
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>

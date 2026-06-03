@@ -1,6 +1,7 @@
 import {
   assertVerseSuffixStable,
   detectSuspectCrossGranthaContent,
+  isBareLeafCounterTitle,
   portalMantraTitleForConfiguredLeaf,
   scanMantraForPublish,
   scanGranthaHierarchyMantras,
@@ -14,6 +15,26 @@ function assert(cond: boolean, msg: string) {
 assert(
   portalMantraTitleForConfiguredLeaf("Shloka 3.10", "Mantra") === "Mantra 3.10",
   "wrong leaf prefix should normalize on publish",
+);
+assert(
+  portalMantraTitleForConfiguredLeaf("", "Mantra") === "",
+  "blank portal title must not default to Mantra 1",
+);
+assert(
+  portalMantraTitleForConfiguredLeaf("Mantra 1", "Mantra") === "",
+  "bare Mantra 1 placeholder must not pass as verse label",
+);
+assert(
+  isBareLeafCounterTitle("Vaakhyaa 1") === true,
+  "Vaakhyaa 1 must be detected as bare leaf counter",
+);
+assert(
+  isBareLeafCounterTitle("Vaakhyaa 1.1.1") === false,
+  "Vaakhyaa 1.1.1 must not be bare leaf counter",
+);
+assert(
+  portalMantraTitleForConfiguredLeaf("Mantra 1.7", "Mantra") === "Mantra 1.7",
+  "valid dotted suffix must be kept",
 );
 const relabeled = scanMantraForPublish({
   portalLabel: portalMantraTitleForConfiguredLeaf("Shloka 3.10", "Mantra"),

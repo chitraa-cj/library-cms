@@ -10,6 +10,8 @@ import { strapiRequest, withSectionLock } from "./strapi";
 import { applyHierarchyRepairInPlace } from "./grantha-hierarchy-repair";
 import {
   sortMantrasByDisplayOrder,
+  buildMantraTitleCtx,
+  mantraLabelForCmsSync,
   type GranthaStructureConfig,
 } from "../client/src/lib/grantha-structure-sync";
 
@@ -327,7 +329,9 @@ export async function syncPendingMantraSlotsFromDraft(opts: {
   let remainingPending = 0;
 
   outer: for (const adhyaya of hierarchy as MantraSectionNode[]) {
+    const adhyayaIndex = (hierarchy as MantraSectionNode[]).findIndex((x) => x.id === adhyaya.id);
     for (const khanda of adhyaya.khandas ?? []) {
+      const khandaIndex = (adhyaya.khandas ?? []).findIndex((x) => x.id === khanda.id);
       const padas = khanda.padas ?? [];
       const targets: Array<{ padaId?: string; pada?: MantraPadaNode }> =
         structureConfig.levelThreeEnabled && padas.length > 0
@@ -364,6 +368,20 @@ export async function syncPendingMantraSlotsFromDraft(opts: {
 
         const sorted = sortedMantrasInSection(adhyaya, khanda, padaId, structureConfig);
         const resolved = new Map<string, string>();
+        const padaIndex =
+          structureConfig.levelThreeEnabled && padaId
+            ? (khanda.padas ?? []).findIndex((x) => x.id === padaId)
+            : undefined;
+        const titleCtx =
+          adhyayaIndex >= 0 && khandaIndex >= 0
+            ? buildMantraTitleCtx(
+                adhyayaIndex,
+                khanda,
+                khandaIndex,
+                structureConfig as GranthaStructureConfig,
+                padaIndex != null && padaIndex >= 0 ? padaIndex : undefined,
+              )
+            : null;
 
         for (let i = 0; i < sorted.length; i++) {
           const m = sorted[i] as MantraRow;
@@ -380,7 +398,9 @@ export async function syncPendingMantraSlotsFromDraft(opts: {
             continue;
           }
 
-          const portalLabel = (m.title ?? "").trim();
+          const portalLabel = titleCtx
+            ? mantraLabelForCmsSync(m.title, i + 1, titleCtx)
+            : (m.title ?? "").trim();
           let docId: string | undefined;
 
           const prevWithStrapi = sorted
@@ -392,10 +412,12 @@ export async function syncPendingMantraSlotsFromDraft(opts: {
             const afterDocId = resolved.get(prevWithStrapi.id) ?? prevWithStrapi.strapiDocumentId!;
             docId = await insertMantraAfterInSection(sectionDocId, afterDocId, portalLabel);
           } else {
-            const all = await listSectionMantraOrders(sectionDocId);
-            const maxOrder = all.length > 0 ? Math.max(...all.map((r) => r.order)) : 0;
-            const newSortKey = maxOrder > 0 ? maxOrder + STRAPI_SORT_GAP : STRAPI_SORT_GAP;
-            docId = await createMantraInSection(sectionDocId, newSortKey, portalLabel);
+            docId = await withSectionLock(sectionDocId, async () => {
+              const all = await listSectionMantraOrders(sectionDocId);
+              const maxOrder = all.length > 0 ? Math.max(...all.map((r) => r.order)) : 0;
+              const newSortKey = maxOrder > 0 ? maxOrder + STRAPI_SORT_GAP : STRAPI_SORT_GAP;
+              return createMantraInSection(sectionDocId, newSortKey, portalLabel);
+            });
           }
 
           if (docId) {

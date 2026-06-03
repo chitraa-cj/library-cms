@@ -119,8 +119,7 @@ function AppRouter() {
 }
 
 function AppVersionWatcher() {
-  useAppVersionRefreshPrompt();
-  return null;
+  return useAppVersionRefreshPrompt();
 }
 
 function App() {

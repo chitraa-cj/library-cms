@@ -2,6 +2,7 @@ import { useState, useMemo, useEffect } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { queryClient, apiRequest } from "@/lib/queryClient";
 import { syncGranthaCmsCaches } from "@/lib/strapi-cache-sync";
+import { countLeafMantrasInSectionTree } from "@/lib/grantha-structure-sync";
 import { fetchManthraByDocumentId } from "@/lib/resolve-strapi-mantra-detail";
 import { useToast } from "@/hooks/use-toast";
 import { useDrafts } from "@/hooks/use-drafts";
@@ -488,7 +489,10 @@ export default function SectionsPage() {
                 ): JSX.Element[] {
                   const children = (childrenOf.get(node.documentId) || []).sort((a: any, b: any) => (a.order ?? 999) - (b.order ?? 999));
                   const hasChildren = children.length > 0;
-                  const manthraCount = Array.isArray(node.manthras) ? node.manthras.length : 0;
+                  const inlineManthraCount = Array.isArray(node.manthras) ? node.manthras.length : 0;
+                  const manthraCount = hasChildren
+                    ? countLeafMantrasInSectionTree(node, childrenOf)
+                    : inlineManthraCount;
                   const isExpanded = expandedSections.has(node.documentId);
                   const indentPx = depth * 24;
                   const py = depth === 0 ? "py-3" : "py-2.5";

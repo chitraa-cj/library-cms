@@ -72,10 +72,11 @@ export function useAuth() {
     queryKey: ["/api/auth/user"],
     queryFn: fetchAuthUser,
     retry: false,
-    staleTime: 5 * 60 * 1000,
+    staleTime: 0,
     gcTime: 24 * 60 * 60 * 1000,
     refetchOnWindowFocus: true,
     refetchOnReconnect: true,
+    refetchOnMount: "always",
     placeholderData: (prev) => {
       if (prev) return prev;
       const cached = readCachedAuthUser();

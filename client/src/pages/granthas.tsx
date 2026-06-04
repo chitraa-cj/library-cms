@@ -388,18 +388,21 @@ function bhashyamEntryRichness(entry: unknown): number {
   );
 }
 
-/** Do not pull CMS commentary when the editor only has shloka text filled (insert / partial edit). */
+/** Pull CMS commentary into the editor unless local edits would be clobbered. */
 function shouldImportCmsBhashyam(
   local: ManthraNode,
   cmsBhashyam: unknown,
   strapiLabel: string,
 ): boolean {
   if (!cmsBhashyam) return false;
-  if (bhashyamEntryRichness(local.BhashyamForShlokaManthra) > 0) return true;
-  if (shlokaManthraEntryRichness(local.ShlokaManthraEntry) >= MANTRA_LINK_MIN_CONTENT_SCORE) {
-    return false;
-  }
+  // Same verse only — during an insert renumber a row can briefly link to a CMS docId
+  // whose label suffix differs; don't pull that other verse's commentary.
   if (!labelsShareVerseSuffix(local.title, strapiLabel)) return false;
+  // Local commentary present  → merge (keeps local edits, fills gaps from CMS).
+  // Local commentary empty    → import the CMS commentary outright.
+  // Shloka richness is intentionally NOT consulted: commentary is a separate field and
+  // must load even when the verse body is already present (the prior shloka-richness gate
+  // hid existing CMS bhashyam from the editor for every verse that had shloka text).
   return true;
 }
 

@@ -96,8 +96,6 @@ import {
   scoreStrapiManthraRowContent,
   resolvePortalMantraToStrapiDoc,
   collectKnownVerseSuffixesForLeaf,
-  strapiVerseTakenForConfiguredLeaf,
-  sectionHasVerseSuffixAnyLeaf,
   titleUsesConfiguredLeaf,
   mantraNumberSuffix,
   portalMantraTitleForLeaf,
@@ -109,6 +107,8 @@ import {
   countLeafMantrasInAdhyaya,
   countMantrasOnLeafSections,
   strapiMantrasForResolvedSection,
+  mergeStrapiMantraRefsForPortalMantraOwner,
+  dedupeManthrasForEditor,
   linkFlatGranthaAdhyayasToSoleStrapiSection,
   enforceMantraPlacementByStructure,
   type GranthaStructureConfig,
@@ -664,25 +664,6 @@ function reconstructHierarchyFromStrapi(sections: any[], leafName = "Mantra"): A
         documentId: adhyaya.documentId || undefined,
       } as AdhyayaNode & { documentId?: string };
     });
-}
-
-function dedupeManthrasForEditor(manthras: ManthraNode[], leaf: string): ManthraNode[] {
-  const configured = (leaf || "Mantra").trim();
-  const bySuffix = new Map<string, ManthraNode>();
-  const score = (x: ManthraNode) => {
-    let s = shlokaManthraEntryRichness(x.ShlokaManthraEntry);
-    if (hasBlocks(x.BhashyamForShlokaManthra?.SanskritTextEntry)) s += 50;
-    if (isPublishedStrapiDocId(x.strapiDocumentId)) s += 1;
-    return s;
-  };
-  for (const m of sortMantrasByDisplayOrder(manthras)) {
-    if (!titleUsesConfiguredLeaf(m.title, configured)) continue;
-    const suffix = mantraNumberSuffix(m.title);
-    const key = suffix ?? m.id;
-    const prev = bySuffix.get(key);
-    if (!prev || score(m) > score(prev)) bySuffix.set(key, m);
-  }
-  return sortNodesByOrder([...bySuffix.values()]);
 }
 
 /**
@@ -1258,6 +1239,8 @@ export default function GranthasPage() {
   const adhyayasRef = useRef<AdhyayaNode[]>([]);
   const structureConfigRef = useRef(structureConfig);
   const editingItemRef = useRef<any>(null);
+  /** When true, portal hierarchy bodies/teekas win over CMS on enrich and mantra dialog fetch. */
+  const preferPortalMantraContentRef = useRef(false);
   const formDataRef = useRef(formData);
   const strapiHierarchySyncTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const mantraSyncTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -1547,6 +1530,11 @@ export default function GranthasPage() {
     if (!docId) return;
     // Avoid CMS fetch overwriting in-progress edits (e.g. after a wrong docId link is corrected).
     if (manthraDialogDirtyRef.current) return;
+    // Draft / portal-saved hierarchy: keep local verse bodies; published-only uses CMS below.
+    if (preferPortalMantraContentRef.current) {
+      setManthraLoading(false);
+      return;
+    }
     const fetchGen = mantraFetchGenRef.current;
     let cancelled = false;
     setManthraLoading(true);
@@ -2179,6 +2167,7 @@ export default function GranthasPage() {
     setEditingDraftId(null);
     setDraftSyncedForPublish(false);
     setEditingItem(null);
+    preferPortalMantraContentRef.current = false;
     setViewOnly(false);
     setDeletedStrapiSectionDocIds([]);
     setDeletedStrapiManthraDocIds([]);
@@ -2262,6 +2251,7 @@ export default function GranthasPage() {
       publishScopeMetaEffectSkipRef.current = true;
       publishScopeReadyRef.current = true;
       if (loadedDraftId != null) markEditorSyncedForPublish();
+      preferPortalMantraContentRef.current = true;
       setStep(1);
       setView("form");
       return;
@@ -2431,6 +2421,13 @@ export default function GranthasPage() {
         );
       }
     }
+
+    const preferPortalMantraContent =
+      !!item._isDraft ||
+      (!!loadedDraftId &&
+        Array.isArray(rawHierForEnrich) &&
+        rawHierForEnrich.length > 0);
+    preferPortalMantraContentRef.current = preferPortalMantraContent;
 
     // Shared for all cases: Strapi items AND local drafts linked to Strapi.
     let effectiveStructureConfig = migrateStructureConfig(rawCfg2);
@@ -2754,36 +2751,6 @@ export default function GranthasPage() {
         return collectKnownVerseSuffixesForLeaf(titles, configuredLeafLabel);
       }
 
-      function markStrapiDocsMatchedByLeaf(
-        portalTitle: string | undefined,
-        sectionList: { title: string; docId: string }[],
-        matched: Set<string>,
-      ) {
-        const suffix = mantraNumberSuffix(portalTitle);
-        if (!suffix || !titleUsesConfiguredLeaf(portalTitle, configuredLeafLabel)) return;
-        for (const sm of sectionList) {
-          if (
-            mantraNumberSuffix(sm.title) === suffix &&
-            titleUsesConfiguredLeaf(sm.title, configuredLeafLabel)
-          ) {
-            matched.add(sm.docId);
-          }
-        }
-      }
-
-      /** Also mark rows with the same verse suffix under any leaf (prevents duplicate supplement rows). */
-      function markStrapiDocsMatchedBySuffix(
-        portalTitle: string | undefined,
-        sectionList: { title: string; docId: string }[],
-        matched: Set<string>,
-      ) {
-        const suffix = mantraNumberSuffix(portalTitle);
-        if (!suffix) return;
-        for (const sm of sectionList) {
-          if (mantraNumberSuffix(sm.title) === suffix) matched.add(sm.docId);
-        }
-      }
-
       function enrichHierarchy(hier: AdhyayaNode[]): AdhyayaNode[] {
         const knownShlokas = collectKnownShlokas(hier);
         const knownSuffixes = collectKnownSuffixes(hier);
@@ -2803,44 +2770,61 @@ export default function GranthasPage() {
             // title-keyed map would return manthras from the wrong adhyaya (e.g. Mundaka bug
             // where "Prathama Khanda" existed under all 3 Mundikas — the last writer won and
             // ALL three rendered Tritiya Mundaka's "Mantra 3.1.X" manthras).
-            let strapiMantrasForKhanda: { title: string; docId: string; order: number }[];
-            if (k.title === "_default") {
-              // Flat portal khanda — mantras may live on a child Strapi section (Vivekachudamani et al.).
-              const partialSnap = [{ ...a, khandas: a.khandas }] as SnapshotAdhyaya[];
-              const sectionCtx = { childrenByParentDocId: strapiChildSectionsByParentDocId };
-              const resolvedSecId = resolveMantraOwnerSectionDocId(
-                partialSnap,
-                a.id,
-                k.id,
-                undefined,
-                effectiveStructureConfig,
-                sectionCtx,
-              );
-              const adhyayaDocId: string | undefined = (a as any).documentId;
-              strapiMantrasForKhanda = strapiMantrasForResolvedSection(
+            const adhyayaDocId: string | undefined = (a as any).documentId;
+            const khandaDocId: string | undefined = (k as any).documentId;
+            const partialSnap = [{ ...a, khandas: a.khandas }] as SnapshotAdhyaya[];
+            const sectionCtx = { childrenByParentDocId: strapiChildSectionsByParentDocId };
+            const resolvedSecId = resolveMantraOwnerSectionDocId(
+              partialSnap,
+              a.id,
+              k.id,
+              undefined,
+              effectiveStructureConfig,
+              sectionCtx,
+            );
+            let strapiMantrasForKhanda: StrapiMantraRef[] = [];
+            if (k.title === "_default" || adhyaDocId || khandaDocId) {
+              const primary = strapiMantrasForResolvedSection(
                 strapiMantrasBySecDocId,
                 resolvedSecId,
                 adhyayaDocId,
               );
+              strapiMantrasForKhanda = mergeStrapiMantraRefsForPortalMantraOwner(
+                primary,
+                strapiMantrasBySecDocId,
+                {
+                  resolvedSecId,
+                  adhyayaDocId,
+                  khandaTitle: k.title,
+                  khandaDocId,
+                  cfg: effectiveStructureConfig,
+                  childrenByParentDocId: strapiChildSectionsByParentDocId,
+                },
+              );
             } else if (adhyaDocId) {
-              // Real khanda: find this khanda's specific Strapi section.
-              // Try documentId first (most reliable — survives title changes in Strapi),
-              // then fall back to title matching under the parent.
               const childSecs = strapiChildSectionsByParentDocId.get(adhyaDocId) ?? [];
-              const kDocId: string | undefined = (k as any).documentId;
               const matchSec =
-                (kDocId ? childSecs.find((c: any) => c.documentId === kDocId) : undefined)
+                (khandaDocId ? childSecs.find((c: any) => c.documentId === khandaDocId) : undefined)
                 ?? childSecs.find((c: any) => c.title === k.title);
-              strapiMantrasForKhanda = matchSec?.documentId
+              const primary = matchSec?.documentId
                 ? strapiMantrasForResolvedSection(
                     strapiMantrasBySecDocId,
                     matchSec.documentId,
                     adhyaDocId,
                   )
                 : [];
-            } else {
-              // No adhyaya docId — cannot scope khanda; skip title-only map (collides across adhyayas).
-              strapiMantrasForKhanda = [];
+              strapiMantrasForKhanda = mergeStrapiMantraRefsForPortalMantraOwner(
+                primary,
+                strapiMantrasBySecDocId,
+                {
+                  resolvedSecId: matchSec?.documentId,
+                  adhyayaDocId,
+                  khandaTitle: k.title,
+                  khandaDocId,
+                  cfg: effectiveStructureConfig,
+                  childrenByParentDocId: strapiChildSectionsByParentDocId,
+                },
+              );
             }
 
             const { byOrder: strapiByOrder, ambiguousOrders } = buildUniqueStrapiOrderMap(
@@ -2866,23 +2850,19 @@ export default function GranthasPage() {
                 if (hasLocalDraftContent) return { docId: undefined };
                 return undefined;
               }
-              if (resolved.docId) {
-                matchedDocIds.add(resolved.docId);
-                markStrapiDocsMatchedByLeaf(m.title, strapiMantrasForKhanda, matchedDocIds);
-                markStrapiDocsMatchedBySuffix(m.title, strapiMantrasForKhanda, matchedDocIds);
-              }
+              if (resolved.docId) matchedDocIds.add(resolved.docId);
               return resolved;
             }
 
-            const khandaDocId: string | undefined =
-              (k as any).documentId
+            const khandaDocIdResolved: string | undefined =
+              khandaDocId
               ?? (adhyaDocId
                 ? (strapiChildSectionsByParentDocId.get(adhyaDocId) ?? []).find(
                     (s: any) => s.title === k.title
                   )?.documentId
                 : undefined);
-            const strapiPadaChildCount = khandaDocId
-              ? (strapiChildSectionsByParentDocId.get(khandaDocId) ?? []).length
+            const strapiPadaChildCount = khandaDocIdResolved
+              ? (strapiChildSectionsByParentDocId.get(khandaDocIdResolved) ?? []).length
               : 0;
             /** L3 books: mantras live on pada sections — never duplicate onto khanda.manthras. */
             const mantraRowsOnPadasOnly =
@@ -2900,6 +2880,7 @@ export default function GranthasPage() {
                 docId,
                 shlokaIndex,
                 portalMantraTitleForLeaf(m.title, leafLabel),
+                { preferPortalContent: preferPortalMantraContent },
               );
               if (docId) delete row._isNewLocal;
               if (!shouldKeepManthraInEditor(row, seenStrapiMantraDocIds)) return acc;
@@ -2915,15 +2896,28 @@ export default function GranthasPage() {
               // under the parent khanda (Pada-level section) — needed for manthra supplement.
               const padaDocId: string | undefined =
                 (p as any).documentId
-                ?? (khandaDocId
-                  ? (strapiChildSectionsByParentDocId.get(khandaDocId) ?? []).find(
+                ?? (khandaDocIdResolved
+                  ? (strapiChildSectionsByParentDocId.get(khandaDocIdResolved) ?? []).find(
                       (s: any) => s.title === p.title
                     )?.documentId
                   : undefined);
-              const padaStrapi = strapiMantrasForResolvedSection(
+              const padaPrimary = strapiMantrasForResolvedSection(
                 strapiMantrasBySecDocId,
                 padaDocId,
-                khandaDocId,
+                khandaDocIdResolved,
+              );
+              const padaStrapi = mergeStrapiMantraRefsForPortalMantraOwner(
+                padaPrimary,
+                strapiMantrasBySecDocId,
+                {
+                  resolvedSecId: padaDocId,
+                  adhyayaDocId,
+                  khandaTitle: k.title,
+                  khandaDocId: khandaDocIdResolved,
+                  padaDocId,
+                  cfg: effectiveStructureConfig,
+                  childrenByParentDocId: strapiChildSectionsByParentDocId,
+                },
               );
               const { byOrder: padaByOrder, ambiguousOrders: padaAmbiguousOrders } =
                 buildUniqueStrapiOrderMap(padaStrapi);
@@ -2943,28 +2937,20 @@ export default function GranthasPage() {
                   resolved.docId,
                   shlokaIndex,
                   portalMantraTitleForLeaf(m.title, leafLabel),
+                  { preferPortalContent: preferPortalMantraContent },
                 );
                 if (resolved.docId) delete row._isNewLocal;
                 if (!shouldKeepManthraInEditor(row, seenStrapiMantraDocIds)) return acc;
-                if (resolved.docId) {
-                  markStrapiDocsMatchedByLeaf(m.title, padaStrapi, padaMatchedDocIds);
-                  markStrapiDocsMatchedBySuffix(m.title, padaStrapi, padaMatchedDocIds);
-                }
                 acc.push(row);
                 return acc;
               }, []);
               // Supplement: Strapi manthras on this pada not yet in the local list.
               const newPadaManthras: ManthraNode[] = [];
               for (const sm of padaStrapi) {
-                const padaSmSuffix = mantraNumberSuffix(sm.title);
-                if (padaSmSuffix && knownSuffixes.has(padaSmSuffix)) continue;
-                if (padaSmSuffix && sectionHasVerseSuffixAnyLeaf(padaStrapi, padaSmSuffix)) continue;
-                if (
-                  !padaMatchedDocIds.has(sm.docId) &&
-                  !knownShlokas.has(sm.title) &&
-                  !strapiVerseTakenForConfiguredLeaf(sm.title, knownSuffixes, leafLabel) &&
-                  !deletedManthraDocIdsSet.has(sm.docId)
-                ) {
+                if (deletedManthraDocIdsSet.has(sm.docId)) continue;
+                if (padaMatchedDocIds.has(sm.docId)) continue;
+                if (knownShlokas.has(sm.title)) continue;
+                if (!deletedManthraDocIdsSet.has(sm.docId)) {
                   newPadaManthras.push(
                     hydrateManthraShlokaFromIndex(
                       { id: uid(), title: sm.title, order: sm.order, strapiDocumentId: sm.docId },
@@ -3021,13 +3007,10 @@ export default function GranthasPage() {
             const newManthras: ManthraNode[] = [];
             if (!mantraRowsOnPadasOnly) {
             for (const sm of strapiMantrasForKhanda) {
-              const smSuffix = mantraNumberSuffix(sm.title);
-              if (smSuffix && knownSuffixes.has(smSuffix)) continue;
-              if (smSuffix && sectionHasVerseSuffixAnyLeaf(strapiMantrasForKhanda, smSuffix)) continue;
+              if (deletedManthraDocIdsSet.has(sm.docId)) continue;
+              if (matchedDocIds.has(sm.docId)) continue;
+              if (knownShlokas.has(sm.title)) continue;
               if (
-                !matchedDocIds.has(sm.docId) &&
-                !knownShlokas.has(sm.title) &&
-                !strapiVerseTakenForConfiguredLeaf(sm.title, knownSuffixes, leafLabel) &&
                 !deletedManthraDocIdsSet.has(sm.docId)
               ) {
                 newManthras.push(
@@ -3287,7 +3270,7 @@ export default function GranthasPage() {
     // state from the moment the grantha opens — not just after each dialog
     // is individually opened. Without this, any "Save" before opening every
     // dialog would clear teeka content in the draft.
-    if (granthaDocId && isCurrentOpenEditLoad(openEditLoadGen)) {
+    if (granthaDocId && isCurrentOpenEditLoad(openEditLoadGen) && !preferPortalMantraContent) {
       fetch(`/api/strapi/manthras/teekas-by-grantha/${granthaDocId}`, CMS_FETCH_INIT)
         .then((r) => r.ok ? r.json() : null)
         .then((payload) => {
@@ -6642,7 +6625,7 @@ export default function GranthasPage() {
               {structureConfig.leafName}
               {" to enter its text content. "}
               <strong>+ between verses</strong>
-              {" renumbers labels in the editor and syncs them to CMS (like inserting a row in a spreadsheet). "}
+              {" renumbers labels and syncs them to CMS for every grantha. The editor lists every linked CMS row (same as the Mantras tab). "}
               <strong>Sync verse numbers to CMS</strong>
               {" refreshes every section if labels drifted."}
             </p>
@@ -6657,7 +6640,12 @@ export default function GranthasPage() {
               const hideL1Row = !structureConfig.levelOneEnabled;
               const sortedKhandasForAdhyaya = sortNodesByOrder(adhyaya.khandas);
               const flatFirstKhanda = sortedKhandasForAdhyaya[0];
-              const flatLeafCount = countLeafMantrasInAdhyaya(adhyaya, structureConfig);
+              const flatLeafCount = flatFirstKhanda
+                ? dedupeManthrasForEditor(
+                    sortMantrasByDisplayOrder(flatFirstKhanda.manthras),
+                    leaf,
+                  ).length
+                : countLeafMantrasInAdhyaya(adhyaya, structureConfig);
               return (
               <div key={adhyaya.id} className={hideL1Row ? "space-y-3" : "border rounded-xl overflow-hidden"} data-testid={`adhyaya-${aIdx}`}>
                 {/* Level-1 row — hidden when L1 is disabled */}

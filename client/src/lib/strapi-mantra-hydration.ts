@@ -35,14 +35,21 @@ function shlokaRichness(entry: unknown): number {
   return scoreStrapiManthraRowContent(entry);
 }
 
+export type ManthraHydrationOptions = {
+  /** Portal draft / saved local hierarchy — never replace in-progress verse bodies with CMS. */
+  preferPortalContent?: boolean;
+};
+
 /** Apply pre-fetched SK/EN from grantha open so each verse dialog does not re-download shloka text. */
 export function hydrateManthraShlokaFromIndex<T extends { strapiDocumentId?: string; ShlokaManthraEntry?: unknown }>(
   node: T,
   index: StrapiMantraShlokaIndex,
   docId?: string,
+  options?: ManthraHydrationOptions,
 ): T {
   const id = docId ?? node.strapiDocumentId;
   if (!id) return node;
+  if (options?.preferPortalContent) return node;
   const remote = index.get(id);
   if (!remote) return node;
   const localRich = shlokaRichness(node.ShlokaManthraEntry);
@@ -66,21 +73,28 @@ export function prepareManthraAfterStrapiResolve<
   resolvedDocId: string | undefined,
   index: StrapiMantraShlokaIndex,
   normalizedTitle?: string,
+  options?: ManthraHydrationOptions,
 ): T {
   const id = resolvedDocId ?? node.strapiDocumentId;
   const prevId = node.strapiDocumentId;
   const relinked = !!id && !!prevId && prevId !== id;
   const titled = normalizedTitle !== undefined ? { ...node, title: normalizedTitle } : node;
-  const base = relinked
-    ? {
-        ...titled,
-        strapiDocumentId: id,
-        ShlokaManthraEntry: undefined,
-        BhashyamForShlokaManthra: undefined,
-      }
-    : { ...titled, strapiDocumentId: id };
+  const preferPortal = options?.preferPortalContent === true;
+
+  let base: T;
+  if (relinked && !preferPortal) {
+    base = {
+      ...titled,
+      strapiDocumentId: id,
+      ShlokaManthraEntry: undefined,
+      BhashyamForShlokaManthra: undefined,
+    };
+  } else {
+    base = { ...titled, strapiDocumentId: id };
+  }
   if (!id) return base;
-  return hydrateManthraShlokaFromIndex(base, index, id);
+  if (preferPortal) return base;
+  return hydrateManthraShlokaFromIndex(base, index, id, options);
 }
 
 export function mantraNodeHasHydratedShloka(node: {

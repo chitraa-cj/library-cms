@@ -889,6 +889,180 @@ export function strapiMantrasForResolvedSection(
   return [];
 }
 
+export type PortalMantraOwnerMergeContext = {
+  resolvedSecId?: string;
+  adhyayaDocId?: string;
+  khandaTitle?: string;
+  khandaDocId?: string;
+  padaDocId?: string;
+  cfg: Pick<GranthaStructureConfig, "levelTwoEnabled" | "levelThreeEnabled">;
+  childrenByParentDocId?: Map<string, Array<{ documentId: string }>>;
+};
+
+function mergeStrapiMantraRefLists(
+  primaryList: StrapiMantraRef[],
+  sectionDocIds: Iterable<string>,
+  strapiMantrasBySecDocId: Map<string, StrapiMantraRef[]>,
+): StrapiMantraRef[] {
+  const byDoc = new Map<string, StrapiMantraRef>();
+  const ingest = (list: StrapiMantraRef[]) => {
+    for (const sm of list) {
+      if (!sm.docId) continue;
+      const prev = byDoc.get(sm.docId);
+      const score = sm.contentScore ?? 0;
+      const prevScore = prev?.contentScore ?? 0;
+      if (!prev || score >= prevScore) byDoc.set(sm.docId, sm);
+    }
+  };
+  ingest(primaryList);
+  for (const sid of sectionDocIds) {
+    if (!sid) continue;
+    ingest(strapiMantrasBySecDocId.get(sid) ?? []);
+  }
+  return [...byDoc.values()].sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
+}
+
+/** Section documentIds whose mantras belong to one portal owner (khanda / pada / flat adhyaya). */
+export function collectMantraSectionDocIdsForPortalOwner(
+  ctx: PortalMantraOwnerMergeContext,
+  strapiMantrasBySecDocId: Map<string, StrapiMantraRef[]>,
+): string[] {
+  const {
+    resolvedSecId,
+    adhyayaDocId,
+    khandaTitle,
+    khandaDocId,
+    padaDocId,
+    cfg,
+    childrenByParentDocId,
+  } = ctx;
+  const ids = new Set<string>();
+  const levelTwo = cfg.levelTwoEnabled !== false;
+  const levelThree = !!cfg.levelThreeEnabled;
+  const isDefaultKhanda = khandaTitle === "_default" || !levelTwo;
+
+  if (resolvedSecId) ids.add(resolvedSecId);
+  if (isPublishedStrapiDocId(padaDocId)) ids.add(padaDocId!);
+  if (isPublishedStrapiDocId(khandaDocId)) ids.add(khandaDocId!);
+
+  if (levelThree && padaDocId) {
+    return [...ids];
+  }
+
+  if (!levelTwo && adhyayaDocId) {
+    ids.add(adhyayaDocId);
+    for (const c of childrenByParentDocId?.get(adhyayaDocId) ?? []) {
+      ids.add(c.documentId);
+    }
+    return [...ids];
+  }
+
+  if (isDefaultKhanda && adhyayaDocId) {
+    ids.add(adhyayaDocId);
+    for (const c of childrenByParentDocId?.get(adhyayaDocId) ?? []) {
+      ids.add(c.documentId);
+    }
+    return [...ids];
+  }
+
+  if (
+    adhyayaDocId &&
+    resolvedSecId &&
+    adhyayaDocId !== resolvedSecId &&
+    (strapiMantrasBySecDocId.get(adhyayaDocId) ?? []).length > 0 &&
+    (strapiMantrasBySecDocId.get(resolvedSecId) ?? []).length > 0
+  ) {
+    ids.add(adhyayaDocId);
+  }
+
+  return [...ids];
+}
+
+/**
+ * All granthas: union CMS mantras from every Strapi section that owns this portal bucket
+ * (flat adhyaya, _default + child khanda, named khanda with split parent/child rows, L3 pada).
+ */
+export function mergeStrapiMantraRefsForPortalMantraOwner(
+  primaryList: StrapiMantraRef[],
+  strapiMantrasBySecDocId: Map<string, StrapiMantraRef[]>,
+  ctx: PortalMantraOwnerMergeContext,
+): StrapiMantraRef[] {
+  const sectionIds = collectMantraSectionDocIdsForPortalOwner(ctx, strapiMantrasBySecDocId);
+  return mergeStrapiMantraRefLists(primaryList, sectionIds, strapiMantrasBySecDocId);
+}
+
+/** @deprecated Use mergeStrapiMantraRefsForPortalMantraOwner */
+export function mergeStrapiMantraRefsForFlatAdhyaya(
+  adhyayaDocId: string | undefined,
+  primaryList: StrapiMantraRef[],
+  strapiMantrasBySecDocId: Map<string, StrapiMantraRef[]>,
+  childrenByParentDocId?: Map<string, Array<{ documentId: string }>>,
+): StrapiMantraRef[] {
+  return mergeStrapiMantraRefsForPortalMantraOwner(primaryList, strapiMantrasBySecDocId, {
+    adhyayaDocId,
+    khandaTitle: "_default",
+    cfg: { levelTwoEnabled: false },
+    childrenByParentDocId,
+  });
+}
+
+export type EditorManthraRow = {
+  id: string;
+  title: string;
+  order?: number;
+  strapiDocumentId?: string;
+  ShlokaManthraEntry?: unknown;
+  BhashyamForShlokaManthra?: { SanskritTextEntry?: unknown };
+};
+
+function editorManthraRichness(m: EditorManthraRow): number {
+  let s = scoreStrapiManthraRowContent(m.ShlokaManthraEntry);
+  if (entryContentCharCount(m.BhashyamForShlokaManthra?.SanskritTextEntry) > 0) s += 50;
+  if (isPublishedStrapiDocId(m.strapiDocumentId)) s += 1;
+  return s;
+}
+
+/**
+ * Editor list: keep every linked CMS row (by documentId). Collapse portal-only duplicates
+ * that share a verse suffix only when they lack a Strapi id (legacy draft stubs).
+ */
+export function dedupeManthrasForEditor<T extends EditorManthraRow>(
+  manthras: T[],
+  leaf: string,
+): T[] {
+  const configured = (leaf || "Mantra").trim();
+  const byDocId = new Map<string, T>();
+  const orphansBySuffix = new Map<string, T>();
+
+  for (const m of sortMantrasByDisplayOrder(manthras)) {
+    const docId = (m.strapiDocumentId ?? "").trim();
+    if (isPublishedStrapiDocId(docId)) {
+      const prev = byDocId.get(docId);
+      if (!prev || editorManthraRichness(m) > editorManthraRichness(prev)) byDocId.set(docId, m);
+      continue;
+    }
+    if (!titleUsesConfiguredLeaf(m.title, configured)) continue;
+    const suffix = mantraNumberSuffix(m.title);
+    const key = suffix ?? m.id;
+    const prev = orphansBySuffix.get(key);
+    if (!prev || editorManthraRichness(m) > editorManthraRichness(prev)) orphansBySuffix.set(key, m);
+  }
+
+  const claimedSuffixes = new Set<string>();
+  for (const m of byDocId.values()) {
+    const suf = mantraNumberSuffix(m.title);
+    if (suf) claimedSuffixes.add(suf);
+  }
+  const out: T[] = [...byDocId.values()];
+  for (const m of orphansBySuffix.values()) {
+    const suf = mantraNumberSuffix(m.title);
+    if (suf && claimedSuffixes.has(suf)) continue;
+    out.push(m);
+    if (suf) claimedSuffixes.add(suf);
+  }
+  return sortNodesByOrder(out);
+}
+
 /**
  * Flat granthas (one top-level Strapi section with all mantras, e.g. Atma Bodha "Shloka") often
  * have portal adhyayas with no documentId. Link them so enrich and publish resolve the same rows.

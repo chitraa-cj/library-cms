@@ -39,6 +39,10 @@ import {
   dedupePublishedMantrasForDisplay,
   strapiMantrasForResolvedSection,
   linkFlatGranthaAdhyayasToSoleStrapiSection,
+  mergeStrapiMantraRefsForFlatAdhyaya,
+  mergeStrapiMantraRefsForPortalMantraOwner,
+  collectMantraSectionDocIdsForPortalOwner,
+  dedupeManthrasForEditor,
   type MantraTitleCtx,
 } from "../client/src/lib/grantha-structure-sync.ts";
 import {
@@ -430,6 +434,78 @@ assert.equal(flatTree[0].order, 1);
 assert.equal(flatTree[0].khandas[0].manthras[0].id, "m2");
 assert.equal(flatTree[0].khandas[0].manthras[0].title, "Shloka 1.1");
 assert.equal(flatTree[0].khandas[0].manthras[1].title, "Shloka 1.2");
+
+// Flat adhyaya: merge mantras from adhyaya + child sections (Atma Bodha-style split).
+const secA = "sec-adhyaya-docid";
+const secChild = "sec-shloka-child";
+const mergedFlat = mergeStrapiMantraRefsForFlatAdhyaya(
+  secA,
+  [{ title: "Mantra 1.1", docId: "doc-a1", order: 100000 }],
+  new Map([
+    [secA, [{ title: "Mantra 1.1", docId: "doc-a1", order: 100000 }]],
+    [
+      secChild,
+      [
+        { title: "Mantra 1.1", docId: "doc-c1-dup", order: 100000, contentScore: 1 },
+        { title: "Mantra 1.2", docId: "doc-c2", order: 200000, contentScore: 50 },
+      ],
+    ],
+  ]),
+  new Map([[secA, [{ documentId: secChild }]]]),
+);
+assert.equal(mergedFlat.length, 3);
+assert.equal(
+  mergedFlat.some((m) => m.docId === "doc-c2"),
+  true,
+  "must include child-section CMS rows not only on adhyaya section",
+);
+
+// Named khanda (Mundaka-style): merge split parent+child sections, not sibling khandas.
+const mundakaMap = new Map<string, StrapiMantraRef[]>([
+  ["sec-m1", [{ title: "Mantra 1.1.1", docId: "doc-on-child", order: 100000, contentScore: 10 }]],
+  ["sec-adhyaya", [{ title: "Mantra 1.1.1", docId: "doc-on-parent", order: 100000, contentScore: 1 }]],
+  ["sec-other-khanda", [{ title: "Mantra 9.9.9", docId: "doc-other", order: 900000 }]],
+]);
+const mundakaMerge = mergeStrapiMantraRefsForPortalMantraOwner(
+  mundakaMap.get("sec-m1")!,
+  mundakaMap,
+  {
+    resolvedSecId: "sec-m1",
+    adhyayaDocId: "sec-adhyaya",
+    khandaTitle: "Prathama Khanda",
+    khandaDocId: "sec-m1",
+    cfg: { levelTwoEnabled: true, levelThreeEnabled: false },
+    childrenByParentDocId: new Map([
+      ["sec-adhyaya", [{ documentId: "sec-m1" }, { documentId: "sec-other-khanda" }]],
+    ]),
+  },
+);
+assert.equal(mundakaMerge.length, 2);
+assert.equal(mundakaMerge.some((m) => m.docId === "doc-on-parent"), true);
+assert.equal(mundakaMerge.some((m) => m.docId === "doc-other"), false);
+
+const mundakaIds = collectMantraSectionDocIdsForPortalOwner(
+  {
+    resolvedSecId: "sec-m1",
+    adhyayaDocId: "sec-adhyaya",
+    khandaTitle: "Prathama Khanda",
+    khandaDocId: "sec-m1",
+    cfg: { levelTwoEnabled: true },
+  },
+  mundakaMap,
+);
+assert.equal(mundakaIds.includes("sec-other-khanda"), false);
+
+// Editor dedupe: one row per Strapi documentId (not one per suffix).
+const editorDedupe = dedupeManthrasForEditor(
+  [
+    { id: "p1", title: "Mantra 1.1", order: 1, strapiDocumentId: "doc-aaaaaaaaaaaa" },
+    { id: "p2", title: "Mantra 1.1", order: 2, strapiDocumentId: "doc-bbbbbbbbbbbb" },
+    { id: "p3", title: "Mantra 1.2", order: 3, strapiDocumentId: "doc-cccccccccccc" },
+  ],
+  "Mantra",
+);
+assert.equal(editorDedupe.length, 3, "must keep distinct CMS rows that share a suffix");
 
 // Insert-between renumbers titles (spreadsheet row insert).
 const insertCtx: MantraTitleCtx = {

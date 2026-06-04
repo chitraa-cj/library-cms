@@ -315,26 +315,63 @@ def _should_reopen_browser(err: BaseException) -> bool:
 
 
 def _cleanup_stale_chrome() -> None:
-    """Kill orphaned chromedriver processes after repeated launch failures."""
+    """Kill orphaned chromedriver / helper Chrome after repeated launch failures."""
     import subprocess
 
     _log("[hermex] Cleaning up stale chromedriver before relaunch")
     if sys.platform in ("darwin", "linux"):
-        subprocess.run(["pkill", "-f", "chromedriver"], capture_output=True)
-    time.sleep(3)
+        for pattern in (
+            "chromedriver",
+            "undetected_chromedriver",
+            "chrome-headless",
+            "Google Chrome --headless",
+        ):
+            subprocess.run(["pkill", "-f", pattern], capture_output=True)
+    time.sleep(5)
+
+
+def _headless_fallback_enabled() -> bool:
+    import os
+
+    v = os.environ.get("HERMEX_HEADLESS_FALLBACK", "").strip().lower()
+    if v in ("0", "false", "no"):
+        return False
+    if v in ("1", "true", "yes"):
+        return True
+    return sys.platform == "darwin"
 
 
 def _open_gemini_browser(headless: bool, *, after_cleanup: bool = False) -> Any:
     from hermex import Gemini
 
-    if after_cleanup:
-        _cleanup_stale_chrome()
-    gemini = Gemini(headless=headless)
-    gemini.open_url("https://gemini.google.com/app")
-    _dismiss_gemini_overlays(gemini)
-    if not getattr(gemini, "is_logged_in", True):
-        _log("[hermex] WARN: Gemini session not logged in — run: npm run hermex:setup")
-    return gemini
+    modes: list[bool] = [headless]
+    if headless and _headless_fallback_enabled():
+        modes.append(False)
+
+    last_err: BaseException | None = None
+    for mode in modes:
+        if after_cleanup or last_err is not None:
+            _cleanup_stale_chrome()
+        try:
+            _log(f"[hermex] Launching Chrome (headless={mode})")
+            gemini = Gemini(headless=mode)
+            gemini.open_url("https://gemini.google.com/app")
+            _dismiss_gemini_overlays(gemini)
+            if not getattr(gemini, "is_logged_in", True):
+                _log("[hermex] WARN: Gemini session not logged in — run: npm run hermex:setup")
+            if mode is False and headless:
+                _log("[hermex] Using visible Chrome — headless launch failed (common on macOS long runs)")
+            return gemini
+        except Exception as e:
+            last_err = e
+            if not _should_reopen_browser(e):
+                raise
+            _log(f"[hermex] Browser launch failed (headless={mode}): {e}")
+            if mode is headless and len(modes) > 1:
+                _log("[hermex] Retrying with visible Chrome (HERMEX_HEADLESS_FALLBACK)")
+    if last_err is not None:
+        raise last_err
+    raise RuntimeError("Could not open Gemini browser")
 
 
 def _close_gemini_browser(gemini: Any | None) -> None:
@@ -678,7 +715,7 @@ def _translate_chunks(
 
     gemini: Any | None = None
     chunks_since_browser_open = 0
-    browser_restart_every = 12
+    browser_restart_every = 8 if headless else 12
 
     def _reopen_browser(*, force_cleanup: bool = False) -> Any:
         nonlocal gemini, chunks_since_browser_open

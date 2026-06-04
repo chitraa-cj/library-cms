@@ -575,7 +575,10 @@ export async function translateJobIncremental(
 
   const byLang = new Map<string, HermexTranslationRow>();
 
-  const fetchHermexRows = async (targetLanguages: string[]): Promise<void> => {
+  const fetchHermexRows = async (
+    targetLanguages: string[],
+    headless: boolean,
+  ): Promise<void> => {
     const result = await runHermexWithRetry(
       {
         sourceText: job.sourceText,
@@ -583,7 +586,7 @@ export async function translateJobIncremental(
         targetLanguages,
         context: job.context,
         chunkSize: effChunk,
-        headless: opts.headless,
+        headless,
         queryTimeoutSec: queryTimeoutForSource(job.sourceText.length),
         chunkDelaySec: opts.chunkDelayMs / 1000,
         maxRetries: 3,
@@ -600,7 +603,19 @@ export async function translateJobIncremental(
     console.log(
       `[hermex] One browser session for ${allLangs.length} language(s) across ${workChunks.length} Strapi chunk(s)`,
     );
-    await fetchHermexRows(allLangs);
+    try {
+      await fetchHermexRows(allLangs, opts.headless);
+    } catch (chromeErr: unknown) {
+      if (opts.headless && isChromeSessionError(chromeErr)) {
+        console.log(
+          "[hermex] Chrome session failed in headless mode — retrying this job with visible Chrome (--headed). Keep the window open.",
+        );
+        await sleep(Math.max(opts.chunkDelayMs * 2, 12000));
+        await fetchHermexRows(allLangs, false);
+      } else {
+        throw chromeErr;
+      }
+    }
   } catch (e: unknown) {
     const msg = e instanceof Error ? e.message : String(e);
     const parseFailed =
@@ -613,7 +628,7 @@ export async function translateJobIncremental(
       for (const lang of allLangs) {
         if (byLang.has(lang)) continue;
         try {
-          await fetchHermexRows([lang]);
+          await fetchHermexRows([lang], opts.headless);
           console.log(`[translate] OK single-lang retry | ${lang}`);
         } catch (singleErr: unknown) {
           const sm = singleErr instanceof Error ? singleErr.message : String(singleErr);

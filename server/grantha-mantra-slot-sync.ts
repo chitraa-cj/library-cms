@@ -1,3 +1,4 @@
+import { isBlankMantraLabel, validateMantraLabelForCmsCreate } from "@shared/mantra-cms-guard";
 import { sortKeyBetween, STRAPI_SORT_GAP } from "@shared/mantra-sort-key";
 import {
   isPublishedStrapiDocId,
@@ -11,7 +12,7 @@ import { applyHierarchyRepairInPlace } from "./grantha-hierarchy-repair";
 import {
   sortMantrasByDisplayOrder,
   buildMantraTitleCtx,
-  mantraLabelForCmsSync,
+  mantraLabelFromListPosition,
   type GranthaStructureConfig,
 } from "../client/src/lib/grantha-structure-sync";
 
@@ -80,16 +81,36 @@ async function listSectionMantraOrders(sectionDocId: string): Promise<
   return all;
 }
 
-async function createMantraInSection(
+/** Reuse a stray CMS row that has no verse label instead of POSTing another orphan. */
+async function claimOrCreateMantraInSection(
   sectionDocumentId: string,
   sortKey: number,
   label: string,
 ): Promise<string | undefined> {
+  const trimmed = label.trim();
+  const labelErr = validateMantraLabelForCmsCreate(trimmed);
+  if (labelErr) {
+    console.warn(`[sync-mantra-slots] Refusing create in ${sectionDocumentId}: ${labelErr}`);
+    return undefined;
+  }
+
+  const existing = await listSectionMantraOrders(sectionDocumentId);
+  const blank = existing.find((r) => isBlankMantraLabel(r.ShlokaManthraNumber));
+  if (blank) {
+    await strapiRequest(`/api/manthras/${blank.documentId}`, {
+      method: "PUT",
+      body: JSON.stringify({
+        data: { ShlokaManthraNumber: trimmed, order: sortKey, Section: sectionDocumentId },
+      }),
+    });
+    return blank.documentId;
+  }
+
   const created = await strapiRequest("/api/manthras", {
     method: "POST",
     body: JSON.stringify({
       data: {
-        ShlokaManthraNumber: label,
+        ShlokaManthraNumber: trimmed,
         order: sortKey,
         Section: sectionDocumentId,
       },
@@ -130,7 +151,7 @@ async function insertMantraAfterInSection(
       ).sortKey;
     }
 
-    return createMantraInSection(sectionDocumentId, newSortKey, label);
+    return claimOrCreateMantraInSection(sectionDocumentId, newSortKey, label);
   });
 }
 
@@ -399,8 +420,15 @@ export async function syncPendingMantraSlotsFromDraft(opts: {
           }
 
           const portalLabel = titleCtx
-            ? mantraLabelForCmsSync(m.title, i + 1, titleCtx)
+            ? mantraLabelFromListPosition(m.title, i + 1, titleCtx)
             : (m.title ?? "").trim();
+          if (isBlankMantraLabel(portalLabel)) {
+            errors.push(
+              `Skipped CMS slot for portal verse ${m.id} — no Shloka label (renumber the section in the editor, then Save & Publish).`,
+            );
+            continue;
+          }
+
           let docId: string | undefined;
 
           const prevWithStrapi = sorted
@@ -416,7 +444,7 @@ export async function syncPendingMantraSlotsFromDraft(opts: {
               const all = await listSectionMantraOrders(sectionDocId);
               const maxOrder = all.length > 0 ? Math.max(...all.map((r) => r.order)) : 0;
               const newSortKey = maxOrder > 0 ? maxOrder + STRAPI_SORT_GAP : STRAPI_SORT_GAP;
-              return createMantraInSection(sectionDocId, newSortKey, portalLabel);
+              return claimOrCreateMantraInSection(sectionDocId, newSortKey, portalLabel);
             });
           }
 

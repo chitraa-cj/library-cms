@@ -12,6 +12,7 @@ import {
   getPortalVocabularyDefaults,
   getTeekaAuthorsAllowlist,
   removePortalVocabularyEntry,
+  resolveAllowedTeekaAuthor,
 } from "./cms-vocabulary";
 import { portalVocabularyKeys, type PortalVocabularyKey } from "@shared/schema";
 import Database from "better-sqlite3";
@@ -50,6 +51,16 @@ import {
 import { readClientBuildId } from "./build-info";
 import { applyHierarchyRepairInPlace } from "./grantha-hierarchy-repair";
 import { syncPendingMantraSlotsFromDraft } from "./grantha-mantra-slot-sync";
+import {
+  deleteGranthaTreeFromStrapi,
+  stripHierarchyStrapiLinksForFreshPublish,
+} from "./grantha-fresh-republish";
+import { buildArticleStrapiPayload, validateArticleDraft } from "@shared/article-editorial";
+import {
+  deleteOrphanMantrasForGrantha,
+  listOrphanMantrasForGrantha,
+} from "./grantha-orphan-manthras";
+import { validateMantraLabelForCmsCreate } from "@shared/mantra-cms-guard";
 import { buildGranthaPublishProgressPlan } from "@shared/grantha-publish-progress";
 import { collectUnlinkedMantrasFromGranthaDraft } from "../client/src/lib/grantha-strapi-mantra-sync";
 
@@ -1945,8 +1956,10 @@ async function resolveManthraDocIdForPublish(
   sectionDocId: string | undefined,
   mData: Record<string, any>,
   granthaDocId?: string,
-  options?: { fastSinglePublish?: boolean },
+  options?: { fastSinglePublish?: boolean; republishFresh?: boolean },
 ): Promise<string | undefined> {
+  if (options?.republishFresh) return undefined;
+
   const portalLabel = portalMantraLabel(manthra, mData);
   const stored =
     typeof manthra.strapiDocumentId === "string" && manthra.strapiDocumentId.length >= 10
@@ -1960,12 +1973,49 @@ async function resolveManthraDocIdForPublish(
     return stored;
   }
 
-  // Trust the portal hierarchy link — but never publish into another grantha's row.
+  const preferred =
+    typeof manthra.strapiDocumentId === "string" && manthra.strapiDocumentId.length >= 10
+      ? manthra.strapiDocumentId
+      : undefined;
+
+  const resolveFromSectionRows = async (): Promise<string | undefined> => {
+    if (!portalLabel) return undefined;
+    const rows = await listSectionMantraLabels(sectionDocId);
+    const byExact = findDocIdByExactLabelInRows(rows, portalLabel, preferred);
+    if (byExact) return byExact;
+    const bySuffix = pickDocIdForSuffixInSectionRows(rows, portalLabel, preferred);
+    if (bySuffix) return bySuffix;
+    return findManthraDocIdByLabelInSection(sectionDocId, portalLabel, preferred);
+  };
+
+  // Trust the portal link only when the CMS row is in this section and shares the portal verse suffix.
+  // After orphan cleanup or renumber, a stale strapiDocumentId can point at the wrong verse (e.g. 1.1.4)
+  // while the portal title is 1.1.3 — that caused false duplicate_suffix_in_section on publish.
   if (stored) {
     try {
       const ok = await manthraDocIdMatchesPublishContext(stored, granthaDocId, sectionDocId);
       if (ok) {
-        return stored;
+        if (!portalLabel) return stored;
+        const portalSuf = mantraNumberSuffix(portalLabel);
+        if (!portalSuf) return stored;
+        const rows = await listSectionMantraLabels(sectionDocId);
+        const storedLabel =
+          rows.find((r) => r.documentId === stored)?.label ??
+          (await fetchManthraStrapiLabel(stored));
+        const storedSuf = mantraNumberSuffix(storedLabel);
+        if (storedSuf === portalSuf) return stored;
+        const adopted = pickDocIdForSuffixInSectionRows(rows, portalLabel, preferred) ?? (await resolveFromSectionRows());
+        if (adopted) {
+          if (adopted !== stored) {
+            console.warn(
+              `[publish] Portal strapiDocumentId ${stored} (${storedLabel || "?"}) does not match "${portalLabel}" — publishing to ${adopted}`,
+            );
+          }
+          return adopted;
+        }
+        console.warn(
+          `[publish] Ignoring strapiDocumentId ${stored} — CMS label "${storedLabel || "?"}" does not match portal "${portalLabel}"`,
+        );
       } else {
         console.warn(
           `[publish] Ignoring strapiDocumentId ${stored} — mantra belongs to a different grantha/section than this publish`,
@@ -1978,25 +2028,7 @@ async function resolveManthraDocIdForPublish(
     }
   }
 
-  if (portalLabel) {
-    const rows = await listSectionMantraLabels(sectionDocId);
-    const preferred =
-      typeof manthra.strapiDocumentId === "string" && manthra.strapiDocumentId.length >= 10
-        ? manthra.strapiDocumentId
-        : undefined;
-    const byExact = findDocIdByExactLabelInRows(rows, portalLabel, preferred);
-    if (byExact) return byExact;
-    const bySuffix = pickDocIdForSuffixInSectionRows(rows, portalLabel, preferred);
-    if (bySuffix) return bySuffix;
-    const byLabel = await findManthraDocIdByLabelInSection(
-      sectionDocId,
-      portalLabel,
-      manthra.strapiDocumentId,
-    );
-    if (byLabel) return byLabel;
-  }
-
-  return undefined;
+  return resolveFromSectionRows();
 }
 
 type PortalManthraSibling = { id?: string; strapiDocumentId?: string; order?: number };
@@ -2129,6 +2161,8 @@ async function publishManthraToStrapi(
     granthaName?: string;
     /** Editor explicitly approved a verse renumber — relaxes the suffix-stability guard only. */
     allowRenumber?: boolean;
+    /** Publish every mantra as a new CMS row under a fresh grantha tree. */
+    republishFresh?: boolean;
   },
 ): Promise<string | undefined> {
   try {
@@ -2160,6 +2194,7 @@ async function publishManthraToStrapiInner(
     granthaName?: string;
     /** Editor explicitly approved a verse renumber — relaxes the suffix-stability guard only. */
     allowRenumber?: boolean;
+    republishFresh?: boolean;
   },
 ): Promise<string | undefined> {
   const configuredLeaf = (options?.configuredLeaf || "Mantra").trim() || "Mantra";
@@ -2186,7 +2221,7 @@ async function publishManthraToStrapiInner(
   }
   const portalLabel = (manthra.title || manthra.ShlokaManthraNumber || "").trim();
   const prelimData = { ShlokaManthraNumber: portalLabel };
-  const targetDocId = await resolveManthraDocIdForPublish(
+  let targetDocId = await resolveManthraDocIdForPublish(
     manthra,
     sectionDocId,
     prelimData,
@@ -2195,6 +2230,44 @@ async function publishManthraToStrapiInner(
   );
   const label = portalLabel || manthra.title || "(unknown)";
   const publishOrder = await resolvePublishSortKey(manthra, sectionDocId, options);
+  const portalLinkedDocumentId =
+    typeof manthra.strapiDocumentId === "string" && manthra.strapiDocumentId.length >= 10
+      ? manthra.strapiDocumentId
+      : undefined;
+
+  if (
+    isPublishIntegrityEnabled() &&
+    !options?.fastSinglePublish &&
+    sectionDocId &&
+    portalLabel
+  ) {
+    const rows = await listSectionMantraLabels(sectionDocId);
+    const labelMap = new Map(rows.map((r) => [r.label, r.documentId]));
+    const collision = sectionSuffixCollision(
+      rows.map((r) => r.label),
+      portalLabel,
+      targetDocId,
+      labelMap,
+    );
+    if (collision) {
+      const adopt = pickDocIdForSuffixInSectionRows(
+        rows,
+        portalLabel,
+        targetDocId ?? portalLinkedDocumentId,
+      );
+      if (adopt) {
+        if (adopt !== targetDocId) {
+          console.warn(
+            `[publish] Suffix collision for "${portalLabel}" — updating existing row ${adopt} instead of creating`,
+          );
+        }
+        targetDocId = adopt;
+      } else {
+        publishFailures.push({ manthra: portalLabel, error: collision.message });
+        return undefined;
+      }
+    }
+  }
 
   if (targetDocId && !manthraHasLocalPublishableContent(manthra)) {
     const order = publishOrder;
@@ -2250,10 +2323,6 @@ async function publishManthraToStrapiInner(
         : undefined;
     const entry = mData.ShlokaManthraEntry ?? manthra.ShlokaManthraEntry;
     const { sk, en } = plainTextFromManthraEntry(entry);
-    const portalLinkedDocumentId =
-      typeof manthra.strapiDocumentId === "string" && manthra.strapiDocumentId.length >= 10
-        ? manthra.strapiDocumentId
-        : undefined;
     const violations = scanMantraForPublish({
       portalLabel: fullLabel,
       configuredLeaf,
@@ -2271,19 +2340,6 @@ async function publishManthraToStrapiInner(
       console.warn(`[publish] Integrity block "${fullLabel}": ${msg}`);
       publishFailures.push({ manthra: fullLabel, error: msg });
       return undefined;
-    }
-    if (!options?.fastSinglePublish && sectionDocId && fullLabel) {
-      const rows = await listSectionMantraLabels(sectionDocId);
-      const collision = sectionSuffixCollision(
-        rows.map((r) => r.label),
-        fullLabel,
-        targetDocId,
-        new Map(rows.map((r) => [r.label, r.documentId])),
-      );
-      if (collision) {
-        publishFailures.push({ manthra: fullLabel, error: collision.message });
-        return undefined;
-      }
     }
   }
 
@@ -2327,6 +2383,12 @@ async function createOrUpdateManthra(
 ): Promise<string | undefined> {
   const sectionDocId: string | undefined = mData.Section;
   const number: string | undefined = mData.ShlokaManthraNumber;
+  const labelErr = validateMantraLabelForCmsCreate(number ?? label);
+  if (labelErr) {
+    console.warn(`[publish] Refusing to create manthra without label: ${labelErr}`);
+    warnings?.push({ manthra: label || "(no label)", error: labelErr });
+    return undefined;
+  }
 
   // skipLookup=true is used when the caller already tried a direct PUT that failed
   // with an orphaned-document error.  In that case the Strapi search might return
@@ -2366,10 +2428,25 @@ async function createOrUpdateManthra(
           labelMap,
         );
         if (collision) {
-          const msg = collision.message;
-          console.warn(`[publish] Manthra "${label}" blocked: ${msg}`);
-          warnings?.push({ manthra: label, error: msg });
-          return undefined;
+          const reuseOnCollision =
+            pickDocIdForSuffixInSectionRows(rows, number.trim()) ??
+            findDocIdByExactLabelInRows(rows, number.trim());
+          if (reuseOnCollision) {
+            console.log(
+              `[publish] Manthra "${label}" — suffix already in section, updating ${reuseOnCollision}`,
+            );
+            try {
+              return await updateExistingManthra(reuseOnCollision, mData, label, warnings);
+            } catch (updateErr: any) {
+              if (!isOrphanedDocError(updateErr)) throw updateErr;
+              await deleteOrphanedManthra(reuseOnCollision, label);
+            }
+          } else {
+            const msg = collision.message;
+            console.warn(`[publish] Manthra "${label}" blocked: ${msg}`);
+            warnings?.push({ manthra: label, error: msg });
+            return undefined;
+          }
         }
       }
     }
@@ -2464,14 +2541,19 @@ async function publishGranthaWithHierarchy(
       summary?: string;
     },
   ) => void,
-  allowRenumber?: boolean,
+  publishOptions?: { allowRenumber?: boolean; republishFresh?: boolean },
 ): Promise<any> {
+  const allowRenumber = !!publishOptions?.allowRenumber;
+  let republishFresh =
+    !!publishOptions?.republishFresh || (allowRenumber && !!draft.strapiDocumentId);
+  let oldGranthaDocIdForCleanup: string | undefined;
+
   await assertGranthaPublishNotLocked(draft.strapiDocumentId);
   const rawData = draft.data as Record<string, any>;
   // Strip wizard-only / local-format fields from the Grantha payload
   const {
     teekas: teekaDefinitions,
-    hierarchy,
+    hierarchy: hierarchyRaw,
     structureConfig,
     // Always compute NumberOfTeekas from the actual teekas array, never from stored form data
     NumberOfTeekas: _NumberOfTeekas,
@@ -2483,6 +2565,19 @@ async function publishGranthaWithHierarchy(
     publishScope: _publishScope,
     ...granthaDataRaw
   } = rawData;
+
+  let hierarchy = hierarchyRaw;
+  if (republishFresh && draft.strapiDocumentId) {
+    oldGranthaDocIdForCleanup = draft.strapiDocumentId;
+    console.log(
+      `[publish] Fresh republish: portal draft replaces CMS grantha ${oldGranthaDocIdForCleanup}`,
+    );
+    if (Array.isArray(hierarchy)) {
+      hierarchy = stripHierarchyStrapiLinksForFreshPublish(hierarchy);
+    }
+    draft = { ...draft, strapiDocumentId: undefined };
+  }
+
   const granthaPayload = cleanPayloadForStrapi(stripPortalMetaFromGranthaPayload(granthaDataRaw));
 
   // ── Progress tracking ─────────────────────────────────────────────────────
@@ -2558,7 +2653,20 @@ async function publishGranthaWithHierarchy(
 
   // 1. Create or update the Grantha record
   let strapiResult: any;
-  if (draft.strapiDocumentId) {
+  if (republishFresh) {
+    scrubLeakedPortalKeysFromStrapiPayload(
+      granthaPayload,
+      "POST /api/granthas (fresh structural republish)",
+    );
+    console.log(
+      `[publish] Fresh republish — POST /api/granthas keys:`,
+      Object.keys(granthaPayload).sort().join(", "),
+    );
+    strapiResult = await strapiRequest("/api/granthas", {
+      method: "POST",
+      body: JSON.stringify({ data: granthaPayload }),
+    });
+  } else if (draft.strapiDocumentId) {
     const existingG = await fetchGranthaTranslationsForMerge(draft.strapiDocumentId);
     mergeGranthaPayloadWithExistingStrapiTranslations(granthaPayload, existingG);
     scrubMergedGranthaRepeatableComponents(granthaPayload);
@@ -2642,8 +2750,7 @@ async function publishGranthaWithHierarchy(
     const candidates: TeekaCandidate[] = [];
     const seen = new Set<string>();
     for (const teeka of teekaDefinitions) {
-      const validAuthor = teeka.TeekaAuthor && teekaAuthorAllow.has(teeka.TeekaAuthor)
-        ? teeka.TeekaAuthor : undefined;
+      const validAuthor = resolveAllowedTeekaAuthor(teeka.TeekaAuthor, teekaAuthorAllow);
       const effectiveName = (teeka.TeekaName || "").trim() || (validAuthor ? `${validAuthor} Teeka` : "");
       if (!effectiveName) continue;
       const key = effectiveName.toLowerCase();
@@ -2665,14 +2772,27 @@ async function publishGranthaWithHierarchy(
       }
 
       const toCreate: TeekaCandidate[] = [];
+      const toSyncAuthor: Array<{ docId: string; author: string; name: string }> = [];
       for (const c of candidates) {
         const docId = existingByName.get(c.effectiveName.toLowerCase());
         if (docId) {
           console.log(`[publish] Teeka "${c.effectiveName}" already exists (${docId}) — reusing`);
           teekaNameToDocId.set(c.effectiveName.toLowerCase(), docId);
+          if (c.validAuthor) toSyncAuthor.push({ docId, author: c.validAuthor, name: c.effectiveName });
           reportProgress(`Teeka: ${c.effectiveName}`, "teeka");
         } else {
           toCreate.push(c);
+        }
+      }
+
+      for (const { docId, author, name } of toSyncAuthor) {
+        try {
+          await strapiRequest(`/api/teekas/${docId}`, {
+            method: "PUT",
+            body: JSON.stringify({ data: { TeekaAuthor: author } }),
+          });
+        } catch (e: any) {
+          console.warn(`[publish] Teeka "${name}" author sync failed: ${e?.message || e}`);
         }
       }
 
@@ -2752,10 +2872,10 @@ async function publishGranthaWithHierarchy(
     }
   };
 
-  if (Array.isArray(deletedStrapiSectionDocIds)) {
+  if (!republishFresh && Array.isArray(deletedStrapiSectionDocIds)) {
     await runBoundedDeletes(deletedStrapiSectionDocIds, "section", failedDeletedSectionDocIds);
   }
-  if (Array.isArray(deletedStrapiManthraDocIds)) {
+  if (!republishFresh && Array.isArray(deletedStrapiManthraDocIds)) {
     await runBoundedDeletes(deletedStrapiManthraDocIds, "manthra", failedDeletedManthraDocIds);
   }
 
@@ -2820,9 +2940,8 @@ async function publishGranthaWithHierarchy(
   // round-trip per mantra. The trade-off is finer-grained crash recovery
   // (you may re-publish up to ~50 mantras after a crash) for big throughput
   // wins on large single-section granthas (Vivekachudamani et al).
-  const manthraIdToDocId: Map<string, string> = jobId
-    ? await storage.loadManthraResolutions(jobId)
-    : new Map();
+  const manthraIdToDocId: Map<string, string> =
+    jobId && !republishFresh ? await storage.loadManthraResolutions(jobId) : new Map();
   if (manthraIdToDocId.size > 0) {
     console.log(`[publish] Hydrated ${manthraIdToDocId.size} manthra resolution(s) from checkpoint`);
   }
@@ -2883,7 +3002,7 @@ async function publishGranthaWithHierarchy(
         granthaDocId,
         teekaNameToDocId,
         publishFailures,
-        { portalSiblings, configuredLeaf, granthaName: granthaNameForIntegrity, allowRenumber },
+        { portalSiblings, configuredLeaf, granthaName: granthaNameForIntegrity, allowRenumber, republishFresh },
       );
       if (returnedDocId && manthra.id) {
         manthraIdToDocId.set(manthra.id, returnedDocId);
@@ -3283,6 +3402,40 @@ async function publishGranthaWithHierarchy(
       await resolutionFlushInFlight;
     } catch (e: any) {
       console.warn(`[publish] final resolution flush failed: ${e?.message || e}`);
+    }
+  }
+
+  if (
+    republishFresh &&
+    oldGranthaDocIdForCleanup &&
+    granthaDocId &&
+    oldGranthaDocIdForCleanup !== granthaDocId
+  ) {
+    reportProgress("Removing superseded CMS grantha", "grantha");
+    try {
+      const cleanup = await deleteGranthaTreeFromStrapi(oldGranthaDocIdForCleanup);
+      console.log(
+        `[publish] Superseded grantha ${oldGranthaDocIdForCleanup} cleanup: ` +
+          `granthaDeleted=${cleanup.granthaDeleted}, ` +
+          `failedManthras=${cleanup.failedManthras.length}, failedSections=${cleanup.failedSections.length}`,
+      );
+      if (cleanup.failedManthras.length > 0 || cleanup.failedSections.length > 0) {
+        publishFailures.push({
+          manthra: "[Grantha cleanup]",
+          error:
+            `[WARNING] Old CMS grantha was replaced but ${cleanup.failedManthras.length} mantra(s) ` +
+            `and ${cleanup.failedSections.length} section(s) could not be deleted — remove them manually in Strapi if needed.`,
+        });
+      }
+    } catch (e: any) {
+      console.error(
+        `[publish] Failed to delete superseded grantha ${oldGranthaDocIdForCleanup}:`,
+        e?.message || e,
+      );
+      publishFailures.push({
+        manthra: "[Grantha cleanup]",
+        error: `[WARNING] New grantha published but old CMS tree (${oldGranthaDocIdForCleanup}) could not be removed: ${e?.message || e}`,
+      });
     }
   }
 
@@ -4156,9 +4309,7 @@ export async function registerRoutes(
     const teekaNameToDocId: Map<string, string> = await loadGranthaTeekaNameToDocId(granthaDocId);
     const teekaAuthorAllow = await getTeekaAuthorsAllowlist();
     for (const teeka of teekaDefinitions) {
-      const validAuthor = teeka.TeekaAuthor && teekaAuthorAllow.has(teeka.TeekaAuthor)
-        ? teeka.TeekaAuthor
-        : undefined;
+      const validAuthor = resolveAllowedTeekaAuthor(teeka.TeekaAuthor, teekaAuthorAllow);
       const effectiveName = (teeka.TeekaName || "").trim() || (validAuthor ? `${validAuthor} Teeka` : "");
       if (!effectiveName) continue;
       const key = effectiveName.toLowerCase();
@@ -4370,6 +4521,46 @@ export async function registerRoutes(
     } catch (error: any) {
       console.error("[sync-mantra-slots]", error);
       res.status(500).json({ message: error.message || "Mantra slot sync failed" });
+    }
+  });
+
+  // ── Orphan mantras: blank ShlokaManthraNumber rows from failed slot sync ─────────────
+  app.get("/api/granthas/:docId/orphan-manthras", requireAuth, async (req, res) => {
+    try {
+      const docId = req.params.docId?.trim();
+      if (!docId || docId.length < 10) {
+        return res.status(400).json({ message: "Valid grantha documentId required" });
+      }
+      const orphans = await listOrphanMantrasForGrantha(docId);
+      res.json({ count: orphans.length, orphans });
+    } catch (error: any) {
+      console.error("[orphan-manthras]", error);
+      res.status(500).json({ message: error.message || "Failed to list orphan mantras" });
+    }
+  });
+
+  app.post("/api/granthas/:docId/cleanup-orphan-manthras", requireAuth, async (req, res) => {
+    try {
+      const docId = req.params.docId?.trim();
+      if (!docId || docId.length < 10) {
+        return res.status(400).json({ message: "Valid grantha documentId required" });
+      }
+      const dryRun = req.body?.dryRun === true;
+      const result = await deleteOrphanMantrasForGrantha(docId, { dryRun });
+      res.json({
+        dryRun,
+        orphanCount: result.orphans.length,
+        deletedCount: result.deleted.length,
+        failedCount: result.failed.length,
+        deleted: result.deleted,
+        failed: result.failed,
+        message: dryRun
+          ? `Found ${result.orphans.length} orphan row(s) — set dryRun:false to delete`
+          : `Deleted ${result.deleted.length} orphan row(s)`,
+      });
+    } catch (error: any) {
+      console.error("[cleanup-orphan-manthras]", error);
+      res.status(500).json({ message: error.message || "Cleanup failed" });
     }
   });
 
@@ -4767,7 +4958,10 @@ export async function registerRoutes(
         // Single attempt: retrying re-runs the entire grantha walk (progress resets to 0).
         withPublishRetries(
           () =>
-            publishGranthaWithHierarchy(draft, jobId, (done, total, current, meta) => {
+            publishGranthaWithHierarchy(
+              draft,
+              jobId,
+              (done, total, current, meta) => {
               job.progress = {
                 done,
                 total,
@@ -4781,7 +4975,9 @@ export async function registerRoutes(
                 progressTotal: total,
                 progressCurrent: current,
               });
-            }),
+            },
+              { allowRenumber: !!allowRenumber },
+            ),
           1,
         )
           .then(async (result) => {
@@ -4903,6 +5099,18 @@ export async function registerRoutes(
             ? buildSectionPayload(draft.data as Record<string, any>)
             : draft.contentType === "chapters"
             ? await buildChapterPayload(draft.data as Record<string, any>)
+            : draft.contentType === "articles"
+            ? (() => {
+                const articleErr = validateArticleDraft(draft.data as Record<string, unknown>);
+                if (articleErr) {
+                  const err: any = new Error(articleErr);
+                  err.status = 400;
+                  throw err;
+                }
+                return cleanPayloadForStrapi(
+                  buildArticleStrapiPayload(draft.data as Record<string, unknown>),
+                );
+              })()
             : cleanPayloadForStrapi(draft.data as Record<string, any>);
 
         // Log a size summary rather than the full JSON: stringify on a 500KB-2MB rich-text

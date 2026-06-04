@@ -188,5 +188,9 @@ assert(
   )?.code === "duplicate_suffix_in_section",
   "collision must block when suffix row exists but publish target is unresolved",
 );
+assert(
+  pickDocIdForSuffixInSectionRows(sectionWithThree, "Vaakhyaa 1.1.3") === "doc-m-3",
+  "unresolved publish must still find suffix row for adopt",
+);
 
 console.log("grantha-publish-integrity: all tests passed");

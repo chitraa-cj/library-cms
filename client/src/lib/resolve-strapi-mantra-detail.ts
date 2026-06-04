@@ -90,12 +90,11 @@ export async function fetchManthraForGranthaEditor(opts: {
       bypassCache: opts.bypassCache,
     });
     const remoteScore = direct.contentScore ?? 0;
-    const needsResolve =
-      remoteScore < MANTRA_LINK_MIN_CONTENT_SCORE ||
-      (opts.shlokaManthraNumber &&
-        direct.data.ShlokaManthraNumber &&
-        !labelsShareSuffix(opts.shlokaManthraNumber, String(direct.data.ShlokaManthraNumber)));
-
+    // Verse text lives on documentId — portal title may be ahead of CMS label during insert renumber.
+    if (remoteScore >= MANTRA_LINK_MIN_CONTENT_SCORE) {
+      return direct;
+    }
+    const needsResolve = remoteScore < MANTRA_LINK_MIN_CONTENT_SCORE;
     if (!needsResolve) return direct;
     if (opts.background && localScore >= MANTRA_LINK_MIN_CONTENT_SCORE) {
       return direct;
@@ -111,7 +110,8 @@ export async function fetchManthraForGranthaEditor(opts: {
   return fetchResolvedManthraDetail(opts);
 }
 
-function labelsShareSuffix(a: string, b: string): boolean {
+/** True when portal title and CMS ShlokaManthraNumber refer to the same verse suffix (e.g. 1.1.2). */
+export function labelsShareVerseSuffix(a: string, b: string): boolean {
   const sa = a.trim().match(/([\d]+(?:\.[\d]+)*)\s*$/)?.[1];
   const sb = b.trim().match(/([\d]+(?:\.[\d]+)*)\s*$/)?.[1];
   return !!(sa && sb && sa === sb);

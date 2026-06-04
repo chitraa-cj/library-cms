@@ -4,6 +4,11 @@
  */
 import assert from "node:assert/strict";
 import {
+  validateMantraLabelForCmsCreate,
+  provisionalMantraInsertLabel,
+  isBlankMantraLabel,
+} from "../shared/mantra-cms-guard";
+import {
   reindexMantrasContiguous,
   reindexMantrasInListOrder,
   titlePrefixFromMantraTitle,
@@ -44,6 +49,8 @@ import {
   mergeStrapiMantraRefsForPortalMantraOwner,
   collectMantraSectionDocIdsForPortalOwner,
   dedupeManthrasForEditor,
+  enforceUniqueStrapiDocumentIdsAmongMantras,
+  insertPlaceholderRowsForMissingSuffixGaps,
   type MantraTitleCtx,
 } from "../client/src/lib/grantha-structure-sync.ts";
 import {
@@ -168,7 +175,11 @@ const remap = resolvePortalMantraToStrapiDoc(
     ambiguousOrders,
   },
 );
-assert.equal(remap?.docId, "doc-aaaa1111111111");
+assert.equal(
+  remap?.docId,
+  "doc-bbbb2222222222",
+  "published documentId must not be replaced by suffix match during renumber",
+);
 
 // After renumber: trust portal strapiDocumentId even when Strapi label suffix differs.
 const renumberSection: StrapiMantraRef[] = [
@@ -208,13 +219,33 @@ assert.equal(
   "must not match by Strapi sort order when suffix is missing in CMS",
 );
 
-// Stale documentId must not override portal title suffix (Shloka 1.1.2 → correct row).
+// Insert-between: portal label ahead of CMS must keep the same documentId (content C stays on doc-C).
+const insertRenumberSection: StrapiMantraRef[] = [
+  { title: "Shloka 1.1.3", docId: "doc-content-c", order: 300000 },
+  { title: "Shloka 1.1.4", docId: "doc-content-d", order: 400000 },
+];
+const insertRenumberKeep = resolvePortalMantraToStrapiDoc(
+  { title: "Shloka 1.1.4", strapiDocumentId: "doc-content-c" },
+  {
+    configuredLeaf: "Shloka",
+    sectionMantras: insertRenumberSection,
+    byOrder: buildUniqueStrapiOrderMap(insertRenumberSection).byOrder,
+    ambiguousOrders: buildUniqueStrapiOrderMap(insertRenumberSection).ambiguousOrders,
+  },
+);
+assert.equal(
+  insertRenumberKeep?.docId,
+  "doc-content-c",
+  "must not relink to doc-content-d just because CMS label still says 1.1.4",
+);
+
+// Portal-only rows still link by suffix when no published documentId.
 const mislinkSection: StrapiMantraRef[] = [
   { title: "Shloka 1.1.1", docId: "doc-stale-verse1", order: 100000, contentScore: 80 },
   { title: "Shloka 1.1.2", docId: "doc-correct-12", order: 200000, contentScore: 120 },
 ];
-const mislinkFix = resolvePortalMantraToStrapiDoc(
-  { title: "Shloka 1.1.2", strapiDocumentId: "doc-stale-verse1" },
+const orphanLink = resolvePortalMantraToStrapiDoc(
+  { title: "Shloka 1.1.2" },
   {
     configuredLeaf: "Shloka",
     sectionMantras: mislinkSection,
@@ -222,11 +253,7 @@ const mislinkFix = resolvePortalMantraToStrapiDoc(
     ambiguousOrders: buildUniqueStrapiOrderMap(mislinkSection).ambiguousOrders,
   },
 );
-assert.equal(
-  mislinkFix?.docId,
-  "doc-correct-12",
-  "portal verse suffix must win over stale strapiDocumentId",
-);
+assert.equal(orphanLink?.docId, "doc-correct-12");
 
 // Same verse label in two sections must not cross-link (no grantha-wide title map).
 const sectionARefs: StrapiMantraRef[] = [
@@ -520,6 +547,76 @@ const editorDedupe = dedupeManthrasForEditor(
 );
 assert.equal(editorDedupe.length, 3, "must keep distinct CMS rows that share a suffix");
 
+const insertVisible = dedupeManthrasForEditor(
+  [
+    { id: "p1", title: "Shloka 1.1.1", order: 1, strapiDocumentId: "doc-aaaaaaaaaaaa" },
+    {
+      id: "new",
+      title: "Shloka 1.1.2",
+      order: 2,
+      _isNewLocal: true,
+      ShlokaManthraEntry: { EnglishTranslationText: [{ type: "paragraph", children: [{ text: "Inserted verse body here." }] }] },
+    },
+    { id: "p2", title: "Shloka 1.1.3", order: 3, strapiDocumentId: "doc-bbbbbbbbbbbb" },
+  ],
+  "Shloka",
+);
+assert.equal(insertVisible.length, 3);
+assert.equal(insertVisible.some((m) => m.id === "new"), true, "inserted 1.1.2 must stay visible");
+
+const dupDocFixed = enforceUniqueStrapiDocumentIdsAmongMantras(
+  [
+    { id: "p1", title: "Shloka 1.1.1", order: 1, strapiDocumentId: "doc-aaaaaaaaaaaa" },
+    {
+      id: "new",
+      title: "Shloka 1.1.2",
+      order: 2,
+      _isNewLocal: true,
+      strapiDocumentId: "doc-bbbbbbbbbbbb",
+      ShlokaManthraEntry: { EnglishTranslationText: [{ type: "paragraph", children: [{ text: "User edited new slot." }] }] },
+    },
+    {
+      id: "p2",
+      title: "Shloka 1.1.3",
+      order: 3,
+      strapiDocumentId: "doc-bbbbbbbbbbbb",
+      ShlokaManthraEntry: { EnglishTranslationText: [{ type: "paragraph", children: [{ text: "Old 1.1.2 body now at 1.1.3." }] }] },
+    },
+  ],
+  [{ title: "Shloka 1.1.2", docId: "doc-bbbbbbbbbbbb", order: 2 }],
+);
+assert.equal(dupDocFixed.length, 3);
+assert.equal(
+  dupDocFixed.find((m) => m.id === "p2")?.strapiDocumentId,
+  "doc-bbbbbbbbbbbb",
+  "established row keeps CMS link when insert briefly shared documentId",
+);
+assert.equal(dupDocFixed.find((m) => m.id === "new")?.strapiDocumentId, undefined);
+assert.equal(
+  dupDocFixed.find((m) => m.id === "p2")?.ShlokaManthraEntry?.EnglishTranslationText?.[0]?.children?.[0]?.text,
+  "Old 1.1.2 body now at 1.1.3.",
+);
+const dupDocVisible = dedupeManthrasForEditor(dupDocFixed, "Shloka");
+assert.equal(dupDocVisible.length, 3);
+assert.equal(dupDocVisible.some((m) => m.id === "p2"), true, "shifted verse must stay visible");
+
+// claimedDocIds: second portal row cannot steal first row's CMS link
+const claimed = new Set<string>(["doc-bbbbbbbbbbbb"]);
+const secondResolve = resolvePortalMantraToStrapiDoc(
+  { title: "Shloka 1.1.3", strapiDocumentId: "doc-bbbbbbbbbbbb" },
+  {
+    configuredLeaf: "Shloka",
+    sectionMantras: [
+      { title: "Shloka 1.1.2", docId: "doc-bbbbbbbbbbbb", order: 2 },
+      { title: "Shloka 1.1.3", docId: "doc-cccccccccccc", order: 3 },
+    ],
+    byOrder: new Map(),
+    ambiguousOrders: new Set(),
+    claimedDocIds: claimed,
+  },
+);
+assert.equal(secondResolve?.docId, "doc-cccccccccccc");
+
 // Insert-between renumbers titles (spreadsheet row insert).
 const insertCtx: MantraTitleCtx = {
   leaf: "Shloka",
@@ -540,6 +637,29 @@ const insertRenumbered = reindexMantrasInListOrder(
 );
 assert.equal(insertRenumbered[2].title, "Shloka 1.1.3");
 assert.equal(insertRenumbered[3].title, "Shloka 1.1.4");
+
+const reindexDupDoc = reindexMantrasInListOrder(
+  [
+    { id: "p1", title: "Shloka 1.1.1", order: 1, strapiDocumentId: "doc-aaaaaaaaaaaa" },
+    { id: "p2", title: "Shloka 1.1.2", order: 2, strapiDocumentId: "doc-bbbbbbbbbbbb" },
+    { id: "new", title: "Shloka 1.1.2", order: 3, _isNewLocal: true, strapiDocumentId: "doc-bbbbbbbbbbbb" },
+  ],
+  insertCtx,
+);
+assert.equal(reindexDupDoc.length, 3, "renumber must not drop rows that share a documentId");
+assert.equal(reindexDupDoc.find((m) => m.id === "p2")?.title, "Shloka 1.1.2");
+assert.equal(reindexDupDoc.find((m) => m.id === "new")?.title, "Shloka 1.1.3");
+
+const gapFilled = insertPlaceholderRowsForMissingSuffixGaps(
+  [
+    { id: "a", title: "Shloka 1.1.1", order: 1 },
+    { id: "b", title: "Shloka 1.1.3", order: 3 },
+  ],
+  insertCtx,
+  () => "gap-new",
+);
+assert.equal(gapFilled.length, 3);
+assert.equal(gapFilled.find((m) => m.title === "Shloka 1.1.2")?.id, "gap-new");
 
 // ── assignContiguousMantraOrders: new row must not sort to front (order: 0 bug) ──
 const baseFour: ManthraRow[] = [
@@ -690,6 +810,10 @@ assert.equal(
   ),
   true,
 );
+const userDevanagari = "जन्तूनां नरजन्म दुर्लभमतः पुंस्त्वं ततो विप्रता";
+const cmsVerseTwo =
+  "jantūnāṃ narajanma durlabhamataḥ puṃstvaṃ tato vipratā tasmādvaidikadharmamārgaparatā vidvattvamasmātparam | ātmānātmavivecanaṃ svanubhavo brahmātmanā saṃsthiti - rmukirno śatakoṭijanmasu kṛtaiḥ puṇyairvinā labhyate || 2 ||";
+assert.equal(isPlaceholderVersusCms(userDevanagari, cmsVerseTwo), false);
 assert.equal(entryContentCharCount("4"), 1);
 
 const dupRefsByRichness: StrapiMantraRef[] = [
@@ -794,5 +918,11 @@ const linked = linkFlatGranthaAdhyayasToSoleStrapiSection(
   [{ documentId: "shloka-sec", manthras: [{ documentId: "doc-111111111111" }] }],
 );
 assert.equal(linked[0].documentId, "shloka-sec");
+
+assert.equal(validateMantraLabelForCmsCreate(""), "ShlokaManthraNumber is required — cannot create a CMS row without a verse label.");
+assert.equal(validateMantraLabelForCmsCreate("  "), validateMantraLabelForCmsCreate(""));
+assert.equal(validateMantraLabelForCmsCreate("Shloka 1.1"), null);
+assert.equal(provisionalMantraInsertLabel("Vaakhyaa 1.2"), "Vaakhyaa 1.2 (new)");
+assert.equal(isBlankMantraLabel("x"), false);
 
 console.log("test-grantha-mantra-index: all ok (insert/delete/order)");

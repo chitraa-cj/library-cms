@@ -64,10 +64,24 @@ export async function getTeekaAuthorsAllowlist(): Promise<Set<string>> {
   return new Set(vocab.teekaAuthors);
 }
 
+/** Map draft author to the canonical allowlist spelling (case-insensitive). */
+export function resolveAllowedTeekaAuthor(
+  author: string | undefined | null,
+  allow: Set<string>,
+): string | undefined {
+  const trimmed = String(author ?? "").trim();
+  if (!trimmed) return undefined;
+  if (allow.has(trimmed)) return trimmed;
+  const lower = trimmed.toLowerCase();
+  for (const entry of allow) {
+    if (entry.toLowerCase() === lower) return entry;
+  }
+  return undefined;
+}
+
 export async function isAllowedTeekaAuthor(name: string | undefined | null): Promise<boolean> {
-  if (!name || !String(name).trim()) return false;
   const allow = await getTeekaAuthorsAllowlist();
-  return allow.has(String(name).trim());
+  return resolveAllowedTeekaAuthor(name, allow) !== undefined;
 }
 
 export async function addPortalVocabularyEntry(

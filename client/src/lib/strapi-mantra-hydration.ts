@@ -81,6 +81,19 @@ export function prepareManthraAfterStrapiResolve<
   const prevId = node.strapiDocumentId;
   const relinked = !!id && !!prevId && prevId !== id;
   const titled = normalizedTitle !== undefined ? { ...node, title: normalizedTitle } : node;
+  // Insert renumber: portal bodies stay on the stored documentId even if CMS label lags.
+  if (
+    relinked &&
+    options?.preferPortalContent &&
+    shlokaRichness(node.ShlokaManthraEntry) >= MANTRA_LINK_MIN_CONTENT_SCORE
+  ) {
+    return hydrateManthraShlokaFromIndex(
+      { ...titled, strapiDocumentId: prevId },
+      index,
+      prevId,
+      options,
+    );
+  }
   let base: T;
   if (relinked) {
     // Wrong CMS link (common after Viveka renumber/migration): always drop stale bodies.

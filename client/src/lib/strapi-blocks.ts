@@ -62,7 +62,11 @@ export function isPlaceholderVersusCms(
   if (!s || d === s) return false;
   if (/^\d{1,3}$/.test(d)) return true;
   if (d.length <= 8 && s.length > 40) return true;
-  if (s.length >= 40 && d.length < s.length * 0.2) return true;
+  if (s.length >= 40 && d.length < s.length * 0.2) {
+    // Real editor input (e.g. Devanagari the user typed) — do not replace with a longer wrong CMS row.
+    if (d.length >= 20) return false;
+    return true;
+  }
   return false;
 }
 

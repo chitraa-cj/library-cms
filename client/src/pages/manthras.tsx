@@ -5,6 +5,8 @@ import { syncGranthaCmsCaches } from "@/lib/strapi-cache-sync";
 import { useToast } from "@/hooks/use-toast";
 import { useDrafts } from "@/hooks/use-drafts";
 import { useAuth } from "@/hooks/use-auth";
+import { provisionalMantraInsertLabel } from "@shared/mantra-cms-guard";
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -349,6 +351,7 @@ export default function ManthrasPage() {
         afterDocumentId: insertTarget.afterDocumentId,
         sectionDocId: insertTarget.sectionDocId,
         afterNum: insertTarget.afterNum,
+        ShlokaManthraNumber: provisionalMantraInsertLabel(insertTarget.afterNum),
       });
       const json = await res.json();
       const newDoc = json?.data;
@@ -599,6 +602,46 @@ export default function ManthrasPage() {
     return matchesSearch && matchesGrantha && matchesSection;
   });
 
+  const orphanPublishedInView = useMemo(
+    () =>
+      strapiManthras.filter((m) => {
+        if ((m.ShlokaManthraNumber ?? "").trim()) return false;
+        const granthaName = (m as any).grantha?.GranthaName || "";
+        const matchesGrantha = filterGrantha === "__all__" || granthaName === filterGrantha;
+        const sectionDocId = (m as any).section?.documentId || "";
+        const matchesSection = filterSection === "__all__" || sectionDocId === filterSection;
+        return matchesGrantha && matchesSection;
+      }),
+    [strapiManthras, filterGrantha, filterSection],
+  );
+
+  const granthaDocIdForCleanup = useMemo(() => {
+    if (filterGrantha === "__all__") return "";
+    const sec = allSections.find((s) => (s as any).grantha?.GranthaName === filterGrantha);
+    return (sec as any)?.grantha?.documentId || "";
+  }, [filterGrantha, allSections]);
+
+  const cleanupOrphansMutation = useMutation({
+    mutationFn: async (granthaDocId: string) => {
+      const res = await apiRequest(
+        "POST",
+        `/api/granthas/${granthaDocId}/cleanup-orphan-manthras`,
+        { dryRun: false },
+      );
+      return res.json();
+    },
+    onSuccess: (result: { deletedCount?: number }) => {
+      void syncGranthaCmsCaches(queryClient);
+      toast({
+        title: "Orphan rows removed",
+        description: `Deleted ${result.deletedCount ?? 0} empty CMS row(s). Re-open the grantha editor and Save & Publish to sync real verses.`,
+      });
+    },
+    onError: (err: any) => {
+      toast({ variant: "destructive", title: "Cleanup failed", description: err.message });
+    },
+  });
+
   const isSaving = saveDraft.isPending;
   const selectedSection = formData.section
     ? allSections.find((s) => s.documentId === formData.section)
@@ -658,6 +701,31 @@ export default function ManthrasPage() {
           </Button>
         )}
       </div>
+
+      {orphanPublishedInView.length > 0 && granthaDocIdForCleanup && (
+        <Alert variant="destructive" className="mb-4">
+          <AlertTitle>Orphan CMS rows ({orphanPublishedInView.length})</AlertTitle>
+          <AlertDescription className="space-y-2">
+            <p>
+              These &quot;No number&quot; rows are empty Strapi placeholders from an earlier CMS slot sync
+              (before verse labels were set). They are not your real shlokas — your 12 labeled verses above
+              are correct.
+            </p>
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              disabled={cleanupOrphansMutation.isPending}
+              onClick={() => cleanupOrphansMutation.mutate(granthaDocIdForCleanup)}
+              data-testid="button-cleanup-orphan-manthras"
+            >
+              {cleanupOrphansMutation.isPending
+                ? "Removing…"
+                : `Remove ${orphanPublishedInView.length} orphan row(s) from Strapi`}
+            </Button>
+          </AlertDescription>
+        </Alert>
+      )}
 
       {fetchLooksIncomplete && (
         <div

@@ -618,7 +618,10 @@ export interface StrapiChapter {
  *   cover (media — images)
  *   author (manyToOne → Author)
  *   category (manyToOne → Category)
- *   blocks (dynamiczone)
+ *   blocks (dynamiczone — dateline + lead + body assembled on publish from portal draft)
+ *
+ * Portal draft also stores (not sent as top-level Strapi fields):
+ *   eventDate, eventTime, place, lead, body
  */
 export interface StrapiArticle {
   id: number;
@@ -636,6 +639,8 @@ export interface StrapiArticle {
   } | null;
   author?: StrapiAuthor | null;
   category?: StrapiCategory | null;
+  /** Strapi `shared.seo` component when enabled on Article content-type */
+  seo?: SeoComponent | null;
   blocks?: any[];
   publishedAt?: string;
   createdAt?: string;

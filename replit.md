@@ -19,7 +19,7 @@ A data feeding website for the Ekatmadham Library that connects to a Strapi CMS 
 - **Section** (`api::section.section`): Structural divisions — title, order, type (enum: adhyay|khanda|valli|pada|kanda|sukta|varga|anuvaka|prakarana|chapter|part|section|book), titleTranslations (shared.translations[]), grantha (manyToOne), parent (manyToOne→Section), sub_sections (oneToMany→Section), manthras (oneToMany→Manthra)
 - **Manthra** (`api::manthra.manthra`): Individual verse/mantra entries — ShlokaManthraNumber (string), order, Section (manyToOne, capital S), ShlokaManthraEntry (shared.text-and-translation), BhashyamEntry (shared.text-and-translation), Teekas (default.bhashya-entries[]), wordMeanings (shared.word-meaning[])
 - **Teeka** (`api::teeka.teeka`): Commentary works — TeekaName, TeekaAuthor (enum), grantha (manyToOne)
-- **Article** (`api::article.article`): Blog articles — title, description, slug, cover (media), author (manyToOne), category (manyToOne), blocks (dynamiczone)
+- **Article** (`api::article.article`): Blog articles — title, description, slug, cover (media), author, category, blocks (dynamiczone), **seo** (`shared.seo`: metaTitle, metaDescription, shareImage). Portal enforces SEO fields, JSON-LD in draft, and publishes meta via `description` + `seo` component (`shared/article-seo.ts`).
 - **Author** (`api::author.author`): Author profiles — name, avatar (media), email, articles (oneToMany)
 - **Category** (`api::category.category`): Content categories — name, slug, description, articles (oneToMany)
 - **User**: Strapi user accounts

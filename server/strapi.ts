@@ -16,6 +16,7 @@ import {
   isBareLeafCounterTitle,
   sectionSuffixCollision,
 } from "@shared/grantha-publish-integrity";
+import { validateMantraLabelForCmsCreate } from "@shared/mantra-cms-guard";
 
 const STRAPI_URL = process.env.STRAPI_URL || "http://13.53.121.15:1337";
 const STRAPI_ADMIN_NOTE =
@@ -815,13 +816,8 @@ export function createStrapiRouter() {
       const labelMatchesPreferred =
         !label || !preferredLabel || labelsShareVerseSuffix(label, preferredLabel);
 
-      // Fast path: linked row exists with verse text — return immediately (no section-wide scan).
-      if (
-        preferredRow &&
-        preferredDocId &&
-        labelMatchesPreferred &&
-        preferredScore >= 12
-      ) {
+      // Fast path: substantive verse on the linked CMS row — do not re-resolve by portal label during renumber.
+      if (preferredRow && preferredDocId && preferredScore >= 12) {
         const sec = preferredRow.Section;
         return res.json({
           data: {
@@ -945,6 +941,15 @@ export function createStrapiRouter() {
         res.status(400).json({ message: "afterDocumentId and sectionDocId are required" });
         return;
       }
+      const insertLabel = (ShlokaManthraNumber ?? "").trim();
+      const insertLabelErr = validateMantraLabelForCmsCreate(insertLabel);
+      if (insertLabelErr) {
+        res.status(400).json({
+          message: insertLabelErr,
+          code: "blank_mantra_label",
+        });
+        return;
+      }
 
       const result = await withSectionLock(sectionDocId, async () => {
         const all = await listSectionMantraOrders(sectionDocId);
@@ -979,7 +984,7 @@ export function createStrapiRouter() {
           method: "POST",
           body: JSON.stringify({
             data: {
-              ShlokaManthraNumber: (ShlokaManthraNumber ?? "").trim(),
+              ShlokaManthraNumber: insertLabel,
               order: newSortKey,
               Section: sectionDocId,
             },
@@ -1076,38 +1081,45 @@ export function createStrapiRouter() {
             if (fromOrder) ShlokaManthraNumber = fromOrder;
           }
           if (integrityOn && ShlokaManthraNumber.trim()) {
-            let existing = labelCache.get(documentId);
-            if (existing === undefined) {
-              try {
-                const one = await strapiRequest(
-                  `/api/manthras/${documentId}?fields[0]=ShlokaManthraNumber`,
-                );
-                existing = String(one?.data?.ShlokaManthraNumber ?? "").trim();
-              } catch {
-                existing = "";
-              }
-              labelCache.set(documentId, existing);
-            }
             const leafViolation = assertConfiguredLeafOnLabel(ShlokaManthraNumber, leaf);
             if (leafViolation) {
               results.push({ documentId, ok: false, error: leafViolation.message });
               continue;
             }
-            if (existing && !renumberAllowed) {
-              const suffixViolation = assertVerseSuffixStable(existing, ShlokaManthraNumber);
-              if (suffixViolation) {
-                // Portal renumbered (insert/delete) but Strapi row still has the old verse id —
-                // update fractional sort key only; do not rewrite ShlokaManthraNumber.
+            // The existing label is consumed only by the suffix-stability guard below,
+            // which is skipped entirely under allowRenumber. Fetching it otherwise adds
+            // a GET per row — doubling Strapi round-trips on full label syncs (which run
+            // with allowRenumber=true) and making large-grantha publishes crawl. Only
+            // read it when the guard can actually use it.
+            if (!renumberAllowed) {
+              let existing = labelCache.get(documentId);
+              if (existing === undefined) {
                 try {
-                  await strapiRequest(`/api/manthras/${documentId}`, {
-                    method: "PUT",
-                    body: JSON.stringify({ data: { order } }),
-                  });
-                  results.push({ documentId, ok: true, labelSkipped: true });
-                } catch (e: any) {
-                  results.push({ documentId, ok: false, error: e?.message || String(e) });
+                  const one = await strapiRequest(
+                    `/api/manthras/${documentId}?fields[0]=ShlokaManthraNumber`,
+                  );
+                  existing = String(one?.data?.ShlokaManthraNumber ?? "").trim();
+                } catch {
+                  existing = "";
                 }
-                continue;
+                labelCache.set(documentId, existing);
+              }
+              if (existing) {
+                const suffixViolation = assertVerseSuffixStable(existing, ShlokaManthraNumber);
+                if (suffixViolation) {
+                  // Portal renumbered (insert/delete) but Strapi row still has the old verse id —
+                  // update fractional sort key only; do not rewrite ShlokaManthraNumber.
+                  try {
+                    await strapiRequest(`/api/manthras/${documentId}`, {
+                      method: "PUT",
+                      body: JSON.stringify({ data: { order } }),
+                    });
+                    results.push({ documentId, ok: true, labelSkipped: true });
+                  } catch (e: any) {
+                    results.push({ documentId, ok: false, error: e?.message || String(e) });
+                  }
+                  continue;
+                }
               }
             }
           }
@@ -1150,10 +1162,15 @@ export function createStrapiRouter() {
         res.status(400).json({ message: "sectionDocumentId is required" });
         return;
       }
+      const label = (ShlokaManthraNumber ?? "").trim();
+      const labelErr = validateMantraLabelForCmsCreate(label);
+      if (labelErr) {
+        res.status(400).json({ message: labelErr, code: "blank_mantra_label" });
+        return;
+      }
 
       const { created, sortKey } = await withSectionLock(sid, async () => {
         const all = await listSectionMantraOrders(sid);
-        const label = (ShlokaManthraNumber ?? "").trim();
         if (isPublishIntegrityEnabled() && label && isBareLeafCounterTitle(label)) {
           const err: any = new Error(
             `Bare verse labels like "${label}" are not allowed — use a dotted suffix (e.g. Vaakhyaa 1.1.1).`,
@@ -1185,7 +1202,7 @@ export function createStrapiRouter() {
             data: {
               Section: sid,
               order: newSortKey,
-              ShlokaManthraNumber: ShlokaManthraNumber ?? "",
+              ShlokaManthraNumber: label,
             },
           }),
         });

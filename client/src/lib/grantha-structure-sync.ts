@@ -332,13 +332,16 @@ export function findStrapiMantraByExactTitleInSection(
   sectionMantras: StrapiMantraRef[],
   portalTitle: string | undefined,
   preferredDocId?: string,
+  claimedDocIds?: Set<string>,
 ): StrapiMantraRef | undefined {
   const label = (portalTitle ?? "").trim();
   if (!label || sectionMantras.length === 0) return undefined;
   const lower = label.toLowerCase();
   const hits = sectionMantras.filter((sm) => sm.title.trim().toLowerCase() === lower);
   if (hits.length === 0) return undefined;
-  return pickBestStrapiMantraRefForLink(hits, preferredDocId);
+  const pool = strapiRefsAvailableForLink(hits, preferredDocId, claimedDocIds);
+  if (pool.length === 0) return undefined;
+  return pickBestStrapiMantraRefForLink(pool, preferredDocId);
 }
 
 /**
@@ -346,11 +349,21 @@ export function findStrapiMantraByExactTitleInSection(
  * when the portal title uses that leaf but CMS rows still use another prefix (Mantra → Shloka),
  * still links by suffix so fetch/view/edit show the correct row.
  */
+function strapiRefsAvailableForLink(
+  pool: StrapiMantraRef[],
+  preferredDocId?: string,
+  claimedDocIds?: Set<string>,
+): StrapiMantraRef[] {
+  if (!claimedDocIds?.size) return pool;
+  return pool.filter((h) => h.docId === preferredDocId || !claimedDocIds.has(h.docId));
+}
+
 export function findStrapiMantraByVerseSuffix(
   mantras: StrapiMantraRef[],
   portalTitle: string | undefined,
   configuredLeaf: string,
   preferredDocId?: string,
+  claimedDocIds?: Set<string>,
 ): StrapiMantraRef | undefined {
   const leaf = (configuredLeaf || "Mantra").trim();
   const label = (portalTitle ?? "").trim();
@@ -360,12 +373,13 @@ export function findStrapiMantraByVerseSuffix(
   if (hits.length === 0) return undefined;
   const leafHits = hits.filter((sm) => titleUsesConfiguredLeaf(sm.title, leaf));
   const portalUsesLeaf = titleUsesConfiguredLeaf(label, leaf);
-  const pool =
+  let pool =
     leafHits.length > 0
       ? leafHits
       : portalUsesLeaf
         ? hits
         : [];
+  pool = strapiRefsAvailableForLink(pool, preferredDocId, claimedDocIds);
   if (pool.length === 0) return undefined;
   return pickBestStrapiMantraRefForLink(pool, preferredDocId);
 }
@@ -387,63 +401,53 @@ export interface ResolvePortalMantraStrapiOptions {
   sectionMantras: StrapiMantraRef[];
   byOrder: Map<number, StrapiMantraRef>;
   ambiguousOrders: Set<number>;
+  /** DocIds already linked to an earlier portal row in this section (insert-between safety). */
+  claimedDocIds?: Set<string>;
 }
 
 /**
  * Map a portal mantra node to the correct Strapi documentId.
- * Portal verse title (suffix) is authoritative for fetch/display; stored documentId is trusted
- * only when it matches that suffix or no other row owns the suffix (renumber / in-flight label).
+ * Published `strapiDocumentId` owns verse content; portal titles may run ahead of CMS labels
+ * during insert-between renumber. Label/suffix matching is for portal-only rows only.
  */
 export function resolvePortalMantraToStrapiDoc(
   portal: { title?: string; order?: number; strapiDocumentId?: string },
   opts: ResolvePortalMantraStrapiOptions,
 ): { docId: string | undefined } | undefined {
-  const { configuredLeaf, byExactTitle, sectionMantras } = opts;
+  const { configuredLeaf, byExactTitle, sectionMantras, claimedDocIds } = opts;
   const leaf = (configuredLeaf || "Mantra").trim();
   const portalTitle = (portal.title ?? "").trim();
-  const portalSuf = mantraNumberSuffix(portalTitle);
-  const preferred = portal.strapiDocumentId;
+  const preferred = (portal.strapiDocumentId ?? "").trim();
 
-  if (portalTitle) {
-    const exactInSection = findStrapiMantraByExactTitleInSection(
-      sectionMantras,
-      portalTitle,
-      preferred,
-    );
-    if (exactInSection) {
-      return { docId: exactInSection.docId };
-    }
-    if (sectionMantras.length === 0 && byExactTitle?.has(portalTitle)) {
-      return { docId: byExactTitle.get(portalTitle)! };
-    }
-    const bySuffix = findStrapiMantraByVerseSuffix(
-      sectionMantras,
-      portalTitle,
-      leaf,
-      preferred,
-    );
-    if (bySuffix) {
-      return { docId: bySuffix.docId };
-    }
+  if (isPublishedStrapiDocId(preferred) && !claimedDocIds?.has(preferred)) {
+    return { docId: preferred };
   }
 
-  if (preferred) {
-    const sm = sectionMantras.find((s) => s.docId === preferred);
-    if (sm) {
-      const strapiSuf = mantraNumberSuffix(sm.title);
-      if (portalSuf && strapiSuf && portalSuf !== strapiSuf && portalTitle) {
-        const owner = findStrapiMantraByVerseSuffix(sectionMantras, portalTitle, leaf);
-        if (owner && owner.docId !== preferred) {
-          return { docId: owner.docId };
-        }
-      }
-      return { docId: preferred };
-    }
-    // Row may live on another section in CMS; keep published id so grantha-wide shloka index can hydrate.
-    if (isPublishedStrapiDocId(preferred)) {
-      return { docId: preferred };
-    }
-    return { docId: undefined };
+  if (!portalTitle) return undefined;
+
+  const exactInSection = findStrapiMantraByExactTitleInSection(
+    sectionMantras,
+    portalTitle,
+    preferred,
+    claimedDocIds,
+  );
+  if (exactInSection) {
+    return { docId: exactInSection.docId };
+  }
+  if (sectionMantras.length === 0 && byExactTitle?.has(portalTitle)) {
+    const id = byExactTitle.get(portalTitle)!;
+    if (!claimedDocIds?.has(id) || id === preferred) return { docId: id };
+  }
+
+  const bySuffix = findStrapiMantraByVerseSuffix(
+    sectionMantras,
+    portalTitle,
+    leaf,
+    preferred,
+    claimedDocIds,
+  );
+  if (bySuffix) {
+    return { docId: bySuffix.docId };
   }
 
   return undefined;
@@ -526,19 +530,15 @@ export function mantraLabelFromListPosition(
   return buildMantraDisplayTitle(pfx, orderNum1Based, ctx);
 }
 
-/** Drop duplicate portal rows (same id or same Strapi documentId) before renumbering. */
+/** Drop duplicate portal `id` only — never drop rows that share a CMS documentId (insert renumber). */
 export function dedupeMantrasInDisplayOrder<T extends { id: string; strapiDocumentId?: string }>(
   manthrasInDisplayOrder: T[],
 ): T[] {
   const seenIds = new Set<string>();
-  const seenDocIds = new Set<string>();
   const out: T[] = [];
   for (const m of manthrasInDisplayOrder) {
     if (m.id && seenIds.has(m.id)) continue;
-    const docId = (m.strapiDocumentId ?? "").trim();
-    if (docId.length >= STRAPI_DOCUMENT_ID_MIN_LENGTH && seenDocIds.has(docId)) continue;
     if (m.id) seenIds.add(m.id);
-    if (docId.length >= STRAPI_DOCUMENT_ID_MIN_LENGTH) seenDocIds.add(docId);
     out.push(m);
   }
   return out;
@@ -573,6 +573,8 @@ export function reindexMantrasContiguous<T extends { id: string; title: string; 
 /**
  * Same as `reindexMantrasContiguous` but uses the **array order** of `manthras` as display order
  * (no sort). Use after insert/append when items are already in the correct sequence.
+ *
+ * Spreadsheet insert: only `order` and `title` change — `id`, `strapiDocumentId`, and verse bodies move with the row.
  */
 export function reindexMantrasInListOrder<T extends { id: string; title: string; order: number }>(
   manthrasInDisplayOrder: T[],
@@ -795,8 +797,38 @@ export function syncPortalSectionTitle(
   if (!name) return t;
   const ordAlt = PORTAL_SECTION_ORDINALS.join("|");
   const re = new RegExp(`^(?:${ordAlt}|\\d+)\\s+${escapeRegExp(name)}\\s*$`, "i");
+  if (!t) return `${editorOrdinalLabel(position1Based)} ${name}`;
   if (!re.test(t)) return t;
   return `${editorOrdinalLabel(position1Based)} ${name}`;
+}
+
+/** Assign default `{ordinal} {levelName}` titles where sections are blank (hidden L1 rows, insert-after, CMS load). */
+export function fillMissingSectionTitles<T extends SyncAdhyayaNode>(
+  list: T[],
+  cfg: GranthaStructureConfig,
+): T[] {
+  const levelTwo = cfg.levelTwoEnabled !== false;
+  const levelThree = !!cfg.levelThreeEnabled;
+  const L1 = (cfg.levelOneName ?? "Adhyaya").trim() || "Adhyaya";
+  const L2 = (cfg.levelTwoName ?? "Khanda").trim() || "Khanda";
+  const L3 = (cfg.levelThreeName ?? "Pada").trim() || "Pada";
+
+  return sortNodesByOrder(list).map((a, ai) => {
+    const aTitle = a.title?.trim() || `${editorOrdinalLabel(ai + 1)} ${L1}`;
+    const khandas = sortNodesByOrder(a.khandas ?? []).map((k, ki) => {
+      if (k.title === "_default") return k;
+      const kTitle = k.title?.trim() || `${editorOrdinalLabel(ki + 1)} ${L2}`;
+      if (levelThree) {
+        const padas = sortNodesByOrder(k.padas ?? []).map((p, pi) => {
+          const pTitle = p.title?.trim() || `${editorOrdinalLabel(pi + 1)} ${L3}`;
+          return p.title?.trim() ? p : { ...p, title: pTitle };
+        });
+        return k.title?.trim() ? { ...k, padas } : { ...k, title: kTitle, padas };
+      }
+      return k.title?.trim() ? k : { ...k, title: kTitle };
+    });
+    return a.title?.trim() ? { ...a, khandas } : { ...a, title: aTitle, khandas };
+  });
 }
 
 /**
@@ -1085,6 +1117,7 @@ export type EditorManthraRow = {
   title: string;
   order?: number;
   strapiDocumentId?: string;
+  _isNewLocal?: boolean;
   ShlokaManthraEntry?: unknown;
   BhashyamForShlokaManthra?: { SanskritTextEntry?: unknown };
 };
@@ -1093,48 +1126,154 @@ function editorManthraRichness(m: EditorManthraRow): number {
   let s = scoreStrapiManthraRowContent(m.ShlokaManthraEntry);
   if (entryContentCharCount(m.BhashyamForShlokaManthra?.SanskritTextEntry) > 0) s += 50;
   if (isPublishedStrapiDocId(m.strapiDocumentId)) s += 1;
+  if (m._isNewLocal) s += 200;
   return s;
 }
 
+function pickEditorManthraForDocId<T extends EditorManthraRow>(candidates: T[]): T {
+  const sorted = sortMantrasByDisplayOrder(candidates);
+  const established = sorted.filter((m) => !m._isNewLocal);
+  const pool = established.length > 0 ? established : sorted;
+  return pool.reduce(
+    (best, m) => (editorManthraRichness(m) > editorManthraRichness(best) ? m : best),
+    pool[0]!,
+  );
+}
+
 /**
- * Editor list: keep every linked CMS row (by documentId). Collapse portal-only duplicates
- * that share a verse suffix only when they lack a Strapi id (legacy draft stubs).
+ * After insert/sync: at most one portal row per CMS documentId. Losers keep portal verse
+ * bodies but drop the shared link so they can claim a new row on the next sync.
+ */
+export function enforceUniqueStrapiDocumentIdsAmongMantras<
+  T extends EditorManthraRow,
+>(manthras: T[], sectionRefs?: StrapiMantraRef[]): T[] {
+  const sorted = sortMantrasByDisplayOrder(manthras);
+  const byDoc = new Map<string, T[]>();
+  for (const m of sorted) {
+    const docId = (m.strapiDocumentId ?? "").trim();
+    if (!isPublishedStrapiDocId(docId)) continue;
+    const group = byDoc.get(docId) ?? [];
+    group.push(m);
+    byDoc.set(docId, group);
+  }
+  const winnerIdByDoc = new Map<string, string>();
+  for (const [docId, group] of byDoc) {
+    if (group.length <= 1) continue;
+    // First portal row in display order keeps the CMS link (labels may lag after insert).
+    const winner = pickEditorManthraForDocId(group);
+    winnerIdByDoc.set(docId, winner.id);
+  }
+  return manthras.map((m) => {
+    const docId = (m.strapiDocumentId ?? "").trim();
+    if (!isPublishedStrapiDocId(docId)) return m;
+    const winnerId = winnerIdByDoc.get(docId);
+    if (!winnerId || winnerId === m.id) return m;
+    return { ...m, strapiDocumentId: undefined };
+  });
+}
+
+/** Portal row must stay in hierarchy even when CMS resolve fails (new insert / unsaved verse). */
+export function portalManthraShouldRetainInHierarchy(m: {
+  title?: string;
+  _isNewLocal?: boolean;
+  ShlokaManthraEntry?: unknown;
+  BhashyamForShlokaManthra?: unknown;
+}): boolean {
+  if (m._isNewLocal) return true;
+  if (scoreStrapiManthraRowContent(m.ShlokaManthraEntry) >= MANTRA_LINK_MIN_CONTENT_SCORE) {
+    return true;
+  }
+  if (entryContentCharCount(m.BhashyamForShlokaManthra?.SanskritTextEntry) > 0) return true;
+  return !!mantraNumberSuffix(m.title);
+}
+
+/**
+ * Editor list: one row per portal `id` (never hide inserted verses like 1.1.2).
  */
 export function dedupeManthrasForEditor<T extends EditorManthraRow>(
   manthras: T[],
-  leaf: string,
+  _leaf?: string,
 ): T[] {
-  const configured = (leaf || "Mantra").trim();
-  const byDocId = new Map<string, T>();
-  const orphansBySuffix = new Map<string, T>();
+  const seenId = new Set<string>();
+  return sortMantrasByDisplayOrder(manthras).filter((m) => {
+    if (!m.id || seenId.has(m.id)) return false;
+    seenId.add(m.id);
+    return true;
+  });
+}
 
-  for (const m of sortMantrasByDisplayOrder(manthras)) {
-    const docId = (m.strapiDocumentId ?? "").trim();
-    if (isPublishedStrapiDocId(docId)) {
-      const prev = byDocId.get(docId);
-      if (!prev || editorManthraRichness(m) > editorManthraRichness(prev)) byDocId.set(docId, m);
-      continue;
-    }
-    if (!titleUsesConfiguredLeaf(m.title, configured)) continue;
-    const suffix = mantraNumberSuffix(m.title);
-    const key = suffix ?? m.id;
-    const prev = orphansBySuffix.get(key);
-    if (!prev || editorManthraRichness(m) > editorManthraRichness(prev)) orphansBySuffix.set(key, m);
+/**
+ * When the list jumps 1.1.1 → 1.1.3, surface a placeholder Shloka 1.1.2 so the user can
+ * restore the inserted verse (common after insert-between + save without CMS slot).
+ */
+export function insertPlaceholderRowsForMissingSuffixGaps<
+  T extends { id: string; title: string; order: number; _isNewLocal?: boolean },
+>(
+  manthras: T[],
+  ctx: MantraTitleCtx,
+  createId: () => string,
+  maxInserts = 5,
+): T[] {
+  const sorted = sortMantrasByDisplayOrder(manthras);
+  const parsed: Array<{ m: T; n: number; prefix: string }> = [];
+  for (const m of sorted) {
+    const suf = mantraNumberSuffix(m.title);
+    if (!suf || !titleUsesConfiguredLeaf(m.title, ctx.leaf)) continue;
+    const parts = suf.split(".");
+    const n = parseInt(parts[parts.length - 1] ?? "", 10);
+    if (!Number.isFinite(n)) continue;
+    const prefix = parts.slice(0, -1).join(".");
+    parsed.push({ m, n, prefix });
   }
+  if (parsed.length < 2) return sorted;
+  const prefix0 = parsed[0]!.prefix;
+  if (!parsed.every((p) => p.prefix === prefix0)) return sorted;
 
-  const claimedSuffixes = new Set<string>();
-  for (const m of byDocId.values()) {
-    const suf = mantraNumberSuffix(m.title);
-    if (suf) claimedSuffixes.add(suf);
+  const present = new Set(parsed.map((p) => p.n));
+  const min = Math.min(...parsed.map((p) => p.n));
+  const max = Math.max(...parsed.map((p) => p.n));
+  const inserts: T[] = [];
+  for (let n = min; n <= max && inserts.length < maxInserts; n++) {
+    if (present.has(n)) continue;
+    const title = buildMantraDisplayTitle(ctx.leaf, n, ctx);
+    inserts.push({
+      id: createId(),
+      title,
+      order: n,
+      _isNewLocal: true,
+    } as T);
   }
-  const out: T[] = [...byDocId.values()];
-  for (const m of orphansBySuffix.values()) {
-    const suf = mantraNumberSuffix(m.title);
-    if (suf && claimedSuffixes.has(suf)) continue;
-    out.push(m);
-    if (suf) claimedSuffixes.add(suf);
-  }
-  return sortNodesByOrder(out);
+  if (inserts.length === 0) return sorted;
+  return sortMantrasByDisplayOrder([...sorted, ...inserts]);
+}
+
+/** Walk hierarchy and add placeholder rows for missing 1.1.n-style gaps (e.g. 1.1.1 then 1.1.3). */
+export function fillMissingVerseGapsInHierarchy<T extends SyncAdhyayaNode>(
+  list: T[],
+  cfg: GranthaStructureConfig,
+  createId: () => string,
+): T[] {
+  const levelThree = !!cfg.levelThreeEnabled;
+  return sortNodesByOrder(list).map((a, ai) => {
+    const khandas = sortNodesByOrder(a.khandas ?? []).map((k, ki) => {
+      const khandaCtx = buildMantraTitleCtx(ai, k, ki, cfg);
+      if (levelThree && (k.padas ?? []).length > 0) {
+        const padas = sortNodesByOrder(k.padas ?? []).map((p, pi) => {
+          const padaCtx = buildMantraTitleCtx(ai, k, ki, cfg, pi);
+          return {
+            ...p,
+            manthras: insertPlaceholderRowsForMissingSuffixGaps(p.manthras ?? [], padaCtx, createId),
+          };
+        });
+        return { ...k, padas, manthras: [] as SyncManthraNode[] };
+      }
+      return {
+        ...k,
+        manthras: insertPlaceholderRowsForMissingSuffixGaps(k.manthras ?? [], khandaCtx, createId),
+      };
+    });
+    return { ...a, khandas } as T;
+  });
 }
 
 /**

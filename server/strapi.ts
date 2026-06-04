@@ -225,6 +225,40 @@ export async function strapiRequest(
   throw lastErr;
 }
 
+/** Max Strapi list pages fetched concurrently. Firing every page at once (Promise.all over
+ *  dozens of pages) makes the remote Strapi queue/throttle them — slower and flakier than a
+ *  steady stream of small batches. Tune with STRAPI_PAGE_BATCH_SIZE. */
+const STRAPI_PAGE_BATCH_SIZE = Math.max(
+  1,
+  Number(process.env.STRAPI_PAGE_BATCH_SIZE) || 5,
+);
+
+/**
+ * Fetch every page of a paginated Strapi list with bounded concurrency.
+ * Page 1 is fetched first to learn the page count; remaining pages are fetched in batches of
+ * `batchSize` (default STRAPI_PAGE_BATCH_SIZE) instead of all at once.
+ * Returns the flattened `data`, plus the first page and its pagination meta for callers that
+ * need `total` / `pageCount` (e.g. to report completeness or rebuild the response envelope).
+ */
+async function fetchAllStrapiPages(
+  buildUrl: (page: number) => string,
+  opts?: { batchSize?: number },
+): Promise<{ data: any[]; firstPage: any; pageCount: number; total: number }> {
+  const batchSize = Math.max(1, opts?.batchSize ?? STRAPI_PAGE_BATCH_SIZE);
+  const firstPage = await strapiRequest(buildUrl(1));
+  const pageCount: number = firstPage?.meta?.pagination?.pageCount ?? 1;
+  const total: number = firstPage?.meta?.pagination?.total ?? (firstPage?.data?.length ?? 0);
+  const data: any[] = [...(firstPage?.data ?? [])];
+  for (let start = 2; start <= pageCount; start += batchSize) {
+    const end = Math.min(start + batchSize - 1, pageCount);
+    const batch = await Promise.all(
+      Array.from({ length: end - start + 1 }, (_, i) => strapiRequest(buildUrl(start + i))),
+    );
+    for (const p of batch) data.push(...(p?.data ?? []));
+  }
+  return { data, firstPage, pageCount, total };
+}
+
 /** Full-populate mantra/backup pages can exceed 30s — allow 2 min per page. */
 const STRAPI_LARGE_HTTP_TIMEOUT_MS = 120_000;
 
@@ -401,26 +435,14 @@ export function createStrapiRouter() {
         return res.json(data);
       }
 
-      // Multi-page fetch: collect all sections across every page.
-      const firstPage = await strapiRequest(`/api/sections?${SECTION_LIST_POPULATE}&pagination[page]=1`);
-      const total: number = firstPage?.meta?.pagination?.total ?? 0;
-      const pageSize: number = firstPage?.meta?.pagination?.pageSize ?? 100;
-      const pageCount = Math.ceil(total / pageSize);
+      // Multi-page fetch: collect all sections across every page (in bounded batches).
+      const { data: allData, firstPage, pageCount } = await fetchAllStrapiPages(
+        (page) => `/api/sections?${SECTION_LIST_POPULATE}&pagination[page]=${page}`,
+      );
 
       if (pageCount <= 1) {
         return res.json(firstPage);
       }
-
-      const restPages = await Promise.all(
-        Array.from({ length: pageCount - 1 }, (_, i) =>
-          strapiRequest(`/api/sections?${SECTION_LIST_POPULATE}&pagination[page]=${i + 2}`)
-        )
-      );
-
-      const allData = [
-        ...(firstPage?.data ?? []),
-        ...restPages.flatMap((p: any) => p?.data ?? []),
-      ];
 
       return res.json({
         data: allData,
@@ -473,43 +495,17 @@ export function createStrapiRouter() {
       // Sections and manthras are independent fetches — run both phases concurrently so the
       // grantha editor load is bounded by the slower of the two, not their sum. Each phase
       // still fetches its own remaining pages in parallel.
-      const collectSections = async (): Promise<any[]> => {
-        const firstSectionPage = await strapiRequest(
-          `/api/sections?${sectionFilter}&${sectionMeta}&pagination[page]=1`
-        );
-        const sectionTotal: number = firstSectionPage?.meta?.pagination?.total ?? 0;
-        const sectionPageSize: number = firstSectionPage?.meta?.pagination?.pageSize ?? 100;
-        const sectionPageCount = Math.ceil(sectionTotal / sectionPageSize);
-        let sections: any[] = [...(firstSectionPage?.data ?? [])];
-        if (sectionPageCount > 1) {
-          const restSectionPages = await Promise.all(
-            Array.from({ length: sectionPageCount - 1 }, (_, i) =>
-              strapiRequest(`/api/sections?${sectionFilter}&${sectionMeta}&pagination[page]=${i + 2}`)
-            )
-          );
-          sections = sections.concat(restSectionPages.flatMap((p: any) => p?.data ?? []));
-        }
-        return sections;
-      };
-
-      const collectManthras = async (): Promise<any[]> => {
-        const firstManthraPage = await strapiRequest(`/api/manthras?${manthraQuery}&pagination[page]=1`);
-        const manthraTotal: number = firstManthraPage?.meta?.pagination?.total ?? 0;
-        const manthraPageSize: number = firstManthraPage?.meta?.pagination?.pageSize ?? 100;
-        const manthraPageCount = Math.ceil(manthraTotal / manthraPageSize);
-        let manthras: any[] = [...(firstManthraPage?.data ?? [])];
-        if (manthraPageCount > 1) {
-          const restManthraPages = await Promise.all(
-            Array.from({ length: manthraPageCount - 1 }, (_, i) =>
-              strapiRequest(`/api/manthras?${manthraQuery}&pagination[page]=${i + 2}`)
-            )
-          );
-          manthras = manthras.concat(restManthraPages.flatMap((p: any) => p?.data ?? []));
-        }
-        return manthras;
-      };
-
-      const [allSections, allManthras] = await Promise.all([collectSections(), collectManthras()]);
+      // Sections and manthras are independent — run both phases concurrently so editor load
+      // is bounded by the slower of the two, not their sum. Each phase fetches its own pages
+      // in bounded batches (not all at once) to avoid overwhelming the remote Strapi.
+      const [{ data: allSections }, { data: allManthras }] = await Promise.all([
+        fetchAllStrapiPages(
+          (page) => `/api/sections?${sectionFilter}&${sectionMeta}&pagination[page]=${page}`,
+        ),
+        fetchAllStrapiPages(
+          (page) => `/api/manthras?${manthraQuery}&pagination[page]=${page}`,
+        ),
+      ]);
 
       // ── Step 3: group manthras by section documentId ──
       const manthrasBySection = new Map<string, any[]>();
@@ -624,23 +620,13 @@ export function createStrapiRouter() {
         };
       }
 
-      const firstPage = await strapiRequest(`/api/manthras?${MANTHRA_LIST_POPULATE}&pagination[page]=1`);
-      const allManthras: any[] = (firstPage.data || []).map(normaliseManthra);
-      const pageCount: number = firstPage.meta?.pagination?.pageCount ?? 1;
-      const strapiTotal: number = firstPage.meta?.pagination?.total ?? allManthras.length;
-
-      // Fetch remaining pages in parallel if there are more
-      if (pageCount > 1) {
-        const pageNumbers = Array.from({ length: pageCount - 1 }, (_, i) => i + 2);
-        const extraPages = await Promise.all(
-          pageNumbers.map((p) =>
-            strapiRequest(`/api/manthras?${MANTHRA_LIST_POPULATE}&pagination[page]=${p}`)
-          )
+      // Fetch every page in bounded batches (not all at once) so the remote Strapi isn't
+      // hit with dozens of simultaneous requests — that throttles and slows the whole load.
+      const { data: rawManthras, firstPage, pageCount, total: strapiTotal } =
+        await fetchAllStrapiPages(
+          (page) => `/api/manthras?${MANTHRA_LIST_POPULATE}&pagination[page]=${page}`,
         );
-        for (const page of extraPages) {
-          allManthras.push(...(page.data || []).map(normaliseManthra));
-        }
-      }
+      const allManthras: any[] = rawManthras.map(normaliseManthra);
 
       const fetchComplete = allManthras.length >= strapiTotal;
       if (!fetchComplete) {
@@ -691,18 +677,10 @@ export function createStrapiRouter() {
         "pagination[pageSize]=100",
       ].join("&");
 
-      const firstPage = await strapiRequest(`/api/manthras?${BULK_TEEKA_POPULATE}&pagination[page]=1`);
-      const allManthras: any[] = [...(firstPage.data || [])];
-      const pageCount: number = firstPage.meta?.pagination?.pageCount ?? 1;
-
-      if (pageCount > 1) {
-        const rest = await Promise.all(
-          Array.from({ length: pageCount - 1 }, (_, i) =>
-            strapiRequest(`/api/manthras?${BULK_TEEKA_POPULATE}&pagination[page]=${i + 2}`)
-          )
-        );
-        for (const page of rest) allManthras.push(...(page.data || []));
-      }
+      // Bounded-batch pagination — avoid firing every page at the remote Strapi at once.
+      const { data: allManthras } = await fetchAllStrapiPages(
+        (page) => `/api/manthras?${BULK_TEEKA_POPULATE}&pagination[page]=${page}`,
+      );
 
       // Return map: manthraDocumentId → teekas[] (only where teeka has content)
       const result: Record<string, any[]> = {};

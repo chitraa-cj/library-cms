@@ -423,6 +423,18 @@ export function scanGranthaHierarchyMantras(
   return violations;
 }
 
+/** True when the portal hierarchy has two+ rows with the same verse suffix in one section. */
+export function hierarchyHasDuplicateMantraSuffixes(
+  hierarchy: unknown[],
+  configuredLeaf: string,
+  options?: { levelThreeEnabled?: boolean },
+): boolean {
+  return scanGranthaHierarchyMantras(hierarchy, configuredLeaf, undefined, {
+    maxErrors: 1,
+    levelThreeEnabled: options?.levelThreeEnabled,
+  }).some((v) => v.code === "duplicate_suffix_in_draft");
+}
+
 export function formatIntegrityFailures(violations: PublishIntegrityViolation[]): string {
   const errors = violations.filter((v) => v.severity === "error");
   if (errors.length === 0) return "";

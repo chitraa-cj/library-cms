@@ -10,6 +10,7 @@ import {
   scanGranthaHierarchyMantras,
   sectionSuffixCollision,
 } from "../shared/grantha-publish-integrity";
+import { repairDuplicateSuffixesInHierarchy } from "../client/src/lib/grantha-structure-sync.ts";
 
 function assert(cond: boolean, msg: string) {
   if (!cond) throw new Error(msg);
@@ -143,6 +144,13 @@ const hier = [
 ];
 const dup = scanGranthaHierarchyMantras(hier, "Shloka", "Test");
 assert(dup.some((x) => x.code === "duplicate_suffix_in_draft"), "draft dup suffix");
+
+const cfg = { leafName: "Shloka", levelTwoEnabled: false, levelThreeEnabled: false };
+const repaired = repairDuplicateSuffixesInHierarchy(hier as any, cfg as any);
+const dupAfter = scanGranthaHierarchyMantras(repaired, "Shloka", "Test");
+assert(!dupAfter.some((x) => x.code === "duplicate_suffix_in_draft"), "repair removes dup suffix");
+assert(repaired[0].khandas[0].manthras[0].title === "Shloka 1.1", "first title 1.1");
+assert(repaired[0].khandas[0].manthras[1].title === "Shloka 1.2", "second title 1.2");
 
 // Leaf relabel: same suffix, different prefix — publish updates one row
 const sectionRows = [

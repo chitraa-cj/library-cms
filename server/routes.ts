@@ -40,6 +40,7 @@ import {
   canonicalMantraTitle,
   isBareLeafCounterLabel,
   scanGranthaHierarchyMantras,
+  hierarchyHasDuplicateMantraSuffixes,
   scanMantraForPublish,
   sectionSuffixCollision,
   mantraNumberSuffix,
@@ -2779,8 +2780,11 @@ async function publishGranthaWithHierarchy(
   const granthaNameForIntegrity = String(granthaPayload.GranthaName || draft.title || "").trim();
 
   if (Array.isArray(hierarchy)) {
+    const duplicateSuffixes = hierarchyHasDuplicateMantraSuffixes(hierarchy, configuredLeaf, {
+      levelThreeEnabled: !!structureConfig?.levelThreeEnabled,
+    });
     applyHierarchyRepairInPlace(hierarchy, structureConfig, configuredLeaf, {
-      renumberVerseLabels: !!allowRenumber,
+      renumberVerseLabels: !!allowRenumber || duplicateSuffixes,
     });
   }
 
@@ -4404,7 +4408,12 @@ export async function registerRoutes(
       const granthaName = String(data?.GranthaName || draft.title || "").trim();
 
       if (Array.isArray(hierarchy)) {
-        const repaired = applyHierarchyRepairInPlace(hierarchy, structureConfig, configuredLeaf);
+        const needsRenumber = hierarchyHasDuplicateMantraSuffixes(hierarchy, configuredLeaf, {
+          levelThreeEnabled: !!structureConfig?.levelThreeEnabled,
+        });
+        const repaired = applyHierarchyRepairInPlace(hierarchy, structureConfig, configuredLeaf, {
+          renumberVerseLabels: needsRenumber,
+        });
         if (repaired) {
           await storage.updateDraft(id, user.id, { data: { ...data, hierarchy } });
         }

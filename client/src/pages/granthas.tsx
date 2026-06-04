@@ -111,15 +111,18 @@ import {
   dedupeManthrasForEditor,
   linkFlatGranthaAdhyayasToSoleStrapiSection,
   enforceMantraPlacementByStructure,
+  repairDuplicateSuffixesInHierarchy,
   type GranthaStructureConfig,
   type StrapiMantraRef,
 } from "@/lib/grantha-structure-sync";
+import { hierarchyHasDuplicateMantraSuffixes } from "@shared/grantha-publish-integrity";
 import {
   mergeMantraStrapiDocumentIds,
   syncMantraSectionAfterStructuralEdits,
   syncMantraSectionLabelsToStrapi,
   syncAllMantraSectionLabelsInGrantha,
   syncAllPendingNewMantrasToStrapi,
+  collectMantraSectionSyncTargets,
   getSortedMantrasFromSnapshot,
   syncMantraSlotsViaServer,
   strapiDeleteMantrasBestEffort,
@@ -1246,8 +1249,16 @@ export default function GranthasPage() {
   const mantraSyncTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const mantraSyncChainRef = useRef<Promise<void>>(Promise.resolve());
   const pendingMantraDeletesRef = useRef<Set<string>>(new Set());
+  /** Coalesce rapid +/delete clicks: create all pending CMS rows, then one full label/order pass. */
+  const pendingMantraSyncRef = useRef<{
+    manthraIds: Set<string>;
+    renumber: boolean;
+    ctx: { adhyayaId: string; khandaId: string; padaId?: string } | null;
+  }>({ manthraIds: new Set(), renumber: false, ctx: null });
   const strapiSectionIndexRef = useRef<MantraSectionResolveContext>({});
   const publishInProgressRef = useRef(false);
+  /** Set after +/delete renumber; Save & Publish sends allowRenumber so CMS labels match portal order. */
+  const structuralMantraRenumberPendingRef = useRef(false);
 
   /** Block debounced mantra slot sync while publish is running (avoids 504 during large publishes). */
   function armPublishSyncGuard() {
@@ -1530,10 +1541,13 @@ export default function GranthasPage() {
     if (!docId) return;
     // Avoid CMS fetch overwriting in-progress edits (e.g. after a wrong docId link is corrected).
     if (manthraDialogDirtyRef.current) return;
-    // Draft / portal-saved hierarchy: keep local verse bodies; published-only uses CMS below.
+    // Portal draft: skip CMS fetch only when this verse already has local shloka content.
     if (preferPortalMantraContentRef.current) {
-      setManthraLoading(false);
-      return;
+      const portalRich = shlokaManthraEntryRichness(localNodeEarly?.ShlokaManthraEntry);
+      if (portalRich >= MANTRA_LINK_MIN_CONTENT_SCORE) {
+        setManthraLoading(false);
+        return;
+      }
     }
     const fetchGen = mantraFetchGenRef.current;
     let cancelled = false;
@@ -2168,6 +2182,8 @@ export default function GranthasPage() {
     setDraftSyncedForPublish(false);
     setEditingItem(null);
     preferPortalMantraContentRef.current = false;
+    structuralMantraRenumberPendingRef.current = false;
+    pendingMantraSyncRef.current = { manthraIds: new Set(), renumber: false, ctx: null };
     setViewOnly(false);
     setDeletedStrapiSectionDocIds([]);
     setDeletedStrapiManthraDocIds([]);
@@ -2323,8 +2339,9 @@ export default function GranthasPage() {
     } else {
       // Look up any saved portal draft for this Strapi entry (including already-published ones)
       // to restore structureConfig and hierarchy which aren't stored in Strapi.
+      // In-progress overlay only — published snapshot drafts must not mask live Strapi.
       const matchingDraft = allGranthaDrafts.find(
-        (d) => d.strapiDocumentId === item.documentId
+        (d) => d.strapiDocumentId === item.documentId && d.status !== "published",
       );
       const savedData = matchingDraft?.data as any;
       publishScopeDraftData = savedData ?? item._draftData;
@@ -3270,7 +3287,7 @@ export default function GranthasPage() {
     // state from the moment the grantha opens — not just after each dialog
     // is individually opened. Without this, any "Save" before opening every
     // dialog would clear teeka content in the draft.
-    if (granthaDocId && isCurrentOpenEditLoad(openEditLoadGen) && !preferPortalMantraContent) {
+    if (granthaDocId && isCurrentOpenEditLoad(openEditLoadGen)) {
       fetch(`/api/strapi/manthras/teekas-by-grantha/${granthaDocId}`, CMS_FETCH_INIT)
         .then((r) => r.ok ? r.json() : null)
         .then((payload) => {
@@ -4067,6 +4084,42 @@ export default function GranthasPage() {
     if (patches.length > 0) invalidateGranthaCmsCaches(queryClient);
   }
 
+  function queuePendingMantraSync(
+    ctx: { adhyayaId: string; khandaId: string; padaId?: string },
+    opts?: { onlyManthraIds?: string[]; renumberSectionLabels?: boolean },
+  ) {
+    const pending = pendingMantraSyncRef.current;
+    if (opts?.onlyManthraIds) {
+      for (const id of opts.onlyManthraIds) pending.manthraIds.add(id);
+    }
+    if (opts?.renumberSectionLabels) pending.renumber = true;
+    pending.ctx = ctx;
+  }
+
+  /** Snapshot queued +/delete ops into one Strapi pass (all new rows when renumbering). */
+  function takePendingMantraSyncOpts(
+    fallbackCtx: { adhyayaId: string; khandaId: string; padaId?: string },
+  ): {
+    ctx: { adhyayaId: string; khandaId: string; padaId?: string };
+    syncOpts: { onlyManthraIds?: string[]; renumberSectionLabels?: boolean };
+  } {
+    const pending = pendingMantraSyncRef.current;
+    const ctx = pending.ctx ?? fallbackCtx;
+    const renumber = pending.renumber;
+    const syncOpts = {
+      renumberSectionLabels: renumber,
+      onlyManthraIds: renumber
+        ? undefined
+        : pending.manthraIds.size > 0
+          ? [...pending.manthraIds]
+          : undefined,
+    };
+    pending.manthraIds.clear();
+    pending.renumber = false;
+    pending.ctx = null;
+    return { ctx, syncOpts };
+  }
+
   /**
    * Debounced + serialized Strapi mantra sync. Coalesces rapid inserts/deletes into one pass:
    * deletes removed rows first, creates CMS rows (server-authoritative section resolution), then sort keys.
@@ -4084,159 +4137,250 @@ export default function GranthasPage() {
     if (publishInProgressRef.current) return;
 
     adhyayasRef.current = snapshot;
+    queuePendingMantraSync(ctx, opts);
 
     if (mantraSyncTimerRef.current) clearTimeout(mantraSyncTimerRef.current);
     mantraSyncTimerRef.current = setTimeout(() => {
+      void flushMantraStructuralSyncNow(ctx);
+    }, 280);
+  }
+
+  /** Run queued mantra CMS sync immediately (used before Save / Save & Publish). */
+  async function flushMantraStructuralSyncNow(
+    fallbackCtx: { adhyayaId: string; khandaId: string; padaId?: string },
+  ) {
+    if (mantraSyncTimerRef.current) {
+      clearTimeout(mantraSyncTimerRef.current);
       mantraSyncTimerRef.current = null;
+    }
+    const granthaDoc =
+      editingItemRef.current && !editingItemRef.current._isDraft
+        ? editingItemRef.current.documentId
+        : editingItemRef.current?._strapiDocId;
+    if (!isPublishedStrapiDocId(granthaDoc) || publishInProgressRef.current) return;
+
+    const { ctx, syncOpts } = takePendingMantraSyncOpts(fallbackCtx);
+    const snap = adhyayasRef.current as SnapshotAdhyaya[];
+    const cfg = structureConfigRef.current;
+    const toDelete = [...pendingMantraDeletesRef.current];
+    pendingMantraDeletesRef.current.clear();
+
+    await (mantraSyncChainRef.current = mantraSyncChainRef.current.then(async () => {
       if (publishInProgressRef.current) return;
-      const snap = adhyayasRef.current as SnapshotAdhyaya[];
-      const cfg = structureConfigRef.current;
-      const toDelete = [...pendingMantraDeletesRef.current];
-      pendingMantraDeletesRef.current.clear();
-      const syncOpts = opts;
 
-      mantraSyncChainRef.current = mantraSyncChainRef.current
-        .then(async () => {
-          if (publishInProgressRef.current) return;
+      let draftId = editingDraftId;
+      if (!draftId && isPublishedStrapiDocId(granthaDoc)) {
+        try {
+          const payload = buildSavePayload();
+          const saved = await saveDraft.mutateAsync({
+            title: formDataRef.current.GranthaName || payload.GranthaName || "Grantha",
+            data: payload,
+            strapiDocumentId: granthaDoc,
+          });
+          draftId = saved?.id ?? null;
+          if (draftId) setEditingDraftId(draftId);
+        } catch {
+          return;
+        }
+      }
 
-          let draftId = editingDraftId;
-          if (!draftId && isPublishedStrapiDocId(granthaDoc)) {
-            try {
-              const payload = buildSavePayload();
-              const saved = await saveDraft.mutateAsync({
-                title: formDataRef.current.GranthaName || payload.GranthaName || "Grantha",
-                data: payload,
-                strapiDocumentId: granthaDoc,
-              });
-              draftId = saved?.id ?? null;
-              if (draftId) setEditingDraftId(draftId);
-            } catch {
-              return;
-            }
-          }
-
-          if (draftId && isPublishedStrapiDocId(granthaDoc)) {
-            if (toDelete.length > 0) {
-              const failedDeleteIds = await strapiDeleteMantrasBestEffort(toDelete);
-              if (failedDeleteIds.length > 0) {
-                setDeletedStrapiManthraDocIds((prev) =>
-                  Array.from(new Set([...prev, ...failedDeleteIds])),
-                );
-              }
-            }
-            const result = await syncMantraSlotsViaServer(draftId, {
-              adhyayaId: ctx.adhyayaId,
-              khandaId: ctx.khandaId,
-              padaId: ctx.padaId,
-              hierarchy: snap,
-              onlyManthraIds: syncOpts?.onlyManthraIds,
-            });
-            const patches = (result.patches ?? []).map((p) => ({
-              manthraId: p.manthraId,
-              strapiDocumentId: p.strapiDocumentId,
-            }));
-            applyMantraSlotSyncResult(patches, ctx, result.hierarchy);
-            if (syncOpts?.renumberSectionLabels) {
-              const snapAfter = adhyayasRef.current as SnapshotAdhyaya[];
-              const labelSummary = await syncMantraSectionLabelsToStrapi(
-                snapAfter,
-                ctx.adhyayaId,
-                ctx.khandaId,
-                ctx.padaId,
-                cfg,
-                { allowRenumber: true },
-              );
-              syncGranthaCmsCaches(queryClient);
-              const n = labelSummary.labelsUpdated + labelSummary.orderOnly;
-              if (n > 0 || patches.length > 0) {
-                toast({
-                  title: "Verses synced to CMS",
-                  description:
-                    patches.length > 0
-                      ? `Created ${patches.length} row(s) and updated ${labelSummary.labelsUpdated} label(s) in Strapi (spreadsheet-style renumber).`
-                      : `Updated ${labelSummary.labelsUpdated} ${cfg.leafName} label(s) in Strapi.`,
-                });
-              }
-            } else if (patches.length > 0) {
-              toast({
-                title: "Verse slot synced to CMS",
-                description:
-                  result.message ??
-                  `Created ${patches.length} row(s) in Strapi.`,
-              });
-            } else if ((result.errors ?? []).length > 0) {
-              toast({
-                variant: "destructive",
-                title: "CMS row not created",
-                description: result.errors!.join("; "),
-              });
-            }
-            return;
-          }
-
-          const { patches, failedDeleteIds, sortKeysUpdated, labelsUpdated, labelSyncOrderOnly } =
-            await syncMantraSectionAfterStructuralEdits(
-              snap,
-              ctx.adhyayaId,
-              ctx.khandaId,
-              ctx.padaId,
-              cfg,
-              toDelete,
-              strapiSectionIndexRef.current,
-              syncOpts,
-            );
+      if (draftId && isPublishedStrapiDocId(granthaDoc)) {
+        if (toDelete.length > 0) {
+          const failedDeleteIds = await strapiDeleteMantrasBestEffort(toDelete);
           if (failedDeleteIds.length > 0) {
             setDeletedStrapiManthraDocIds((prev) =>
               Array.from(new Set([...prev, ...failedDeleteIds])),
             );
           }
-          applyMantraSlotSyncResult(patches, ctx);
-          if (
-            (patches.length > 0 ||
-              sortKeysUpdated > 0 ||
-              labelsUpdated > 0 ||
-              labelSyncOrderOnly > 0) &&
-            editingGranthaStrapiDocumentId()
-          ) {
-            const leaf = cfg.leafName || "Mantra";
-            toast({
-              title: syncOpts?.renumberSectionLabels ? "Verses synced to CMS" : "Verse slot synced to CMS",
-              description:
-                syncOpts?.renumberSectionLabels && labelsUpdated > 0
-                  ? `Created ${patches.length} row(s) where needed; updated ${labelsUpdated} ${leaf} label(s) in Strapi.`
-                  : patches.length > 0
-                    ? `Created ${patches.length} row(s) in Strapi${sortKeysUpdated > 0 ? ` and updated sort order for ${sortKeysUpdated} row(s)` : ""}.`
-                    : labelsUpdated > 0
-                      ? `Updated ${labelsUpdated} ${leaf} label(s) in Strapi.`
-                      : `Updated sort order for ${sortKeysUpdated || labelSyncOrderOnly} row(s) in Strapi.`,
-            });
-          } else if (patches.length === 0 && editingGranthaStrapiDocumentId()) {
-            const sorted = getSortedMantrasFromSnapshot(
-              snap,
-              ctx.adhyayaId,
-              ctx.khandaId,
-              ctx.padaId,
-              cfg,
-            );
-            const pending = sorted.filter((m) => !isPublishedStrapiDocId(m.strapiDocumentId));
-            if (pending.length > 0) {
-              toast({
-                variant: "destructive",
-                title: "CMS row not created",
-                description:
-                  `${pending.length} new verse(s) are still portal-only. Save the grantha to retry, or check that the section is linked to Strapi.`,
-              });
-            }
-          }
-        })
-        .catch((e: unknown) => {
-          if (publishInProgressRef.current) return;
-          const msg = e instanceof Error ? e.message : String(e);
-          toast({ variant: "destructive", title: "Strapi mantra sync failed", description: msg });
+        }
+        if (syncOpts.renumberSectionLabels) {
+          applyHierarchyRenumberToEditorState(cfg);
+        }
+        const snapForSlots = adhyayasRef.current as SnapshotAdhyaya[];
+        const result = await syncMantraSlotsViaServer(draftId, {
+          adhyayaId: ctx.adhyayaId,
+          khandaId: ctx.khandaId,
+          padaId: ctx.padaId,
+          hierarchy: snapForSlots,
+          onlyManthraIds: syncOpts.renumberSectionLabels ? undefined : syncOpts.onlyManthraIds,
         });
-    }, 280);
+        const patches = (result.patches ?? []).map((p) => ({
+          manthraId: p.manthraId,
+          strapiDocumentId: p.strapiDocumentId,
+        }));
+        applyMantraSlotSyncResult(patches, ctx, result.hierarchy);
+        if (syncOpts.renumberSectionLabels) {
+          const snapAfter = adhyayasRef.current as SnapshotAdhyaya[];
+          const labelSummary = await syncMantraSectionLabelsToStrapi(
+            snapAfter,
+            ctx.adhyayaId,
+            ctx.khandaId,
+            ctx.padaId,
+            cfg,
+            { allowRenumber: true },
+          );
+          syncGranthaCmsCaches(queryClient);
+          const n = labelSummary.labelsUpdated + labelSummary.orderOnly;
+          if (n > 0 || patches.length > 0) {
+            toast({
+              title: "Verses synced to CMS",
+              description:
+                patches.length > 0
+                  ? `Created ${patches.length} row(s) and updated ${labelSummary.labelsUpdated} label(s) in Strapi (spreadsheet-style renumber).`
+                  : `Updated ${labelSummary.labelsUpdated} ${cfg.leafName} label(s) in Strapi.`,
+            });
+          }
+        } else if (patches.length > 0) {
+          toast({
+            title: "Verse slot synced to CMS",
+            description: result.message ?? `Created ${patches.length} row(s) in Strapi.`,
+          });
+        } else if ((result.errors ?? []).length > 0) {
+          toast({
+            variant: "destructive",
+            title: "CMS row not created",
+            description: result.errors!.join("; "),
+          });
+        } else {
+          const fixed = repairDuplicateSuffixesInHierarchy(
+            adhyayasRef.current as AdhyayaNode[],
+            cfg,
+          );
+          if (fixed !== adhyayasRef.current) {
+            adhyayasRef.current = fixed;
+            setAdhyayas(fixed);
+          }
+        }
+        return;
+      }
+
+      if (syncOpts.renumberSectionLabels) {
+        applyHierarchyRenumberToEditorState(cfg);
+      }
+
+      const snapForSync = adhyayasRef.current as SnapshotAdhyaya[];
+      const { patches, failedDeleteIds, sortKeysUpdated, labelsUpdated, labelSyncOrderOnly } =
+        await syncMantraSectionAfterStructuralEdits(
+          snapForSync,
+          ctx.adhyayaId,
+          ctx.khandaId,
+          ctx.padaId,
+          cfg,
+          toDelete,
+          strapiSectionIndexRef.current,
+          syncOpts,
+        );
+      if (failedDeleteIds.length > 0) {
+        setDeletedStrapiManthraDocIds((prev) =>
+          Array.from(new Set([...prev, ...failedDeleteIds])),
+        );
+      }
+      applyMantraSlotSyncResult(patches, ctx);
+      if (
+        (patches.length > 0 ||
+          sortKeysUpdated > 0 ||
+          labelsUpdated > 0 ||
+          labelSyncOrderOnly > 0) &&
+        editingGranthaStrapiDocumentId()
+      ) {
+        const leaf = cfg.leafName || "Mantra";
+        toast({
+          title: syncOpts.renumberSectionLabels ? "Verses synced to CMS" : "Verse slot synced to CMS",
+          description:
+            syncOpts.renumberSectionLabels && labelsUpdated > 0
+              ? `Created ${patches.length} row(s) where needed; updated ${labelsUpdated} ${leaf} label(s) in Strapi.`
+              : patches.length > 0
+                ? `Created ${patches.length} row(s) in Strapi${sortKeysUpdated > 0 ? ` and updated sort order for ${sortKeysUpdated} row(s)` : ""}.`
+                : labelsUpdated > 0
+                  ? `Updated ${labelsUpdated} ${leaf} label(s) in Strapi.`
+                  : `Updated sort order for ${sortKeysUpdated || labelSyncOrderOnly} row(s) in Strapi.`,
+        });
+      } else if (patches.length === 0 && editingGranthaStrapiDocumentId()) {
+        const sorted = getSortedMantrasFromSnapshot(
+          snap,
+          ctx.adhyayaId,
+          ctx.khandaId,
+          ctx.padaId,
+          cfg,
+        );
+        const pendingRows = sorted.filter((m) => !isPublishedStrapiDocId(m.strapiDocumentId));
+        if (pendingRows.length > 0) {
+          toast({
+            variant: "destructive",
+            title: "CMS row not created",
+            description:
+              `${pendingRows.length} new verse(s) are still portal-only. Save the grantha to retry, or check that the section is linked to Strapi.`,
+          });
+        }
+      }
+      const fixed = repairDuplicateSuffixesInHierarchy(
+        adhyayasRef.current as AdhyayaNode[],
+        cfg,
+      );
+      if (fixed !== adhyayasRef.current) {
+        adhyayasRef.current = fixed;
+        setAdhyayas(fixed);
+      }
+    }));
   }
 
+
+  /**
+   * Before Save / Save & Publish: flush debounced +/delete queue, create all CMS slots,
+   * then align every section's verse labels and sort keys with the portal list.
+   */
+  async function ensureMantraSlotsAndLabelsSyncedBeforePersist(): Promise<void> {
+    const granthaDoc = editingGranthaStrapiDocumentId();
+    if (!isPublishedStrapiDocId(granthaDoc)) return;
+
+    const snap = adhyayasRef.current as SnapshotAdhyaya[];
+    const cfg = structureConfigRef.current;
+    const targets = collectMantraSectionSyncTargets(snap, cfg);
+    const fallbackCtx = targets[0] ?? {
+      adhyayaId: snap[0]?.id ?? "",
+      khandaId: snap[0]?.khandas?.[0]?.id ?? "",
+    };
+
+    const pending = pendingMantraSyncRef.current;
+    if (
+      mantraSyncTimerRef.current ||
+      pending.manthraIds.size > 0 ||
+      pending.renumber ||
+      pendingMantraDeletesRef.current.size > 0
+    ) {
+      await flushMantraStructuralSyncNow(pending.ctx ?? fallbackCtx);
+    }
+    await mantraSyncChainRef.current;
+
+    applyHierarchyRenumberToEditorState(cfg);
+    await flushPendingNewMantrasToStrapi(adhyayasRef.current as AdhyayaNode[]);
+    let snapAfter = adhyayasRef.current as AdhyayaNode[];
+    let repaired = repairDuplicateSuffixesInHierarchy(snapAfter, cfg);
+    if (repaired !== snapAfter) {
+      snapAfter = repaired;
+      adhyayasRef.current = repaired;
+      setAdhyayas(repaired);
+    }
+    await syncAllMantraSectionLabelsInGrantha(snapAfter, cfg, { allowRenumber: true });
+    repaired = repairDuplicateSuffixesInHierarchy(adhyayasRef.current as AdhyayaNode[], cfg);
+    if (repaired !== adhyayasRef.current) {
+      adhyayasRef.current = repaired;
+      setAdhyayas(repaired);
+    }
+    syncGranthaCmsCaches(queryClient);
+  }
+
+  function applyHierarchyRenumberToEditorState(cfg: GranthaStructureConfig = structureConfigRef.current) {
+    setAdhyayas((prev) => {
+      const next = withNormalizedHierarchy(prev, cfg);
+      adhyayasRef.current = next;
+      return next;
+    });
+  }
+
+  function markStructuralMantraRenumberPending() {
+    structuralMantraRenumberPendingRef.current = true;
+  }
 
   /** Retry CMS row creation for any portal-only verses (e.g. after a failed insert sync). */
   async function flushPendingNewMantrasToStrapi(
@@ -4249,18 +4393,19 @@ export default function GranthasPage() {
     const draftId = editingDraftId;
     try {
       if (draftId) {
-        const result = await syncMantraSlotsViaServer(draftId, {
-          hierarchy: snap,
-          onlyManthraIds,
-        });
-        if ((result.patches ?? []).length > 0 && Array.isArray(result.hierarchy)) {
-          adhyayasRef.current = result.hierarchy as AdhyayaNode[];
-          setAdhyayas(result.hierarchy as AdhyayaNode[]);
-          invalidateGranthaCmsCaches(queryClient);
-          toast({
-            title: "Pending verses synced to CMS",
-            description: result.message ?? `Created ${result.patches!.length} row(s) in Strapi.`,
+        for (let round = 0; round < 12; round++) {
+          const result = await syncMantraSlotsViaServer(draftId, {
+            hierarchy: adhyayasRef.current as SnapshotAdhyaya[],
+            onlyManthraIds: round === 0 ? onlyManthraIds : undefined,
           });
+          if ((result.patches ?? []).length > 0 && Array.isArray(result.hierarchy)) {
+            adhyayasRef.current = result.hierarchy as AdhyayaNode[];
+            setAdhyayas(result.hierarchy as AdhyayaNode[]);
+            invalidateGranthaCmsCaches(queryClient);
+          }
+          const remaining = result.remainingPending ?? 0;
+          if (remaining <= 0 && (result.patches ?? []).length === 0) break;
+          if ((result.patches ?? []).length === 0 && remaining <= 0) break;
         }
         return;
       }
@@ -4503,6 +4648,7 @@ export default function GranthasPage() {
   ) {
     const newManthraId = uid();
     markRequiresFullPublish();
+    markStructuralMantraRenumberPending();
     setAdhyayas((prev) => {
       const newManthra: ManthraNode = {
         id: newManthraId,
@@ -4533,6 +4679,7 @@ export default function GranthasPage() {
   function confirmRemoveManthra(renumber: boolean) {
     if (!pendingRemove) return;
     markRequiresFullPublish();
+    if (renumber) markStructuralMantraRenumberPending();
     const { adhyayaId, khandaId, manthraId, padaId } = pendingRemove;
     setPendingRemove(null);
 
@@ -4854,6 +5001,15 @@ export default function GranthasPage() {
     const cfg = structureConfigRef.current ?? structureConfig;
     const tree = adhyayasRef.current.length > 0 ? adhyayasRef.current : adhyayas;
     let hierarchyForPayload = hierarchyForSave(tree as AdhyayaNode[], cfg);
+    if (
+      structuralMantraRenumberPendingRef.current ||
+      hierarchyHasDuplicateMantraSuffixes(hierarchyForPayload, cfg.leafName || "Mantra", {
+        levelThreeEnabled: cfg.levelThreeEnabled,
+      })
+    ) {
+      hierarchyForPayload = withNormalizedHierarchy(hierarchyForPayload, cfg);
+    }
+    hierarchyForPayload = repairDuplicateSuffixesInHierarchy(hierarchyForPayload, cfg);
     if (strapiSectionIndexRef.current.childrenByParentDocId?.size) {
       hierarchyForPayload = dropKhandasDuplicatingDefaultMantraSection(
         hierarchyForPayload,
@@ -4927,14 +5083,26 @@ export default function GranthasPage() {
       toast({ variant: "destructive", title: "Grantha Name is required" });
       return;
     }
-    const payload = buildSavePayload();
-    setAdhyayas(payload.hierarchy as AdhyayaNode[]);
-    const strapiDocId =
-      editingItem && !editingItem._isDraft
-        ? editingItem.documentId
-        : editingItem?._strapiDocId || undefined;
+    void (async () => {
+      try {
+        await ensureMantraSlotsAndLabelsSyncedBeforePersist();
+      } catch (e: unknown) {
+        const msg = e instanceof Error ? e.message : String(e);
+        toast({
+          variant: "destructive",
+          title: "Could not sync verses to CMS",
+          description: msg,
+        });
+        return;
+      }
+      const payload = buildSavePayload();
+      setAdhyayas(payload.hierarchy as AdhyayaNode[]);
+      const strapiDocId =
+        editingItem && !editingItem._isDraft
+          ? editingItem.documentId
+          : editingItem?._strapiDocId || undefined;
 
-    saveDraft.mutate(
+      saveDraft.mutate(
       {
         title: formData.GranthaName,
         data: payload,
@@ -4957,10 +5125,34 @@ export default function GranthasPage() {
         },
       }
     );
+    })();
   }
 
   function runGranthaPublishAfterPreflight(resolvedDraftId: number) {
     void (async () => {
+      try {
+        await ensureMantraSlotsAndLabelsSyncedBeforePersist();
+        const payload = buildSavePayload();
+        await saveDraft.mutateAsync({
+          title: formData.GranthaName,
+          data: payload,
+          strapiDocumentId:
+            editingItem && !editingItem._isDraft
+              ? editingItem.documentId
+              : editingItem?._strapiDocId || undefined,
+          draftId: resolvedDraftId,
+        });
+        markEditorSyncedForPublish();
+      } catch (e: unknown) {
+        const msg = e instanceof Error ? e.message : String(e);
+        toast({
+          variant: "destructive",
+          title: "Could not sync verses before publish",
+          description: msg,
+        });
+        return;
+      }
+
       try {
         const preRes = await apiRequest(
           "POST",
@@ -4988,8 +5180,12 @@ export default function GranthasPage() {
       }
 
       armPublishSyncGuard();
-      publishDraft.mutate(resolvedDraftId, {
+      const allowRenumber = structuralMantraRenumberPendingRef.current;
+      publishDraft.mutate(
+        allowRenumber ? { draftId: resolvedDraftId, allowRenumber: true } : resolvedDraftId,
+        {
         onSuccess: (result: any) => {
+          structuralMantraRenumberPendingRef.current = false;
           resetPublishScope();
           markEditorSyncedForPublish();
           track("grantha_published", {

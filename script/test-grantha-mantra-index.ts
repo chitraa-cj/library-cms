@@ -27,6 +27,7 @@ import {
   prepareHierarchyForSave,
   buildMantraTitleCtx,
   mantraLabelForCmsSync,
+  mantraLabelFromListPosition,
   assignContiguousMantraOrders,
   sortNodesByOrder,
   portalMantraTitleForLeaf,
@@ -405,6 +406,18 @@ const flatCtx = buildMantraTitleCtx(0, { title: "_default" }, 0, {
 assert.equal(mantraLabelForCmsSync("", 7, flatCtx), "Mantra 1.7");
 assert.equal(mantraLabelForCmsSync("Mantra 1", 7, flatCtx), "Mantra 1.7");
 assert.equal(mantraLabelForCmsSync("Mantra 1.5", 5, flatCtx), "Mantra 1.5");
+
+const vivekaCtx = buildMantraTitleCtx(0, { title: "Prathama Khanda" }, 0, {
+  levelTwoEnabled: true,
+  levelThreeEnabled: false,
+  leafName: "Shloka",
+});
+assert.equal(
+  mantraLabelFromListPosition("Shloka 1.1.7", 8, vivekaCtx),
+  "Shloka 1.1.8",
+  "insert renumber: stale suffix shifts with list position",
+);
+assert.equal(mantraLabelFromListPosition("", 3, vivekaCtx), "Shloka 1.1.3");
 
 const flatTree = normalizeEditorHierarchy(
   [

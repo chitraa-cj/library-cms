@@ -439,6 +439,10 @@ export function resolvePortalMantraToStrapiDoc(
       }
       return { docId: preferred };
     }
+    // Row may live on another section in CMS; keep published id so grantha-wide shloka index can hydrate.
+    if (isPublishedStrapiDocId(preferred)) {
+      return { docId: preferred };
+    }
     return { docId: undefined };
   }
 
@@ -509,6 +513,19 @@ export function mantraLabelForCmsSync(
   return buildMantraDisplayTitle(ctx.leaf, orderNum, ctx);
 }
 
+/**
+ * Insert/delete renumber: derive Shloka 1.1.n from **list position** so each CMS row keeps its
+ * documentId but receives the shifted label (old 1.1.7 → 1.1.8, new blank → 1.1.3).
+ */
+export function mantraLabelFromListPosition(
+  portalTitle: string | undefined,
+  orderNum1Based: number,
+  ctx: MantraTitleCtx,
+): string {
+  const pfx = titlePrefixFromMantraTitle(portalTitle, ctx.leaf);
+  return buildMantraDisplayTitle(pfx, orderNum1Based, ctx);
+}
+
 /** Drop duplicate portal rows (same id or same Strapi documentId) before renumbering. */
 export function dedupeMantrasInDisplayOrder<T extends { id: string; strapiDocumentId?: string }>(
   manthrasInDisplayOrder: T[],
@@ -562,6 +579,63 @@ export function reindexMantrasInListOrder<T extends { id: string; title: string;
   ctx: MantraTitleCtx,
 ): T[] {
   return assignContiguousOrderAndTitles(manthrasInDisplayOrder, ctx);
+}
+
+function mantraListHasDuplicateSuffixes(
+  manthras: { id?: string; title?: string }[],
+  configuredLeaf: string,
+): boolean {
+  const seen = new Set<string>();
+  for (const m of manthras) {
+    const label = (m.title ?? "").trim();
+    const suf = mantraNumberSuffix(label);
+    if (!suf || !titleUsesConfiguredLeaf(label, configuredLeaf)) continue;
+    if (seen.has(suf)) return true;
+    seen.add(suf);
+  }
+  return false;
+}
+
+/**
+ * After rapid + inserts or CMS drift: re-run list-order renumber on any section that has
+ * duplicate verse suffixes (e.g. two "Shloka 1.1.7" rows).
+ */
+export function repairDuplicateSuffixesInHierarchy<T extends SyncAdhyayaNode>(
+  list: T[],
+  cfg: GranthaStructureConfig,
+): T[] {
+  const leaf = (cfg.leafName || "Mantra").trim() || "Mantra";
+  const levelThree = !!cfg.levelThreeEnabled;
+  let changed = false;
+
+  const fixList = <M extends SyncManthraNode>(
+    manthras: M[],
+    ctx: MantraTitleCtx,
+  ): M[] => {
+    if (!mantraListHasDuplicateSuffixes(manthras, leaf)) return manthras;
+    changed = true;
+    return reindexMantrasInListOrder(
+      dedupeMantrasInDisplayOrder(sortMantrasByDisplayOrder(manthras)),
+      ctx,
+    ) as M[];
+  };
+
+  const out = sortNodesByOrder(list).map((a, ai) => {
+    const khandas = sortNodesByOrder(a.khandas ?? []).map((k, ki) => {
+      const khandaCtx = buildMantraTitleCtx(ai, k, ki, cfg);
+      if (levelThree && (k.padas ?? []).length > 0) {
+        const padas = sortNodesByOrder(k.padas ?? []).map((p, pi) => {
+          const padaCtx = buildMantraTitleCtx(ai, k, ki, cfg, pi);
+          return { ...p, manthras: fixList(p.manthras ?? [], padaCtx) };
+        });
+        return { ...k, padas, manthras: [] as SyncManthraNode[] };
+      }
+      return { ...k, manthras: fixList(k.manthras ?? [], khandaCtx) };
+    });
+    return { ...a, khandas } as T;
+  });
+
+  return changed ? out : list;
 }
 
 /**

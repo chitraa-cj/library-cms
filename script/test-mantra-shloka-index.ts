@@ -69,7 +69,7 @@ assert.ok(
   blocksToText(publishedRelink.ShlokaManthraEntry!.SanskritTextEntry as never).includes("Rich Sanskrit"),
 );
 
-// Portal draft relink: keep local body, only update documentId.
+// Portal relink to a different CMS doc: stale local body cleared, index applied.
 const portalRelink = prepareManthraAfterStrapiResolve(
   localDraft,
   DOC,
@@ -78,9 +78,33 @@ const portalRelink = prepareManthraAfterStrapiResolve(
   { preferPortalContent: true },
 );
 assert.equal(portalRelink.strapiDocumentId, DOC);
+assert.ok(
+  blocksToText(portalRelink.ShlokaManthraEntry!.SanskritTextEntry as never).includes("Rich Sanskrit"),
+);
+
+// Same documentId, portal mode: keep in-progress local text.
+const portalSameDoc = prepareManthraAfterStrapiResolve(
+  { ...localDraft, strapiDocumentId: DOC },
+  DOC,
+  index,
+  "Shloka 1.1.1",
+  { preferPortalContent: true },
+);
 assert.equal(
-  blocksToText(portalRelink.ShlokaManthraEntry!.SanskritTextEntry as never),
+  blocksToText(portalSameDoc.ShlokaManthraEntry!.SanskritTextEntry as never),
   "local draft verse",
+);
+
+// Portal label-only row (e.g. 1.18–1.26 in draft): fill from CMS index.
+const labelOnly = prepareManthraAfterStrapiResolve(
+  { strapiDocumentId: "old-doc-id-aaaaaa", title: "Shloka 1.1.18" },
+  DOC,
+  index,
+  "Shloka 1.1.18",
+  { preferPortalContent: true },
+);
+assert.ok(
+  blocksToText(labelOnly.ShlokaManthraEntry!.SanskritTextEntry as never).includes("Rich Sanskrit"),
 );
 
 console.log("test-mantra-shloka-index: all ok");

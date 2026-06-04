@@ -36,7 +36,10 @@ function shlokaRichness(entry: unknown): number {
 }
 
 export type ManthraHydrationOptions = {
-  /** Portal draft / saved local hierarchy — never replace in-progress verse bodies with CMS. */
+  /**
+   * Portal draft / saved hierarchy: keep non-empty local verse bodies; still fill empty/stub
+   * rows from CMS so labels like 1.18–1.26 show the same content as the Mantras tab.
+   */
   preferPortalContent?: boolean;
 };
 
@@ -49,7 +52,6 @@ export function hydrateManthraShlokaFromIndex<T extends { strapiDocumentId?: str
 ): T {
   const id = docId ?? node.strapiDocumentId;
   if (!id) return node;
-  if (options?.preferPortalContent) return node;
   const remote = index.get(id);
   if (!remote) return node;
   const localRich = shlokaRichness(node.ShlokaManthraEntry);
@@ -79,10 +81,9 @@ export function prepareManthraAfterStrapiResolve<
   const prevId = node.strapiDocumentId;
   const relinked = !!id && !!prevId && prevId !== id;
   const titled = normalizedTitle !== undefined ? { ...node, title: normalizedTitle } : node;
-  const preferPortal = options?.preferPortalContent === true;
-
   let base: T;
-  if (relinked && !preferPortal) {
+  if (relinked) {
+    // Wrong CMS link (common after Viveka renumber/migration): always drop stale bodies.
     base = {
       ...titled,
       strapiDocumentId: id,
@@ -93,7 +94,6 @@ export function prepareManthraAfterStrapiResolve<
     base = { ...titled, strapiDocumentId: id };
   }
   if (!id) return base;
-  if (preferPortal) return base;
   return hydrateManthraShlokaFromIndex(base, index, id, options);
 }
 

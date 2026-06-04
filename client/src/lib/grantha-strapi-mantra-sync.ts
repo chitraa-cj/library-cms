@@ -12,6 +12,7 @@ import {
   findStrapiMantraByVerseSuffix,
   buildMantraTitleCtx,
   mantraLabelForCmsSync,
+  mantraLabelFromListPosition,
   type GranthaStructureConfig,
   type StrapiMantraRef,
 } from "@/lib/grantha-structure-sync";
@@ -473,7 +474,9 @@ export async function syncMantraSectionLabelsToStrapi(
     seenDocIds.add(documentId);
     const orderNum = idx + 1;
     const label = titleCtx
-      ? mantraLabelForCmsSync(m.title, orderNum, titleCtx)
+      ? options?.allowRenumber
+        ? mantraLabelFromListPosition(m.title, orderNum, titleCtx)
+        : mantraLabelForCmsSync(m.title, orderNum, titleCtx)
       : (m.title ?? "").trim();
     updates.push({
       documentId,
@@ -580,6 +583,11 @@ export async function syncMantraSectionAfterStructuralEdits(
   labelSyncOrderOnly: number;
 }> {
   const failedDeleteIds = await strapiDeleteMantrasBestEffort(deleteDocumentIds);
+  // Insert-between renumber: create every portal-only row in the section, not only the last + click.
+  const createOpts =
+    opts?.renumberSectionLabels === true
+      ? { ...opts, onlyManthraIds: undefined }
+      : opts;
   const patches = await pushMantraSectionStructureToStrapi(
     snapshot,
     adhyayaId,
@@ -587,7 +595,7 @@ export async function syncMantraSectionAfterStructuralEdits(
     padaId,
     cfg,
     sectionCtx,
-    opts,
+    createOpts,
   );
   let snapForSort = snapshot;
   if (patches.length > 0) {

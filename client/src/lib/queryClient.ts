@@ -86,9 +86,16 @@ export const queryClient = new QueryClient({
     queries: {
       queryFn: getQueryFn({ on401: "throw" }),
       refetchInterval: false,
-      refetchOnWindowFocus: true,
+      // The CMS lists (esp. /api/strapi/manthras, which pulls every verse in the DB) are
+      // large and come from a remote Strapi. Re-downloading them every time the window
+      // regains focus made the app feel constantly "loading". Mutations still call
+      // queryClient.invalidateQueries explicitly, so edits/publishes refresh immediately
+      // regardless of staleTime — this only suppresses redundant background refetches.
+      refetchOnWindowFocus: false,
+      // Within this window, remounting a tab serves the cache instead of refetching the
+      // whole list; after it, navigating back refreshes. Explicit invalidation bypasses it.
       refetchOnMount: true,
-      staleTime: 0,
+      staleTime: 30_000,
       gcTime: 5 * 60 * 1000,
       retry: false,
     },

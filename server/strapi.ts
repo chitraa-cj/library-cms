@@ -457,25 +457,6 @@ export function createStrapiRouter() {
 
       const sectionFilter = `filters[grantha][documentId][$eq]=${g}`;
 
-      // ── Step 1: collect all sections ──
-      const firstSectionPage = await strapiRequest(
-        `/api/sections?${sectionFilter}&${sectionMeta}&pagination[page]=1`
-      );
-      const sectionTotal: number = firstSectionPage?.meta?.pagination?.total ?? 0;
-      const sectionPageSize: number = firstSectionPage?.meta?.pagination?.pageSize ?? 100;
-      const sectionPageCount = Math.ceil(sectionTotal / sectionPageSize);
-
-      let allSections: any[] = [...(firstSectionPage?.data ?? [])];
-      if (sectionPageCount > 1) {
-        const restSectionPages = await Promise.all(
-          Array.from({ length: sectionPageCount - 1 }, (_, i) =>
-            strapiRequest(`/api/sections?${sectionFilter}&${sectionMeta}&pagination[page]=${i + 2}`)
-          )
-        );
-        allSections = allSections.concat(restSectionPages.flatMap((p: any) => p?.data ?? []));
-      }
-
-      // ── Step 2: collect all manthras for this grantha (paginated) ──
       const manthraQuery = [
         "fields[0]=documentId",
         "fields[1]=ShlokaManthraNumber",
@@ -489,20 +470,46 @@ export function createStrapiRouter() {
         "pagination[pageSize]=100",
       ].join("&");
 
-      const firstManthraPage = await strapiRequest(`/api/manthras?${manthraQuery}&pagination[page]=1`);
-      const manthraTotal: number = firstManthraPage?.meta?.pagination?.total ?? 0;
-      const manthraPageSize: number = firstManthraPage?.meta?.pagination?.pageSize ?? 100;
-      const manthraPageCount = Math.ceil(manthraTotal / manthraPageSize);
-
-      let allManthras: any[] = [...(firstManthraPage?.data ?? [])];
-      if (manthraPageCount > 1) {
-        const restManthraPages = await Promise.all(
-          Array.from({ length: manthraPageCount - 1 }, (_, i) =>
-            strapiRequest(`/api/manthras?${manthraQuery}&pagination[page]=${i + 2}`)
-          )
+      // Sections and manthras are independent fetches — run both phases concurrently so the
+      // grantha editor load is bounded by the slower of the two, not their sum. Each phase
+      // still fetches its own remaining pages in parallel.
+      const collectSections = async (): Promise<any[]> => {
+        const firstSectionPage = await strapiRequest(
+          `/api/sections?${sectionFilter}&${sectionMeta}&pagination[page]=1`
         );
-        allManthras = allManthras.concat(restManthraPages.flatMap((p: any) => p?.data ?? []));
-      }
+        const sectionTotal: number = firstSectionPage?.meta?.pagination?.total ?? 0;
+        const sectionPageSize: number = firstSectionPage?.meta?.pagination?.pageSize ?? 100;
+        const sectionPageCount = Math.ceil(sectionTotal / sectionPageSize);
+        let sections: any[] = [...(firstSectionPage?.data ?? [])];
+        if (sectionPageCount > 1) {
+          const restSectionPages = await Promise.all(
+            Array.from({ length: sectionPageCount - 1 }, (_, i) =>
+              strapiRequest(`/api/sections?${sectionFilter}&${sectionMeta}&pagination[page]=${i + 2}`)
+            )
+          );
+          sections = sections.concat(restSectionPages.flatMap((p: any) => p?.data ?? []));
+        }
+        return sections;
+      };
+
+      const collectManthras = async (): Promise<any[]> => {
+        const firstManthraPage = await strapiRequest(`/api/manthras?${manthraQuery}&pagination[page]=1`);
+        const manthraTotal: number = firstManthraPage?.meta?.pagination?.total ?? 0;
+        const manthraPageSize: number = firstManthraPage?.meta?.pagination?.pageSize ?? 100;
+        const manthraPageCount = Math.ceil(manthraTotal / manthraPageSize);
+        let manthras: any[] = [...(firstManthraPage?.data ?? [])];
+        if (manthraPageCount > 1) {
+          const restManthraPages = await Promise.all(
+            Array.from({ length: manthraPageCount - 1 }, (_, i) =>
+              strapiRequest(`/api/manthras?${manthraQuery}&pagination[page]=${i + 2}`)
+            )
+          );
+          manthras = manthras.concat(restManthraPages.flatMap((p: any) => p?.data ?? []));
+        }
+        return manthras;
+      };
+
+      const [allSections, allManthras] = await Promise.all([collectSections(), collectManthras()]);
 
       // ── Step 3: group manthras by section documentId ──
       const manthrasBySection = new Map<string, any[]>();

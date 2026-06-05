@@ -1,14 +1,24 @@
-import type { StrapiBlock } from "@shared/schema";
+import type { StrapiBlock, StrapiTextNode } from "@shared/schema";
+
+/**
+ * Recursively extract a block node's plain text. A leaf text node yields its
+ * `text`; a `list` block joins its `list-item` children with newlines; every
+ * other block concatenates its inline children. Paragraph-only input produces
+ * the same output as the pre-structure implementation (backward compatible).
+ */
+function blockNodeText(node: any): string {
+  if (typeof node?.text === "string") return node.text;
+  const kids = node?.children;
+  if (!Array.isArray(kids)) return "";
+  const sep = node?.type === "list" ? "\n" : "";
+  return kids.map(blockNodeText).join(sep);
+}
 
 export function blocksToText(value: StrapiBlock[] | string | undefined | null): string {
   if (!value) return "";
   if (typeof value === "string") return value;
   if (Array.isArray(value)) {
-    return value
-      .map((block) =>
-        (block.children || []).map((child) => child.text || "").join("")
-      )
-      .join("\n");
+    return value.map(blockNodeText).join("\n");
   }
   return "";
 }
@@ -112,21 +122,25 @@ export function blocksToTipTap(
     return { type: "doc", content: [{ type: "paragraph" }] };
   }
 
-  const content: TipTapNode[] = value.map((block: any) => {
-    const children = (block.children || [])
+  // Map a block's leaf text children → TipTap inline nodes (with marks).
+  const inlineNodes = (children: any[]): TipTapNode[] =>
+    (children || [])
       .filter((c: any) => c.text !== undefined && c.text !== "")
       .map((c: any) => {
         const marks: TipTapMark[] = [];
         if (c.bold) marks.push({ type: "bold" });
         if (c.italic) marks.push({ type: "italic" });
         if (c.underline) marks.push({ type: "underline" });
+        if (c.strikethrough) marks.push({ type: "strike" });
         if (c.code) marks.push({ type: "code" });
         const node: TipTapNode = { type: "text", text: c.text };
         if (marks.length) node.marks = marks;
         return node;
       });
 
+  const content: TipTapNode[] = value.map((block: any) => {
     if (block.type === "heading") {
+      const children = inlineNodes(block.children);
       return {
         type: "heading",
         attrs: { level: block.level ?? 2 },
@@ -134,6 +148,38 @@ export function blocksToTipTap(
       };
     }
 
+    if (block.type === "list") {
+      const items = (block.children || []).map((li: any) => {
+        const liChildren = inlineNodes(li.children);
+        return {
+          type: "listItem",
+          content: [{ type: "paragraph", content: liChildren.length ? liChildren : undefined }],
+        };
+      });
+      return {
+        type: block.format === "ordered" ? "orderedList" : "bulletList",
+        content: items.length ? items : undefined,
+      };
+    }
+
+    if (block.type === "quote") {
+      const children = inlineNodes(block.children);
+      return {
+        type: "blockquote",
+        content: [{ type: "paragraph", content: children.length ? children : undefined }],
+      };
+    }
+
+    if (block.type === "code") {
+      const text = (block.children || []).map((c: any) => c.text ?? "").join("");
+      return {
+        type: "codeBlock",
+        content: text ? [{ type: "text", text }] : undefined,
+      };
+    }
+
+    // paragraph (and any unknown leaf-text block) → paragraph
+    const children = inlineNodes(block.children);
     return {
       type: "paragraph",
       content: children.length ? children : undefined,
@@ -151,8 +197,9 @@ function extractText(node: TipTapNode): string {
 }
 
 /** Convert TipTap doc JSON → Strapi blocks array, called on every editor
- *  `onUpdate` event. Handles all TipTap node types so pasted content is
- *  never silently dropped. */
+ *  `onUpdate` event. Emits Strapi-native block types (heading/list/quote/code)
+ *  so structure survives a save→reload round-trip, and falls back to extracting
+ *  text from any unknown node so pasted content is never silently dropped. */
 export function tipTapToBlocks(json: TipTapDoc | null | undefined): StrapiBlock[] {
   if (!json?.content) return [];
 
@@ -166,31 +213,34 @@ export function tipTapToBlocks(json: TipTapDoc | null | undefined): StrapiBlock[
       });
     } else if (node.type === "heading") {
       blocks.push({
-        type: "paragraph",
+        type: "heading",
+        level: node.attrs?.level ?? 2,
         children: inlineToChildren(node.content),
-      } as any);
+      });
     } else if (node.type === "bulletList" || node.type === "orderedList") {
+      const items: StrapiBlock[] = [];
       for (const li of node.content ?? []) {
+        // A listItem wraps a paragraph (TipTap) — pull its inline content.
         const paraContent = li.content?.[0]?.content ?? [];
-        blocks.push({
-          type: "paragraph",
-          children: inlineToChildren(paraContent),
-        });
+        items.push({ type: "list-item", children: inlineToChildren(paraContent) });
       }
+      blocks.push({
+        type: "list",
+        format: node.type === "orderedList" ? "ordered" : "unordered",
+        children: items,
+      });
     } else if (node.type === "blockquote") {
-      for (const inner of node.content ?? []) {
-        blocks.push({
-          type: "paragraph",
-          children: inlineToChildren(inner.content),
-        });
-      }
+      // Flatten nested paragraphs into one quote block, preserving line breaks.
+      const children: StrapiTextNode[] = [];
+      const inners = node.content ?? [];
+      inners.forEach((inner, i) => {
+        if (i > 0) children.push({ type: "text", text: "\n" });
+        children.push(...inlineToChildren(inner.content));
+      });
+      blocks.push({ type: "quote", children: children.length ? children : [{ type: "text", text: "" }] });
     } else if (node.type === "codeBlock") {
       const text = (node.content ?? []).map((c) => c.text ?? "").join("");
-      if (text.trim()) {
-        for (const line of text.split("\n")) {
-          blocks.push({ type: "paragraph", children: [{ type: "text", text: line }] });
-        }
-      }
+      blocks.push({ type: "code", children: [{ type: "text", text }] });
     } else if (node.type === "horizontalRule") {
       // Skip — no Strapi equivalent
     } else {
@@ -205,13 +255,11 @@ export function tipTapToBlocks(json: TipTapDoc | null | undefined): StrapiBlock[
   return blocks;
 }
 
-function inlineToChildren(
-  content: TipTapNode[] | undefined
-): { type: string; text: string; bold?: boolean; italic?: boolean; underline?: boolean; code?: boolean }[] {
+function inlineToChildren(content: TipTapNode[] | undefined): StrapiTextNode[] {
   if (!content || content.length === 0) {
     return [{ type: "text", text: "" }];
   }
-  const children: ReturnType<typeof inlineToChildren> = [];
+  const children: StrapiTextNode[] = [];
   for (const c of content) {
     if (c.type === "hardBreak") {
       // Hard breaks (shift+enter or pasted <br>) become a trailing newline
@@ -222,10 +270,11 @@ function inlineToChildren(
       continue;
     }
     const marks = c.marks ?? [];
-    const child: any = { type: "text", text: c.text ?? "" };
+    const child: StrapiTextNode = { type: "text", text: c.text ?? "" };
     if (marks.some((m) => m.type === "bold")) child.bold = true;
     if (marks.some((m) => m.type === "italic")) child.italic = true;
     if (marks.some((m) => m.type === "underline")) child.underline = true;
+    if (marks.some((m) => m.type === "strike")) child.strikethrough = true;
     if (marks.some((m) => m.type === "code")) child.code = true;
     children.push(child);
   }

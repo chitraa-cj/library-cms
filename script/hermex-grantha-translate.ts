@@ -32,18 +32,33 @@ function parseArgs(argv: string[]): {
   headed: boolean;
   resetCheckpoint: boolean;
 } {
-  const args = argv.filter((a) => !a.startsWith("-"));
-  const flags = new Set(argv.filter((a) => a.startsWith("-")));
+  // Parse the RAW argv — do not pre-strip "--" tokens, or the named flags below can never
+  // match. Boolean flags go in `flags`; everything else that isn't a value of --grantha/
+  // --mantra is a positional (the grantha name).
+  const flags = new Set<string>();
+  const positionals: string[] = [];
   let granthaName = "";
   let mantraFilter: string | undefined;
-  for (let i = 0; i < args.length; i++) {
-    if (args[i] === "--grantha" && args[i + 1]) {
-      granthaName = args[++i];
-    } else if (args[i] === "--mantra" && args[i + 1]) {
-      mantraFilter = args[++i];
-    } else if (!granthaName && !args[i].startsWith("--")) {
-      granthaName = args[i];
+  for (let i = 0; i < argv.length; i++) {
+    const a = argv[i];
+    if (a === "--grantha") {
+      // Consume tokens until the next flag so an unquoted multi-word name
+      // ("Chandogya Upanishad", which npm/shell splits) is captured whole.
+      const parts: string[] = [];
+      while (i + 1 < argv.length && !argv[i + 1].startsWith("--")) parts.push(argv[++i]);
+      granthaName = parts.join(" ").trim();
+    } else if (a === "--mantra" && argv[i + 1] && !argv[i + 1].startsWith("--")) {
+      mantraFilter = argv[++i];
+    } else if (a.startsWith("--")) {
+      flags.add(a);
+    } else {
+      positionals.push(a);
     }
+  }
+  // Positional grantha name (no --grantha flag): join leading tokens so an unquoted
+  // multi-word name survives argument splitting.
+  if (!granthaName && positionals.length) {
+    granthaName = positionals.join(" ").trim();
   }
   if (!granthaName) {
     granthaName = process.env.HERMEX_GRANTHA_NAME?.trim() || "";
@@ -112,12 +127,18 @@ async function main() {
   console.log(`[plan] ${mantras.length} mantras in Strapi`);
 
   if (mantraFilter) {
-    const f = mantraFilter.toLowerCase();
-    mantras = mantras.filter(
-      (m) =>
-        m.label.toLowerCase().includes(f) ||
-        m.documentId === mantraFilter,
+    const f = mantraFilter.trim().toLowerCase();
+    // Match the verse-number suffix exactly so "2.7.1" does not also pull "2.7.10"/"2.7.11".
+    const suffixOf = (label: string) =>
+      label.trim().toLowerCase().match(/(\d+(?:\.\d+)*)\s*$/)?.[1];
+    let filtered = mantras.filter(
+      (m) => suffixOf(m.label) === f || m.documentId === mantraFilter,
     );
+    // Fall back to substring match for non-numeric labels or partial input.
+    if (!filtered.length) {
+      filtered = mantras.filter((m) => m.label.toLowerCase().includes(f));
+    }
+    mantras = filtered;
     console.log(`[plan] Filter --mantra "${mantraFilter}" → ${mantras.length} mantras`);
     if (!mantras.length) {
       console.error("No mantras match filter");

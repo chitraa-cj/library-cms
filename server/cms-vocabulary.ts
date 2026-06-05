@@ -84,6 +84,39 @@ export async function isAllowedTeekaAuthor(name: string | undefined | null): Pro
   return resolveAllowedTeekaAuthor(name, allow) !== undefined;
 }
 
+/**
+ * Strapi's grantha `BhashyamAuthor` field is an enum that only accepts the
+ * canonical grantha author spellings. The CMS vocabulary dropdown also offers
+ * the prasthana-thraya variants ("Sri Shankaracharya", "Sri Upanishad
+ * Brahmendra") and admin-added custom values — none of which Strapi's grantha
+ * enum accepts, so publishing a grantha with one of those 400s.
+ */
+const granthaBhashyamAuthorAllow = new Set<string>(bhashyamAuthors);
+
+/** Known prasthana-spelling → grantha-enum-spelling equivalents (lower-cased keys). */
+const bhashyamAuthorAliases: Record<string, string> = {
+  "sri shankaracharya": "Sri Shankarayacharya",
+  "sri upanishad brahmendra": "Upanishad Brahmendra",
+};
+
+/**
+ * Map a draft `BhashyamAuthor` to a value Strapi's grantha enum will accept.
+ * Returns `undefined` when the value is empty or unrecognized — callers should
+ * omit the field entirely in that case so Strapi validation passes.
+ */
+export function resolveAllowedBhashyamAuthor(
+  author: string | undefined | null,
+): string | undefined {
+  const trimmed = String(author ?? "").trim();
+  if (!trimmed) return undefined;
+  if (granthaBhashyamAuthorAllow.has(trimmed)) return trimmed;
+  const lower = trimmed.toLowerCase();
+  for (const entry of granthaBhashyamAuthorAllow) {
+    if (entry.toLowerCase() === lower) return entry;
+  }
+  return bhashyamAuthorAliases[lower];
+}
+
 export async function addPortalVocabularyEntry(
   key: PortalVocabularyKey,
   value: string,

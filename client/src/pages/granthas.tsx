@@ -299,7 +299,7 @@ function findManthraInTree(
 function hasBlocks(v: StrapiBlock[] | string | null | undefined): boolean {
   if (!v) return false;
   if (typeof v === "string") return v.trim().length > 0;
-  if (Array.isArray(v)) return v.some((b) => b.children?.some((c) => (c.text ?? "").trim().length > 0));
+  if (Array.isArray(v)) return v.some((b) => b.children?.some((c) => ("text" in c ? c.text ?? "" : "").trim().length > 0));
   return false;
 }
 
@@ -2274,11 +2274,51 @@ export default function GranthasPage() {
     leafName: "Mantra",
   };
 
+  // structureConfig lives only in portal drafts, never in Strapi. For some granthas
+  // that config was lost (e.g. the only draft was published, so it's excluded from
+  // the in-progress overlay) and the editor fell back to DEFAULT_STRUCTURE, showing
+  // the wrong hierarchy (Adhyaya/Khanda/Mantra). These code overrides — keyed by the
+  // normalized GranthaName — force the correct structure for such granthas.
+  const STRUCTURE_OVERRIDES_BY_NAME: Record<string, typeof DEFAULT_STRUCTURE> = {
+    "vedanta paribhasha": {
+      levelOneEnabled: true,
+      levelOneName: "Parichchhedha",
+      levelTwoEnabled: true,
+      levelTwoName: "Vishaya",
+      levelThreeEnabled: false,
+      levelThreeName: "Pada",
+      leafName: "Vaakhyaa",
+    },
+  };
+
+  function structureOverrideForName(name: string | undefined | null) {
+    const key = String(name ?? "").trim().toLowerCase();
+    return key ? STRUCTURE_OVERRIDES_BY_NAME[key] : undefined;
+  }
+
+  // True when a saved config is absent or is indistinguishable from the plain
+  // DEFAULT_STRUCTURE — i.e. nothing meaningful was ever persisted for it.
+  function isDefaultLikeStructure(cfg: any): boolean {
+    if (!cfg) return true;
+    return (
+      cfg.levelOneName === DEFAULT_STRUCTURE.levelOneName &&
+      cfg.levelTwoName === DEFAULT_STRUCTURE.levelTwoName &&
+      cfg.leafName === DEFAULT_STRUCTURE.leafName &&
+      !!cfg.levelOneEnabled === DEFAULT_STRUCTURE.levelOneEnabled &&
+      !!cfg.levelTwoEnabled === DEFAULT_STRUCTURE.levelTwoEnabled &&
+      !!cfg.levelThreeEnabled === DEFAULT_STRUCTURE.levelThreeEnabled
+    );
+  }
+
   // "Khanda" was mistakenly included as a leaf-name option in older versions.
   // When a draft was saved with leafName:"Khanda", migrate it to "Mantra" on load
   // and rename any manthra titles that already start with "Khanda ".
-  function migrateStructureConfig(raw: any) {
-    const cfg = raw || DEFAULT_STRUCTURE;
+  // A code override (when one exists for this grantha) wins over a missing or
+  // default-like saved config so known granthas always show the right structure;
+  // a genuinely custom saved config is respected so user edits are preserved.
+  function migrateStructureConfig(raw: any, granthaName?: string) {
+    const override = structureOverrideForName(granthaName);
+    const cfg = override && isDefaultLikeStructure(raw) ? override : raw || DEFAULT_STRUCTURE;
     if (cfg.leafName === "Khanda") return { ...cfg, leafName: "Mantra" };
     return cfg;
   }
@@ -2387,7 +2427,7 @@ export default function GranthasPage() {
         Array.isArray(d.deletedStrapiTeekaDocIds) ? d.deletedStrapiTeekaDocIds : []
       );
       const rawCfg1 = d.structureConfig;
-      const migratedCfg1 = migrateStructureConfig(rawCfg1);
+      const migratedCfg1 = migrateStructureConfig(rawCfg1, d.GranthaName);
       const rawHier1 = d.hierarchy || [];
       const hier1 =
         rawCfg1?.leafName === "Khanda" ? migrateHierarchyLeafName(rawHier1, "Khanda", "Mantra") : rawHier1;
@@ -2480,6 +2520,19 @@ export default function GranthasPage() {
       const savedData = matchingDraft?.data as any;
       publishScopeDraftData = savedData ?? item._draftData;
 
+      // structureConfig lives only in portal drafts (never in Strapi). When there's
+      // no in-progress draft, recover it from the most recent published draft so the
+      // saved structure isn't lost and replaced by DEFAULT_STRUCTURE on reload.
+      // (Published drafts must not mask live Strapi *content*, but structureConfig is
+      // portal-only metadata, so reading just that field is safe.)
+      const structureFromPublishedDraft = savedData?.structureConfig
+        ? undefined
+        : (allGranthaDrafts.find(
+            (d) =>
+              d.strapiDocumentId === item.documentId &&
+              !!(d.data as any)?.structureConfig,
+          )?.data as any)?.structureConfig;
+
       loadedDraftId = matchingDraft?.id ?? null;
       setEditingDraftId(loadedDraftId);
 
@@ -2534,7 +2587,7 @@ export default function GranthasPage() {
       mergeStrapiBHForFallback = item.BhashyakaraIntroduction;
       mergeStrapiGTForFallback = item.GranthaNameTranslations;
 
-      rawCfg2 = savedData?.structureConfig;
+      rawCfg2 = savedData?.structureConfig ?? structureFromPublishedDraft;
       rawHierForEnrich = savedData?.hierarchy || [];
       if (Array.isArray(savedData?.deletedStrapiSectionDocIds) && savedData.deletedStrapiSectionDocIds.length > 0) {
         localDeletedSectionDocIds = savedData.deletedStrapiSectionDocIds;
@@ -2581,7 +2634,9 @@ export default function GranthasPage() {
     preferPortalMantraContentRef.current = preferPortalMantraContent;
 
     // Shared for all cases: Strapi items AND local drafts linked to Strapi.
-    let effectiveStructureConfig = migrateStructureConfig(rawCfg2);
+    const effectiveGranthaName =
+      item.GranthaName || item._draftData?.GranthaName || item.title || "";
+    let effectiveStructureConfig = migrateStructureConfig(rawCfg2, effectiveGranthaName);
     const effectiveDocId = item._isDraft ? item._strapiDocId : item.documentId;
 
     // Show saved hierarchy immediately while CMS sections load in the background.
@@ -4764,16 +4819,22 @@ export default function GranthasPage() {
       });
       syncGranthaCmsCaches(queryClient);
       const total = summary.labelsUpdated + summary.orderOnly;
+      const orphanNote =
+        summary.orphaned > 0
+          ? ` Skipped ${summary.orphaned} verse(s) no longer present in CMS (stale link).`
+          : "";
       toast({
         title: "Verse numbers synced to CMS",
         description:
-          total > 0
+          (total > 0
             ? summary.orderOnly > 0 && summary.labelsUpdated === 0
               ? `Updated sort order for ${summary.orderOnly} row(s); Strapi verse labels unchanged (suffix mismatch — use full publish to renumber).`
               : summary.orderOnly > 0
                 ? `Updated ${summary.labelsUpdated} label(s) and sort order for ${summary.orderOnly} row(s) where the verse number could not change.`
                 : `Updated ${summary.labelsUpdated} ${structureConfigRef.current.leafName} label(s) in Strapi.`
-            : "No linked CMS rows in this draft needed updating.",
+            : summary.orphaned > 0
+              ? "No live CMS rows needed updating."
+              : "No linked CMS rows in this draft needed updating.") + orphanNote,
       });
     } catch (e: unknown) {
       const msg = e instanceof Error ? e.message : String(e);
@@ -5289,7 +5350,7 @@ export default function GranthasPage() {
     setDeletedStrapiTeekaDocIds(
       Array.isArray(d.deletedStrapiTeekaDocIds) ? d.deletedStrapiTeekaDocIds : [],
     );
-    const migratedCfg = migrateStructureConfig(d.structureConfig);
+    const migratedCfg = migrateStructureConfig(d.structureConfig, d.GranthaName);
     const rawHier = d.hierarchy || [];
     const hier =
       d.structureConfig?.leafName === "Khanda"

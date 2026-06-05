@@ -79,14 +79,21 @@ export function saveCheckpoint(filePath: string, data: CheckpointFile): void {
   fs.writeFileSync(filePath, JSON.stringify(data, null, 2));
 }
 
+// Recurse into nested block children so a `list` (whose children are `list-item`
+// blocks) yields its item text instead of empty — otherwise list-form English
+// source would translate as blank. Paragraph-only input is unchanged.
+function blockNodeText(node: any): string {
+  if (typeof node?.text === "string") return node.text;
+  if (!Array.isArray(node?.children)) return "";
+  const sep = node?.type === "list" ? "\n" : "";
+  return node.children.map(blockNodeText).join(sep);
+}
+
 export function blocksToText(blocks: unknown): string {
   if (!blocks) return "";
   if (typeof blocks === "string") return blocks.trim();
   if (!Array.isArray(blocks)) return "";
-  return blocks
-    .map((b: any) => (b.children || []).map((c: any) => c.text || "").join(""))
-    .join("\n")
-    .trim();
+  return blocks.map(blockNodeText).join("\n").trim();
 }
 
 export function textToBlocks(text: string): any[] {
@@ -312,15 +319,19 @@ export async function runHermexWithRetry(
 }
 
 export async function resolveGranthaByName(name: string): Promise<{ documentId: string; GranthaName: string }> {
-  const q = encodeURIComponent(name.trim());
+  // Collapse internal whitespace/newlines so a pasted multi-line arg
+  // ("Chandogya \n Upanishad", which a wrapped terminal can produce) still
+  // matches "Chandogya Upanishad" in Strapi's $containsi filter.
+  const clean = name.replace(/\s+/g, " ").trim();
+  const q = encodeURIComponent(clean);
   const res = await strapiRequest(
     `/api/granthas?filters[GranthaName][$containsi]=${q}&pagination[pageSize]=20&fields[0]=documentId&fields[1]=GranthaName`,
   );
   const list: any[] = res?.data ?? [];
   if (!list.length) {
-    throw new Error(`No grantha found matching "${name}"`);
+    throw new Error(`No grantha found matching "${clean}"`);
   }
-  const exact = list.find((g) => (g.GranthaName ?? "").toLowerCase() === name.trim().toLowerCase());
+  const exact = list.find((g) => (g.GranthaName ?? "").toLowerCase() === clean.toLowerCase());
   const pick = exact ?? list[0];
   if (list.length > 1 && !exact) {
     console.warn(
@@ -599,57 +610,57 @@ export async function translateJobIncremental(
     }
   };
 
-  try {
-    console.log(
-      `[hermex] One browser session for ${allLangs.length} language(s) across ${workChunks.length} Strapi chunk(s)`,
-    );
+  // Translate one set of languages in a SINGLE Python/Chrome session, with the
+  // same headless→visible fallback and single-language parse-retry as before.
+  // A whole-batch failure leaves those langs out of byLang; the per-chunk sync
+  // below records them as failed (and the run retries them next time).
+  const fetchBatchWithRecovery = async (batchLangs: string[]): Promise<void> => {
     try {
-      await fetchHermexRows(allLangs, opts.headless);
-    } catch (chromeErr: unknown) {
-      if (opts.headless && isChromeSessionError(chromeErr)) {
-        console.log(
-          "[hermex] Chrome session failed in headless mode — retrying this job with visible Chrome (--headed). Keep the window open.",
-        );
-        await sleep(Math.max(opts.chunkDelayMs * 2, 12000));
-        await fetchHermexRows(allLangs, false);
-      } else {
-        throw chromeErr;
-      }
-    }
-  } catch (e: unknown) {
-    const msg = e instanceof Error ? e.message : String(e);
-    const parseFailed =
-      msg.toLowerCase().includes("json") ||
-      msg.toLowerCase().includes("delimiter") ||
-      msg.toLowerCase().includes("could not parse");
-
-    if (parseFailed && allLangs.length > 1) {
-      console.log(`[translate] JSON parse failed — retrying ${allLangs.length} languages one at a time`);
-      for (const lang of allLangs) {
-        if (byLang.has(lang)) continue;
-        try {
-          await fetchHermexRows([lang], opts.headless);
-          console.log(`[translate] OK single-lang retry | ${lang}`);
-        } catch (singleErr: unknown) {
-          const sm = singleErr instanceof Error ? singleErr.message : String(singleErr);
-          console.log(`[translate] FAIL single-lang retry | ${lang} | ${sm}`);
+      try {
+        await fetchHermexRows(batchLangs, opts.headless);
+      } catch (chromeErr: unknown) {
+        if (opts.headless && isChromeSessionError(chromeErr)) {
+          console.log(
+            "[hermex] Chrome session failed headless — retrying this batch with visible Chrome. Keep the window open.",
+          );
+          await sleep(Math.max(opts.chunkDelayMs * 2, 12000));
+          await fetchHermexRows(batchLangs, false);
+        } else {
+          throw chromeErr;
         }
-        if (opts.chunkDelayMs > 0) await sleep(opts.chunkDelayMs);
       }
-    } else {
-      fail += allLangs.length;
-      console.log(`[translate] FAIL ${job.context} | [${allLangs.join(", ")}] | ${msg}`);
-      for (const w of workChunks) {
-        checkpoint.failedChunks[w.key] = msg || "unknown";
-        console.log(`[warn] ${w.chunkId} | still missing in Strapi: ${w.langs.join(", ")}`);
-      }
-      saveCheckpoint(opts.checkpointPath, checkpoint);
-      return { ok, fail };
-    }
-  }
+    } catch (e: unknown) {
+      const msg = e instanceof Error ? e.message : String(e);
+      const parseFailed =
+        msg.toLowerCase().includes("json") ||
+        msg.toLowerCase().includes("delimiter") ||
+        msg.toLowerCase().includes("could not parse");
 
-  for (let wi = 0; wi < workChunks.length; wi++) {
-    const { plannedLangs, langs, key, chunkId } = workChunks[wi];
+      if (parseFailed && batchLangs.length > 1) {
+        console.log(`[translate] JSON parse failed — retrying ${batchLangs.length} languages one at a time`);
+        for (const lang of batchLangs) {
+          if (byLang.has(lang)) continue;
+          try {
+            await fetchHermexRows([lang], opts.headless);
+            console.log(`[translate] OK single-lang retry | ${lang}`);
+          } catch (singleErr: unknown) {
+            const sm = singleErr instanceof Error ? singleErr.message : String(singleErr);
+            console.log(`[translate] FAIL single-lang retry | ${lang} | ${sm}`);
+          }
+          if (opts.chunkDelayMs > 0) await sleep(opts.chunkDelayMs);
+        }
+      } else {
+        console.log(`[translate] FAIL batch | [${batchLangs.join(", ")}] | ${msg}`);
+      }
+    }
+  };
+
+  // Sync one Strapi workChunk from byLang and update the checkpoint. Extracted so
+  // we can persist incrementally after each session batch — a heavy mantra no
+  // longer rides on a single all-or-nothing session where a late crash loses
+  // every earlier translation.
+  const syncWorkChunk = async (w: ChunkWork): Promise<void> => {
+    const { plannedLangs, langs, key, chunkId } = w;
     let rows: HermexTranslationRow[] = [];
     let chunkFailed = false;
     let lastError = "";
@@ -716,8 +727,47 @@ export async function translateJobIncremental(
       console.log(`[warn] ${chunkId} | still missing in Strapi: ${stillMissingAfter.join(", ")}`);
     }
     saveCheckpoint(opts.checkpointPath, checkpoint);
+  };
 
-    if (wi < workChunks.length - 1 && opts.chunkDelayMs > 0) {
+  // Group workChunks into session batches of ~HERMEX_SESSION_BATCH languages.
+  // Each batch is one fresh Python/Chrome session, after which its chunks are
+  // synced. This bounds how much heavy-source work depends on a single browser
+  // session (the cause of the all-or-nothing 42-language jobs) and persists
+  // progress as it goes.
+  const SESSION_BATCH = Math.max(1, parseInt(process.env.HERMEX_SESSION_BATCH || "6", 10) || 6);
+  const workBatches: ChunkWork[][] = [];
+  {
+    let cur: ChunkWork[] = [];
+    let curLangs = 0;
+    for (const w of workChunks) {
+      cur.push(w);
+      curLangs += w.langs.length;
+      if (curLangs >= SESSION_BATCH) {
+        workBatches.push(cur);
+        cur = [];
+        curLangs = 0;
+      }
+    }
+    if (cur.length) workBatches.push(cur);
+  }
+
+  console.log(
+    `[hermex] ${allLangs.length} language(s) across ${workChunks.length} Strapi chunk(s) in ${workBatches.length} session batch(es) of ~${SESSION_BATCH} lang(s)`,
+  );
+
+  for (let bi = 0; bi < workBatches.length; bi++) {
+    const batch = workBatches[bi];
+    const batchLangs = [...new Set(batch.flatMap((w) => w.langs))].filter((l) => !byLang.has(l));
+    if (batchLangs.length > 0) {
+      console.log(
+        `[hermex] Session batch ${bi + 1}/${workBatches.length}: ${batchLangs.length} lang(s) in a fresh browser — ${batchLangs.join(", ")}`,
+      );
+      await fetchBatchWithRecovery(batchLangs);
+    }
+    for (const w of batch) {
+      await syncWorkChunk(w);
+    }
+    if (bi < workBatches.length - 1 && opts.chunkDelayMs > 0) {
       await sleep(opts.chunkDelayMs);
     }
   }

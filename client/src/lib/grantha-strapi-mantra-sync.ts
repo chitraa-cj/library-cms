@@ -306,6 +306,8 @@ export type BatchIdentitySyncSummary = {
   labelsUpdated: number;
   orderOnly: number;
   failed: number;
+  /** Rows whose Strapi mantra no longer exists (404) — skipped, not a failure. */
+  orphaned: number;
 };
 
 export type LabelSyncProgressCallback = (done: number, total: number, current: string) => void;
@@ -347,7 +349,7 @@ async function strapiBatchIdentitySync(
     progressLabel?: string;
   },
 ): Promise<BatchIdentitySyncSummary> {
-  const summary: BatchIdentitySyncSummary = { labelsUpdated: 0, orderOnly: 0, failed: 0 };
+  const summary: BatchIdentitySyncSummary = { labelsUpdated: 0, orderOnly: 0, failed: 0, orphaned: 0 };
   if (updates.length === 0) return summary;
   // Smaller chunks keep the progress bar moving (each batch is one frozen step until it
   // returns) at the cost of more localhost round-trips to our own server — cheap relative
@@ -391,11 +393,16 @@ async function strapiBatchIdentitySync(
       clearTimeout(timer);
     }
     const json = await res.json().catch(() => ({}));
-    const results: Array<{ documentId: string; ok?: boolean; error?: string; labelSkipped?: boolean }> =
+    const results: Array<{ documentId: string; ok?: boolean; error?: string; labelSkipped?: boolean; orphan?: boolean }> =
       json?.results ?? [];
     for (const r of results) {
       if (!r || r.ok === false) {
         summary.failed += 1;
+        continue;
+      }
+      // Orphan: the Strapi mantra was deleted (404) — skipped, not updated or failed.
+      if (r.orphan) {
+        summary.orphaned += 1;
         continue;
       }
       if (r.labelSkipped) summary.orderOnly += 1;
@@ -524,7 +531,7 @@ export async function syncMantraSectionLabelsToStrapi(
     sectionLabel?: string;
   },
 ): Promise<BatchIdentitySyncSummary> {
-  const empty: BatchIdentitySyncSummary = { labelsUpdated: 0, orderOnly: 0, failed: 0 };
+  const empty: BatchIdentitySyncSummary = { labelsUpdated: 0, orderOnly: 0, failed: 0, orphaned: 0 };
   const sectionDocumentId = resolveMantraSectionStrapiDocumentId(snapshot, adhyayaId, khandaId, padaId, cfg);
   if (!sectionDocumentId) return empty;
 
@@ -638,7 +645,7 @@ export async function syncAllMantraSectionLabelsInGrantha(
   cfg: GranthaStructureConfig,
   options?: { allowRenumber?: boolean; onProgress?: LabelSyncProgressCallback },
 ): Promise<BatchIdentitySyncSummary> {
-  const total: BatchIdentitySyncSummary = { labelsUpdated: 0, orderOnly: 0, failed: 0 };
+  const total: BatchIdentitySyncSummary = { labelsUpdated: 0, orderOnly: 0, failed: 0, orphaned: 0 };
   const targets = collectMantraSectionSyncTargets(snapshot, cfg);
   const grandTotal = Math.max(1, countLinkedMantrasForLabelSync(snapshot, cfg));
   let offset = 0;
@@ -674,6 +681,7 @@ export async function syncAllMantraSectionLabelsInGrantha(
     total.labelsUpdated += part.labelsUpdated;
     total.orderOnly += part.orderOnly;
     total.failed += part.failed;
+    total.orphaned += part.orphaned;
     offset += Math.max(sectionCount, part.labelsUpdated + part.orderOnly > 0 ? 1 : 0);
     if (offset > grandTotal) offset = grandTotal;
   }

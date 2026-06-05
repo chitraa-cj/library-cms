@@ -193,7 +193,7 @@ export function enrichArticleDraftForSave(
 
 function blockPlainText(block: StrapiBlock | undefined): string {
   if (!block?.children) return "";
-  return block.children.map((c) => c.text ?? "").join("");
+  return block.children.map((c) => ("text" in c ? c.text ?? "" : "")).join("");
 }
 
 /** Strapi REST payload for api::article.article */

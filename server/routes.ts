@@ -13,6 +13,7 @@ import {
   getTeekaAuthorsAllowlist,
   removePortalVocabularyEntry,
   resolveAllowedTeekaAuthor,
+  resolveAllowedBhashyamAuthor,
 } from "./cms-vocabulary";
 import { portalVocabularyKeys, type PortalVocabularyKey } from "@shared/schema";
 import Database from "better-sqlite3";
@@ -235,17 +236,20 @@ function cleanOldPublishJobs() {
 // ─── SQLite export helpers ────────────────────────────────────────────────────
 
 /** Extract plain text from a Strapi blocks (rich-text) field */
+// Recurse into nested block children (a `list` holds `list-item` blocks, which
+// hold the text) so structured rich text isn't read as empty. List items join
+// with newlines; everything else concatenates inline text. Paragraph-only input
+// matches the previous one-level behaviour.
+function blockNodeText(node: any): string {
+  if (typeof node?.text === "string") return node.text;
+  if (!Array.isArray(node?.children)) return "";
+  const sep = node?.type === "list" ? "\n" : "";
+  return node.children.map(blockNodeText).join(sep);
+}
+
 function blocksToText(blocks: any): string {
   if (!blocks || !Array.isArray(blocks)) return "";
-  return blocks
-    .map((block: any) => {
-      if (!block?.children) return "";
-      return block.children
-        .map((child: any) => (typeof child?.text === "string" ? child.text : ""))
-        .join("");
-    })
-    .join("\n")
-    .trim();
+  return blocks.map(blockNodeText).join("\n").trim();
 }
 
 /** Build an in-memory SQLite database from a backup snapshot and return its buffer.
@@ -2579,6 +2583,17 @@ async function publishGranthaWithHierarchy(
   }
 
   const granthaPayload = cleanPayloadForStrapi(stripPortalMetaFromGranthaPayload(granthaDataRaw));
+
+  // BhashyamAuthor is a Strapi enum. Drafts can carry prasthana spellings or
+  // admin-added custom values that aren't in the grantha enum, which makes Strapi
+  // reject the publish with a 400 ValidationError. Normalize to an allowed value,
+  // or drop the field entirely so publish succeeds for granthas without a bhashyam.
+  const resolvedBhashyamAuthor = resolveAllowedBhashyamAuthor(granthaPayload.BhashyamAuthor);
+  if (resolvedBhashyamAuthor) {
+    granthaPayload.BhashyamAuthor = resolvedBhashyamAuthor;
+  } else if ("BhashyamAuthor" in granthaPayload) {
+    delete granthaPayload.BhashyamAuthor;
+  }
 
   // ── Progress tracking ─────────────────────────────────────────────────────
   // All three bindings use const/let (not function declarations) so they are

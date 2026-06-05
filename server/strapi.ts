@@ -134,7 +134,13 @@ function classifyStrapiError(status?: number, body?: string): string {
  * / "curl no-status" / "max-time" phrases that strapiRequest's retry classifier
  * already understands, so backoff behavior is preserved.
  */
-const STRAPI_HTTP_TIMEOUT_MS = 40_000;
+// Per-request timeout for standard Strapi calls. Env-tunable so heavy CLI runs (e.g. the
+// hermex translator's full-populate per-mantra GETs against a slow remote Strapi) can raise
+// it without changing the web app's default. Set STRAPI_HTTP_TIMEOUT_MS in that run's env.
+const STRAPI_HTTP_TIMEOUT_MS = Math.max(
+  5_000,
+  Number(process.env.STRAPI_HTTP_TIMEOUT_MS) || 40_000,
+);
 async function fetchRequest(
   url: string,
   method = "GET",
@@ -1005,7 +1011,7 @@ export function createStrapiRouter() {
       }
 
       const CONCURRENCY = 12;
-      const results: Array<{ documentId: string; ok: boolean; error?: string; labelSkipped?: boolean }> = [];
+      const results: Array<{ documentId: string; ok: boolean; error?: string; labelSkipped?: boolean; orphan?: boolean }> = [];
 
       // One PUT per Strapi documentId (after insert/renumber every sibling needs its own update).
       const byDocumentId = new Map<string, { documentId: string; order: number; ShlokaManthraNumber: string }>();
@@ -1101,7 +1107,14 @@ export function createStrapiRouter() {
                     });
                     results.push({ documentId, ok: true, labelSkipped: true });
                   } catch (e: any) {
-                    results.push({ documentId, ok: false, error: e?.message || String(e) });
+                    if (e?.status === 404) {
+                      // Mantra was deleted in Strapi since this draft linked it —
+                      // nothing to update. Treat as an orphan skip so one stale link
+                      // can't fail the whole sync/publish.
+                      results.push({ documentId, ok: true, orphan: true });
+                    } else {
+                      results.push({ documentId, ok: false, error: e?.message || String(e) });
+                    }
                   }
                   continue;
                 }
@@ -1119,7 +1132,14 @@ export function createStrapiRouter() {
             });
             results.push({ documentId, ok: true });
           } catch (e: any) {
-            results.push({ documentId, ok: false, error: e?.message || String(e) });
+            if (e?.status === 404) {
+              // Mantra was deleted in Strapi since this draft linked it — nothing to
+              // update. Treat as an orphan skip so one stale link can't fail the whole
+              // sync/publish (mirrors how section sync tolerates 404s).
+              results.push({ documentId, ok: true, orphan: true });
+            } else {
+              results.push({ documentId, ok: false, error: e?.message || String(e) });
+            }
           }
         }
       }

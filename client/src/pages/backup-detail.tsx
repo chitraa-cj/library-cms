@@ -78,9 +78,19 @@ type BackupSummary = {
 };
 
 // ── Helpers ────────────────────────────────────────────────────────
+// Recurse into nested children so a `list` (whose children are `list-item`
+// blocks) yields its item text rather than empty. List items join with
+// newlines; other blocks concatenate inline text. Paragraph-only input matches
+// the previous one-level behaviour.
+function blockNodeText(node: any): string {
+  if (typeof node?.text === "string") return node.text;
+  if (!Array.isArray(node?.children)) return "";
+  const sep = node?.type === "list" ? "\n" : "";
+  return node.children.map(blockNodeText).join(sep);
+}
 function blocksToText(blocks: Block[] | undefined): string {
   if (!blocks?.length) return "";
-  return blocks.map((b) => b.children?.map((c) => c.text).join("") ?? "").join("\n").trim();
+  return blocks.map(blockNodeText).join("\n").trim();
 }
 
 // IASTTransliteration comes from Strapi as rich-text blocks but may also be

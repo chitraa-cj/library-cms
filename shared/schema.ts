@@ -367,10 +367,33 @@ export type CmsPortalVocabularyRow = typeof cmsPortalVocabulary.$inferSelect;
 
 // ---------- Strapi block / rich-text primitives ----------
 
-/** A single node in Strapi's block (rich-text) editor format. */
+/**
+ * A leaf text node inside a Strapi block. Marks use Strapi's names
+ * (`strikethrough`, not `strike`).
+ */
+export interface StrapiTextNode {
+  type: "text";
+  text: string;
+  bold?: boolean;
+  italic?: boolean;
+  underline?: boolean;
+  strikethrough?: boolean;
+  code?: boolean;
+}
+
+/**
+ * A single node in Strapi's block (rich-text) editor format.
+ *
+ * Most blocks (`paragraph`, `heading`, `quote`, `code`, `list-item`) hold text
+ * nodes directly. A `list` block instead holds `list-item` blocks as children,
+ * so `children` is a union of text nodes and nested blocks. `level` applies to
+ * headings; `format` ("ordered" | "unordered") applies to lists.
+ */
 export interface StrapiBlock {
   type: string;
-  children: { type: string; text: string }[];
+  level?: number;
+  format?: "ordered" | "unordered";
+  children: (StrapiTextNode | StrapiBlock)[];
 }
 
 // ---------- Shared component interfaces ----------

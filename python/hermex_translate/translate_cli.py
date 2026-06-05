@@ -310,23 +310,62 @@ def _should_reopen_browser(err: BaseException) -> bool:
             "disconnected",
             "target window already closed",
             "web view not found",
+            # The chromedriver/Chrome process died: the HTTP control connection to
+            # the driver is gone. These must trigger a full relaunch — a page
+            # refresh on a dead driver loops forever (the connection-refused spiral
+            # that fails every remaining chunk of a mantra).
+            "connection refused",
+            "failed to establish a new connection",
+            "max retries exceeded",
+            "connection aborted",
+            "remote end closed connection",
+            "newconnectionerror",
+            "errno 61",
+            "actively refused",
         )
     )
 
 
 def _cleanup_stale_chrome() -> None:
-    """Kill orphaned chromedriver / helper Chrome after repeated launch failures."""
+    """Kill orphaned chromedriver / automation Chrome after launch failures.
+
+    Includes the Hermex Chrome profile dir so orphaned *visible*-fallback Chrome
+    windows (which the headless-only patterns miss) are reaped — these accumulate
+    on long macOS runs and wedge every subsequent launch with 'cannot connect to
+    chrome'. The profile marker is automation-only, so a user's personal browser
+    (default profile) is never touched. Override the marker with
+    HERMEX_CHROME_PROFILE_MARKER if your Chrome profile path differs."""
+    import os
     import subprocess
 
     _log("[hermex] Cleaning up stale chromedriver before relaunch")
+    profile_marker = os.environ.get("HERMEX_CHROME_PROFILE_MARKER", "hermex/chrome_profile").strip()
     if sys.platform in ("darwin", "linux"):
-        for pattern in (
+        patterns = [
             "chromedriver",
             "undetected_chromedriver",
             "chrome-headless",
             "Google Chrome --headless",
-        ):
+        ]
+        if profile_marker:
+            patterns.append(profile_marker)
+        for pattern in patterns:
             subprocess.run(["pkill", "-f", pattern], capture_output=True)
+
+    # Remove stale Singleton lock files — a hard-killed Chrome leaves these, and a
+    # fresh Chrome on the same profile then exits immediately ('cannot connect to
+    # chrome'). Chrome recreates them on a clean launch, so removal is safe.
+    profile_dir = os.environ.get("HERMEX_CHROME_PROFILE_DIR") or os.path.expanduser(
+        "~/Library/Application Support/hermex/chrome_profile"
+    )
+    for lock in ("SingletonLock", "SingletonSocket", "SingletonCookie"):
+        lock_path = os.path.join(profile_dir, lock)
+        try:
+            if os.path.lexists(lock_path):
+                os.remove(lock_path)
+                _log(f"[hermex] Removed stale {lock}")
+        except OSError as lock_err:
+            _log(f"[hermex] Could not remove {lock}: {lock_err}")
     time.sleep(5)
 
 
@@ -341,6 +380,17 @@ def _headless_fallback_enabled() -> bool:
     return sys.platform == "darwin"
 
 
+def _launch_attempts() -> int:
+    """How many full launch passes to make before giving up. Long grantha runs
+    on macOS wedge Chrome ('cannot connect to chrome') and only recover after a
+    stale-process cleanup + wait, so retry the launch rather than failing the
+    whole job (which is what cascaded 1000+ chunks into the same error)."""
+    import os
+
+    n = int(os.environ.get("HERMEX_LAUNCH_ATTEMPTS", "0") or 0)
+    return n if n > 0 else 4
+
+
 def _open_gemini_browser(headless: bool, *, after_cleanup: bool = False) -> Any:
     from hermex import Gemini
 
@@ -348,27 +398,38 @@ def _open_gemini_browser(headless: bool, *, after_cleanup: bool = False) -> Any:
     if headless and _headless_fallback_enabled():
         modes.append(False)
 
+    max_attempts = _launch_attempts()
     last_err: BaseException | None = None
-    for mode in modes:
-        if after_cleanup or last_err is not None:
+    for attempt in range(1, max_attempts + 1):
+        for mode in modes:
+            # Always clean orphaned chromedriver/Chrome before a retry attempt
+            # (or when the caller knows the prior session died) — a wedged port
+            # is the usual cause of 'cannot connect to chrome' on launch.
+            if after_cleanup or attempt > 1:
+                _cleanup_stale_chrome()
+            try:
+                _log(f"[hermex] Launching Chrome (headless={mode}, attempt {attempt}/{max_attempts})")
+                gemini = Gemini(headless=mode)
+                gemini.open_url("https://gemini.google.com/app")
+                _dismiss_gemini_overlays(gemini)
+                if not getattr(gemini, "is_logged_in", True):
+                    _log("[hermex] WARN: Gemini session not logged in — run: npm run hermex:setup")
+                if mode is False and headless:
+                    _log("[hermex] Using visible Chrome — headless launch failed (common on macOS long runs)")
+                return gemini
+            except Exception as e:
+                last_err = e
+                if not _should_reopen_browser(e):
+                    raise
+                _log(f"[hermex] Browser launch failed (headless={mode}, attempt {attempt}): {e}")
+                if mode is headless and len(modes) > 1:
+                    _log("[hermex] Retrying with visible Chrome (HERMEX_HEADLESS_FALLBACK)")
+        # All modes failed this pass — escalate: clean up, back off, try again.
+        if attempt < max_attempts:
+            wait = min(60.0, 10.0 * attempt)
+            _log(f"[hermex] All launch modes failed (attempt {attempt}/{max_attempts}) — cleanup + wait {wait:.0f}s")
             _cleanup_stale_chrome()
-        try:
-            _log(f"[hermex] Launching Chrome (headless={mode})")
-            gemini = Gemini(headless=mode)
-            gemini.open_url("https://gemini.google.com/app")
-            _dismiss_gemini_overlays(gemini)
-            if not getattr(gemini, "is_logged_in", True):
-                _log("[hermex] WARN: Gemini session not logged in — run: npm run hermex:setup")
-            if mode is False and headless:
-                _log("[hermex] Using visible Chrome — headless launch failed (common on macOS long runs)")
-            return gemini
-        except Exception as e:
-            last_err = e
-            if not _should_reopen_browser(e):
-                raise
-            _log(f"[hermex] Browser launch failed (headless={mode}): {e}")
-            if mode is headless and len(modes) > 1:
-                _log("[hermex] Retrying with visible Chrome (HERMEX_HEADLESS_FALLBACK)")
+            time.sleep(wait)
     if last_err is not None:
         raise last_err
     raise RuntimeError("Could not open Gemini browser")
@@ -724,6 +785,18 @@ def _translate_chunks(
         chunks_since_browser_open = 0
         return gemini
 
+    def _safe_reopen(*, force_cleanup: bool = False) -> bool:
+        """Reopen without propagating. A relaunch that still fails after the
+        internal launch retries must fail only the current chunk (recorded via
+        continue_on_error), never crash the whole job — that crash is what
+        cascaded every remaining mantra into 'session not created'."""
+        try:
+            _reopen_browser(force_cleanup=force_cleanup)
+            return True
+        except Exception as reopen_err:
+            _log(f"[hermex] Browser reopen failed (continuing to next chunk): {reopen_err}")
+            return False
+
     try:
         _reopen_browser()
         for idx, chunk in enumerate(chunks):
@@ -734,7 +807,13 @@ def _translate_chunks(
                     _log(
                         f"[hermex] Proactive browser restart after {chunks_since_browser_open} chunks"
                     )
-                    _reopen_browser(force_cleanup=True)
+                    if not _safe_reopen(force_cleanup=True):
+                        # Could not restart now — back off and let the next attempt
+                        # retry rather than running a chunk on a dead browser.
+                        last_err = last_err or RuntimeError("browser restart failed")
+                        if attempt < max_retries:
+                            time.sleep(chunk_delay_sec * attempt)
+                        continue
                 try:
                     _run_one_chunk(gemini, idx, chunk)
                     last_err = None
@@ -747,7 +826,7 @@ def _translate_chunks(
                         wait = chunk_delay_sec * attempt
                         if _should_reopen_browser(e):
                             _log(f"[hermex] RETRY {chunk_label} in {wait:.0f}s (reopen browser)")
-                            _reopen_browser(force_cleanup=True)
+                            _safe_reopen(force_cleanup=True)
                         else:
                             _log(f"[hermex] RETRY {chunk_label} in {wait:.0f}s (same browser)")
                             _recover_browser_session(gemini)

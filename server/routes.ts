@@ -810,6 +810,15 @@ async function buildManthraData(
     typeof manthra.strapiDocumentId === "string" && manthra.strapiDocumentId.length >= 10;
   const strapiDocId = manthra.strapiDocumentId as string;
 
+  // Fresh republish strips the live Strapi link but keeps `_priorStrapiDocId` so we can read
+  // the existing CMS content for verses whose bhashyam/teeka were never hydrated into the draft.
+  const priorContentDocId =
+    !isExistingStrapi &&
+    typeof manthra._priorStrapiDocId === "string" &&
+    (manthra._priorStrapiDocId as string).length >= 10
+      ? (manthra._priorStrapiDocId as string)
+      : undefined;
+
   let resolvedTeekas: any[] = [];
   if (Array.isArray(rawTeekas) && rawTeekas.length > 0) {
     resolvedTeekas = await resolveManthraTeekas(rawTeekas, granthaDocId, teekaNameToDocId);
@@ -819,16 +828,22 @@ async function buildManthraData(
     Array.isArray(rawTeekas) && rawTeekas.length > 0 && resolvedTeekas.length > 0;
   // Always fetch teeka snapshot for existing mantras so partial edits never wipe sibling teekas.
   const needsTeekaMergeSnapshot = isExistingStrapi && localTeekasNeedMerge;
+  // Doc id to read existing CMS content from: the row itself for a normal update, or the
+  // row this verse was published from for a fresh republish (so un-hydrated content survives).
+  const snapshotDocId = isExistingStrapi ? strapiDocId : priorContentDocId;
+  const fetchSnapshot = !!snapshotDocId && (needsTeekaMergeSnapshot || !!priorContentDocId);
 
   let strapiMantraSnapshot: any = null;
-  if (needsTeekaMergeSnapshot) {
+  if (fetchSnapshot) {
     try {
       strapiMantraSnapshot =
-        (await strapiRequest(`/api/manthras/${strapiDocId}${MANTRA_EXISTING_MERGE_QUERY}`))?.data ?? null;
-      if (resolvedTeekas.length > 0) {
-        const n = strapiMantraSnapshot?.Teekas?.length ?? 0;
-        console.log(`[buildManthraData] Fetched Strapi mantra snapshot (${n} teeka row(s)) for merge`);
-      }
+        (await strapiRequest(`/api/manthras/${snapshotDocId}${MANTRA_EXISTING_MERGE_QUERY}`))?.data ?? null;
+      const n = strapiMantraSnapshot?.Teekas?.length ?? 0;
+      console.log(
+        `[buildManthraData] Fetched Strapi mantra snapshot (${n} teeka row(s))${
+          priorContentDocId ? " for fresh-republish carry-over" : " for merge"
+        }`,
+      );
     } catch (e: any) {
       console.warn(`[buildManthraData] Could not fetch existing Strapi mantra for merge — ${e.message}`);
     }
@@ -900,6 +915,12 @@ async function buildManthraData(
     } else if (isExistingStrapi && mantraTextMergeNeeded(cleaned) && !strapiMantraSnapshot) {
       await mergeMantraTextComponentsFromStrapi(cleaned, strapiDocId);
     }
+  }
+
+  // Fresh republish: backfill bhashyam / teeka / shloka that the draft never hydrated so a
+  // structural renumber (which recreates every row) can't blank out un-opened verses.
+  if (priorContentDocId && strapiMantraSnapshot) {
+    carryOverFreshRepublishContent(cleaned, strapiMantraSnapshot);
   }
 
   pruneNonPublishableManthraTextFields(cleaned);
@@ -1261,6 +1282,58 @@ function mergeTeekaEntryForPut(strapiEntry: any | null | undefined, localEntry: 
   }
   if (mergedOT !== undefined) out.OtherTranslations = mergedOT;
   return rebuildTextAndTranslationForStrapiPut(out) ?? out;
+}
+
+function rebuildTeekaOrTextEntryFromSnapshot(entry: any): any {
+  if (!entry || typeof entry !== "object") return entry ?? null;
+  const norm = normalizeTextAndTranslation({ ...entry });
+  return rebuildTextAndTranslationForStrapiPut(norm as Record<string, any>) ?? norm;
+}
+
+/**
+ * Fresh republish only — fill anything the local draft is missing from a snapshot of the row
+ * this verse was previously published from. Large granthas never hydrate per-verse bhashyam/teeka
+ * into the draft, and a fresh republish recreates every row, so without this carry-over an
+ * un-opened verse would be recreated blank (and its original deleted), losing its commentary.
+ */
+function carryOverFreshRepublishContent(target: Record<string, any>, snapshot: any): void {
+  if (!snapshot || typeof snapshot !== "object") return;
+
+  // Shloka + Bhashyam bodies: take the CMS body whenever the draft didn't supply one.
+  for (const key of ["ShlokaManthraEntry", "BhashyamEntry"] as const) {
+    if (textEntryHasPublishableContent(target[key])) continue;
+    const snap = snapshot[key];
+    if (snap && typeof snap === "object" && textEntryHasPublishableContent(snap)) {
+      target[key] = rebuildTeekaOrTextEntryFromSnapshot(snap);
+    }
+  }
+
+  // Teekas: keep every draft entry, fill empty TeekaEntry bodies from CMS, and add any CMS
+  // teekas the draft never carried (an un-opened verse holds no per-teeka content locally).
+  const snapTeekas: any[] = Array.isArray(snapshot.Teekas) ? snapshot.Teekas : [];
+  if (snapTeekas.length === 0) return;
+  const snapByDocId = new Map<string, any>();
+  for (const et of snapTeekas) {
+    if (et?.teeka?.documentId) snapByDocId.set(et.teeka.documentId, et);
+  }
+  const localTeekas: any[] = Array.isArray(target.Teekas) ? target.Teekas : [];
+  const merged: any[] = [];
+  const used = new Set<string>();
+  for (const lt of localTeekas) {
+    const tDocId = typeof lt?.teeka === "string" ? lt.teeka : undefined;
+    if (tDocId) used.add(tDocId);
+    if (tDocId && !textEntryHasPublishableContent(lt?.TeekaEntry) && snapByDocId.has(tDocId)) {
+      merged.push({ ...lt, TeekaEntry: rebuildTeekaOrTextEntryFromSnapshot(snapByDocId.get(tDocId).TeekaEntry) });
+    } else {
+      merged.push(lt);
+    }
+  }
+  for (const et of snapTeekas) {
+    const tDocId = et?.teeka?.documentId;
+    if (!tDocId || used.has(tDocId)) continue;
+    merged.push({ teeka: tDocId, TeekaEntry: rebuildTeekaOrTextEntryFromSnapshot(et.TeekaEntry) });
+  }
+  if (merged.length > 0) target.Teekas = merged;
 }
 
 /** One Strapi GET for existing-mantra publish: teekas + Shloka + Bhashyam (avoids duplicate round-trips). */

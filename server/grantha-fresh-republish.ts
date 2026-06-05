@@ -3,7 +3,16 @@ import { strapiRequest } from "./strapi";
 /** Remove Strapi document links so publish creates a fresh CMS tree from portal draft content. */
 export function stripHierarchyStrapiLinksForFreshPublish(hierarchy: any[]): any[] {
   const stripManthra = (m: any) => {
-    const { strapiDocumentId: _s, _isNewLocal: _n, ...rest } = m;
+    const { strapiDocumentId, _isNewLocal: _n, ...rest } = m;
+    // Keep a non-link back-reference to the row this verse was published from. A fresh
+    // republish recreates every mantra from the local draft, but large granthas never
+    // hydrate per-verse bhashyam/teeka into the draft (only verse text is bulk-loaded).
+    // Without this, un-opened verses would be recreated blank and the originals deleted,
+    // losing their bhashyam/teeka. Stripped from the Strapi payload by cleanPayloadForStrapi
+    // (it drops keys starting with "_"), so it never reaches the CMS.
+    if (typeof strapiDocumentId === "string" && strapiDocumentId.length >= 10) {
+      rest._priorStrapiDocId = strapiDocumentId;
+    }
     return rest;
   };
   return hierarchy.map((adhyaya) => ({

@@ -81,7 +81,57 @@ async function listSectionMantraOrders(sectionDocId: string): Promise<
   return all;
 }
 
-/** Reuse a stray CMS row that has no verse label instead of POSTing another orphan. */
+function blocksHaveText(field: any): boolean {
+  if (!field) return false;
+  if (typeof field === "string") return field.trim().length > 0;
+  if (Array.isArray(field)) {
+    return field.some(
+      (b) =>
+        Array.isArray(b?.children) &&
+        b.children.some((c: any) => typeof c?.text === "string" && c.text.trim().length > 0),
+    );
+  }
+  return false;
+}
+
+/** True when a TextAndTranslation component holds any non-empty text. */
+function textEntryHasContent(entry: any): boolean {
+  if (!entry || typeof entry !== "object") return false;
+  return (
+    blocksHaveText(entry.SanskritTextEntry) ||
+    blocksHaveText(entry.EnglishTranslationText) ||
+    blocksHaveText(entry.IASTTransliteration) ||
+    (Array.isArray(entry.OtherTranslations) &&
+      entry.OtherTranslations.some((ot: any) => blocksHaveText(ot?.TranslationText)))
+  );
+}
+
+/**
+ * True when a CMS manthra row already holds verse / bhashyam / teeka content. A blank-LABELED
+ * row that still has content is a real verse whose label was never set — it must NOT be claimed
+ * for a newly inserted verse, or that verse would inherit another verse's commentary.
+ * Fails safe: if the content can't be verified, treat the row as non-empty (do not claim).
+ */
+async function mantraRowHasContent(documentId: string): Promise<boolean> {
+  try {
+    const r = await strapiRequest(
+      `/api/manthras/${documentId}` +
+        "?populate[ShlokaManthraEntry][populate]=*" +
+        "&populate[BhashyamEntry][populate]=*" +
+        "&populate[Teekas][populate][TeekaEntry][populate]=*",
+    );
+    const data = r?.data;
+    if (!data) return false;
+    if (textEntryHasContent(data.ShlokaManthraEntry)) return true;
+    if (textEntryHasContent(data.BhashyamEntry)) return true;
+    const teekas = data.Teekas;
+    return Array.isArray(teekas) && teekas.some((t: any) => textEntryHasContent(t?.TeekaEntry));
+  } catch {
+    return true;
+  }
+}
+
+/** Reuse a stray CMS row that has no verse label AND no content; otherwise POST a fresh row. */
 async function claimOrCreateMantraInSection(
   sectionDocumentId: string,
   sortKey: number,
@@ -95,15 +145,19 @@ async function claimOrCreateMantraInSection(
   }
 
   const existing = await listSectionMantraOrders(sectionDocumentId);
-  const blank = existing.find((r) => isBlankMantraLabel(r.ShlokaManthraNumber));
-  if (blank) {
-    await strapiRequest(`/api/manthras/${blank.documentId}`, {
+  // Only claim a blank-labeled row when it is ALSO empty of content. A blank-labeled row that
+  // still holds shloka/bhashyam/teeka is a real verse whose label was lost — claiming it would
+  // graft its commentary onto the inserted verse (the Vivekachudamani "+ verse shows bhashyam" bug).
+  for (const r of existing) {
+    if (!isBlankMantraLabel(r.ShlokaManthraNumber)) continue;
+    if (await mantraRowHasContent(r.documentId)) continue;
+    await strapiRequest(`/api/manthras/${r.documentId}`, {
       method: "PUT",
       body: JSON.stringify({
         data: { ShlokaManthraNumber: trimmed, order: sortKey, Section: sectionDocumentId },
       }),
     });
-    return blank.documentId;
+    return r.documentId;
   }
 
   const created = await strapiRequest("/api/manthras", {

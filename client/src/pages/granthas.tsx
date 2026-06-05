@@ -226,6 +226,11 @@ interface ManthraNode {
   ShlokaManthraEntry?: TextAndTranslation;
   BhashyamForShlokaManthra?: TextAndTranslation;
   Teekas?: ManthraTeekaEntry[];
+  /** Set when the user explicitly edits this verse's Shloka/Bhashyam in the editor. The publish
+   *  merge treats an edited field as authoritative — a deliberate edit (even if shorter than the
+   *  CMS copy) is sent, and a deliberate clear actually removes the CMS content. Portal-only. */
+  _shlokaEdited?: boolean;
+  _bhashyamEdited?: boolean;
 }
 
 interface PadaNode {
@@ -5140,9 +5145,14 @@ export default function GranthasPage() {
     padaId?: string,
     options?: { markDirty?: boolean }
   ) {
+    // Flag which content field the user touched so the publish merge treats it as
+    // authoritative (lands shorter edits; honours deliberate removals). Portal-only flags.
+    const applied: Partial<ManthraNode> = { ...updates };
     if (options?.markDirty !== false) {
       setManthraDialogDirty(true);
       markManthraContentChanged(manthraId);
+      if ("BhashyamForShlokaManthra" in updates) applied._bhashyamEdited = true;
+      if ("ShlokaManthraEntry" in updates) applied._shlokaEdited = true;
     }
     setAdhyayas((prev) =>
       prev.map((a) => {
@@ -5159,7 +5169,7 @@ export default function GranthasPage() {
                   return {
                     ...p,
                     manthras: p.manthras.map((m) =>
-                      m.id === manthraId ? { ...m, ...updates } : m
+                      m.id === manthraId ? { ...m, ...applied } : m
                     ),
                   };
                 }),
@@ -5168,7 +5178,7 @@ export default function GranthasPage() {
             return {
               ...k,
               manthras: k.manthras.map((m) =>
-                m.id === manthraId ? { ...m, ...updates } : m
+                m.id === manthraId ? { ...m, ...applied } : m
               ),
             };
           }),

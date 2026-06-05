@@ -819,6 +819,13 @@ async function buildManthraData(
       ? (manthra._priorStrapiDocId as string)
       : undefined;
 
+  // Strapi keys the user explicitly edited this session (set by the editor). For these the draft
+  // is authoritative: a shorter edit still lands (no placeholder protection) and an empty draft
+  // means "remove", so deliberate edits/removals actually reflect in the CMS.
+  const editedTextKeys = new Set<string>();
+  if (manthra._shlokaEdited === true) editedTextKeys.add("ShlokaManthraEntry");
+  if (manthra._bhashyamEdited === true) editedTextKeys.add("BhashyamEntry");
+
   let resolvedTeekas: any[] = [];
   if (Array.isArray(rawTeekas) && rawTeekas.length > 0) {
     resolvedTeekas = await resolveManthraTeekas(rawTeekas, granthaDocId, teekaNameToDocId);
@@ -831,7 +838,11 @@ async function buildManthraData(
   // Doc id to read existing CMS content from: the row itself for a normal update, or the
   // row this verse was published from for a fresh republish (so un-hydrated content survives).
   const snapshotDocId = isExistingStrapi ? strapiDocId : priorContentDocId;
-  const fetchSnapshot = !!snapshotDocId && (needsTeekaMergeSnapshot || !!priorContentDocId);
+  const fetchSnapshot =
+    !!snapshotDocId &&
+    (needsTeekaMergeSnapshot ||
+      !!priorContentDocId ||
+      (isExistingStrapi && editedTextKeys.size > 0));
 
   let strapiMantraSnapshot: any = null;
   if (fetchSnapshot) {
@@ -909,21 +920,24 @@ async function buildManthraData(
   }
 
   // ── SAFETY: Merge ShlokaManthraEntry + BhashyamEntry (skip on fast single publish — local body is authoritative) ──
-  if (!options?.fastSinglePublish) {
-    if (isExistingStrapi && strapiMantraSnapshot) {
-      applyMantraTextMergeFromStrapiData(cleaned, strapiMantraSnapshot);
-    } else if (isExistingStrapi && mantraTextMergeNeeded(cleaned) && !strapiMantraSnapshot) {
-      await mergeMantraTextComponentsFromStrapi(cleaned, strapiDocId);
+  // Also runs when the user explicitly edited/cleared a field (editedTextKeys), even if the
+  // draft is now empty — so a deliberate removal is sent rather than silently kept.
+  if (!options?.fastSinglePublish && isExistingStrapi) {
+    if (strapiMantraSnapshot) {
+      applyMantraTextMergeFromStrapiData(cleaned, strapiMantraSnapshot, editedTextKeys);
+    } else if (mantraTextMergeNeeded(cleaned) || editedTextKeys.size > 0) {
+      await mergeMantraTextComponentsFromStrapi(cleaned, strapiDocId, editedTextKeys);
     }
   }
 
   // Fresh republish: backfill bhashyam / teeka / shloka that the draft never hydrated so a
-  // structural renumber (which recreates every row) can't blank out un-opened verses.
+  // structural renumber (which recreates every row) can't blank out un-opened verses. A field
+  // the user deliberately cleared this session must NOT be refilled from the old CMS row.
   if (priorContentDocId && strapiMantraSnapshot) {
-    carryOverFreshRepublishContent(cleaned, strapiMantraSnapshot);
+    carryOverFreshRepublishContent(cleaned, strapiMantraSnapshot, editedTextKeys);
   }
 
-  pruneNonPublishableManthraTextFields(cleaned);
+  pruneNonPublishableManthraTextFields(cleaned, editedTextKeys);
   sanitizeStrapiTextComponentsOnManthraLikePayload(cleaned);
   return cleaned;
 }
@@ -1189,9 +1203,12 @@ function textEntryHasPublishableContent(entry: any): boolean {
   return otherTranslationsHavePublishableContent(entry.OtherTranslations);
 }
 
-/** Drop empty TextAndTranslation shells so Strapi PUT omits them and keeps CMS content. */
-function pruneNonPublishableManthraTextFields(m: Record<string, any>): void {
+/** Drop empty TextAndTranslation shells so Strapi PUT omits them and keeps CMS content.
+ *  Keys in `preserveKeys` are kept even when empty — the user deliberately cleared them and
+ *  the empty value must be sent so Strapi actually removes the content. */
+function pruneNonPublishableManthraTextFields(m: Record<string, any>, preserveKeys?: Set<string>): void {
   for (const key of MANTHRA_TEXT_COMPONENT_KEYS) {
+    if (preserveKeys?.has(key)) continue;
     const v = m[key];
     if (v && typeof v === "object" && !Array.isArray(v) && !textEntryHasPublishableContent(v)) {
       delete m[key];
@@ -1211,6 +1228,9 @@ function manthraTextEntryIsOrderStubOnly(entry: any): boolean {
 
 /** True when the portal draft has verse/teeka content worth a full Strapi merge PUT. */
 function manthraHasLocalPublishableContent(manthra: Record<string, any>): boolean {
+  // An explicit edit/clear must take the full merge path, not the label-only fast path —
+  // otherwise a deliberately emptied Shloka/Bhashyam would never be cleared in the CMS.
+  if (manthra._shlokaEdited === true || manthra._bhashyamEdited === true) return true;
   if (textEntryHasPublishableContent(manthra.ShlokaManthraEntry)) {
     if (manthraTextEntryIsOrderStubOnly(manthra.ShlokaManthraEntry)) return false;
     return true;
@@ -1240,7 +1260,14 @@ async function updateManthraIdentityOnly(
  *  Strapi is the base; each blocks field is replaced only when the draft has publishable content there.
  *  OtherTranslations are merged by language so Strapi-only rows are never dropped.
  *  Return value is always rebuilt for Strapi REST (strips nested ids / relations from populate=*). */
-function mergeTeekaEntryForPut(strapiEntry: any | null | undefined, localEntry: any | null | undefined): any {
+function mergeTeekaEntryForPut(
+  strapiEntry: any | null | undefined,
+  localEntry: any | null | undefined,
+  // When the user explicitly edited this field, the draft is authoritative: take its blocks
+  // whenever they're non-empty, bypassing the placeholder/length heuristic that otherwise
+  // protects rich CMS text from being clobbered by a stub draft.
+  trustDraft = false,
+): any {
   if (!localEntry || typeof localEntry !== "object") {
     if (strapiEntry && typeof strapiEntry === "object") {
       const norm = normalizeTextAndTranslation({ ...strapiEntry });
@@ -1261,27 +1288,33 @@ function mergeTeekaEntryForPut(strapiEntry: any | null | undefined, localEntry: 
       ? undefined
       : mergeOtherTranslations(draftOT, strapiOT);
 
+  const keepDraft = (draftField: any, strapiField: any) =>
+    hasPublishableBlocks(draftField) &&
+    (trustDraft || !isPlaceholderVersusCmsText(draftField, strapiField));
+
   const out: Record<string, any> = { ...s };
-  if (
-    hasPublishableBlocks(d.SanskritTextEntry) &&
-    !isPlaceholderVersusCmsText(d.SanskritTextEntry, s.SanskritTextEntry)
-  ) {
+  if (keepDraft(d.SanskritTextEntry, s.SanskritTextEntry)) {
     out.SanskritTextEntry = d.SanskritTextEntry;
   }
-  if (
-    hasPublishableBlocks(d.EnglishTranslationText) &&
-    !isPlaceholderVersusCmsText(d.EnglishTranslationText, s.EnglishTranslationText)
-  ) {
+  if (keepDraft(d.EnglishTranslationText, s.EnglishTranslationText)) {
     out.EnglishTranslationText = d.EnglishTranslationText;
   }
-  if (
-    hasPublishableBlocks(d.IASTTransliteration) &&
-    !isPlaceholderVersusCmsText(d.IASTTransliteration, s.IASTTransliteration)
-  ) {
+  if (keepDraft(d.IASTTransliteration, s.IASTTransliteration)) {
     out.IASTTransliteration = d.IASTTransliteration;
   }
   if (mergedOT !== undefined) out.OtherTranslations = mergedOT;
   return rebuildTextAndTranslationForStrapiPut(out) ?? out;
+}
+
+/** Empty TextAndTranslation used to actively clear a CMS field the user deliberately removed. */
+function clearedTextEntry(): Record<string, any> {
+  const emptyBlocks = [{ type: "paragraph", children: [{ type: "text", text: "" }] }];
+  return {
+    SanskritTextEntry: emptyBlocks,
+    EnglishTranslationText: emptyBlocks.map((b) => ({ ...b })),
+    IASTTransliteration: emptyBlocks.map((b) => ({ ...b })),
+    OtherTranslations: [],
+  };
 }
 
 function rebuildTeekaOrTextEntryFromSnapshot(entry: any): any {
@@ -1296,11 +1329,17 @@ function rebuildTeekaOrTextEntryFromSnapshot(entry: any): any {
  * into the draft, and a fresh republish recreates every row, so without this carry-over an
  * un-opened verse would be recreated blank (and its original deleted), losing its commentary.
  */
-function carryOverFreshRepublishContent(target: Record<string, any>, snapshot: any): void {
+function carryOverFreshRepublishContent(
+  target: Record<string, any>,
+  snapshot: any,
+  editedKeys?: Set<string>,
+): void {
   if (!snapshot || typeof snapshot !== "object") return;
 
   // Shloka + Bhashyam bodies: take the CMS body whenever the draft didn't supply one.
   for (const key of ["ShlokaManthraEntry", "BhashyamEntry"] as const) {
+    // A field the user deliberately edited/cleared this session is authoritative — never refill it.
+    if (editedKeys?.has(key)) continue;
     if (textEntryHasPublishableContent(target[key])) continue;
     const snap = snapshot[key];
     if (snap && typeof snap === "object" && textEntryHasPublishableContent(snap)) {
@@ -1367,32 +1406,47 @@ function mantraTextMergeNeeded(target: Record<string, any>): boolean {
 }
 
 /** Apply Strapi-backed merge for Shloka/Bhashyam using a mantra `data` object already fetched from Strapi. */
-function applyMantraTextMergeFromStrapiData(target: Record<string, any>, strapiData: any): void {
-  if (!strapiData || typeof strapiData !== "object") return;
+function applyMantraTextMergeFromStrapiData(
+  target: Record<string, any>,
+  strapiData: any,
+  // Strapi keys the user explicitly edited this session (authoritative: trust draft, and an
+  // empty draft means "remove" rather than "leave CMS alone").
+  editedKeys?: Set<string>,
+): void {
   const keys = ["ShlokaManthraEntry", "BhashyamEntry"] as const;
   for (const key of keys) {
+    const edited = !!editedKeys?.has(key);
     const localEntry = target[key];
-    if (!localEntry || typeof localEntry !== "object" || !textEntryHasPublishableContent(localEntry)) {
-      // Omit from PUT — Strapi keeps existing CMS text when the field is not sent.
-      delete target[key];
+    const hasLocal =
+      localEntry && typeof localEntry === "object" && textEntryHasPublishableContent(localEntry);
+    if (!hasLocal) {
+      if (edited) {
+        // User deliberately cleared this field — overwrite CMS with empty so it's removed.
+        target[key] = clearedTextEntry();
+      } else {
+        // Omit from PUT — Strapi keeps existing CMS text when the field is not sent.
+        delete target[key];
+      }
       continue;
     }
-    const strapiEntry = strapiData[key];
+    const strapiEntry = strapiData && typeof strapiData === "object" ? strapiData[key] : undefined;
     if (strapiEntry && typeof strapiEntry === "object") {
-      target[key] = mergeTeekaEntryForPut(strapiEntry, localEntry);
+      target[key] = mergeTeekaEntryForPut(strapiEntry, localEntry, edited);
     }
+    // No CMS counterpart: target[key] stays = the draft entry (already correct).
   }
 }
 
 /** Fallback when no snapshot: fetch Strapi Shloka/Bhashyam only (used after failed combined fetch). */
 async function mergeMantraTextComponentsFromStrapi(
   target: Record<string, any>,
-  strapiDocumentId: string
+  strapiDocumentId: string,
+  editedKeys?: Set<string>,
 ): Promise<void> {
-  if (!mantraTextMergeNeeded(target)) return;
+  if (!mantraTextMergeNeeded(target) && !(editedKeys && editedKeys.size > 0)) return;
   try {
     const fetched = await strapiRequest(`/api/manthras/${strapiDocumentId}${MANTRA_EXISTING_MERGE_QUERY}`);
-    applyMantraTextMergeFromStrapiData(target, fetched?.data);
+    applyMantraTextMergeFromStrapiData(target, fetched?.data, editedKeys);
   } catch (e: any) {
     console.warn(`[mergeMantraTextComponentsFromStrapi] Fetch/merge failed — sending local fields only: ${e.message}`);
   }

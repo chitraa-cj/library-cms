@@ -2088,6 +2088,10 @@ async function resolveManthraDocIdForPublish(
   mData: Record<string, any>,
   granthaDocId?: string,
   options?: { fastSinglePublish?: boolean; republishFresh?: boolean },
+  // documentIds owned (via strapiDocumentId) by OTHER portal verses in this same publish.
+  // A verse must never resolve — by label — onto a row that is another verse's identity,
+  // or an inserted verse would steal the renumbered verse's row (and its bhashyam/teeka).
+  reservedDocIds: Set<string> = new Set(),
 ): Promise<string | undefined> {
   if (options?.republishFresh) return undefined;
 
@@ -2104,54 +2108,47 @@ async function resolveManthraDocIdForPublish(
     return stored;
   }
 
-  const preferred =
-    typeof manthra.strapiDocumentId === "string" && manthra.strapiDocumentId.length >= 10
-      ? manthra.strapiDocumentId
-      : undefined;
+  const preferred = stored;
 
   const resolveFromSectionRows = async (): Promise<string | undefined> => {
     if (!portalLabel) return undefined;
-    const rows = await listSectionMantraLabels(sectionDocId);
+    const allRows = await listSectionMantraLabels(sectionDocId);
+    // Never adopt a row that is another verse's immutable identity.
+    const rows =
+      reservedDocIds.size > 0 ? allRows.filter((r) => !reservedDocIds.has(r.documentId)) : allRows;
     const byExact = findDocIdByExactLabelInRows(rows, portalLabel, preferred);
     if (byExact) return byExact;
     const bySuffix = pickDocIdForSuffixInSectionRows(rows, portalLabel, preferred);
     if (bySuffix) return bySuffix;
-    return findManthraDocIdByLabelInSection(sectionDocId, portalLabel, preferred);
+    const byFetch = await findManthraDocIdByLabelInSection(sectionDocId, portalLabel, preferred);
+    return byFetch && !reservedDocIds.has(byFetch) ? byFetch : undefined;
   };
 
-  // Trust the portal link only when the CMS row is in this section and shares the portal verse suffix.
-  // After orphan cleanup or renumber, a stale strapiDocumentId can point at the wrong verse (e.g. 1.1.4)
-  // while the portal title is 1.1.3 — that caused false duplicate_suffix_in_section on publish.
+  // documentId is the verse's immutable identity. When the portal link points at a row that
+  // belongs to this grantha/section and isn't claimed by any OTHER sibling, TRUST it — even if
+  // the CMS label still lags a renumber (portal "1.1.3" vs CMS "1.1.2"). This publish relabels
+  // the row. Re-resolving by label here is what let an inserted "1.1.2" hijack the old verse's
+  // row, and pushed the renumbered verse onto a fresh blank row without its commentary.
   if (stored) {
     try {
       const ok = await manthraDocIdMatchesPublishContext(stored, granthaDocId, sectionDocId);
       if (ok) {
+        if (!reservedDocIds.has(stored)) return stored;
+        // Conflict: another sibling claims the same docId too — fall back to label resolution
+        // for this verse so the two don't both write to the same row.
         if (!portalLabel) return stored;
-        const portalSuf = mantraNumberSuffix(portalLabel);
-        if (!portalSuf) return stored;
-        const rows = await listSectionMantraLabels(sectionDocId);
-        const storedLabel =
-          rows.find((r) => r.documentId === stored)?.label ??
-          (await fetchManthraStrapiLabel(stored));
-        const storedSuf = mantraNumberSuffix(storedLabel);
-        if (storedSuf === portalSuf) return stored;
-        const adopted = pickDocIdForSuffixInSectionRows(rows, portalLabel, preferred) ?? (await resolveFromSectionRows());
+        const adopted = await resolveFromSectionRows();
         if (adopted) {
-          if (adopted !== stored) {
-            console.warn(
-              `[publish] Portal strapiDocumentId ${stored} (${storedLabel || "?"}) does not match "${portalLabel}" — publishing to ${adopted}`,
-            );
-          }
+          console.warn(
+            `[publish] strapiDocumentId ${stored} is claimed by multiple portal verses — publishing "${portalLabel}" to ${adopted} instead`,
+          );
           return adopted;
         }
-        console.warn(
-          `[publish] Ignoring strapiDocumentId ${stored} — CMS label "${storedLabel || "?"}" does not match portal "${portalLabel}"`,
-        );
-      } else {
-        console.warn(
-          `[publish] Ignoring strapiDocumentId ${stored} — mantra belongs to a different grantha/section than this publish`,
-        );
+        return stored;
       }
+      console.warn(
+        `[publish] Ignoring strapiDocumentId ${stored} — mantra belongs to a different grantha/section than this publish`,
+      );
     } catch (e: any) {
       if (!isOrphanedDocError(e)) {
         console.warn(`[publish] Stored doc ${stored} lookup failed:`, e?.message || e);
@@ -2352,12 +2349,26 @@ async function publishManthraToStrapiInner(
   }
   const portalLabel = (manthra.title || manthra.ShlokaManthraNumber || "").trim();
   const prelimData = { ShlokaManthraNumber: portalLabel };
+  // documentIds owned by OTHER verses in this section's publish. Their rows are those verses'
+  // identities and must never be adopted (by label) for this verse — that is the insert/renumber
+  // "bhashyam tags along with the new verse" corruption.
+  const reservedDocIds = new Set<string>();
+  for (const sib of options?.portalSiblings ?? []) {
+    if (
+      sib.id !== manthra.id &&
+      typeof sib.strapiDocumentId === "string" &&
+      sib.strapiDocumentId.length >= 10
+    ) {
+      reservedDocIds.add(sib.strapiDocumentId);
+    }
+  }
   let targetDocId = await resolveManthraDocIdForPublish(
     manthra,
     sectionDocId,
     prelimData,
     granthaDocId,
     options,
+    reservedDocIds,
   );
   const label = portalLabel || manthra.title || "(unknown)";
   const publishOrder = await resolvePublishSortKey(manthra, sectionDocId, options);
@@ -2372,7 +2383,13 @@ async function publishManthraToStrapiInner(
     sectionDocId &&
     portalLabel
   ) {
-    const rows = await listSectionMantraLabels(sectionDocId);
+    const allRows = await listSectionMantraLabels(sectionDocId);
+    // A row owned by another sibling is that verse's identity — exclude it so a label
+    // collision can't make this verse adopt (and overwrite) another verse's row.
+    const rows =
+      reservedDocIds.size > 0
+        ? allRows.filter((r) => !reservedDocIds.has(r.documentId))
+        : allRows;
     const labelMap = new Map(rows.map((r) => [r.label, r.documentId]));
     const collision = sectionSuffixCollision(
       rows.map((r) => r.label),

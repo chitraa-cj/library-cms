@@ -2692,6 +2692,10 @@ async function publishGranthaWithHierarchy(
   publishOptions?: { allowRenumber?: boolean; republishFresh?: boolean },
 ): Promise<any> {
   const allowRenumber = !!publishOptions?.allowRenumber;
+  // Fresh rebuild (delete old Strapi grantha + recreate everything from the draft) runs ONLY
+  // when in-between "+" inserts / deletes renumbered verses this session (allowRenumber). For
+  // content-only edits the publish stays an in-place update. This scopes the draft-first
+  // rebuild to the structural-change case that needs it, per the editor's draft-only "+" flow.
   let republishFresh =
     !!publishOptions?.republishFresh || (allowRenumber && !!draft.strapiDocumentId);
   let oldGranthaDocIdForCleanup: string | undefined;
@@ -6196,6 +6200,215 @@ export async function registerRoutes(
       errors: job.errors,
       message: job.message,
     });
+  });
+
+  // ── Full grantha rebuild from a snapshot ───────────────────────────────────
+  // Deletes the live grantha matched BY NAME (its manthras → sections → grantha)
+  // and recreates the whole grantha fresh from the snapshot. Aborts if more than
+  // one live grantha shares the name. Runs as a background job (same poll infra).
+  const RESTORE_INTERNAL_KEYS = new Set([
+    "id", "documentId", "createdAt", "updatedAt", "publishedAt", "locale",
+  ]);
+  function stripStrapiInternal(obj: any): any {
+    if (Array.isArray(obj)) return obj.map(stripStrapiInternal);
+    if (obj && typeof obj === "object") {
+      const out: any = {};
+      for (const [k, v] of Object.entries(obj)) {
+        if (RESTORE_INTERNAL_KEYS.has(k)) continue;
+        out[k] = stripStrapiInternal(v);
+      }
+      return out;
+    }
+    return obj;
+  }
+
+  app.post("/api/admin/backups/:id/restore-grantha-full", requireAuth, requireAdmin, async (req, res) => {
+    const backupId = parseInt(req.params.id);
+    const { granthaDocId } = req.body as { granthaDocId: string };
+    if (!granthaDocId) return res.status(400).json({ message: "granthaDocId is required" });
+    if (isNaN(backupId)) return res.status(400).json({ message: "Invalid backup ID" });
+
+    const backup = await storage.getBackup(backupId);
+    if (!backup) return res.status(404).json({ message: "Backup not found" });
+    const bData = decompressBackupData(backup.data);
+
+    const snapGrantha = (bData.granthas ?? []).find((g: any) => g.documentId === granthaDocId);
+    if (!snapGrantha) return res.status(404).json({ message: "Grantha not found in this snapshot" });
+    const granthaName = String(snapGrantha.GranthaName ?? "").trim();
+    if (!granthaName) return res.status(400).json({ message: "Snapshot grantha has no name to match on" });
+
+    const snapSections: any[] = (bData.sections ?? []).filter(
+      (s: any) => s.grantha?.documentId === granthaDocId,
+    );
+    const snapSectionDocIds = new Set(snapSections.map((s: any) => s.documentId));
+    const snapManthras: any[] = (bData.manthras ?? []).filter((m: any) =>
+      snapSectionDocIds.has(m.Section?.documentId ?? m.section?.documentId ?? ""),
+    );
+
+    // Find the live grantha(s) by name (case-insensitive exact).
+    let liveMatches: any[] = [];
+    try {
+      const r = await strapiRequest(
+        `/api/granthas?filters[GranthaName][$eqi]=${encodeURIComponent(granthaName)}` +
+        `&fields[0]=documentId&fields[1]=GranthaName&pagination[pageSize]=100`,
+      );
+      liveMatches = r?.data ?? [];
+    } catch (e: any) {
+      return res.status(502).json({ message: `Failed to query live granthas: ${e.message}` });
+    }
+    if (liveMatches.length > 1) {
+      return res.status(409).json({
+        message: `Aborted: ${liveMatches.length} live granthas match the name "${granthaName}". Resolve the duplicates manually before a full restore.`,
+        matches: liveMatches.map((g) => ({ documentId: g.documentId, GranthaName: g.GranthaName })),
+      });
+    }
+    const liveGrantha = liveMatches[0] ?? null;
+
+    const jobId = `restore-full-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    restoreJobs.set(jobId, { status: "running", progress: 0, total: snapManthras.length, results: [], errors: [] });
+    res.status(202).json({
+      jobId,
+      total: snapManthras.length,
+      willDeleteLive: liveGrantha?.documentId ?? null,
+    });
+
+    (async () => {
+      const job = restoreJobs.get(jobId)!;
+      try {
+        // 1. Delete the live grantha (manthras → sections → grantha).
+        if (liveGrantha) {
+          const liveGid = liveGrantha.documentId;
+          const liveManthraIds: string[] = [];
+          let page = 1;
+          while (true) {
+            const lr = await strapiRequest(
+              `/api/manthras?filters[Section][grantha][documentId][$eq]=${encodeURIComponent(liveGid)}` +
+              `&fields[0]=documentId&pagination[page]=${page}&pagination[pageSize]=100`,
+            );
+            const items: any[] = lr?.data ?? [];
+            liveManthraIds.push(...items.map((x) => x.documentId));
+            if (items.length < 100) break;
+            page++;
+          }
+          let delM = 0;
+          for (const did of liveManthraIds) {
+            try { await strapiRequest(`/api/manthras/${did}`, { method: "DELETE" }); delM++; }
+            catch (e: any) { job.errors.push({ manthra: did, error: `delete manthra: ${e.message}` }); }
+          }
+          job.results.push({ manthra: "(live)", docId: liveGid, action: `deleted ${delM} live manthra(s)` });
+
+          const lsr = await strapiRequest(
+            `/api/sections?filters[grantha][documentId][$eq]=${encodeURIComponent(liveGid)}` +
+            `&fields[0]=documentId&pagination[pageSize]=100`,
+          );
+          const liveSecIds: string[] = (lsr?.data ?? []).map((x: any) => x.documentId);
+          let delS = 0;
+          for (const sid of liveSecIds) {
+            try { await strapiRequest(`/api/sections/${sid}`, { method: "DELETE" }); delS++; }
+            catch (e: any) { job.errors.push({ manthra: sid, error: `delete section: ${e.message}` }); }
+          }
+          job.results.push({ manthra: "(live)", docId: liveGid, action: `deleted ${delS} live section(s)` });
+
+          try {
+            await strapiRequest(`/api/granthas/${liveGid}`, { method: "DELETE" });
+            job.results.push({ manthra: "(live)", docId: liveGid, action: `deleted live grantha ${liveGid}` });
+          } catch (e: any) {
+            job.errors.push({ manthra: liveGid, error: `delete grantha: ${e.message}` });
+          }
+        }
+
+        // 2. Recreate the grantha. Create WITHOUT the teekas relation first so a relation
+        // format quirk can never fail the POST (which would leave nothing after the delete);
+        // then connect teekas best-effort.
+        const gp = stripStrapiInternal(snapGrantha);
+        delete gp.sections; delete gp.manthras; delete gp.teekas;
+        const gRes = await strapiRequest("/api/granthas", {
+          method: "POST", body: JSON.stringify({ data: gp }),
+        });
+        const newGid: string | undefined = gRes?.data?.documentId;
+        if (!newGid) throw new Error("Grantha create returned no documentId");
+        job.results.push({ manthra: "(grantha)", docId: newGid, action: `created grantha "${granthaName}"` });
+
+        const teekaDocIds = Array.isArray(snapGrantha.teekas)
+          ? snapGrantha.teekas.map((t: any) => t?.documentId).filter(Boolean)
+          : [];
+        if (teekaDocIds.length) {
+          try {
+            await strapiRequest(`/api/granthas/${newGid}`, {
+              method: "PUT", body: JSON.stringify({ data: { teekas: teekaDocIds } }),
+            });
+          } catch (e: any) {
+            job.errors.push({ manthra: "(grantha teekas)", error: `could not relink teekas: ${e.message}` });
+          }
+        }
+
+        // 3. Recreate sections (parents before children).
+        const secMap = new Map<string, string>(); // old → new documentId
+        const pending = [...snapSections];
+        let guard = pending.length * pending.length + 10;
+        while (pending.length && guard-- > 0) {
+          const s = pending.shift()!;
+          const parentOld = s.parent?.documentId;
+          if (parentOld && snapSectionDocIds.has(parentOld) && !secMap.has(parentOld)) {
+            pending.push(s); // wait until parent created
+            continue;
+          }
+          const sp = stripStrapiInternal(s);
+          delete sp.manthras;
+          sp.grantha = newGid;
+          if (parentOld && secMap.has(parentOld)) sp.parent = secMap.get(parentOld);
+          else delete sp.parent;
+          try {
+            const sRes = await strapiRequest("/api/sections", {
+              method: "POST", body: JSON.stringify({ data: sp }),
+            });
+            const newSid = sRes?.data?.documentId;
+            if (newSid) secMap.set(s.documentId, newSid);
+          } catch (e: any) {
+            job.errors.push({ manthra: `section ${s.title ?? s.documentId}`, error: e.message });
+          }
+        }
+        job.results.push({ manthra: "(sections)", docId: newGid, action: `created ${secMap.size} section(s)` });
+
+        // 4. Recreate manthras.
+        let created = 0;
+        for (const m of snapManthras) {
+          const oldSec = m.Section?.documentId ?? m.section?.documentId;
+          const newSec = oldSec ? secMap.get(oldSec) : undefined;
+          const label = String(m.ShlokaManthraNumber ?? m.documentId ?? "?");
+          if (!newSec) {
+            job.errors.push({ manthra: label, error: "section could not be remapped — skipped" });
+            job.progress++;
+            continue;
+          }
+          const mp = stripStrapiInternal(m);
+          mp.Section = newSec;
+          if (Array.isArray(m.Teekas)) {
+            mp.Teekas = m.Teekas.map((t: any) => {
+              const clean = stripStrapiInternal(t);
+              if (t.teeka?.documentId) clean.teeka = t.teeka.documentId; else delete clean.teeka;
+              return clean;
+            });
+          }
+          try {
+            const mRes = await strapiRequest("/api/manthras", {
+              method: "POST", body: JSON.stringify({ data: mp }),
+            });
+            created++;
+            job.results.push({ manthra: label, docId: mRes?.data?.documentId ?? "", action: "created" });
+          } catch (e: any) {
+            job.errors.push({ manthra: label, error: e.message });
+          }
+          job.progress++;
+        }
+        job.results.push({ manthra: "(manthras)", docId: newGid, action: `created ${created} manthra(s)` });
+        job.status = "done";
+      } catch (e: any) {
+        job.status = "error";
+        job.message = e.message;
+        console.error(`[restore-full ${jobId}]`, e);
+      }
+    })();
   });
 
   // Track in-progress backup to prevent duplicate requests.

@@ -1,4 +1,3 @@
-import { MANTRA_LINK_MIN_CONTENT_SCORE } from "@/lib/grantha-structure-sync";
 import { apiRequest } from "@/lib/queryClient";
 import {
   fetchManthraDetailCached,
@@ -30,6 +29,22 @@ function entryContentScore(entry: unknown): number {
   return blocksLen(e.SanskritTextEntry) + blocksLen(e.EnglishTranslationText);
 }
 
+/**
+ * Total publishable text on a mantra — Shloka + Bhashyam + every Teeka.
+ * Scoring only the verse text wrongly treats a commentary-only mantra (bhashyam/teeka
+ * added but no Shloka) as "empty", which makes the resolver swap it for a content-bearing
+ * sibling and surface that sibling's bhashyam/teeka on the wrong verse.
+ */
+export function mantraContentScore(mantra: unknown): number {
+  if (!mantra || typeof mantra !== "object") return 0;
+  const m = mantra as Record<string, any>;
+  let score = entryContentScore(m.ShlokaManthraEntry) + entryContentScore(m.BhashyamEntry);
+  if (Array.isArray(m.Teekas)) {
+    for (const t of m.Teekas) score += entryContentScore(t?.TeekaEntry);
+  }
+  return score;
+}
+
 export function isManthraFetchAbortError(err: unknown): boolean {
   return (
     (err instanceof DOMException && err.name === "AbortError") ||
@@ -57,7 +72,7 @@ export async function fetchManthraByDocumentId(
       data,
       documentId: data.documentId || documentId,
       corrected: false,
-      contentScore: entryContentScore(data.ShlokaManthraEntry),
+      contentScore: mantraContentScore(data),
     };
   },
     { bypassCache: opts?.bypassCache },
@@ -65,8 +80,14 @@ export async function fetchManthraByDocumentId(
 }
 
 /**
- * Grantha editor: direct CMS fetch by documentId (cached).
- * Resolve-for-edit runs only when the row is missing, empty, or duplicate-linked.
+ * Grantha editor: lazy-hydrate a verse's OWN content by its OWN documentId (cached).
+ *
+ * Draft-first model: the local draft node is the source of truth. This only fetches the
+ * heavy fields (bhashyam/teeka, full translations) for an EXISTING verse by its own
+ * documentId — it never resolves by label to a sibling. Inserted verses (no documentId /
+ * _isNewLocal) never reach here (the editor effect short-circuits them). If the verse's own
+ * row can't be loaded, we keep the local draft content rather than label-resolving — that
+ * label fallback is exactly what grafted a neighbour's bhashyam onto the wrong verse.
  */
 export async function fetchManthraForGranthaEditor(opts: {
   documentId: string;
@@ -83,31 +104,15 @@ export async function fetchManthraForGranthaEditor(opts: {
 }): Promise<ResolvedManthraDetail | null> {
   if (opts.skipFetch) return null;
 
-  const localScore = opts.localContentScore ?? 0;
-
   try {
-    const direct = await fetchManthraByDocumentId(opts.documentId, {
+    return await fetchManthraByDocumentId(opts.documentId, {
       bypassCache: opts.bypassCache,
     });
-    const remoteScore = direct.contentScore ?? 0;
-    // Verse text lives on documentId — portal title may be ahead of CMS label during insert renumber.
-    if (remoteScore >= MANTRA_LINK_MIN_CONTENT_SCORE) {
-      return direct;
-    }
-    const needsResolve = remoteScore < MANTRA_LINK_MIN_CONTENT_SCORE;
-    if (!needsResolve) return direct;
-    if (opts.background && localScore >= MANTRA_LINK_MIN_CONTENT_SCORE) {
-      return direct;
-    }
-  } catch {
-    /* fall through to resolve */
-  }
-
-  if (opts.background && localScore >= MANTRA_LINK_MIN_CONTENT_SCORE) {
+  } catch (err) {
+    if (isManthraFetchAbortError(err)) throw err;
+    // Keep the local draft node — never fall back to label-based sibling resolution.
     return null;
   }
-
-  return fetchResolvedManthraDetail(opts);
 }
 
 /** True when portal title and CMS ShlokaManthraNumber refer to the same verse suffix (e.g. 1.1.2). */
@@ -167,10 +172,17 @@ export async function fetchPublishedManthraForEdit(
   opts?: { signal?: AbortSignal },
 ): Promise<ResolvedManthraDetail> {
   const signal = opts?.signal;
-  let result = await fetchManthraByDocumentId(item.documentId, { signal });
-  const score = result.contentScore ?? 0;
-  if (score < MANTRA_LINK_MIN_CONTENT_SCORE) {
-    result = await fetchResolvedManthraDetail({
+  // The clicked row's own documentId is authoritative. A freshly-inserted ("+") mantra is
+  // legitimately empty, so a content-score swap would silently redirect the edit to a
+  // content-bearing sibling that shares the verse-suffix label — surfacing that sibling's
+  // bhashyam/teeka on the new verse and writing the user's edits to the wrong row. So we
+  // only fall through to label-based resolution when this row cannot be loaded at all
+  // (orphaned / locale-null), never merely because it is empty.
+  try {
+    return await fetchManthraByDocumentId(item.documentId, { signal });
+  } catch (err) {
+    if (isManthraFetchAbortError(err)) throw err;
+    return await fetchResolvedManthraDetail({
       documentId: item.documentId,
       granthaDocId: item.grantha?.documentId,
       sectionDocId: item.section?.documentId,
@@ -178,5 +190,4 @@ export async function fetchPublishedManthraForEdit(
       signal,
     });
   }
-  return result;
 }

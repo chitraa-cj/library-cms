@@ -708,6 +708,52 @@ export function createStrapiRouter() {
     }
   });
 
+  // ── Bulk FULL-content fetch for every manthra in a grantha ──
+  // Used by the grantha editor to fully hydrate the draft on open so editing is
+  // entirely draft-driven (no per-verse Strapi fetch/merge — that label-matched
+  // merge is what grafted a neighbour's bhashyam onto the wrong verse after a "+"
+  // insert renumber). Returns content keyed STRICTLY by the verse's own
+  // documentId — never by label/ShlokaManthraNumber.
+  router.get("/manthras/full-by-grantha/:granthaDocId", async (req, res) => {
+    try {
+      const { granthaDocId } = req.params;
+      const BULK_FULL_POPULATE = [
+        `filters[Section][grantha][documentId][$eq]=${granthaDocId}`,
+        "fields[0]=documentId",
+        "fields[1]=ShlokaManthraNumber",
+        "populate[ShlokaManthraEntry][populate]=*",
+        "populate[BhashyamEntry][populate]=*",
+        "populate[Teekas][populate][teeka][fields][0]=documentId",
+        "populate[Teekas][populate][teeka][fields][1]=TeekaName",
+        "populate[Teekas][populate][teeka][fields][2]=TeekaAuthor",
+        "populate[Teekas][populate][TeekaEntry][populate]=*",
+        // Heavy rich-text populate — keep pages small so payloads stay well under
+        // Strapi v5's sub-relation drop threshold.
+        "pagination[pageSize]=50",
+      ].join("&");
+
+      // Bounded-batch pagination — avoid firing every page at the remote Strapi at once.
+      const { data: allManthras } = await fetchAllStrapiPages(
+        (page) => `/api/manthras?${BULK_FULL_POPULATE}&pagination[page]=${page}`,
+      );
+
+      // Map: manthra documentId → { ShlokaManthraEntry, BhashyamEntry, Teekas }.
+      const result: Record<string, { ShlokaManthraEntry: any; BhashyamEntry: any; Teekas: any[] }> = {};
+      for (const m of allManthras) {
+        if (!m.documentId) continue;
+        result[m.documentId] = {
+          ShlokaManthraEntry: m.ShlokaManthraEntry ?? null,
+          BhashyamEntry: m.BhashyamEntry ?? null,
+          Teekas: Array.isArray(m.Teekas) ? m.Teekas : [],
+        };
+      }
+
+      res.json({ data: result });
+    } catch (error: any) {
+      res.status(500).json({ message: error.message || "Failed to fetch full mantra content for grantha" });
+    }
+  });
+
   function mantraNumberSuffix(label: string): string | null {
     const m = String(label || "")
       .trim()
@@ -735,6 +781,19 @@ export function createStrapiRouter() {
       blocksPlainTextForScore(entry.SanskritTextEntry).length +
       blocksPlainTextForScore(entry.EnglishTranslationText).length
     );
+  }
+
+  /** Total publishable text on a fully-populated mantra — Shloka + Bhashyam + every Teeka.
+   *  Scoring only the verse text wrongly treats a commentary-only mantra as "empty" and lets
+   *  resolve-for-edit swap it for a content-bearing sibling. Section-list candidates only
+   *  populate ShlokaManthraEntry, so for those this degrades to the verse-text score. */
+  function mantraRowContentScore(m: any): number {
+    if (!m || typeof m !== "object") return 0;
+    let score = mantraEntryContentScore(m.ShlokaManthraEntry) + mantraEntryContentScore(m.BhashyamEntry);
+    if (Array.isArray(m.Teekas)) {
+      for (const t of m.Teekas) score += mantraEntryContentScore(t?.TeekaEntry);
+    }
+    return score;
   }
 
   function labelsShareVerseSuffix(a: string, b: string): boolean {
@@ -802,7 +861,7 @@ export function createStrapiRouter() {
         }
       }
 
-      const preferredScore = preferredRow ? mantraEntryContentScore(preferredRow.ShlokaManthraEntry) : 0;
+      const preferredScore = preferredRow ? mantraRowContentScore(preferredRow) : 0;
       const preferredLabel = String(preferredRow?.ShlokaManthraNumber ?? "").trim();
       const labelMatchesPreferred =
         !label || !preferredLabel || labelsShareVerseSuffix(label, preferredLabel);
@@ -892,7 +951,7 @@ export function createStrapiRouter() {
         },
         documentId: winner.documentId,
         corrected,
-        contentScore: mantraEntryContentScore(m.ShlokaManthraEntry),
+        contentScore: mantraRowContentScore(m),
       });
     } catch (error: any) {
       res.status(500).json({ message: error.message || "Failed to resolve manthra for edit" });

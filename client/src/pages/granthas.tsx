@@ -53,10 +53,7 @@ import {
   isStubOrderOrPlaceholderText,
   stripStubTextAndTranslationEntry,
 } from "@/lib/strapi-blocks";
-import {
-  fetchManthraForGranthaEditor,
-  labelsShareVerseSuffix,
-} from "@/lib/resolve-strapi-mantra-detail";
+import { fetchManthraForGranthaEditor } from "@/lib/resolve-strapi-mantra-detail";
 import { invalidateManthraCache } from "@/lib/mantra-cms-cache";
 import { parsePublishScopeFromDraft } from "@/lib/grantha-publish-scope";
 import {
@@ -67,16 +64,13 @@ import {
 } from "@/components/ui/tooltip";
 import {
   cancelGranthaMantraPrefetch,
-  prefetchGranthaMantrasFromHierarchy,
   prefetchManthraDocumentId,
-  prefetchManthraNeighbors,
   setGranthaMantraPrefetchContext,
 } from "@/lib/grantha-mantra-prefetch";
 import {
   buildMantraShlokaIndexFromSections,
   hydrateManthraShlokaFromIndex,
   prepareManthraAfterStrapiResolve,
-  mantraNodeHasHydratedShloka,
 } from "@/lib/strapi-mantra-hydration";
 import {
   sortNodesByOrder,
@@ -381,39 +375,6 @@ function shlokaManthraEntryRichness(entry: unknown): number {
   );
 }
 
-function bhashyamEntryRichness(entry: unknown): number {
-  if (!entry || typeof entry !== "object") return 0;
-  const e = entry as {
-    SanskritTextEntry?: unknown;
-    EnglishTranslationText?: unknown;
-  };
-  return (
-    entryContentCharCount(e.SanskritTextEntry as any) +
-    entryContentCharCount(e.EnglishTranslationText as any)
-  );
-}
-
-/** Pull CMS commentary into the editor unless local edits would be clobbered. */
-function shouldImportCmsBhashyam(
-  local: ManthraNode,
-  cmsBhashyam: unknown,
-  strapiLabel: string,
-): boolean {
-  if (!cmsBhashyam) return false;
-  // Same verse only — during an insert renumber a row can briefly link to a CMS docId
-  // whose label suffix differs; don't pull that other verse's commentary.
-  if (!labelsShareVerseSuffix(local.title, strapiLabel)) return false;
-  // Local commentary present  → merge (keeps local edits, fills gaps from CMS).
-  // Local commentary empty    → import the CMS commentary outright.
-  // Shloka richness is intentionally NOT consulted: commentary is a separate field and
-  // must load even when the verse body is already present (the prior shloka-richness gate
-  // hid existing CMS bhashyam from the editor for every verse that had shloka text).
-  return true;
-}
-
-function strapiManthraRowRichness(row: Record<string, unknown>): number {
-  return shlokaManthraEntryRichness(row.ShlokaManthraEntry);
-}
 
 /** Draft-only teeka row worth keeping when Strapi list does not include it yet. */
 function teekaEntryHasMergeableContent(entry: any): boolean {
@@ -461,6 +422,56 @@ function mergeTeekas(draftTeekas: ManthraTeekaEntry[] | undefined, strapiTeekas:
     }
   }
   return result;
+}
+
+/** Full CMS content for one verse, keyed by its own documentId (never by label). */
+type FullCmsManthraContent = {
+  ShlokaManthraEntry: any;
+  BhashyamEntry: any;
+  Teekas: any[];
+};
+
+/**
+ * Hydrate every existing verse's heavy fields (bhashyam, full shloka, teekas) from a
+ * documentId-keyed CMS content map so the draft becomes self-contained and the editor can
+ * render entirely from draft state. Matching is by the verse's OWN `strapiDocumentId` only —
+ * never by display label/number — so a "+" insert renumber can never graft a neighbour's
+ * bhashyam onto the wrong verse. Inserted verses (`_isNewLocal`) and verses the user edited
+ * (`_shlokaEdited` / `_bhashyamEdited`) keep their own draft content untouched.
+ */
+function hydrateHierarchyFromFullCmsContent(
+  tree: AdhyayaNode[],
+  byDocId: Map<string, FullCmsManthraContent>,
+): AdhyayaNode[] {
+  const patchNode = (m: ManthraNode): ManthraNode => {
+    const docId = m.strapiDocumentId;
+    if (!docId || m._isNewLocal) return m;
+    const full = byDocId.get(docId);
+    if (!full) return m;
+    const cmsShloka = stripStubTextAndTranslationEntry(full.ShlokaManthraEntry);
+    const cmsBhashyam = stripStubTextAndTranslationEntry(full.BhashyamEntry);
+    return {
+      ...m,
+      ShlokaManthraEntry: m._shlokaEdited
+        ? m.ShlokaManthraEntry
+        : mergeEntry(m.ShlokaManthraEntry, cmsShloka) ?? m.ShlokaManthraEntry,
+      BhashyamForShlokaManthra: m._bhashyamEdited
+        ? m.BhashyamForShlokaManthra
+        : mergeEntry(m.BhashyamForShlokaManthra, cmsBhashyam) ?? m.BhashyamForShlokaManthra,
+      Teekas:
+        Array.isArray(full.Teekas) && full.Teekas.length > 0
+          ? mergeTeekas(m.Teekas, full.Teekas)
+          : m.Teekas,
+    };
+  };
+  return tree.map((a) => ({
+    ...a,
+    khandas: a.khandas.map((k) => ({
+      ...k,
+      manthras: k.manthras.map(patchNode),
+      padas: (k.padas ?? []).map((p) => ({ ...p, manthras: p.manthras.map(patchNode) })),
+    })),
+  }));
 }
 
 function normLangKey(l: string | undefined): string {
@@ -1514,6 +1525,12 @@ export default function GranthasPage() {
   const manthraDialogDirtyRef = useRef(false);
   const [verseLabelSyncPending, setVerseLabelSyncPending] = useState(false);
   const [editingGranthaSectionsLoading, setEditingGranthaSectionsLoading] = useState(false);
+  // Full-content hydration (Change A): the draft is the only source of truth while editing, so
+  // every existing verse's bhashyam/teeka is pulled into the draft once on open. While this runs
+  // (or if it fails) verse editing is blocked so we never edit/publish on partial data.
+  const [granthaContentHydrating, setGranthaContentHydrating] = useState(false);
+  const [granthaHydrationError, setGranthaHydrationError] = useState<string | null>(null);
+  const granthaHydrationDocIdRef = useRef<string | null>(null);
   const [pendingRemove, setPendingRemove] = useState<{ adhyayaId: string; khandaId: string; manthraId: string; padaId?: string; title: string } | null>(null);
 
   useEffect(() => {
@@ -1542,13 +1559,10 @@ export default function GranthasPage() {
           wasNewLocal: !!node._isNewLocal,
         }
       : { node: null, wasNewLocal: true };
-    const needsCmsShloka =
-      isPublishedStrapiDocId(ctx.strapiDocumentId) &&
-      !(node && mantraNodeHasHydratedShloka(node));
-    setManthraLoading(needsCmsShloka);
+    // Draft is fully hydrated on grantha open (Change A), so opening a verse never fetches/merges
+    // from the CMS — the draft is the sole source of truth. No loading, no per-verse prefetch.
+    setManthraLoading(false);
     setEditingManthra(ctx);
-    prefetchManthraDocumentId(ctx.strapiDocumentId);
-    prefetchManthraNeighbors(adhyayasRef.current as AdhyayaNode[], ctx);
   }
 
   function warmManthraOnHover(strapiDocumentId?: string) {
@@ -1622,308 +1636,6 @@ export default function GranthasPage() {
       </>
     );
   }
-
-  // When the mantra dialog opens for a published mantra (has strapiDocumentId),
-  // fetch the live Strapi content and merge it with any portal-draft edits so
-  // users always see the most complete version.
-  //
-  // MERGE STRATEGY (field-level): Strapi data is used as the BASE, but any
-  // field that the portal draft already has non-empty content for is PRESERVED.
-  // This prevents the draft's English translations (or other edits not yet
-  // published to Strapi) from being silently overwritten by the Strapi fetch.
-  useEffect(() => {
-    if (!editingManthra) return;
-    const snap = adhyayasRef.current as SnapshotAdhyaya[];
-    const { adhyayaId, khandaId, manthraId, padaId } = editingManthra;
-    const localNodeEarly = findManthraInTree(
-      snap as AdhyayaNode[],
-      adhyayaId,
-      khandaId,
-      manthraId,
-      padaId,
-    );
-    // Newly inserted rows: never pull from CMS (avoids wrong verse / empty wipe).
-    if (localNodeEarly?._isNewLocal) return;
-    const docId = editingManthra.strapiDocumentId;
-    if (!docId) return;
-    // Avoid CMS fetch overwriting in-progress edits (e.g. after a wrong docId link is corrected).
-    if (manthraDialogDirtyRef.current) return;
-    // Portal draft: skip CMS fetch only when this verse already has local shloka content.
-    if (preferPortalMantraContentRef.current) {
-      const portalRich = shlokaManthraEntryRichness(localNodeEarly?.ShlokaManthraEntry);
-      if (portalRich >= MANTRA_LINK_MIN_CONTENT_SCORE) {
-        setManthraLoading(false);
-        return;
-      }
-    }
-    const fetchGen = mantraFetchGenRef.current;
-    let cancelled = false;
-    setManthraLoading(true);
-
-    // mergeEntry and mergeTeekas are module-level functions (see top of file).
-
-    const applyStrapiMantraToTree = (
-      strapiRow: Record<string, unknown>,
-      opts: { forceDocId?: string; heavyFieldsOnly?: boolean } = {},
-    ) => {
-      const configuredLeaf = (structureConfigRef.current.leafName || "Mantra").trim() || "Mantra";
-      const strapiLabel = String(strapiRow.ShlokaManthraNumber ?? "");
-      const cmsShloka = stripStubTextAndTranslationEntry(strapiRow.ShlokaManthraEntry);
-      const cmsBhashyam = stripStubTextAndTranslationEntry(strapiRow.BhashyamEntry);
-      const applyTitle = (mn: ManthraNode) =>
-        portalMantraTitleForLeaf(mn.title, configuredLeaf, strapiLabel);
-      const resolvedDocId =
-        opts.forceDocId || (strapiRow.documentId as string) || docId;
-
-      const patchManthra = (mn: ManthraNode): ManthraNode => {
-        const suffixAligned = labelsShareVerseSuffix(mn.title, strapiLabel);
-        if (!suffixAligned) {
-          return {
-            ...mn,
-            title: applyTitle(mn),
-          };
-        }
-
-        const localRich = shlokaManthraEntryRichness(mn.ShlokaManthraEntry);
-        const remoteRich = shlokaManthraEntryRichness(cmsShloka);
-        let shloka = mn.ShlokaManthraEntry;
-        if (!opts.heavyFieldsOnly) {
-          const preferPortalBodies = localRich >= MANTRA_LINK_MIN_CONTENT_SCORE;
-          const mergedShloka = mergeEntry(mn.ShlokaManthraEntry, cmsShloka as any);
-          const mergedRich = shlokaManthraEntryRichness(mergedShloka);
-          if (preferPortalBodies) {
-            shloka = mergedShloka ?? mn.ShlokaManthraEntry;
-          } else {
-            shloka =
-              mergedRich >= localRich || remoteRich >= MANTRA_LINK_MIN_CONTENT_SCORE
-                ? mergedShloka
-                : stripStubTextAndTranslationEntry(mn.ShlokaManthraEntry) ?? mn.ShlokaManthraEntry;
-          }
-        } else {
-          // Shloka SK/EN already came from sections/by-grantha — still merge OtherTranslations
-          // (and IAST) from full CMS row. Bhashyam already did this; shloka OT was skipped before.
-          const mergedShloka = mergeEntry(mn.ShlokaManthraEntry, cmsShloka as any);
-          shloka = mergedShloka ?? mn.ShlokaManthraEntry;
-        }
-
-        const bhashyam = shouldImportCmsBhashyam(mn, cmsBhashyam, strapiLabel)
-          ? mergeEntry(mn.BhashyamForShlokaManthra, cmsBhashyam as any)
-          : mn.BhashyamForShlokaManthra;
-
-        return {
-          ...mn,
-          title: applyTitle(mn),
-          strapiDocumentId: resolvedDocId,
-          ShlokaManthraEntry: shloka,
-          BhashyamForShlokaManthra: bhashyam,
-          Teekas:
-            Array.isArray(strapiRow.Teekas) && (strapiRow.Teekas as unknown[]).length > 0
-              ? mergeTeekas(mn.Teekas, strapiRow.Teekas as any)
-              : mn.Teekas,
-        };
-      };
-
-      setAdhyayas((prev) =>
-        prev.map((a) => {
-          if (a.id !== adhyayaId) return a;
-          return {
-            ...a,
-            khandas: a.khandas.map((k) => {
-              if (k.id !== khandaId) return k;
-              if (padaId) {
-                return {
-                  ...k,
-                  padas: (k.padas ?? []).map((p) => {
-                    if (p.id !== padaId) return p;
-                    return {
-                      ...p,
-                      manthras: p.manthras.map((mn) =>
-                        mn.id !== manthraId ? mn : patchManthra(mn),
-                      ),
-                    };
-                  }),
-                };
-              }
-              return {
-                ...k,
-                manthras: k.manthras.map((mn) =>
-                  mn.id !== manthraId ? mn : patchManthra(mn),
-                ),
-              };
-            }),
-          };
-        }),
-      );
-    };
-
-    const cfg = structureConfigRef.current;
-    const localNode = localNodeEarly ?? findManthraInTree(snap as AdhyayaNode[], adhyayaId, khandaId, manthraId, padaId);
-    const sectionDocId = resolveMantraSectionStrapiDocumentId(
-      snap,
-      adhyayaId,
-      khandaId,
-      padaId,
-      cfg,
-    );
-
-    const granthaDocId = editingGranthaStrapiDocumentId();
-    const localRich = shlokaManthraEntryRichness(localNode?.ShlokaManthraEntry);
-    const hasHydratedShloka = mantraNodeHasHydratedShloka(localNode ?? {});
-
-    const runFetch = (background: boolean) =>
-      fetchManthraForGranthaEditor({
-        documentId: docId,
-        granthaDocId,
-        sectionDocId,
-        shlokaManthraNumber: localNode?.title,
-        localContentScore: localRich,
-        background,
-        bypassCache: !background,
-      });
-
-    if (hasHydratedShloka) {
-      setManthraLoading(false);
-      runFetch(true)
-        .then((result) => {
-          if (!result || cancelled || fetchGen !== mantraFetchGenRef.current) return;
-          if (manthraDialogDirtyRef.current) return;
-          applyStrapiMantraToTree(result.data, {
-            forceDocId: result.documentId,
-            heavyFieldsOnly: true,
-          });
-          if (result.corrected) {
-            setEditingManthra((prev) =>
-              prev ? { ...prev, strapiDocumentId: result.documentId } : prev,
-            );
-          }
-        })
-        .catch(console.error);
-      return () => {
-        cancelled = true;
-      };
-    }
-
-    runFetch(false)
-      .then((result) => {
-        if (!result || cancelled || fetchGen !== mantraFetchGenRef.current) return;
-        if (manthraDialogDirtyRef.current) return;
-        const remoteRich =
-          result.contentScore ?? strapiManthraRowRichness(result.data);
-
-        if (localRich >= MANTRA_LINK_MIN_CONTENT_SCORE && remoteRich < localRich) {
-          const blockCorrection =
-            structuralMantraRenumberPendingRef.current &&
-            isPublishedStrapiDocId(localNode?.strapiDocumentId) &&
-            result.corrected &&
-            result.documentId !== localNode?.strapiDocumentId;
-          if (result.corrected && !blockCorrection) {
-            setEditingManthra((prev) =>
-              prev ? { ...prev, strapiDocumentId: result.documentId } : prev,
-            );
-            setAdhyayas((prev) =>
-              prev.map((a) => {
-                if (a.id !== adhyayaId) return a;
-                return {
-                  ...a,
-                  khandas: a.khandas.map((k) => {
-                    if (k.id !== khandaId) return k;
-                    const patchDoc = (mn: ManthraNode) =>
-                      mn.id === manthraId
-                        ? { ...mn, strapiDocumentId: result.documentId }
-                        : mn;
-                    if (padaId) {
-                      return {
-                        ...k,
-                        padas: (k.padas ?? []).map((p) =>
-                          p.id === padaId
-                            ? { ...p, manthras: p.manthras.map(patchDoc) }
-                            : p,
-                        ),
-                      };
-                    }
-                    return { ...k, manthras: k.manthras.map(patchDoc) };
-                  }),
-                };
-              }),
-            );
-          }
-          return;
-        }
-
-        if (
-          !result.corrected &&
-          remoteRich < MANTRA_LINK_MIN_CONTENT_SCORE &&
-          localRich >= MANTRA_LINK_MIN_CONTENT_SCORE
-        ) {
-          return;
-        }
-        if (!result.corrected && remoteRich < localRich) {
-          return;
-        }
-
-        const blockDocIdCorrection =
-          structuralMantraRenumberPendingRef.current &&
-          isPublishedStrapiDocId(localNode?.strapiDocumentId) &&
-          result.corrected &&
-          result.documentId !== localNode?.strapiDocumentId;
-
-        applyStrapiMantraToTree(result.data, {
-          forceDocId: blockDocIdCorrection
-            ? localNode?.strapiDocumentId
-            : result.documentId,
-        });
-
-        if (result.corrected && !blockDocIdCorrection) {
-          setEditingManthra((prev) =>
-            prev ? { ...prev, strapiDocumentId: result.documentId } : prev,
-          );
-          if (editingDraftId) {
-            const leaf = (cfg.leafName ?? "Mantra").trim() || "Mantra";
-            const cmsShloka = stripStubTextAndTranslationEntry(result.data.ShlokaManthraEntry);
-            saveManthraPatchMutation.mutate({
-              draftId: editingDraftId,
-              title: formDataRef.current.GranthaName || "Grantha",
-              adhyayaId,
-              khandaId,
-              padaId,
-              manthraId,
-              manthraData: {
-                ...(localNode ?? { id: manthraId, title: "", order: 0 }),
-                strapiDocumentId: result.documentId,
-                title: portalMantraTitleForLeaf(
-                  localNode?.title ?? "",
-                  leaf,
-                  String(result.data.ShlokaManthraNumber ?? ""),
-                ),
-                ShlokaManthraEntry: mergeEntry(localNode?.ShlokaManthraEntry, cmsShloka as any),
-                BhashyamForShlokaManthra: mergeEntry(
-                  localNode?.BhashyamForShlokaManthra,
-                  stripStubTextAndTranslationEntry(result.data.BhashyamEntry) as any,
-                ),
-              },
-            });
-          }
-          toast({
-            title: "Mantra link corrected",
-            description:
-              "Linked to the CMS row with content for this verse. Mantras tab uses the same rule when duplicates exist.",
-          });
-        }
-      })
-      .catch(console.error)
-      .finally(() => {
-        if (!cancelled) setManthraLoading(false);
-      });
-    return () => {
-      cancelled = true;
-    };
-    // Do not depend on strapiDocumentId — correcting the link must not re-fetch and wipe the editor.
-  }, [
-    editingManthra?.adhyayaId,
-    editingManthra?.khandaId,
-    editingManthra?.padaId,
-    editingManthra?.manthraId,
-  ]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Reset dirty flag when opening a different mantra (openManthraEditor also clears this).
   useEffect(() => {
@@ -2375,6 +2087,47 @@ export default function GranthasPage() {
     setView("form");
   }
 
+  /**
+   * Fetch every verse's full content (bhashyam / shloka / teekas) for a grantha, keyed by the
+   * verse's own documentId. Returns null on failure (network / non-OK) so the caller can fail
+   * closed; an empty Map means "no published verses" (e.g. a brand-new grantha) — not a failure.
+   */
+  async function fetchFullGranthaContentMap(
+    granthaDocId: string,
+  ): Promise<Map<string, FullCmsManthraContent> | null> {
+    try {
+      const res = await fetch(`/api/strapi/manthras/full-by-grantha/${granthaDocId}`, CMS_FETCH_INIT);
+      if (!res.ok) return null;
+      const payload = await res.json();
+      const data = payload?.data;
+      if (!data || typeof data !== "object") return new Map();
+      return new Map(Object.entries(data) as [string, FullCmsManthraContent][]);
+    } catch {
+      return null;
+    }
+  }
+
+  /** Re-run full-content hydration against the current draft tree (used by the error-state retry). */
+  async function retryGranthaContentHydration() {
+    const granthaDocId = granthaHydrationDocIdRef.current;
+    if (!granthaDocId) return;
+    setGranthaHydrationError(null);
+    setGranthaContentHydrating(true);
+    const map = await fetchFullGranthaContentMap(granthaDocId);
+    if (granthaHydrationDocIdRef.current !== granthaDocId) return;
+    if (map === null) {
+      setGranthaContentHydrating(false);
+      setGranthaHydrationError(
+        "Could not load verse content from the CMS. Editing is blocked until all content loads so existing bhashyam is never overwritten with empty content.",
+      );
+      return;
+    }
+    const hydrated = hydrateHierarchyFromFullCmsContent(adhyayasRef.current as AdhyayaNode[], map);
+    adhyayasRef.current = hydrated;
+    setAdhyayas(hydrated);
+    setGranthaContentHydrating(false);
+  }
+
   async function openEdit(item: any) {
     cancelGranthaMantraPrefetch();
     invalidateManthraCache();
@@ -2675,6 +2428,15 @@ export default function GranthasPage() {
     if (isCurrentOpenEditLoad(openEditLoadGen)) {
       setEditingGranthaSectionsLoading(true);
     }
+    // Change A — start full-content hydration in parallel with the section load. Every existing
+    // verse's bhashyam/shloka/teekas is pulled into the draft (keyed by its own documentId) so the
+    // editor renders entirely from draft state and never label-merges from Strapi per verse.
+    setGranthaContentHydrating(true);
+    setGranthaHydrationError(null);
+    granthaHydrationDocIdRef.current = effectiveDocId || null;
+    const fullContentPromise = effectiveDocId
+      ? fetchFullGranthaContentMap(effectiveDocId)
+      : Promise.resolve(new Map<string, FullCmsManthraContent>());
     let fetchedSections: any[] = [];
     let strapiGranthaOne: any = null;
     try {
@@ -3533,11 +3295,44 @@ export default function GranthasPage() {
         hierarchyBeforeEnrich,
         withVerseGaps,
       );
-      adhyayasRef.current = withPreservedContent;
-      setAdhyayas(withPreservedContent);
+
+      // Change A — block on full-content hydration so the draft is self-contained before any
+      // editing. On failure (and only when the tree actually has published verses) we show the
+      // tree read-only with an error + retry rather than letting the user edit/publish on
+      // partial data (which could overwrite existing bhashyam with empty content).
+      const fullContentMap = await fullContentPromise;
+      if (!isCurrentOpenEditLoad(openEditLoadGen)) {
+        return;
+      }
+      const treeHasPublishedVerses = (() => {
+        for (const a of withPreservedContent) {
+          for (const k of a.khandas) {
+            if (k.manthras.some((m) => isPublishedStrapiDocId(m.strapiDocumentId))) return true;
+            for (const p of k.padas ?? []) {
+              if (p.manthras.some((m) => isPublishedStrapiDocId(m.strapiDocumentId))) return true;
+            }
+          }
+        }
+        return false;
+      })();
+      if (fullContentMap === null && treeHasPublishedVerses) {
+        adhyayasRef.current = withPreservedContent;
+        setAdhyayas(withPreservedContent);
+        setGranthaContentHydrating(false);
+        setGranthaHydrationError(
+          "Could not load verse content from the CMS. Editing is blocked until all content loads so existing bhashyam is never overwritten with empty content.",
+        );
+      } else {
+        const hydratedTree = hydrateHierarchyFromFullCmsContent(
+          withPreservedContent,
+          fullContentMap ?? new Map<string, FullCmsManthraContent>(),
+        );
+        adhyayasRef.current = hydratedTree;
+        setAdhyayas(hydratedTree);
+        setGranthaContentHydrating(false);
+      }
 
       bindGranthaMantraPrefetchContext();
-      prefetchGranthaMantrasFromHierarchy(normalizedOpen);
       if (isPublishedStrapiDocId(granthaDocId)) {
         flushStrapiFullHierarchySectionOrderSyncNow(normalizedOpen, effectiveStructureConfig, true);
       }
@@ -3548,47 +3343,6 @@ export default function GranthasPage() {
       setStep(1);
       setView("form");
       setEditingGranthaSectionsLoading(false);
-
-    // ── Bulk teeka pre-populate ──
-    // After the hierarchy is in state, fetch ALL manthras' teeka data from
-    // Strapi in one request and merge it into the hierarchy. This guarantees
-    // that teeka content (especially OtherTranslations) is ALWAYS present in
-    // state from the moment the grantha opens — not just after each dialog
-    // is individually opened. Without this, any "Save" before opening every
-    // dialog would clear teeka content in the draft.
-    if (granthaDocId && isCurrentOpenEditLoad(openEditLoadGen)) {
-      fetch(`/api/strapi/manthras/teekas-by-grantha/${granthaDocId}`, CMS_FETCH_INIT)
-        .then((r) => r.ok ? r.json() : null)
-        .then((payload) => {
-          if (!isCurrentOpenEditLoad(openEditLoadGen)) return;
-          if (!payload?.data || typeof payload.data !== "object") return;
-          const teekaMap: Record<string, any[]> = payload.data;
-          setAdhyayas((prev) =>
-            prev.map((a) => ({
-              ...a,
-              khandas: a.khandas.map((k) => ({
-                ...k,
-                manthras: k.manthras.map((m) => {
-                  const st = m.strapiDocumentId ? teekaMap[m.strapiDocumentId] : null;
-                  if (!st?.length) return m;
-                  return { ...m, Teekas: mergeTeekas(m.Teekas, st) };
-                }),
-                padas: (k.padas ?? []).map((p) => ({
-                  ...p,
-                  manthras: p.manthras.map((m) => {
-                    const st = m.strapiDocumentId ? teekaMap[m.strapiDocumentId] : null;
-                    if (!st?.length) return m;
-                    return { ...m, Teekas: mergeTeekas(m.Teekas, st) };
-                  }),
-                })),
-              })),
-            }))
-          );
-        })
-        .catch(() => {
-          // Silent — per-dialog fetch still acts as fallback
-        });
-    }
   }
 
   async function openView(item: any) {
@@ -4398,18 +4152,13 @@ export default function GranthasPage() {
    */
   function scheduleStrapiMantraSectionIdentitySync(
     snapshot: AdhyayaNode[],
-    ctx: { adhyayaId: string; khandaId: string; padaId?: string },
-    opts?: { onlyManthraIds?: string[]; renumberSectionLabels?: boolean },
+    _ctx: { adhyayaId: string; khandaId: string; padaId?: string },
+    _opts?: { onlyManthraIds?: string[]; renumberSectionLabels?: boolean },
   ) {
-    const granthaDoc =
-      editingItem && !editingItem._isDraft
-        ? editingItem.documentId
-        : editingItem?._strapiDocId;
-    if (!isPublishedStrapiDocId(granthaDoc)) return;
-    if (publishInProgressRef.current) return;
-
+    // Draft-first model: structural edits (insert / delete / renumber) mutate the local draft
+    // ONLY — nothing is synced to Strapi while editing. The next Save & Publish rebuilds the
+    // whole grantha fresh from the draft. We just keep the working snapshot ref current.
     adhyayasRef.current = snapshot;
-    queuePendingMantraSync(ctx, opts);
   }
 
   /** Run queued mantra CMS sync immediately (used before Save / Save & Publish). */
@@ -4608,106 +4357,14 @@ export default function GranthasPage() {
   async function ensureMantraSlotsAndLabelsSyncedBeforePersist(
     mode: "draft" | "publish" = "publish",
   ): Promise<void> {
-    const granthaDoc = editingGranthaStrapiDocumentId();
-    if (!isPublishedStrapiDocId(granthaDoc)) return;
-
-    const snap = adhyayasRef.current as SnapshotAdhyaya[];
-    const cfg = structureConfigRef.current;
-    const targets = collectMantraSectionSyncTargets(snap, cfg);
-    const fallbackCtx = targets[0] ?? {
-      adhyayaId: snap[0]?.id ?? "",
-      khandaId: snap[0]?.khandas?.[0]?.id ?? "",
-    };
-
-    // Insert-between already renumbers in **list order**; full-tree normalize on draft Save
-    // sorts by `order` and rewrites every label — that scrambles the editor vs what the user saw.
-    if (mode === "publish") {
-      applyHierarchyRenumberToEditorState(cfg);
-    }
-
+    // Draft-first model: nothing is synced to Strapi here anymore. After in-between "+"/delete
+    // edits, the next grantha Save & Publish rebuilds the whole grantha fresh from the draft
+    // (publishGranthaWithHierarchy with allowRenumber). The only prep needed is to normalize
+    // local labels before that fresh publish so the rebuilt tree is in tidy list order. For
+    // content-only edits (no structural change) we leave labels/order untouched.
     if (mode === "publish" && structuralMantraRenumberPendingRef.current) {
-      setPersistProgress({
-        title: "Preparing fresh publish",
-        done: 0,
-        total: 1,
-        current:
-          "Structural verse changes detected — publishing as a new CMS grantha (skipping incremental label sync)…",
-      });
-      return;
+      applyHierarchyRenumberToEditorState(structureConfigRef.current);
     }
-
-    if (mode === "draft") {
-      setPersistProgress({
-        title: "Saving draft",
-        done: 0,
-        total: 1,
-        current: "Writing portal draft to database…",
-      });
-      return;
-    }
-
-    const mantraTotal = Math.max(
-      1,
-      countLinkedMantrasForLabelSync(adhyayasRef.current as SnapshotAdhyaya[], cfg),
-    );
-    const reportSync = (done: number, total: number, current: string) => {
-      setPersistProgress({
-        title: "Syncing verses to CMS",
-        done,
-        total: Math.max(total, 1),
-        current,
-      });
-    };
-
-    setPersistProgress({
-      title: "Preparing CMS sync",
-      done: 0,
-      total: mantraTotal,
-      current: "Flushing insert/delete queue…",
-    });
-
-    const pending = pendingMantraSyncRef.current;
-    if (
-      mantraSyncTimerRef.current ||
-      pending.manthraIds.size > 0 ||
-      pending.renumber ||
-      pendingMantraDeletesRef.current.size > 0
-    ) {
-      await flushMantraStructuralSyncNow(pending.ctx ?? fallbackCtx);
-    }
-    await mantraSyncChainRef.current;
-
-    await syncAllMantraSectionLabelsInGrantha(adhyayasRef.current as SnapshotAdhyaya[], cfg, {
-      allowRenumber: true,
-      onProgress: reportSync,
-    });
-    reportSync(0, mantraTotal, "Creating CMS slots for new verses…");
-    const flushResult = await flushPendingNewMantrasToStrapi(adhyayasRef.current as AdhyayaNode[]);
-    let snapAfter = adhyayasRef.current as AdhyayaNode[];
-    let repaired = repairDuplicateSuffixesInHierarchy(snapAfter, cfg);
-    const suffixRepaired = repaired !== snapAfter;
-    if (suffixRepaired) {
-      snapAfter = repaired;
-      adhyayasRef.current = repaired;
-      setAdhyayas(repaired);
-    }
-    // Pass 1 already labelled every existing row. A second full re-sync only matters when
-    // the slot flush created new rows, a suffix repair rewrote labels, or the flush errored
-    // (partial state). Re-syncing all sections otherwise is pure wasted remote round-trips —
-    // the dominant cost when publishing large granthas against a remote Strapi.
-    if (flushResult.created > 0 || flushResult.errored || suffixRepaired) {
-      await syncAllMantraSectionLabelsInGrantha(snapAfter, cfg, {
-        allowRenumber: true,
-        onProgress: reportSync,
-      });
-      repaired = repairDuplicateSuffixesInHierarchy(adhyayasRef.current as AdhyayaNode[], cfg);
-      if (repaired !== adhyayasRef.current) {
-        adhyayasRef.current = repaired;
-        setAdhyayas(repaired);
-      }
-    }
-    syncGranthaCmsCaches(queryClient);
-    reportSync(mantraTotal, mantraTotal, "CMS sync complete — continuing…");
   }
 
   function applyHierarchyRenumberToEditorState(cfg: GranthaStructureConfig = structureConfigRef.current) {
@@ -5011,7 +4668,11 @@ export default function GranthasPage() {
 
   /**
    * Insert a blank manthra after `afterManthraId` (spreadsheet-style): renumber portal titles
-   * in the section, create the CMS row, then batch-update all linked labels in Strapi.
+   * locally only. The new verse stays a portal-only draft row (`_isNewLocal`, no CMS link) and is
+   * NEVER synced to Strapi during editing — linking a blank insert to a sibling's content-bearing
+   * CMS row (by label/order) is exactly what grafted a neighbour's bhashyam onto the "+" verse on
+   * publish. The whole grantha is rebuilt fresh from the draft on the next Save & Publish
+   * (allowRenumber), which creates this verse as a fresh empty CMS row with correct labels.
    */
   function insertManthraAfter(
     adhyayaId: string,
@@ -5042,10 +4703,6 @@ export default function GranthasPage() {
       );
       const next = mergePublishedHierarchyPreservingContent(prev, spliced);
       adhyayasRef.current = next;
-      scheduleStrapiMantraSectionIdentitySync(next, { adhyayaId, khandaId, padaId }, {
-        onlyManthraIds: [newManthraId],
-        renumberSectionLabels: true,
-      });
       return next;
     });
     openManthraEditor({ adhyayaId, khandaId, manthraId: newManthraId, padaId });
@@ -6090,14 +5747,20 @@ export default function GranthasPage() {
   const mantraSaveAndPublishReady =
     editingDraftId != null &&
     !manthraDialogDirty &&
+    // After an in-between "+" insert (or delete) the whole grantha must be rebuilt fresh on
+    // the next grantha-level Save & Publish. A single-verse publish here would push to the
+    // OLD CMS rows and re-introduce label/bhashyam drift — so allow Save (to draft) only.
+    !structuralMantraRenumberPendingRef.current &&
     !saveDraft.isPending &&
     !saveManthraPatchMutation.isPending &&
     !publishMantraMutation.isPending;
   const mantraSaveAndPublishHint = !editingDraftId
     ? "Save the grantha draft first"
-    : manthraDialogDirty
-      ? "Save this verse before publishing"
-      : undefined;
+    : structuralMantraRenumberPendingRef.current
+      ? "Verses were added/removed (+). Save to draft and keep editing — then use the grantha's Save & Publish to rebuild the CMS."
+      : manthraDialogDirty
+        ? "Save this verse before publishing"
+        : undefined;
 
   const activeEditorProgress: EditorOperationProgress | null =
     publishDraft.isPending && publishProgress && publishProgress.total > 0
@@ -7283,6 +6946,25 @@ export default function GranthasPage() {
               <span>Syncing structure and verses from CMS…</span>
             </div>
           ) : null}
+          {granthaContentHydrating && !granthaHydrationError ? (
+            <div className="flex items-center gap-2 rounded-lg border border-border bg-muted/40 px-3 py-2 text-sm text-muted-foreground">
+              <Loader2 className="h-4 w-4 shrink-0 animate-spin" />
+              <span>Loading all verse content (bhashyam &amp; teekas) into the draft…</span>
+            </div>
+          ) : null}
+          {granthaHydrationError ? (
+            <div className="flex flex-wrap items-center gap-3 rounded-lg border border-destructive/40 bg-destructive/10 px-3 py-2 text-sm text-destructive">
+              <span className="flex-1 min-w-[200px]">{granthaHydrationError}</span>
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={() => void retryGranthaContentHydration()}
+                data-testid="button-retry-grantha-hydration"
+              >
+                Retry
+              </Button>
+            </div>
+          ) : null}
           <div>
             <h2 className="text-xl font-semibold">
               {formData.GranthaName || "Grantha"} — Content
@@ -7302,8 +6984,16 @@ export default function GranthasPage() {
             </p>
           </div>
 
-          {/* Tree */}
-          <div className="space-y-3">
+          {/* Tree — blocked from interaction until full content is hydrated (Change A) so verse
+              edits never run on partial data. */}
+          <div
+            className={
+              granthaContentHydrating || granthaHydrationError
+                ? "space-y-3 pointer-events-none opacity-60"
+                : "space-y-3"
+            }
+            aria-busy={granthaContentHydrating || !!granthaHydrationError}
+          >
             {sortNodesByOrder(adhyayas).map((adhyaya, aIdx) => {
               const L1 = structureConfig.levelOneName;
               const L2 = structureConfig.levelTwoName;
@@ -8450,30 +8140,35 @@ export default function GranthasPage() {
                           )}
                         Save
                       </Button>
-                      <TooltipProvider delayDuration={200}>
-                        <Tooltip>
-                          <TooltipTrigger asChild>
-                            <span className="inline-flex">
-                              <Button
-                                onClick={handleSaveAndPublishManthra}
-                                disabled={!mantraSaveAndPublishReady || publishMantraMutation.isPending}
-                                data-testid="button-manthra-save-publish"
-                              >
-                                {publishMantraMutation.isPending && (
-                                  <Loader2 className="w-4 h-4 mr-2 animate-spin" />
-                                )}
-                                <Send className="w-4 h-4 mr-2" />
-                                Save & Publish
-                              </Button>
-                            </span>
-                          </TooltipTrigger>
-                          {mantraSaveAndPublishHint && (
-                            <TooltipContent side="top" className="max-w-xs text-xs">
-                              {mantraSaveAndPublishHint}
-                            </TooltipContent>
-                          )}
-                        </Tooltip>
-                      </TooltipProvider>
+                      {/* Newly inserted ("+") verses are draft-only: they publish solely via the
+                          grantha-level Save & Publish (a fresh republish from the draft snapshot).
+                          Existing verses keep per-verse Save & Publish. */}
+                      {!currentManthra?._isNewLocal && (
+                        <TooltipProvider delayDuration={200}>
+                          <Tooltip>
+                            <TooltipTrigger asChild>
+                              <span className="inline-flex">
+                                <Button
+                                  onClick={handleSaveAndPublishManthra}
+                                  disabled={!mantraSaveAndPublishReady || publishMantraMutation.isPending}
+                                  data-testid="button-manthra-save-publish"
+                                >
+                                  {publishMantraMutation.isPending && (
+                                    <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                                  )}
+                                  <Send className="w-4 h-4 mr-2" />
+                                  Save & Publish
+                                </Button>
+                              </span>
+                            </TooltipTrigger>
+                            {mantraSaveAndPublishHint && (
+                              <TooltipContent side="top" className="max-w-xs text-xs">
+                                {mantraSaveAndPublishHint}
+                              </TooltipContent>
+                            )}
+                          </Tooltip>
+                        </TooltipProvider>
+                      )}
                     </div>
                     {mantraPublishStatus && publishMantraMutation.isPending && (
                       <p className="text-xs text-muted-foreground max-w-[280px] text-right">
@@ -8497,7 +8192,7 @@ export default function GranthasPage() {
               <div className="space-y-2 text-sm text-muted-foreground">
                 <p>
                   {currentManthra?._isNewLocal
-                    ? "This is a newly inserted verse. Save to keep it in the portal draft, or publish to push it to the CMS."
+                    ? "This is a newly inserted verse. Save to keep it in the portal draft — it will be published with the whole grantha on the next Save & Publish."
                     : "You have unsaved edits on this verse."}
                 </p>
                 <p>
@@ -8574,15 +8269,18 @@ export default function GranthasPage() {
               >
                 Save draft
               </AlertDialogAction>
-              <AlertDialogAction
-                onClick={() => {
-                  setPendingCloseManthra(false);
-                  handleSaveAndPublishManthra();
-                }}
-                data-testid="button-manthra-close-save-publish"
-              >
-                Save &amp; Publish
-              </AlertDialogAction>
+              {/* New ("+") verses are draft-only — no per-verse publish. */}
+              {!currentManthra?._isNewLocal && (
+                <AlertDialogAction
+                  onClick={() => {
+                    setPendingCloseManthra(false);
+                    handleSaveAndPublishManthra();
+                  }}
+                  data-testid="button-manthra-close-save-publish"
+                >
+                  Save &amp; Publish
+                </AlertDialogAction>
+              )}
             </div>
           </AlertDialogFooter>
         </AlertDialogContent>

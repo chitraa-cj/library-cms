@@ -9,6 +9,7 @@ import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Separator } from "@/components/ui/separator";
+import { Checkbox } from "@/components/ui/checkbox";
 import {
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter,
 } from "@/components/ui/dialog";
@@ -395,6 +396,9 @@ export default function BackupDetailPage() {
   const [restoring, setRestoring] = useState(false);
   const [restoreResult, setRestoreResult] = useState<RestoreResult | null>(null);
   const [restoreProgress, setRestoreProgress] = useState<{ current: number; total: number } | null>(null);
+  // "merge" = fill missing content (safe); "full" = delete live grantha (by name) and rebuild.
+  const [restoreMode, setRestoreMode] = useState<"merge" | "full">("merge");
+  const [fullAck, setFullAck] = useState(false);
 
   // Single-mantra restore state
   const [mantraRestoreOpen, setMantraRestoreOpen] = useState(false);
@@ -517,6 +521,59 @@ export default function BackupDetailPage() {
     }
   }
 
+  // Full rebuild: delete the live grantha (matched by name) and recreate it from the snapshot.
+  async function handleRestoreFull(snapshotGranthaDocId: string) {
+    setRestoring(true);
+    setRestoreResult(null);
+    setRestoreProgress(null);
+    try {
+      const startRes = await fetch(`/api/admin/backups/${id}/restore-grantha-full`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ granthaDocId: snapshotGranthaDocId }),
+      });
+      const startData = await startRes.json();
+      if (!startRes.ok) {
+        // 409 = multiple live granthas share the name → surface them.
+        const extra = Array.isArray(startData.matches)
+          ? ` (${startData.matches.map((m: any) => m.documentId).join(", ")})`
+          : "";
+        throw new Error((startData.message || "Full restore failed to start") + extra);
+      }
+      setRestoreProgress({ current: 0, total: startData.total });
+
+      const jobId = startData.jobId;
+      while (true) {
+        await new Promise((r) => setTimeout(r, 2500));
+        const pollRes = await fetch(`/api/admin/restore-jobs/${jobId}`);
+        if (!pollRes.ok) throw new Error("Failed to poll restore job");
+        const pollData = await pollRes.json();
+        setRestoreProgress({ current: pollData.progress, total: pollData.total });
+        if (pollData.status === "done" || pollData.status === "error") {
+          setRestoreResult({
+            total: pollData.total,
+            restored: pollData.restored,
+            skipped: pollData.skipped,
+            errored: pollData.errored,
+            results: pollData.results,
+            errors: pollData.errors,
+          });
+          if (pollData.status === "error" && pollData.message) {
+            setRestoreResult((prev: any) =>
+              prev ? { ...prev, errors: [{ manthra: "Fatal", error: pollData.message }, ...(prev.errors ?? [])] } : null,
+            );
+          }
+          break;
+        }
+      }
+    } catch (e: any) {
+      setRestoreResult({ total: 0, restored: 0, skipped: 0, errored: 1, results: [], errors: [{ manthra: "—", error: e.message }] });
+    } finally {
+      setRestoring(false);
+      setRestoreProgress(null);
+    }
+  }
+
   // ── Load lightweight summary (granthas + section list, no manthra text) ──
   const { data: summary, isLoading, error } = useQuery<BackupSummary>({
     queryKey: ["/api/admin/backups", id, "summary"],
@@ -572,6 +629,7 @@ export default function BackupDetailPage() {
   const selectedGrantha = granthaList.find((g) => g.id === selectedGranthaId) ?? null;
   const sections = selectedGranthaId !== null ? (sectionsByGrantha.get(selectedGranthaId) ?? []) : [];
   const selectedSection = sections.find((s) => s.id === selectedSectionId) ?? null;
+  const restoreManthraCount = sections.reduce((sum, s) => sum + (s.manthraCount ?? 0), 0);
 
   if (isLoading) {
     return (
@@ -876,7 +934,7 @@ export default function BackupDetailPage() {
       </Dialog>
 
       {/* Grantha-wide restore */}
-      <Dialog open={restoreOpen} onOpenChange={(o) => { if (!restoring) { setRestoreOpen(o); if (!o) setRestoreResult(null); } }}>
+      <Dialog open={restoreOpen} onOpenChange={(o) => { if (!restoring) { setRestoreOpen(o); if (!o) { setRestoreResult(null); setRestoreMode("merge"); setFullAck(false); } } }}>
         <DialogContent className="max-w-lg">
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2">
@@ -887,24 +945,62 @@ export default function BackupDetailPage() {
 
           {!restoreResult ? (
             <div className="space-y-4">
-              <p className="text-sm text-muted-foreground">
-                Compares each mantra in this snapshot against live Strapi. Only pushes data where the live record is <strong>missing</strong> content — existing live translations are not overwritten. Use <strong>Shloka translations</strong> when Hermex reports missing Hindi/Kannada/etc. but this snapshot still has full OtherTranslations.
-              </p>
               <div className="space-y-1.5">
-                <p className="text-xs font-medium text-muted-foreground uppercase tracking-wider">What to restore</p>
-                <Select value={restoreField} onValueChange={setRestoreField} disabled={restoring}>
-                  <SelectTrigger data-testid="select-restore-field">
+                <p className="text-xs font-medium text-muted-foreground uppercase tracking-wider">Restore mode</p>
+                <Select value={restoreMode} onValueChange={(v) => { setRestoreMode(v as "merge" | "full"); setFullAck(false); }} disabled={restoring}>
+                  <SelectTrigger data-testid="select-restore-mode">
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
-                    <SelectItem value="both">Teekas + Bhashyam (both)</SelectItem>
-                    <SelectItem value="shloka_ot">Shloka OtherTranslations (missing langs only)</SelectItem>
-                    <SelectItem value="all">Teekas + Bhashyam + Shloka OT</SelectItem>
-                    <SelectItem value="teekas">Teekas only</SelectItem>
-                    <SelectItem value="bhashyam">Bhashyam only</SelectItem>
+                    <SelectItem value="merge">Fill missing content (safe)</SelectItem>
+                    <SelectItem value="full">Replace entire grantha (delete &amp; rebuild)</SelectItem>
                   </SelectContent>
                 </Select>
               </div>
+
+              {restoreMode === "merge" ? (
+                <>
+                  <p className="text-sm text-muted-foreground">
+                    Compares each mantra in this snapshot against live Strapi. Only pushes data where the live record is <strong>missing</strong> content — existing live translations are not overwritten. Use <strong>Shloka translations</strong> when Hermex reports missing Hindi/Kannada/etc. but this snapshot still has full OtherTranslations.
+                  </p>
+                  <div className="space-y-1.5">
+                    <p className="text-xs font-medium text-muted-foreground uppercase tracking-wider">What to restore</p>
+                    <Select value={restoreField} onValueChange={setRestoreField} disabled={restoring}>
+                      <SelectTrigger data-testid="select-restore-field">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="both">Teekas + Bhashyam (both)</SelectItem>
+                        <SelectItem value="shloka_ot">Shloka OtherTranslations (missing langs only)</SelectItem>
+                        <SelectItem value="all">Teekas + Bhashyam + Shloka OT</SelectItem>
+                        <SelectItem value="teekas">Teekas only</SelectItem>
+                        <SelectItem value="bhashyam">Bhashyam only</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+                </>
+              ) : (
+                <div className="space-y-3">
+                  <div className="rounded-md border border-red-300 bg-red-50 dark:bg-red-950/30 dark:border-red-900 p-3 space-y-2">
+                    <p className="text-sm font-medium text-red-700 dark:text-red-400">
+                      Destructive — this deletes the live grantha.
+                    </p>
+                    <p className="text-xs text-red-700/90 dark:text-red-400/90">
+                      The live grantha matched by name <strong>“{selectedGrantha?.GranthaName}”</strong> — including <strong>all its sections and mantras</strong> — will be permanently deleted from Strapi, then rebuilt from this snapshot ({restoreManthraCount} mantra{restoreManthraCount === 1 ? "" : "s"}). If more than one live grantha shares this name, the restore aborts and lists them instead of deleting.
+                    </p>
+                  </div>
+                  <label className="flex items-start gap-2 text-sm cursor-pointer select-none">
+                    <Checkbox
+                      checked={fullAck}
+                      onCheckedChange={(c) => setFullAck(c === true)}
+                      disabled={restoring}
+                      data-testid="checkbox-restore-full-ack"
+                      className="mt-0.5"
+                    />
+                    <span>I understand this permanently deletes the live grantha and rebuilds it from this snapshot.</span>
+                  </label>
+                </div>
+              )}
               {restoring && restoreProgress && (
                 <div className="space-y-2">
                   <div className="flex justify-between text-xs text-muted-foreground">
@@ -973,13 +1069,24 @@ export default function BackupDetailPage() {
                 <Button variant="outline" onClick={() => setRestoreOpen(false)} disabled={restoring} data-testid="button-restore-cancel">
                   Cancel
                 </Button>
-                <Button
-                  onClick={() => handleRestore(selectedGrantha!.documentId)}
-                  disabled={restoring}
-                  data-testid="button-restore-confirm"
-                >
-                  {restoring ? <><Loader2 className="w-3.5 h-3.5 mr-1.5 animate-spin" />Restoring…</> : <><RotateCcw className="w-3.5 h-3.5 mr-1.5" />Start Restore</>}
-                </Button>
+                {restoreMode === "full" ? (
+                  <Button
+                    variant="destructive"
+                    onClick={() => handleRestoreFull(selectedGrantha!.documentId)}
+                    disabled={restoring || !fullAck}
+                    data-testid="button-restore-full-confirm"
+                  >
+                    {restoring ? <><Loader2 className="w-3.5 h-3.5 mr-1.5 animate-spin" />Rebuilding…</> : <><RotateCcw className="w-3.5 h-3.5 mr-1.5" />Delete &amp; Rebuild</>}
+                  </Button>
+                ) : (
+                  <Button
+                    onClick={() => handleRestore(selectedGrantha!.documentId)}
+                    disabled={restoring}
+                    data-testid="button-restore-confirm"
+                  >
+                    {restoring ? <><Loader2 className="w-3.5 h-3.5 mr-1.5 animate-spin" />Restoring…</> : <><RotateCcw className="w-3.5 h-3.5 mr-1.5" />Start Restore</>}
+                  </Button>
+                )}
               </>
             ) : (
               <Button variant="outline" onClick={() => { setRestoreOpen(false); setRestoreResult(null); }} data-testid="button-restore-close">

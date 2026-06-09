@@ -24,8 +24,9 @@ import {
   DatabaseBackup,
   ListPlus,
 } from "lucide-react";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { cn } from "@/lib/utils";
+import { usePublishLock } from "@/lib/publish-lock";
 
 type NavSection = {
   sectionLabel?: string;
@@ -72,6 +73,18 @@ export default function DashboardLayout({
   const { user, logout } = useAuth();
   const [location] = useLocation();
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  // While a grantha publish is running, block leaving this screen (in-app nav + tab close/refresh).
+  const publishLocked = usePublishLock();
+
+  useEffect(() => {
+    if (!publishLocked) return;
+    const onBeforeUnload = (e: BeforeUnloadEvent) => {
+      e.preventDefault();
+      e.returnValue = "";
+    };
+    window.addEventListener("beforeunload", onBeforeUnload);
+    return () => window.removeEventListener("beforeunload", onBeforeUnload);
+  }, [publishLocked]);
 
   return (
     <div className="h-screen overflow-hidden bg-background flex">
@@ -115,7 +128,14 @@ export default function DashboardLayout({
         <Separator />
 
         <ScrollArea className="flex-1 py-3">
-          <nav className="px-3 space-y-4">
+          <nav
+            className={cn(
+              "px-3 space-y-4",
+              publishLocked && "pointer-events-none opacity-50",
+            )}
+            aria-disabled={publishLocked}
+            title={publishLocked ? "Navigation is disabled while publishing" : undefined}
+          >
             {navSections.map((section, si) => (
               <div key={si}>
                 {section.sectionLabel && (
@@ -249,7 +269,7 @@ export default function DashboardLayout({
             size="sm"
             className="w-full justify-start text-muted-foreground hover:text-destructive"
             onClick={() => { track("user_logged_out", { username: user?.username }); logout.mutate(); }}
-            disabled={logout.isPending}
+            disabled={logout.isPending || publishLocked}
             data-testid="button-logout"
           >
             <LogOut className="w-4 h-4 mr-2" />
@@ -271,14 +291,15 @@ export default function DashboardLayout({
             <Menu className="w-5 h-5" />
           </Button>
 
-          {/* Back button — all screen sizes */}
+          {/* Back button — all screen sizes (disabled while a publish is running) */}
           <Button
             variant="ghost"
             size="icon"
             className="shrink-0"
-            onClick={() => window.history.back()}
+            onClick={() => { if (!publishLocked) window.history.back(); }}
+            disabled={publishLocked}
             data-testid="button-back"
-            title="Go back"
+            title={publishLocked ? "Disabled while publishing" : "Go back"}
           >
             <ArrowLeft className="w-5 h-5" />
           </Button>
@@ -287,6 +308,12 @@ export default function DashboardLayout({
           <span className="font-semibold text-sm truncate">
             {navSections.flatMap((s) => s.items).find((i) => i.path !== "/dashboard" ? location.startsWith(i.path) : location === i.path)?.label ?? "Ekatmadham CMS"}
           </span>
+
+          {publishLocked && (
+            <span className="ml-auto shrink-0 text-xs font-medium text-amber-600 dark:text-amber-400">
+              Publishing… please don't navigate away
+            </span>
+          )}
         </header>
 
         <main className="flex-1 overflow-auto">{children}</main>

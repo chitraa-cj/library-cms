@@ -55,6 +55,7 @@ import {
 } from "@/lib/strapi-blocks";
 import { fetchManthraForGranthaEditor } from "@/lib/resolve-strapi-mantra-detail";
 import { invalidateManthraCache } from "@/lib/mantra-cms-cache";
+import { setPublishLock } from "@/lib/publish-lock";
 import { parsePublishScopeFromDraft } from "@/lib/grantha-publish-scope";
 import {
   Tooltip,
@@ -173,6 +174,8 @@ import {
   Lock,
   LockOpen,
   RotateCcw,
+  Image as ImageIcon,
+  UploadCloud,
 } from "lucide-react";
 
 const STRAPI_ADMIN = "http://13.53.121.15:1337/admin";
@@ -1303,6 +1306,17 @@ export default function GranthasPage() {
   const [resettingDraftId, setResettingDraftId] = useState<number | null>(null);
 
   // Step 1
+  // A grantha cover image lives in the Strapi media library (uploaded at selection
+  // time). We keep the numeric `id` to set the Strapi relation on publish, plus
+  // `url`/dimensions for in-form preview.
+  type CoverImageMedia = {
+    id?: number;
+    documentId?: string;
+    url?: string;
+    alternativeText?: string | null;
+    width?: number;
+    height?: number;
+  };
   const [formData, setFormData] = useState<{
     GranthaName: string;
     GranthaType: string;
@@ -1316,6 +1330,7 @@ export default function GranthasPage() {
     order: string;
     introVideoId: string;
     introVideoTitle: string;
+    coverImage: CoverImageMedia | null;
   }>({
     GranthaName: "",
     GranthaType: "",
@@ -1329,7 +1344,10 @@ export default function GranthasPage() {
     order: "",
     introVideoId: "",
     introVideoTitle: "",
+    coverImage: null,
   });
+  const [coverImageUploading, setCoverImageUploading] = useState(false);
+  const coverImageInputRef = useRef<HTMLInputElement>(null);
   const [teekas, setTeekas] = useState<TeekaDefinition[]>([]);
   const [otherTranslations, setOtherTranslations] = useState<OtherTranslationEntry[]>([]);
   const [granthaNameTranslations, setGranthaNameTranslations] = useState<GranthaNameTranslationEntry[]>([]);
@@ -1455,6 +1473,10 @@ export default function GranthasPage() {
     node: ManthraNode | null;
     wasNewLocal: boolean;
   } | null>(null);
+  // A freshly inserted ("+") verse stays _isNewLocal until the whole grantha is published, but once
+  // its draft has been saved there is nothing unsaved to lose — so closing it should no longer
+  // prompt "Save this verse before closing?". This tracks that the open verse's draft is saved.
+  const manthraSavedToDraftRef = useRef(false);
   const openEditLoadGenRef = useRef(0);
 
   function isCurrentOpenEditLoad(gen: number): boolean {
@@ -1549,6 +1571,7 @@ export default function GranthasPage() {
   ) {
     mantraFetchGenRef.current += 1;
     manthraDialogDirtyRef.current = false;
+    manthraSavedToDraftRef.current = false;
     setManthraDialogDirty(false);
     setManthraDialogViewOnly(!!opts?.viewOnly);
     const snap = adhyayasRef.current as AdhyayaNode[];
@@ -1665,7 +1688,13 @@ export default function GranthasPage() {
 
   useEffect(() => {
     publishInProgressRef.current = publishDraft.isPending;
+    // Block navigating to other screens while a grantha publish is running (it rebuilds the CMS
+    // grantha and can take minutes — leaving mid-publish risks an inconsistent CMS state).
+    setPublishLock(publishDraft.isPending);
   }, [publishDraft.isPending]);
+
+  // Never leave the navigation locked if the editor unmounts mid-flight.
+  useEffect(() => () => setPublishLock(false), []);
 
   const saveManthraPatchMutation = useMutation({
     mutationFn: async (params: {
@@ -1979,6 +2008,7 @@ export default function GranthasPage() {
     order: "",
     introVideoId: "",
     introVideoTitle: "",
+    coverImage: null as CoverImageMedia | null,
   };
 
   const DEFAULT_STRUCTURE = {
@@ -2172,6 +2202,7 @@ export default function GranthasPage() {
         order: d.order != null ? String(d.order) : "",
         introVideoId: d.introVideoId || "",
         introVideoTitle: d.introVideoTitle || "",
+        coverImage: d._coverImageMeta ?? null,
       });
       setTeekas(d.teekas || []);
       setOtherTranslations(
@@ -2241,6 +2272,7 @@ export default function GranthasPage() {
         order: d.order != null ? String(d.order) : "",
         introVideoId: d.introVideoId || "",
         introVideoTitle: d.introVideoTitle || "",
+        coverImage: d._coverImageMeta ?? null,
       });
       setTeekas(d.teekas || []);
       mergeDraftOther = (d.otherTranslations || []).map((t: any) => ({
@@ -2324,6 +2356,12 @@ export default function GranthasPage() {
         order: item.order != null ? String(item.order) : "",
         introVideoId: item.introVideoId || "",
         introVideoTitle: item.introVideoTitle || "",
+        // Live Strapi cover is the source of truth (cover edits write to Strapi
+        // immediately), so it wins over any stale draft overlay — otherwise a removed
+        // image could reappear from `_coverImageMeta`. Draft meta is only a fallback
+        // for a new grantha that isn't in Strapi yet.
+        coverImage:
+          item.coverImage || (hasDraft && savedData?._coverImageMeta) || null,
       });
 
       mergeDraftOther =
@@ -4999,6 +5037,7 @@ export default function GranthasPage() {
       order: d.order != null ? String(d.order) : "",
       introVideoId: d.introVideoId || "",
       introVideoTitle: d.introVideoTitle || "",
+      coverImage: d._coverImageMeta ?? null,
     });
     setTeekas(d.teekas || []);
     setOtherTranslations(
@@ -5035,6 +5074,112 @@ export default function GranthasPage() {
     publishScopeMetaEffectSkipRef.current = true;
     setEditingManthra(null);
     setManthraDialogViewOnly(false);
+  }
+
+  /** Read a File as raw base64 (data-URL prefix stripped) for the JSON upload route. */
+  function fileToBase64(file: File): Promise<string> {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => {
+        const result = reader.result as string;
+        const comma = result.indexOf(",");
+        resolve(comma >= 0 ? result.slice(comma + 1) : result);
+      };
+      reader.onerror = () => reject(reader.error ?? new Error("Failed to read file"));
+      reader.readAsDataURL(file);
+    });
+  }
+
+  /** Strapi documentId of the grantha being edited, or undefined if it isn't in Strapi yet. */
+  function currentStrapiGranthaDocId(): string | undefined {
+    if (!editingItem) return undefined;
+    return !editingItem._isDraft
+      ? editingItem.documentId
+      : editingItem._strapiDocId || undefined;
+  }
+
+  /**
+   * Attach/detach the cover image directly on the Strapi grantha — a one-field PUT that
+   * takes effect immediately, so the user does NOT have to republish the whole grantha
+   * to add or remove a cover. Passing `null` clears the relation (the generic proxy
+   * forwards the field verbatim, bypassing the publish pipeline's null-stripping). When
+   * the grantha isn't in Strapi yet (new draft), there's nothing to write — it will be
+   * attached on first publish via buildSavePayload.
+   */
+  async function persistCoverImageToStrapi(
+    coverImage: number | null,
+  ): Promise<"written" | "deferred" | "failed"> {
+    const docId = currentStrapiGranthaDocId();
+    if (!docId) return "deferred";
+    try {
+      await apiRequest("PUT", `/api/strapi/granthas/${docId}`, { coverImage });
+      queryClient.invalidateQueries({ queryKey: ["/api/strapi", "granthas"] });
+      return "written";
+    } catch {
+      return "failed";
+    }
+  }
+
+  /** Upload the chosen cover image to Strapi and attach it to the grantha immediately. */
+  async function handleCoverImageUpload(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    e.target.value = ""; // allow re-selecting the same file later
+    if (!file) return;
+    if (!file.type.startsWith("image/")) {
+      toast({ variant: "destructive", title: "Please choose an image file" });
+      return;
+    }
+    if (file.size > 10 * 1024 * 1024) {
+      toast({ variant: "destructive", title: "Image too large", description: "Maximum size is 10 MB." });
+      return;
+    }
+    setCoverImageUploading(true);
+    try {
+      const dataBase64 = await fileToBase64(file);
+      const res = await apiRequest("POST", "/api/strapi/upload", {
+        filename: file.name,
+        mimeType: file.type,
+        dataBase64,
+      });
+      const media = (await res.json()) as CoverImageMedia;
+      setFormData((prev) => ({ ...prev, coverImage: media }));
+      const result = media.id != null ? await persistCoverImageToStrapi(media.id) : "deferred";
+      toast({
+        ...(result === "failed" ? { variant: "destructive" as const } : {}),
+        title: "Cover image uploaded",
+        description:
+          result === "written"
+            ? "Saved to the CMS — no need to publish."
+            : result === "deferred"
+              ? "Stored. It will be attached when you first publish this grantha."
+              : "Uploaded, but attaching to the CMS failed — try uploading again.",
+      });
+    } catch (err: any) {
+      toast({
+        variant: "destructive",
+        title: "Upload failed",
+        description: err?.message || "Could not upload the cover image.",
+      });
+    } finally {
+      setCoverImageUploading(false);
+    }
+  }
+
+  /** Remove the cover image — clears it on the Strapi grantha immediately (no republish). */
+  async function handleRemoveCoverImage() {
+    if (viewOnly) return;
+    setFormData((prev) => ({ ...prev, coverImage: null }));
+    const result = await persistCoverImageToStrapi(null);
+    toast({
+      ...(result === "failed" ? { variant: "destructive" as const } : {}),
+      title: "Cover image removed",
+      description:
+        result === "written"
+          ? "Removed from the CMS — no need to publish."
+          : result === "deferred"
+            ? undefined
+            : "Removed here, but updating the CMS failed — try again.",
+    });
   }
 
   function buildSavePayload(): Record<string, any> {
@@ -5086,6 +5231,16 @@ export default function GranthasPage() {
     }
     if (formData.introVideoId.trim()) payload.introVideoId = formData.introVideoId.trim();
     if (formData.introVideoTitle.trim()) payload.introVideoTitle = formData.introVideoTitle.trim();
+
+    // Cover image: for an existing grantha, add/remove already wrote to Strapi
+    // immediately (persistCoverImageToStrapi), so this is only the fallback that
+    // attaches the cover on a NEW grantha's first publish. The `_coverImageMeta`
+    // companion carries url/dimensions so the preview survives a draft reload; its
+    // `_`-prefix makes the server strip it from the Strapi payload.
+    if (formData.coverImage?.id) {
+      payload.coverImage = formData.coverImage.id;
+      payload._coverImageMeta = formData.coverImage;
+    }
 
     if (hasBlocks(formData.IntroductionToTextEnglish)) {
       payload.IntroductionToTextEnglish = formData.IntroductionToTextEnglish;
@@ -5400,6 +5555,7 @@ export default function GranthasPage() {
         {
           onSuccess: () => {
             setManthraDialogDirty(false);
+            manthraSavedToDraftRef.current = true;
             markEditorSyncedForPublish();
             toast({ title: "Draft saved", description: "Content saved to database." });
             onDone?.();
@@ -5417,6 +5573,7 @@ export default function GranthasPage() {
                 onSuccess: (saved: any) => {
                   if (!editingDraftId && saved?.id) setEditingDraftId(saved.id);
                   setManthraDialogDirty(false);
+                  manthraSavedToDraftRef.current = true;
                   markEditorSyncedForPublish();
                   toast({ title: "Draft saved", description: "Content saved to database." });
                   onDone?.();
@@ -5440,6 +5597,7 @@ export default function GranthasPage() {
         onSuccess: (saved: any) => {
           if (!editingDraftId && saved?.id) setEditingDraftId(saved.id);
           setManthraDialogDirty(false);
+          manthraSavedToDraftRef.current = true;
           markEditorSyncedForPublish();
           toast({ title: "Draft saved", description: "Content saved to database." });
           onDone?.();
@@ -5645,9 +5803,12 @@ export default function GranthasPage() {
 
   function requestCloseMantraDialog() {
     const node = currentManthra;
+    // A new ("+") verse only needs the save-before-closing prompt while its draft is still unsaved.
+    // Once Save (draft) has run and there are no further edits, closing it is safe — no nag.
+    const newVerseUnsaved =
+      isNewLocalManthra(node ?? ({} as ManthraNode)) && !manthraSavedToDraftRef.current;
     const needsConfirm =
-      !manthraDialogViewOnly &&
-      (manthraDialogDirty || isNewLocalManthra(node ?? ({} as ManthraNode)));
+      !manthraDialogViewOnly && (manthraDialogDirty || newVerseUnsaved);
     if (needsConfirm) {
       setPendingCloseManthra(true);
       return;
@@ -6468,6 +6629,65 @@ export default function GranthasPage() {
                   className="mt-1.5"
                   data-testid="input-intro-video-title"
                 />
+              </div>
+              <div className="md:col-span-2">
+                <Label>Cover Image</Label>
+                <p className="text-xs text-muted-foreground mt-0.5">
+                  Stored in the CMS media library and loadable from anywhere. Adding or
+                  removing it saves immediately — no need to republish the grantha.
+                </p>
+                <input
+                  ref={coverImageInputRef}
+                  type="file"
+                  accept="image/*"
+                  className="hidden"
+                  onChange={handleCoverImageUpload}
+                  data-testid="input-cover-image-file"
+                />
+                <div className="mt-1.5 flex items-center gap-4">
+                  <div className="flex h-24 w-24 shrink-0 items-center justify-center overflow-hidden rounded-lg border bg-muted/40">
+                    {formData.coverImage?.url ? (
+                      <img
+                        src={formData.coverImage.url}
+                        alt={formData.coverImage.alternativeText || "Cover image"}
+                        className="h-full w-full object-cover"
+                        data-testid="img-cover-image-preview"
+                      />
+                    ) : (
+                      <ImageIcon className="h-7 w-7 text-muted-foreground" />
+                    )}
+                  </div>
+                  <div className="flex flex-col gap-2">
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      disabled={viewOnly || coverImageUploading}
+                      onClick={() => coverImageInputRef.current?.click()}
+                      data-testid="button-upload-cover-image"
+                    >
+                      {coverImageUploading ? (
+                        <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                      ) : (
+                        <UploadCloud className="w-4 h-4 mr-2" />
+                      )}
+                      {formData.coverImage?.url ? "Replace image" : "Upload image"}
+                    </Button>
+                    {formData.coverImage?.url ? (
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="sm"
+                        disabled={viewOnly || coverImageUploading}
+                        onClick={() => void handleRemoveCoverImage()}
+                        data-testid="button-remove-cover-image"
+                      >
+                        <X className="w-4 h-4 mr-2" />
+                        Remove
+                      </Button>
+                    ) : null}
+                  </div>
+                </div>
               </div>
             </div>
           </div>

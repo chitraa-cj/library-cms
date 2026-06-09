@@ -115,6 +115,60 @@ async function recompactSectionSortKeys(
 }
 const STRAPI_TOKEN = () => process.env.STRAPI_API_TOKEN || "";
 
+/**
+ * Make a Strapi media URL loadable from anywhere. Strapi's local upload provider
+ * returns root-relative paths (e.g. `/uploads/cover_3f2a.jpg`); prefix them with
+ * STRAPI_URL so the CMS (served from a different origin) and any external consumer
+ * can load the asset directly. URLs that are already absolute (S3/CDN providers)
+ * are returned unchanged.
+ */
+export function absolutizeMediaUrl(url?: string | null): string | null {
+  if (!url) return null;
+  if (/^https?:\/\//i.test(url)) return url;
+  return `${STRAPI_URL}${url.startsWith("/") ? "" : "/"}${url}`;
+}
+
+/** Normalize a grantha's `coverImage` media so its `url` is absolute. Mutates in place. */
+export function absolutizeGranthaCover(grantha: any): any {
+  if (grantha?.coverImage?.url) {
+    grantha.coverImage = { ...grantha.coverImage, url: absolutizeMediaUrl(grantha.coverImage.url) };
+  }
+  return grantha;
+}
+
+/**
+ * Upload a single file to the Strapi media library (POST {STRAPI_URL}/api/upload,
+ * multipart field `files`). Returns Strapi's media array. Used to store grantha
+ * cover images so they live in Strapi and are loadable from anywhere. The shared
+ * `fetchRequest` can't be reused here because it hardcodes a JSON Content-Type;
+ * multipart needs fetch to set its own boundary, so this is a dedicated path.
+ */
+export async function uploadToStrapi(
+  fileBuffer: Buffer,
+  filename: string,
+  mimeType: string,
+): Promise<Array<{ id: number; documentId?: string; url: string; alternativeText: string | null; width?: number; height?: number; name?: string }>> {
+  const form = new FormData();
+  form.append("files", new Blob([fileBuffer], { type: mimeType }), filename);
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(new Error("max-time exceeded")), STRAPI_HTTP_TIMEOUT_MS);
+  try {
+    const res = await fetch(`${STRAPI_URL}/api/upload`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${STRAPI_TOKEN()}` },
+      body: form,
+      signal: controller.signal,
+    });
+    const text = await res.text();
+    if (!res.ok) {
+      throw new Error(`Strapi upload failed (${res.status}): ${text.slice(0, 500)}`);
+    }
+    return JSON.parse(text);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 function classifyStrapiError(status?: number, body?: string): string {
   if (status === 401 || status === 403) return "upstream_auth";
   if (status === 408 || status === 429) return "upstream_timeout";
@@ -352,6 +406,7 @@ export function createStrapiRouter() {
     granthas: [
       "populate[BhashyakaraIntroduction][populate]=*",
       "populate[GranthaNameTranslations]=*",
+      "populate[coverImage][fields][0]=url&populate[coverImage][fields][1]=alternativeText&populate[coverImage][fields][2]=width&populate[coverImage][fields][3]=height",
       "populate[teekas][fields][0]=documentId&populate[teekas][fields][1]=TeekaName&populate[teekas][fields][2]=TeekaAuthor",
       "pagination[pageSize]=100",
       "sort=GranthaName:asc",
@@ -1343,6 +1398,44 @@ export function createStrapiRouter() {
     res.status(501).json({ message: STRAPI_ADMIN_NOTE });
   });
 
+  // ── Media upload: store a file in the Strapi media library so it lives in Strapi
+  // and is loadable from anywhere. The client posts JSON { filename, mimeType,
+  // dataBase64 } (the shared json body parser already handles this — no multipart
+  // middleware on the CMS), and we forward it to Strapi's /api/upload. Returns the
+  // uploaded media with an absolute URL for immediate preview.
+  router.post("/upload", async (req, res) => {
+    try {
+      const { filename, mimeType, dataBase64 } = req.body ?? {};
+      if (!dataBase64 || typeof dataBase64 !== "string") {
+        return res.status(400).json({ message: "dataBase64 (base64-encoded file) is required" });
+      }
+      const buffer = Buffer.from(dataBase64, "base64");
+      if (buffer.length === 0) {
+        return res.status(400).json({ message: "Uploaded file is empty or not valid base64" });
+      }
+      const uploaded = await uploadToStrapi(
+        buffer,
+        typeof filename === "string" && filename.trim() ? filename.trim() : "upload",
+        typeof mimeType === "string" && mimeType ? mimeType : "application/octet-stream",
+      );
+      const media = uploaded?.[0];
+      if (!media) {
+        return res.status(502).json({ message: "Strapi upload returned no media" });
+      }
+      return res.json({
+        id: media.id,
+        documentId: media.documentId,
+        url: absolutizeMediaUrl(media.url),
+        alternativeText: media.alternativeText ?? null,
+        width: media.width,
+        height: media.height,
+        name: media.name,
+      });
+    } catch (error: any) {
+      res.status(500).json({ message: error.message || "Failed to upload media" });
+    }
+  });
+
   // ── Granthas list: augment with full sections metadata so the card on the
   // granthas page can display section names (e.g. "Viyada Adhikaranam" for
   // Brahma Sutra). We fetch sections separately (paginated, no 25-item cap)
@@ -1419,8 +1512,9 @@ export function createStrapiRouter() {
         });
       }
 
-      // Attach sections to granthas
-      const enriched = allGranthas.map((g: any) => ({
+      // Attach sections to granthas. Also make each cover image URL absolute so the
+      // CMS (different origin than Strapi) and any external consumer can load it.
+      const enriched = allGranthas.map((g: any) => absolutizeGranthaCover({
         ...g,
         sections: sectionsByGrantha.get(g.documentId) ?? [],
       }));

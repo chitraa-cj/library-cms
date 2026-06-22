@@ -36,6 +36,7 @@
     "hermex:chandogya-1-1-1:dry": "tsx script/hermex-chandogya-1-1-1.ts --dry-run"
   },
   "dependencies": {
+    "@aws-sdk/client-s3": "^3.1070.0",
     "@hookform/resolvers": "^3.10.0",
     "@jridgewell/trace-mapping": "^0.3.25",
     "@radix-ui/react-accordion": "^1.2.4",

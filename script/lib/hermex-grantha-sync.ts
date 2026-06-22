@@ -413,6 +413,35 @@ export function buildJobsForMantra(mantra: any, mantraLabel: string, granthaName
   return jobs;
 }
 
+/**
+ * Drop failed-chunk entries for this mantra whose languages are ALL now present
+ * in Strapi. failedChunks is keyed by exact language grouping, but the grouping
+ * is non-deterministic across runs (effectiveChunkSizeForSource varies by source
+ * length; parse failures retry one language at a time), so a key recorded under
+ * one grouping is never the key that later succeeds — leaving orphaned entries
+ * that "re-run to retry" can never clear once missingLangs hits 0. Re-validating
+ * against live Strapi state is the only reliable cleanup. Returns count removed.
+ */
+export function pruneFailedChunksForMantra(mantra: any, checkpoint: CheckpointFile): number {
+  let removed = 0;
+  for (const key of Object.keys(checkpoint.failedChunks)) {
+    const [docId, field, teeka, langCsv] = key.split("|");
+    if (docId !== mantra.documentId) continue;
+    const job = {
+      field: field as FieldKind,
+      teekaIndex: field === "teeka" ? parseInt(teeka, 10) : undefined,
+    } as TranslateJob;
+    const entry = getTextEntryForJob(mantra, job);
+    const have = filledLangs(entry);
+    const langs = (langCsv ?? "").split(",").filter(Boolean);
+    if (langs.length > 0 && langs.every((l) => have.has(l))) {
+      delete checkpoint.failedChunks[key];
+      removed++;
+    }
+  }
+  return removed;
+}
+
 async function putManthraField(mantraDocId: string, field: "ShlokaManthraEntry" | "BhashyamEntry", mergedEntry: any): Promise<void> {
   const payload = stripEntryForPut(mergedEntry);
   if (!payload) return;

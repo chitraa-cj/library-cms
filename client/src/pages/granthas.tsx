@@ -4,6 +4,7 @@ import { useQuery, useMutation } from "@tanstack/react-query";
 import { queryClient, apiRequest, ApiError, CMS_FETCH_INIT } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
 import { useDrafts } from "@/hooks/use-drafts";
+import { useDraftBackups, type DraftBackup } from "@/hooks/use-draft-backups";
 import { useAuth } from "@/hooks/use-auth";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -143,6 +144,11 @@ import {
 import { STRAPI_SORT_GAP } from "@shared/mantra-sort-key";
 import { usePortalVocabulary } from "@/hooks/use-portal-vocabulary";
 import OtherTranslationsHermex from "@/components/other-translations-hermex";
+import GranthaCsvImportDialog, {
+  splitNumberTokens,
+  type GranthaCsvImportPayload,
+  type GranthaCsvNewVerse,
+} from "@/components/grantha-csv-import-dialog";
 import {
   postStrapiSection,
   collectSectionDocumentIdsChildToParentForAdhyaya,
@@ -176,6 +182,8 @@ import {
   RotateCcw,
   Image as ImageIcon,
   UploadCloud,
+  FileSpreadsheet,
+  History,
 } from "lucide-react";
 
 const STRAPI_ADMIN = "http://13.53.121.15:1337/admin";
@@ -302,6 +310,42 @@ function hasBlocks(v: StrapiBlock[] | string | null | undefined): boolean {
   if (!v) return false;
   if (typeof v === "string") return v.trim().length > 0;
   if (Array.isArray(v)) return v.some((b) => b.children?.some((c) => ("text" in c ? c.text ?? "" : "").trim().length > 0));
+  return false;
+}
+
+/**
+ * Does a draft that edits an existing Strapi grantha carry *real* local edits? Only such drafts
+ * should shadow (hide) the published card in the list. Detected cheaply from portal-only markers
+ * the editor sets on deliberate changes — no Strapi fetch:
+ *   • `deletedStrapi*DocIds` — sections / verses / teekas the user removed
+ *   • per-verse `_isNewLocal` (inserted with +), `_shlokaEdited` / `_bhashyamEdited` (text edited)
+ * A just-opened-then-saved snapshot or an empty stub draft has none of these, so it falls through
+ * to show the clean Published entry instead of an unnecessary "Draft overlay".
+ *
+ * Limitation (intentional, to stay fetch-free): grantha-level intro / other-translation edits have
+ * no per-field flag and aren't counted — such a draft shows as Published in the list but is still
+ * fully restored when its Published card is reopened (no data is lost or deleted).
+ */
+function overlayDraftHasLocalEdits(data: any): boolean {
+  if (!data || typeof data !== "object") return false;
+  for (const key of [
+    "deletedStrapiSectionDocIds",
+    "deletedStrapiManthraDocIds",
+    "deletedStrapiTeekaDocIds",
+  ]) {
+    if (Array.isArray(data[key]) && data[key].length > 0) return true;
+  }
+  const verseEdited = (m: any) =>
+    !!m && (m._isNewLocal === true || m._shlokaEdited === true || m._bhashyamEdited === true);
+  const adhyayas: any[] = Array.isArray(data.hierarchy) ? data.hierarchy : [];
+  for (const a of adhyayas) {
+    for (const k of a?.khandas ?? []) {
+      if ((k?.manthras ?? []).some(verseEdited)) return true;
+      for (const p of k?.padas ?? []) {
+        if ((p?.manthras ?? []).some(verseEdited)) return true;
+      }
+    }
+  }
   return false;
 }
 
@@ -952,10 +996,12 @@ function GranthaCard({
   isAdmin,
   onLock,
   onUnlock,
+  onShowBackups,
 }: {
   item: any;
   onEdit: () => void;
   onView?: (item: any) => void;
+  onShowBackups?: (item: any) => void;
   onDelete: () => void;
   onPublish: () => void;
   onResetDraftFromStrapi?: () => void;
@@ -1080,6 +1126,18 @@ function GranthaCard({
             >
               <ExternalLink className="w-3.5 h-3.5" />
             </button>
+          )}
+          {isDraft && item._draftId && onShowBackups && (
+            <Button
+              size="icon"
+              variant="ghost"
+              className="h-7 w-7 text-muted-foreground hover:text-foreground"
+              onClick={() => onShowBackups(item)}
+              title="Backup versions (view / restore / delete)"
+              data-testid={`button-backups-${item._draftId}`}
+            >
+              <History className="w-3.5 h-3.5" />
+            </Button>
           )}
           {isAdmin && item.documentId && (
             isLocked ? (
@@ -1303,6 +1361,9 @@ export default function GranthasPage() {
   const [persistProgress, setPersistProgress] = useState<EditorOperationProgress | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<any>(null);
   const [resetDraftTarget, setResetDraftTarget] = useState<any>(null);
+  // Draft item whose S3 backup versions are shown in the Backups dialog (null = closed).
+  const [backupsTarget, setBackupsTarget] = useState<any>(null);
+  const [backupDeleteKey, setBackupDeleteKey] = useState<string | null>(null);
   const [resettingDraftId, setResettingDraftId] = useState<number | null>(null);
 
   // Step 1
@@ -1365,6 +1426,8 @@ export default function GranthasPage() {
 
   // Step 3
   const [adhyayas, setAdhyayas] = useState<AdhyayaNode[]>([]);
+  // CSV bulk-import dialog (Step 3 toolbar).
+  const [csvImportOpen, setCsvImportOpen] = useState(false);
   // Tracks Strapi section documentIds that were explicitly removed by the user.
   // Used to prevent the supplement logic from re-adding them and to delete them on publish.
   const [deletedStrapiSectionDocIds, setDeletedStrapiSectionDocIds] = useState<string[]>([]);
@@ -3389,6 +3452,39 @@ export default function GranthasPage() {
     setStep(3);
   }
 
+  // ---------- Draft backup versions (durable S3 history) ----------
+  const backupDraftId: number | null = backupsTarget?._draftId ?? null;
+  const draftBackups = useDraftBackups(backupDraftId);
+
+  /**
+   * Open a saved backup version read-only. We pass it as a draft-with-no-Strapi-link so
+   * openEdit() renders entirely from the stored payload (no Strapi fetch) — a faithful view
+   * of exactly what was saved.
+   */
+  async function viewBackupVersion(item: any, key: string) {
+    try {
+      const record = await draftBackups.fetchBackupContent(key);
+      const data = record?.data;
+      if (!data) {
+        toast({ variant: "destructive", title: "Backup is empty or could not be read" });
+        return;
+      }
+      setBackupsTarget(null);
+      setViewOnly(true);
+      await openEdit({
+        _isDraft: true,
+        _draftData: data,
+        GranthaName: data.GranthaName,
+        GranthaType: data.GranthaType,
+        title: data.GranthaName || item.GranthaName || item.title,
+      });
+      setStep(3);
+    } catch (e: unknown) {
+      const msg = e instanceof Error ? e.message : String(e);
+      toast({ variant: "destructive", title: "Could not open backup version", description: msg });
+    }
+  }
+
   // ---------- Teeka handlers ----------
 
   function addTeeka() {
@@ -4882,6 +4978,140 @@ export default function GranthasPage() {
     );
   }
 
+  /**
+   * Apply CSV-mapped content into the draft tree.
+   *  - `updates` patch existing verses (routed through updateManthraContent, which flags the
+   *    touched fields as edited for the publish merge).
+   *  - `creates` add brand-new verses whose label is the CSV number, into the chosen target
+   *    section (auto-creating a chapter/section when the grantha is still empty). They are
+   *    `_isNewLocal` so the next Save & Publish rebuilds them fresh in the CMS.
+   * The user then Saves or Saves & Publishes through the normal pipeline.
+   */
+  function handleCsvImport(payload: GranthaCsvImportPayload) {
+    const { updates, creates, placement } = payload;
+    if (updates.length === 0 && creates.length === 0) return;
+    markRequiresFullPublish();
+
+    // 1) Patch existing verses.
+    for (const u of updates) {
+      updateManthraContent(
+        u.adhyayaId,
+        u.khandaId,
+        u.manthraId,
+        u.updates as Partial<ManthraNode>,
+        u.padaId,
+      );
+    }
+
+    // 2) Create new verses, placed either in one section or grouped across sections
+    //    by the leading tokens of each verse number. Sections are auto-created as needed.
+    if (creates.length > 0 && placement) {
+      const cfg = structureConfigRef.current;
+      setAdhyayas((prev) => {
+        // Clone the parts we mutate so pushes don't touch the previous state.
+        const next: AdhyayaNode[] = prev.map((a) => ({
+          ...a,
+          khandas: a.khandas.map((k) => ({
+            ...k,
+            manthras: [...k.manthras],
+            padas: (k.padas ?? []).map((p) => ({ ...p, manthras: [...p.manthras] })),
+          })),
+        }));
+
+        const nextOrder = (list: { order?: number }[]) =>
+          list.reduce((m, x) => Math.max(m, x.order ?? 0), 0) + 1;
+
+        const buildNode = (c: GranthaCsvNewVerse, order: number): ManthraNode => ({
+          id: uid(),
+          title: c.number,
+          order,
+          _isNewLocal: true,
+          ShlokaManthraEntry: c.updates.ShlokaManthraEntry,
+          BhashyamForShlokaManthra: c.updates.BhashyamForShlokaManthra,
+          Teekas:
+            c.updates.Teekas ??
+            teekas.map((t) => ({ TeekaName: t.TeekaName, TeekaAuthor: t.TeekaAuthor })),
+          _shlokaEdited: !!c.updates.ShlokaManthraEntry,
+          _bhashyamEdited: !!c.updates.BhashyamForShlokaManthra,
+        });
+
+        // Find an existing sibling by 1-based numeric token position, else append a new one.
+        function ensureChild<T extends { id: string; title: string; order: number }>(
+          siblings: T[],
+          token: string,
+          makeTitle: (order: number) => string,
+          makeExtra: () => Partial<T>,
+        ): T {
+          const idx = parseInt(token, 10);
+          const sorted = [...siblings].sort((x, y) => (x.order ?? 0) - (y.order ?? 0));
+          if (Number.isFinite(idx) && idx >= 1 && idx <= sorted.length) return sorted[idx - 1];
+          const order = nextOrder(siblings);
+          const node = { id: uid(), title: makeTitle(order), order, ...makeExtra() } as T;
+          siblings.push(node);
+          return node;
+        }
+
+        // Resolve the leaf manthra list (creating chapter/section/sub-section) for a path.
+        const leafListFor = (aTok: string, kTok: string, pTok: string): ManthraNode[] => {
+          const a = ensureChild(
+            next, aTok,
+            (o) => `${ordinal(o)} ${cfg.levelOneName}`,
+            () => ({ khandas: [], expanded: true } as any),
+          );
+          const k = ensureChild(
+            a.khandas, kTok,
+            (o) => (cfg.levelTwoEnabled ? `${ordinal(o)} ${cfg.levelTwoName}` : "_default"),
+            () => ({ padas: [], manthras: [], expanded: true } as any),
+          );
+          if (cfg.levelThreeEnabled) {
+            const p = ensureChild(
+              k.padas, pTok,
+              (o) => `${ordinal(o)} ${cfg.levelThreeName}`,
+              () => ({ manthras: [], expanded: true } as any),
+            );
+            return p.manthras;
+          }
+          return k.manthras;
+        };
+
+        if (placement.mode === "group") {
+          const D = placement.sectionLevels;
+          for (const c of creates) {
+            const toks = splitNumberTokens(c.number);
+            const aTok = D >= 1 ? toks[0] ?? "1" : "1";
+            const kTok = D >= 2 ? toks[1] ?? "1" : "1";
+            const pTok = D >= 3 ? toks[2] ?? "1" : "1";
+            const list = leafListFor(aTok, kTok, pTok);
+            list.push(buildNode(c, nextOrder(list)));
+          }
+        } else {
+          // Single section — honour explicit ids, auto-create whatever's missing.
+          const t = placement.target;
+          const a =
+            (t.adhyayaId && next.find((x) => x.id === t.adhyayaId)) ||
+            ensureChild(next, "", (o) => `${ordinal(o)} ${cfg.levelOneName}`, () => ({ khandas: [], expanded: true } as any));
+          const k =
+            (t.khandaId && a.khandas.find((x) => x.id === t.khandaId)) ||
+            ensureChild(a.khandas, "", (o) => (cfg.levelTwoEnabled ? `${ordinal(o)} ${cfg.levelTwoName}` : "_default"), () => ({ padas: [], manthras: [], expanded: true } as any));
+          const pada = t.padaId ? k.padas?.find((x) => x.id === t.padaId) : undefined;
+          const list = pada ? pada.manthras : k.manthras;
+          for (const c of creates) list.push(buildNode(c, nextOrder(list)));
+        }
+
+        // Fix orders / dedupe WITHOUT rewriting our CSV-number labels.
+        const normalized = hierarchyForSave(next, cfg);
+        adhyayasRef.current = normalized;
+        return normalized;
+      });
+    }
+
+    track("manthra_csv_imported", {
+      grantha_name: formData.GranthaName,
+      updated: updates.length,
+      created: creates.length,
+    });
+  }
+
   // Get the currently edited manthra object
   const currentManthra: ManthraNode | null = (() => {
     if (!editingManthra) return null;
@@ -5868,27 +6098,44 @@ export default function GranthasPage() {
     }
   }
 
-  // Collect which Strapi documentIds are currently being edited by a draft
-  // so we can hide the "published" card and only show the draft.
-  const draftedStrapiIds = new Set(
-    unpublishedDrafts.map((d) => d.strapiDocumentId).filter(Boolean) as string[]
-  );
+  const sortedDraftsByRecency = [...unpublishedDrafts].sort((a, b) => {
+    const tb = b.updatedAt != null ? new Date(b.updatedAt).getTime() : 0;
+    const ta = a.updatedAt != null ? new Date(a.updatedAt).getTime() : 0;
+    return tb - ta;
+  });
 
-  // Deduplicate drafts by Grantha name — keep only the most recently updated
-  // one per name so the list doesn't show multiple Draft cards for the same text.
+  // A draft editing an existing Strapi grantha ("overlay") should hide the published card ONLY
+  // when it carries real local edits — and only the newest such draft per Strapi entry (drop
+  // duplicate overlays). Empty / stub / just-opened snapshots fall through so the clean Published
+  // card shows instead. We never delete the draft row: reopening the Published card still loads it.
+  const publishedStrapiIds = new Set(
+    (data?.data || []).map((g: any) => g.documentId).filter(Boolean) as string[],
+  );
+  const shadowingOverlayDraftIds = new Set<number>();
+  const draftedStrapiIds = new Set<string>();
+  const seenOverlayStrapiIds = new Set<string>();
+  for (const d of sortedDraftsByRecency) {
+    if (!d.strapiDocumentId) continue;
+    if (seenOverlayStrapiIds.has(d.strapiDocumentId)) continue; // older duplicate → ignore
+    seenOverlayStrapiIds.add(d.strapiDocumentId); // newest draft row for this Strapi doc
+    const hasEdits = overlayDraftHasLocalEdits(d.data);
+    const hasPublishedCard = publishedStrapiIds.has(d.strapiDocumentId);
+    // Show the overlay card when it has real edits, OR when there is no published card to fall
+    // back to (so a linked draft is never made invisible).
+    if (hasEdits || !hasPublishedCard) shadowingOverlayDraftIds.add(d.id);
+    // Hide the published card only when a real overlay actually takes its place.
+    if (hasEdits && hasPublishedCard) draftedStrapiIds.add(d.strapiDocumentId);
+  }
+
+  // Draft cards to show: shadowing overlays (above) + brand-new unlinked drafts deduped by name.
   const seenDraftNames = new Set<string>();
-  const deduplicatedDrafts = [...unpublishedDrafts]
-    .sort((a, b) => {
-      const tb = b.updatedAt != null ? new Date(b.updatedAt).getTime() : 0;
-      const ta = a.updatedAt != null ? new Date(a.updatedAt).getTime() : 0;
-      return tb - ta;
-    })
-    .filter((d) => {
-      const name = ((d.data as any)?.GranthaName ?? "").toLowerCase().trim() || String(d.id);
-      if (seenDraftNames.has(name)) return false;
-      seenDraftNames.add(name);
-      return true;
-    });
+  const deduplicatedDrafts = sortedDraftsByRecency.filter((d) => {
+    if (d.strapiDocumentId) return shadowingOverlayDraftIds.has(d.id);
+    const name = ((d.data as any)?.GranthaName ?? "").toLowerCase().trim() || String(d.id);
+    if (seenDraftNames.has(name)) return false;
+    seenDraftNames.add(name);
+    return true;
+  });
 
   const saveAndPublishReady =
     editingDraftId != null &&
@@ -6020,6 +6267,7 @@ export default function GranthasPage() {
                     item={item}
                     onEdit={() => openEdit(item)}
                     onView={openView}
+                    onShowBackups={setBackupsTarget}
                     onDelete={() => setDeleteTarget(item)}
                     onPublish={() => handlePublish(item)}
                     onResetDraftFromStrapi={
@@ -6098,6 +6346,122 @@ export default function GranthasPage() {
               >
                 {resettingDraftId != null && <Loader2 className="w-4 h-4 mr-2 animate-spin" />}
                 Discard draft
+              </AlertDialogAction>
+            </AlertDialogFooter>
+          </AlertDialogContent>
+        </AlertDialog>
+
+        {/* Backup versions: durable S3 history for a draft. View any saved version read-only,
+            view the published Strapi version, or delete a backup version. */}
+        <Dialog open={!!backupsTarget} onOpenChange={(open) => { if (!open) setBackupsTarget(null); }}>
+          <DialogContent className="max-w-lg">
+            <DialogHeader>
+              <DialogTitle className="flex items-center gap-2">
+                <History className="w-4 h-4" />
+                Backup versions
+              </DialogTitle>
+              <DialogDescription>
+                Saved versions of &quot;{backupsTarget?.GranthaName || backupsTarget?.title}&quot; on AWS S3.
+                These are kept until you delete them, independent of Strapi — so a failed Save &amp; Publish
+                never loses your work.
+              </DialogDescription>
+            </DialogHeader>
+
+            {(backupsTarget?._strapiDocId || backupsTarget?.documentId) && (
+              <Button
+                variant="outline"
+                size="sm"
+                className="w-full justify-start"
+                onClick={() => {
+                  const docId = backupsTarget._strapiDocId || backupsTarget.documentId;
+                  const item = backupsTarget;
+                  setBackupsTarget(null);
+                  void openView({ documentId: docId, GranthaName: item.GranthaName });
+                }}
+                data-testid="button-view-published"
+              >
+                <ExternalLink className="w-3.5 h-3.5 mr-2" />
+                View published version (from Strapi)
+              </Button>
+            )}
+
+            <div className="max-h-[50vh] overflow-y-auto -mx-1 px-1">
+              {!draftBackups.enabled && !draftBackups.isLoading && (
+                <p className="text-sm text-muted-foreground py-6 text-center">
+                  S3 backups are not configured (set <code>S3_BACKUP_BUCKET</code>). Saving still works;
+                  no durable versions are stored.
+                </p>
+              )}
+              {draftBackups.isLoading && (
+                <div className="flex items-center justify-center py-6 text-muted-foreground">
+                  <Loader2 className="w-4 h-4 animate-spin mr-2" /> Loading versions…
+                </div>
+              )}
+              {draftBackups.enabled && !draftBackups.isLoading && draftBackups.backups.length === 0 && (
+                <p className="text-sm text-muted-foreground py-6 text-center">
+                  No backup versions yet. Save this grantha to create one.
+                </p>
+              )}
+              <ul className="divide-y">
+                {draftBackups.backups.map((b: DraftBackup) => (
+                  <li key={b.key} className="flex items-center justify-between gap-2 py-2">
+                    <div className="min-w-0">
+                      <div className="text-sm font-medium truncate">
+                        {b.ts ? new Date(b.ts).toLocaleString() : b.key.split("/").pop()}
+                      </div>
+                      <div className="text-xs text-muted-foreground">
+                        {(b.size / 1024).toFixed(1)} KB
+                      </div>
+                    </div>
+                    <div className="flex gap-1 shrink-0">
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        onClick={() => void viewBackupVersion(backupsTarget, b.key)}
+                        data-testid={`button-view-backup`}
+                      >
+                        <Eye className="w-3.5 h-3.5 mr-1" /> View
+                      </Button>
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        className="text-destructive hover:text-destructive"
+                        onClick={() => setBackupDeleteKey(b.key)}
+                        data-testid={`button-delete-backup`}
+                      >
+                        <Trash2 className="w-3.5 h-3.5" />
+                      </Button>
+                    </div>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          </DialogContent>
+        </Dialog>
+
+        <AlertDialog open={!!backupDeleteKey} onOpenChange={(open) => { if (!open) setBackupDeleteKey(null); }}>
+          <AlertDialogContent>
+            <AlertDialogHeader>
+              <AlertDialogTitle>Delete this backup version?</AlertDialogTitle>
+              <AlertDialogDescription>
+                This permanently removes this saved version from S3. Other versions and the current draft
+                are unaffected. This cannot be undone.
+              </AlertDialogDescription>
+            </AlertDialogHeader>
+            <AlertDialogFooter>
+              <AlertDialogCancel disabled={draftBackups.deleteBackup.isPending}>Cancel</AlertDialogCancel>
+              <AlertDialogAction
+                onClick={() => {
+                  const key = backupDeleteKey;
+                  if (!key) return;
+                  draftBackups.deleteBackup.mutate(key, { onSuccess: () => setBackupDeleteKey(null) });
+                }}
+                disabled={draftBackups.deleteBackup.isPending}
+                className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+                data-testid="button-confirm-delete-backup"
+              >
+                {draftBackups.deleteBackup.isPending && <Loader2 className="w-4 h-4 mr-2 animate-spin" />}
+                Delete version
               </AlertDialogAction>
             </AlertDialogFooter>
           </AlertDialogContent>
@@ -7670,6 +8034,16 @@ export default function GranthasPage() {
                   Back
                 </Button>
                 <div className="relative flex items-center gap-2">
+                <Button
+                  variant="outline"
+                  onClick={() => setCsvImportOpen(true)}
+                  disabled={saveDraft.isPending || publishDraft.isPending || persistInFlight}
+                  title="Bulk-fill verse fields from a CSV file"
+                  data-testid="button-import-csv"
+                >
+                  <FileSpreadsheet className="w-4 h-4 mr-2" />
+                  Import CSV
+                </Button>
                 {editingDraftId && editingGranthaStrapiDocumentId() && (
                   <Button
                     variant="outline"
@@ -7759,6 +8133,16 @@ export default function GranthasPage() {
           </div>
         </div>
       )}
+
+      {/* CSV bulk-import dialog */}
+      <GranthaCsvImportDialog
+        open={csvImportOpen}
+        onOpenChange={setCsvImportOpen}
+        adhyayas={adhyayas}
+        teekas={teekas}
+        structureConfig={structureConfig}
+        onApply={handleCsvImport}
+      />
 
       {/* Manthra content dialog */}
       <Dialog
@@ -7952,8 +8336,83 @@ export default function GranthasPage() {
                 <h4 className="text-sm font-semibold flex items-center gap-2">
                   <FileText className="w-4 h-4 text-primary" />
                   Bhashyam for this Manthra
-                  <span className="text-xs text-muted-foreground font-normal">(BhashyamForShlokaManthra)</span>
+                  {(formData.BhashyamName || formData.BhashyamAuthor) && (
+                    <span className="font-normal text-muted-foreground">
+                      — {formData.BhashyamName || "Bhashyam"}
+                      {formData.BhashyamAuthor ? ` · ${formData.BhashyamAuthor}` : ""}
+                    </span>
+                  )}
+                  <span className="ml-auto text-xs text-muted-foreground font-normal">(BhashyamForShlokaManthra)</span>
                 </h4>
+
+                {/* Bhashyam author/name — grantha-level fields surfaced here so the
+                    author whose commentary is being entered is always visible and
+                    changeable (not assumed to be Shankaracharya). Saved with the grantha. */}
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 rounded-lg border bg-muted/30 p-3">
+                  <div>
+                    <Label className="text-xs text-muted-foreground">Bhashyam Name</Label>
+                    <Input
+                      value={formData.BhashyamName}
+                      onChange={(e) => setFormData({ ...formData, BhashyamName: e.target.value })}
+                      placeholder="e.g., Chandogya Bhashyam"
+                      className="mt-1.5 h-8 text-sm"
+                      data-testid="input-manthra-bhashyam-name"
+                    />
+                  </div>
+                  <div>
+                    <Label className="text-xs text-muted-foreground">Bhashyam Author</Label>
+                    <Select
+                      value={formData.BhashyamAuthor}
+                      onValueChange={(val) => setFormData({ ...formData, BhashyamAuthor: val })}
+                    >
+                      <SelectTrigger className="mt-1.5 h-8 text-sm" data-testid="select-manthra-bhashyam-author">
+                        <SelectValue placeholder="Select author" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {bhashyamAuthorOptions.map((a) => (
+                          <SelectItem key={a} value={a}>{a}</SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                    {isAdmin && (
+                      <div className="mt-2 flex gap-2">
+                        <Input
+                          value={newSharedOption.bhashyamAuthors}
+                          onChange={(e) => updateSharedOptionDraft("bhashyamAuthors", e.target.value)}
+                          placeholder="Add new Bhashyam author"
+                          className="h-8 text-sm"
+                          onKeyDown={(e) => {
+                            if (e.key === "Enter") {
+                              e.preventDefault();
+                              void addSharedOption("bhashyamAuthors", (value) =>
+                                setFormData({ ...formData, BhashyamAuthor: value }),
+                              );
+                            }
+                          }}
+                        />
+                        <Button
+                          type="button"
+                          size="sm"
+                          disabled={addingSharedOptionKey === "bhashyamAuthors"}
+                          onClick={() =>
+                            void addSharedOption("bhashyamAuthors", (value) =>
+                              setFormData({ ...formData, BhashyamAuthor: value }),
+                            )
+                          }
+                        >
+                          {addingSharedOptionKey === "bhashyamAuthors" ? (
+                            <Loader2 className="w-4 h-4 animate-spin" />
+                          ) : (
+                            <Plus className="w-4 h-4" />
+                          )}
+                        </Button>
+                      </div>
+                    )}
+                  </div>
+                  <p className="sm:col-span-2 text-[11px] text-muted-foreground">
+                    Applies to the whole grantha's bhashyam. Saved when you Save &amp; Publish the grantha.
+                  </p>
+                </div>
                 <div>
                   <Label className="text-xs">Sanskrit Commentary</Label>
                   <RichTextEditor

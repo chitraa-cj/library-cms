@@ -8,6 +8,7 @@
  *   npm run hermex:grantha -- "Chandogya Upanishad" --dry-run
  *   npm run hermex:grantha -- "Chandogya Upanishad" --reset-checkpoint
  *   npm run hermex:grantha -- "Chandogya Upanishad" --headed
+ *   npm run hermex:grantha -- "Chandogya Upanishad" --prune-failed   # re-validate failedChunks vs Strapi, drop stale ones, exit
  */
 import "../server/env";
 import path from "node:path";
@@ -17,6 +18,7 @@ import {
   listMantrasForGrantha,
   loadCheckpoint,
   printMantraSummary,
+  pruneFailedChunksForMantra,
   resolveGranthaByName,
   saveCheckpoint,
   slugify,
@@ -31,6 +33,7 @@ function parseArgs(argv: string[]): {
   dryRun: boolean;
   headed: boolean;
   resetCheckpoint: boolean;
+  pruneFailed: boolean;
 } {
   // Parse the RAW argv — do not pre-strip "--" tokens, or the named flags below can never
   // match. Boolean flags go in `flags`; everything else that isn't a value of --grantha/
@@ -75,11 +78,12 @@ function parseArgs(argv: string[]): {
     dryRun: flags.has("--dry-run"),
     headed: flags.has("--headed"),
     resetCheckpoint: flags.has("--reset-checkpoint"),
+    pruneFailed: flags.has("--prune-failed"),
   };
 }
 
 async function main() {
-  const { granthaName, mantraFilter, dryRun, headed, resetCheckpoint } = parseArgs(process.argv.slice(2));
+  const { granthaName, mantraFilter, dryRun, headed, resetCheckpoint, pruneFailed } = parseArgs(process.argv.slice(2));
 
   const grantha = await resolveGranthaByName(granthaName);
   const checkpointPath = path.join(
@@ -123,6 +127,30 @@ async function main() {
   console.log(`Checkpoint: ${checkpointPath}`);
   console.log(`headless=${opts.headless} chunk=${opts.chunkSize} delay=${opts.chunkDelayMs}ms retries=${opts.maxRetries}\n`);
 
+  if (pruneFailed) {
+    const beforeKeys = Object.keys(checkpoint.failedChunks);
+    const failedMantraIds = [...new Set(beforeKeys.map((k) => k.split("|")[0]))];
+    console.log(
+      `[prune] Re-validating ${beforeKeys.length} failed chunk(s) across ${failedMantraIds.length} mantra(s) against Strapi`,
+    );
+    let removed = 0;
+    for (const id of failedMantraIds) {
+      let full: any;
+      try {
+        full = await fetchMantraFull(id);
+      } catch (e: unknown) {
+        console.warn(`[prune] skip ${id}: ${e instanceof Error ? e.message.slice(0, 80) : e}`);
+        continue;
+      }
+      removed += pruneFailedChunksForMantra(full, checkpoint);
+    }
+    saveCheckpoint(checkpointPath, checkpoint);
+    const remain = Object.keys(checkpoint.failedChunks);
+    console.log(`[prune] Removed ${removed} stale entr(ies); ${remain.length} genuinely-missing remain`);
+    for (const k of remain) console.log(`  ${k}: ${checkpoint.failedChunks[k].slice(0, 80)}`);
+    return;
+  }
+
   let mantras = await listMantrasForGrantha(grantha.documentId);
   console.log(`[plan] ${mantras.length} mantras in Strapi`);
 
@@ -162,6 +190,13 @@ async function main() {
 
   saveCheckpoint(checkpointPath, checkpoint);
 
+  // Per-run tallies for the summary — checkpoint.stats is a lifetime cumulative
+  // counter (loaded from disk, never reset), so reporting it as this run's work
+  // produced nonsense like "7591/1". These reset every invocation.
+  let runOk = 0;
+  let runFail = 0;
+  let runMantras = 0;
+
   for (let mi = 0; mi < mantras.length; mi++) {
     const m = mantras[mi];
     console.log(`\n[mantra ${mi + 1}/${mantras.length}] ${m.label} (${m.documentId})`);
@@ -174,10 +209,19 @@ async function main() {
       continue;
     }
 
+    // Self-heal stale failed-chunk entries for this mantra now that we have fresh
+    // Strapi state — keeps the "Failed chunks" list honest without a separate pass.
+    const pruned = pruneFailedChunksForMantra(mantra, checkpoint);
+    if (pruned) {
+      console.log(`[prune] cleared ${pruned} stale failed-chunk entr(ies) for ${m.label}`);
+      saveCheckpoint(checkpointPath, checkpoint);
+    }
+
     const jobs = buildJobsForMantra(mantra, m.label, grantha.GranthaName);
     if (!jobs.length) {
       console.log(`[skip] No missing translations (or no English source)`);
       checkpoint.stats.mantrasDone++;
+      runMantras++;
       saveCheckpoint(checkpointPath, checkpoint);
       continue;
     }
@@ -188,6 +232,8 @@ async function main() {
       const { ok, fail } = await translateJobIncremental(job, opts, checkpoint);
       checkpoint.stats.ok += ok;
       checkpoint.stats.fail += fail;
+      runOk += ok;
+      runFail += fail;
       saveCheckpoint(checkpointPath, checkpoint);
     }
 
@@ -198,16 +244,18 @@ async function main() {
       console.warn(`[strapi] Could not verify mantra ${m.label}: ${e instanceof Error ? e.message.slice(0, 80) : e}`);
     }
     checkpoint.stats.mantrasDone++;
+    runMantras++;
     saveCheckpoint(checkpointPath, checkpoint);
   }
 
   console.log("\n=== Grantha complete ===");
-  console.log(`Mantras processed: ${checkpoint.stats.mantrasDone}/${mantras.length}`);
-  console.log(`Translations OK: ${checkpoint.stats.ok}, failed: ${checkpoint.stats.fail}`);
-  console.log(`Checkpoint chunks done: ${checkpoint.completedChunks.length}`);
+  console.log(`This run — mantras: ${runMantras}/${mantras.length}, translations OK: ${runOk}, failed: ${runFail}`);
+  console.log(
+    `Lifetime checkpoint — chunks done: ${checkpoint.completedChunks.length} (cumulative OK ${checkpoint.stats.ok} / fail ${checkpoint.stats.fail} across all runs)`,
+  );
   const failedKeys = Object.keys(checkpoint.failedChunks);
   if (failedKeys.length) {
-    console.log(`Failed chunks (${failedKeys.length}) — re-run to retry:`);
+    console.log(`Failed chunks (${failedKeys.length}) — genuinely missing, re-run that mantra to retry:`);
     for (const k of failedKeys.slice(0, 10)) {
       console.log(`  ${k}: ${checkpoint.failedChunks[k].slice(0, 80)}`);
     }

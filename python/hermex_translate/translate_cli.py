@@ -64,7 +64,7 @@ def _parse_marker_blocks(cleaned: str, expected: set[str]) -> list[dict[str, Any
     """===LANGUAGE: Tamil=== blocks — reliable for long Unicode (no JSON escaping)."""
     rows: list[dict[str, Any]] = []
     pattern = re.compile(
-        r"===\s*(?:LANGUAGE:\s*)?([^\n=]+?)\s*===\s*\n([\s\S]*?)(?=\n===\s*(?:LANGUAGE:)?|$)",
+        r"=+\s*(?:LANGUAGE:\s*)?([^\n=]+?)\s*=+\s*\n([\s\S]*?)(?=\n=+\s*(?:LANGUAGE:)?|$)",
         re.IGNORECASE,
     )
     for m in pattern.finditer(cleaned):
@@ -295,6 +295,34 @@ def _gemini_send_message(gemini: Any, message: str, *, paste: bool) -> None:
         gemini._type_into(message, input_p)
     gemini.sleep(1)
     input_p.send_keys(Keys.ENTER)
+    # In Gemini's current input UI the box empties the instant ENTER is pressed and the
+    # send button is removed, so get_state() reports IDLE until the "Stop response" button
+    # appears (~1s later). Without this guard wait_until_idle() can see that momentary
+    # empty-idle box and return before generation even starts → empty/stale response read.
+    # Block until generation visibly starts (Stop response present) before returning.
+    _wait_generation_started(gemini, timeout=15)
+
+
+def _wait_generation_started(gemini: Any, timeout: float = 15) -> bool:
+    """After submit, wait until Gemini's 'Stop response' button appears (generation began).
+
+    Returns True if generation started within `timeout`. Returns False if it never
+    appeared (e.g. an unusually fast/short reply that finished between polls) — callers
+    fall through to wait_until_idle()/fetch, which still recover via the empty-response
+    retry path."""
+    from selenium.webdriver.common.by import By
+
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        try:
+            if gemini.driver.find_elements(
+                By.CSS_SELECTOR, '[data-node-type="input-area"] [aria-label="Stop response"]'
+            ):
+                return True
+        except Exception:
+            pass
+        time.sleep(0.4)
+    return False
 
 
 def _should_reopen_browser(err: BaseException) -> bool:
@@ -550,6 +578,48 @@ def _try_stop_generation(gemini: Any) -> None:
         _log(f"[hermex] Could not stop generation: {e}")
 
 
+def _wait_idle_or_stall(
+    gemini: Any, timeout: float, *, stall_secs: float = 150, poll: float = 2.0
+) -> None:
+    """Wait until Gemini is IDLE, but abort early if generation STALLS.
+
+    The package's wait_until_idle() only polls for the IDLE state, so if Gemini hangs
+    mid-stream with the 'Stop response' button stuck visible it blocks for the FULL
+    (up to 1h) timeout — the multi-minute hangs seen in practice. Here we additionally
+    watch the streamed <model-response> text length: if it stops growing for
+    `stall_secs` while not yet idle, we raise a (recoverable) timeout so the caller
+    refreshes the chat and retries within minutes instead of an hour. Legitimately slow
+    generations keep growing their text, so they are never aborted."""
+    from selenium.common.exceptions import TimeoutException
+    from selenium.webdriver.common.by import By
+    from hermex.models import State
+
+    start = time.time()
+    last_len = -1
+    last_growth = time.time()
+    while time.time() - start < timeout:
+        try:
+            state = gemini.get_state()
+        except Exception:
+            state = None
+        if state == State.IDLE:
+            return
+        try:
+            resps = gemini.driver.find_elements(By.TAG_NAME, "model-response")
+            cur_len = len(resps[-1].text) if resps else 0
+        except Exception:
+            cur_len = last_len
+        if cur_len != last_len:
+            last_len = cur_len
+            last_growth = time.time()
+        elif time.time() - last_growth > stall_secs:
+            raise TimeoutException(
+                f"Gemini generation stall timeout — no new text for {int(stall_secs)}s"
+            )
+        time.sleep(poll)
+    raise TimeoutException(f"Gemini idle wait timeout after {int(timeout)}s")
+
+
 def _gemini_query_with_recovery(
     gemini: Any,
     prompt: str,
@@ -570,7 +640,7 @@ def _gemini_query_with_recovery(
         try:
             _dismiss_gemini_overlays(gemini)
             _gemini_send_message(gemini, prompt, paste=use_paste)
-            gemini.wait_until_idle(timeout=effective_timeout)
+            _wait_idle_or_stall(gemini, effective_timeout)
             return _gemini_fetch_response(gemini)
         except Exception as e:
             last_err = e

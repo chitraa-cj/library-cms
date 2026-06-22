@@ -121,15 +121,15 @@ echo '{"sourceText":"Lead me from untruth to truth.","sourceLanguage":"English",
 
 ## Troubleshooting
 
-| Symptom | Cause | What to do |
-|--------|--------|------------|
-| Input box filled with **“Some fake text…”** | Hermex `fake_typing` + paste mode | Fixed in `translate_cli.py` (`fake_typing=False`). Re-run the job. |
-| Gemini shows Hebrew (etc.) in the browser but logs **FAIL / no rows parsed** | Response was **truncated** or invalid JSON (common on long Teeka) | Parser now salvages partial text and syncs what it can. Re-run for missing langs only (resume). |
-| `[translate] partial … saved 1/2` | One language parsed, one missing | Expected — missing langs are retried on the next run. |
-| **`Response contained neither text nor image`** | Hermex read the reply before Gemini filled `.markdown`, or Chrome closed mid-run | Fixed: polls up to ~40s after IDLE; retries refresh **same browser** (no flash close/open). Run `npm run hermex:setup` once. Do not close the Chrome window while a job runs. |
-| **`element click intercepted`** (Canvas card) | Gemini discovery overlay on `/app` | Fixed: dismiss overlays + JS focus before paste. Use `--headed` if headless still fails. |
-| **`session not created` / `chrome not reachable`** | Headless Chrome died or chromedriver orphan (common after ~100+ mantras on macOS) | Stop the job. Run `pkill -f chromedriver`. Resume with **`--headed`** (recommended on Mac). Auto-fallback to visible Chrome is enabled on macOS (`HERMEX_HEADLESS_FALLBACK`, default on). Do not close the Chrome window during a job. |
-| Parse snippet shows **`npm run hermex...`** | Clipboard/`get_markdown` picked up terminal text, not Gemini | Fixed: read plain `.text` only; reject shell-like garbage. |
+| Symptom                                                                      | Cause                                                                             | What to do                                                                                                                                                                                                                             |
+| ---------------------------------------------------------------------------- | --------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Input box filled with **“Some fake text…”**                                  | Hermex `fake_typing` + paste mode                                                 | Fixed in `translate_cli.py` (`fake_typing=False`). Re-run the job.                                                                                                                                                                     |
+| Gemini shows Hebrew (etc.) in the browser but logs **FAIL / no rows parsed** | Response was **truncated** or invalid JSON (common on long Teeka)                 | Parser now salvages partial text and syncs what it can. Re-run for missing langs only (resume).                                                                                                                                        |
+| `[translate] partial … saved 1/2`                                            | One language parsed, one missing                                                  | Expected — missing langs are retried on the next run.                                                                                                                                                                                  |
+| **`Response contained neither text nor image`**                              | Hermex read the reply before Gemini filled `.markdown`, or Chrome closed mid-run  | Fixed: polls up to ~40s after IDLE; retries refresh **same browser** (no flash close/open). Run `npm run hermex:setup` once. Do not close the Chrome window while a job runs.                                                          |
+| **`element click intercepted`** (Canvas card)                                | Gemini discovery overlay on `/app`                                                | Fixed: dismiss overlays + JS focus before paste. Use `--headed` if headless still fails.                                                                                                                                               |
+| **`session not created` / `chrome not reachable`**                           | Headless Chrome died or chromedriver orphan (common after ~100+ mantras on macOS) | Stop the job. Run `pkill -f chromedriver`. Resume with **`--headed`** (recommended on Mac). Auto-fallback to visible Chrome is enabled on macOS (`HERMEX_HEADLESS_FALLBACK`, default on). Do not close the Chrome window during a job. |
+| Parse snippet shows **`npm run hermex...`**                                  | Clipboard/`get_markdown` picked up terminal text, not Gemini                      | Fixed: read plain `.text` only; reject shell-like garbage.                                                                                                                                                                             |
 
 Long Teeka text (>800 chars) uses **marker blocks** (`===LANGUAGE: Hebrew===`) instead of JSON to avoid quote/Unicode breakage.
 
@@ -138,3 +138,8 @@ Long Teeka text (>800 chars) uses **marker blocks** (`===LANGUAGE: Hebrew===`) i
 - Hermex depends on the Gemini web UI; UI changes can break automation.
 - Respect [Google’s terms of service](https://policies.google.com/terms) for automated use.
 - Review AI translations before publish; do not rely on them without editorial check.
+
+pkill -f translate_cli.py
+rm -f "$HOME/Library/Application Support/hermex/chrome_profile"/Singleton\*
+cd /Users/chitrajain/Documents/Code/XoidLabs/Library/Data-Feeder-CMS
+npm run hermex:grantha -- "Chandogya Upanishad"

@@ -5,6 +5,14 @@ import { createStrapiRouter, strapiRequest, strapiRequestLarge, withSectionLock 
 import { createMigrateRouter } from "./migrate-vivekachudamani";
 import { activityLogger } from "./activity-log";
 import { readLatestDraftSnapshot, writeDraftSnapshot } from "./data-safety";
+import {
+  isS3BackupEnabled,
+  putGranthaBackup,
+  listGranthaBackups,
+  getGranthaBackup,
+  deleteGranthaBackup,
+  assertKeyForDraft,
+} from "./s3-backup";
 import { storage } from "./storage";
 import {
   addPortalVocabularyEntry,
@@ -17,7 +25,7 @@ import {
 } from "./cms-vocabulary";
 import { portalVocabularyKeys, type PortalVocabularyKey } from "@shared/schema";
 import Database from "better-sqlite3";
-import type { User } from "@shared/schema";
+import type { User, Draft } from "@shared/schema";
 import { gzipSync, gunzipSync } from "node:zlib";
 import { createHash } from "node:crypto";
 import { z } from "zod";
@@ -4035,6 +4043,31 @@ export async function registerRoutes(
 
   const VALID_CONTENT_TYPES = [...Object.keys(CONTENT_TYPE_MAP), ...Array.from(STRAPI_UNROUTED_TYPES)];
 
+  /**
+   * Write a durable, versioned S3 backup of a grantha draft (best-effort — never throws).
+   * Only granthas are backed up; other content types are skipped. Returns null when disabled,
+   * skipped, or on failure so the caller never fails the Save because of a backup error.
+   */
+  async function backupGranthaDraft(
+    draft: Draft,
+    userId: string,
+  ): Promise<{ key: string; size: number; ts: string } | null> {
+    if (draft.contentType !== "granthas" || !isS3BackupEnabled()) return null;
+    try {
+      return await putGranthaBackup({
+        draftId: draft.id,
+        userId,
+        title: draft.title,
+        status: draft.status,
+        strapiDocumentId: draft.strapiDocumentId,
+        data: draft.data,
+      });
+    } catch (err) {
+      console.error("[s3-backup] backupGranthaDraft failed:", err);
+      return null;
+    }
+  }
+
   app.get("/api/drafts", requireAuth, async (req, res) => {
     try {
       const user = req.user as User;
@@ -4091,7 +4124,8 @@ export async function registerRoutes(
         strapiDocumentId: draft.strapiDocumentId,
         data: draft.data,
       });
-      res.status(201).json(draft);
+      const backup = await backupGranthaDraft(draft, user.id);
+      res.status(201).json(backup ? { ...draft, _backupKey: backup.key } : draft);
     } catch (error: any) {
       res.status(500).json({ message: error.message || "Failed to create draft" });
     }
@@ -4162,10 +4196,11 @@ export async function registerRoutes(
           strapiDocumentId: draft.strapiDocumentId,
           data: draft.data,
         });
+        const backup = await backupGranthaDraft(draft, user.id);
         if (idem && !idem.replay) {
           await persistIdempotency(idem.key, `/api/drafts/${id}`, idem.hash, user.id, id, 200, draft);
         }
-        res.json(draft);
+        res.json(backup ? { ...draft, _backupKey: backup.key } : draft);
       });
     } catch (error: any) {
       if (error?.status) return res.status(error.status).json({ message: error.message });
@@ -4360,6 +4395,59 @@ export async function registerRoutes(
       });
     } catch (error: any) {
       res.status(500).json({ message: error.message || "Failed to delete draft" });
+    }
+  });
+
+  // List durable S3 backup versions for a draft (newest first). Empty when S3 backups are disabled.
+  app.get("/api/drafts/:id/backups", requireAuth, async (req, res) => {
+    try {
+      const user = req.user as User;
+      const id = parseInt(req.params.id);
+      if (isNaN(id)) return res.status(400).json({ message: "Invalid draft ID" });
+      const draft = await storage.getDraft(id, user.id);
+      if (!draft) return res.status(404).json({ message: "Draft not found" });
+      const backups = await listGranthaBackups(id);
+      res.json({ enabled: isS3BackupEnabled(), backups });
+    } catch (error: any) {
+      res.status(500).json({ message: error.message || "Failed to list backups" });
+    }
+  });
+
+  // Fetch one backup version's stored draft payload (for read-only viewing).
+  app.get("/api/drafts/:id/backups/content", requireAuth, async (req, res) => {
+    try {
+      const user = req.user as User;
+      const id = parseInt(req.params.id);
+      if (isNaN(id)) return res.status(400).json({ message: "Invalid draft ID" });
+      const key = req.query.key;
+      if (typeof key !== "string" || !key) return res.status(400).json({ message: "key is required" });
+      const draft = await storage.getDraft(id, user.id);
+      if (!draft) return res.status(404).json({ message: "Draft not found" });
+      assertKeyForDraft(id, key);
+      const record = await getGranthaBackup(key);
+      res.json(record);
+    } catch (error: any) {
+      const status = /does not belong/.test(error?.message || "") ? 400 : 500;
+      res.status(status).json({ message: error.message || "Failed to fetch backup" });
+    }
+  });
+
+  // Delete one backup version from S3.
+  app.delete("/api/drafts/:id/backups", requireAuth, async (req, res) => {
+    try {
+      const user = req.user as User;
+      const id = parseInt(req.params.id);
+      if (isNaN(id)) return res.status(400).json({ message: "Invalid draft ID" });
+      const key = req.query.key;
+      if (typeof key !== "string" || !key) return res.status(400).json({ message: "key is required" });
+      const draft = await storage.getDraft(id, user.id);
+      if (!draft) return res.status(404).json({ message: "Draft not found" });
+      assertKeyForDraft(id, key);
+      await deleteGranthaBackup(key);
+      res.json({ message: "Backup deleted", key });
+    } catch (error: any) {
+      const status = /does not belong/.test(error?.message || "") ? 400 : 500;
+      res.status(status).json({ message: error.message || "Failed to delete backup" });
     }
   });
 

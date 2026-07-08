@@ -23,6 +23,7 @@ import {
   ShieldCheck,
   DatabaseBackup,
   ListPlus,
+  GraduationCap,
 } from "lucide-react";
 import { useEffect, useState } from "react";
 import { cn } from "@/lib/utils";
@@ -53,6 +54,7 @@ const navSections: NavSection[] = [
       { label: "Teekas", path: "/teekas", icon: Library, description: "Commentary works" },
       { label: "Articles", path: "/articles", icon: FileText, description: "Blog articles & content" },
       { label: "Authors", path: "/authors", icon: Users, description: "Author profiles" },
+      { label: "Acharyas", path: "/acharyas", icon: GraduationCap, description: "Guru-parampara: bios, works & linked texts" },
       { label: "Categories", path: "/categories", icon: Tag, description: "Content categories" },
     ],
   },

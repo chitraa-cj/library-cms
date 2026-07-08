@@ -16,6 +16,7 @@ import TeekasPage from "@/pages/teekas";
 import ManthrasPage from "@/pages/manthras";
 import ArticlesPage from "@/pages/articles";
 import AuthorsPage from "@/pages/authors";
+import AcharyasPage from "@/pages/acharyas";
 import CategoriesPage from "@/pages/categories";
 import AboutPage from "@/pages/about";
 import GlobalPage from "@/pages/global";
@@ -77,6 +78,7 @@ function AuthenticatedRoutes() {
         <Route path="/manthras" component={ManthrasPage} />
         <Route path="/articles" component={ArticlesPage} />
         <Route path="/authors" component={AuthorsPage} />
+        <Route path="/acharyas" component={AcharyasPage} />
         <Route path="/categories" component={CategoriesPage} />
         <Route path="/about" component={AboutPage} />
         <Route path="/global" component={GlobalPage} />

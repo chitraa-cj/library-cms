@@ -2,6 +2,7 @@ import type { Express } from "express";
 import { type Server } from "http";
 import { setupAuth, requireAuth, requireAdmin, hashPassword } from "./auth";
 import { createStrapiRouter, strapiRequest, strapiRequestLarge, withSectionLock } from "./strapi";
+import { createAcharyaRouter, seedAcharyasIfEmpty } from "./acharyas";
 import { createMigrateRouter } from "./migrate-vivekachudamani";
 import { activityLogger } from "./activity-log";
 import { readLatestDraftSnapshot, writeDraftSnapshot } from "./data-safety";
@@ -3984,6 +3985,10 @@ export async function registerRoutes(
 
   const migrateRouter = createMigrateRouter();
   app.use("/api/strapi/migrate", migrateRouter);
+
+  // Acharyas (guru-parampara) — portal-only, local Postgres. Seed on first boot.
+  app.use("/api/acharyas", createAcharyaRouter());
+  void seedAcharyasIfEmpty();
 
   const hermexTranslateBodySchema = z.object({
     sourceText: z.string().min(1).max(120_000),

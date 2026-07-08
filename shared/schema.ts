@@ -365,6 +365,96 @@ export const cmsPortalVocabulary = pgTable("cms_portal_vocabulary", {
 
 export type CmsPortalVocabularyRow = typeof cmsPortalVocabulary.$inferSelect;
 
+// ---------- Acharyas (guru-parampara) ----------
+// Portal-only entity, stored entirely in local Postgres (no Strapi change).
+// Biographies + works are seeded from advaitadhara.sanatana.in and can be
+// edited in the portal. "Texts under an acharya" are NOT stored here — they are
+// derived at read time by matching `aliases` against a Grantha's BhashyamAuthor
+// and a Teeka's TeekaAuthor in Strapi.
+
+/** One heading + its paragraphs within a biography (Sanskrit prose). */
+export type AcharyaBioSection = {
+  heading: string | null;
+  paragraphs: string[];
+};
+
+/** A single work (कृतिः) attributed to the acharya. */
+export type AcharyaWork = {
+  title: string;
+  type?: string | null;
+  source?: string | null;
+  remarks?: string | null;
+};
+
+/** How a biography was populated: from the source, hand-written, or absent. */
+export const acharyaBioStatuses = ["sourced", "custom", "empty"] as const;
+export type AcharyaBioStatus = (typeof acharyaBioStatuses)[number];
+
+export const acharyaProfiles = pgTable("acharya_profiles", {
+  id: serial("id").primaryKey(),
+  /** Stable URL key, e.g. "acharya-0026" or "n-govindabhagavatpadah". */
+  slug: varchar("slug").notNull().unique(),
+  /** Source profile ref, e.g. "profile/acharya/0026" (null if none). */
+  sourceRef: varchar("source_ref"),
+  sourceUrl: text("source_url"),
+  nameDevanagari: text("name_devanagari").notNull(),
+  nameIast: text("name_iast"),
+  /** Editable display name (defaults to IAST). */
+  nameDisplay: text("name_display"),
+  /** Name variants used to link Granthas/Teekas (BhashyamAuthor/TeekaAuthor). */
+  aliases: jsonb("aliases").$type<string[]>().notNull().default([]),
+  /** Life dates as shown on the source, e.g. "788-820 A. D." */
+  dates: text("dates"),
+  /** Position in the guru-parampara ordering. */
+  lineageOrder: integer("lineage_order").notNull().default(0),
+  /** Devanagari name of the guru (parent in the lineage tree), if known. */
+  guruDevanagari: text("guru_devanagari"),
+  /** "acharya" | "granthakara" | null (from the source classification). */
+  category: text("category"),
+  biography: jsonb("biography").$type<AcharyaBioSection[]>().notNull().default([]),
+  worksList: jsonb("works_list").$type<AcharyaWork[]>().notNull().default([]),
+  avatarUrl: text("avatar_url"),
+  bioStatus: text("bio_status").$type<AcharyaBioStatus>().notNull().default("empty"),
+  createdAt: timestamp("created_at").defaultNow(),
+  updatedAt: timestamp("updated_at").defaultNow(),
+  updatedBy: varchar("updated_by").references(() => users.id),
+});
+
+export type AcharyaProfile = typeof acharyaProfiles.$inferSelect;
+export type InsertAcharyaProfile = typeof acharyaProfiles.$inferInsert;
+
+/** Fields a portal editor may update on an acharya. */
+export const updateAcharyaSchema = z.object({
+  nameDisplay: z.string().trim().min(1).optional(),
+  dates: z.string().trim().nullable().optional(),
+  avatarUrl: z.string().trim().nullable().optional(),
+  aliases: z.array(z.string().trim().min(1)).optional(),
+  biography: z
+    .array(
+      z.object({
+        heading: z.string().nullable(),
+        paragraphs: z.array(z.string()),
+      }),
+    )
+    .optional(),
+});
+export type UpdateAcharya = z.infer<typeof updateAcharyaSchema>;
+
+/** An acharya plus the texts derived as "under" them from Strapi. */
+export type AcharyaLinkedText = {
+  documentId: string;
+  name: string;
+  kind: "grantha" | "teeka";
+  granthaType?: string | null;
+  slug?: string | null;
+  coverImageUrl?: string | null;
+};
+
+export type AcharyaWithTexts = AcharyaProfile & {
+  granthas: AcharyaLinkedText[];
+  teekas: AcharyaLinkedText[];
+};
+
 // ---------- Strapi block / rich-text primitives ----------
 
 /**

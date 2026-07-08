@@ -159,3 +159,7 @@ Run via testing skill. Verifies:
 - Sends OtherTranslations in batches of 15 (Strapi 413 prevention)
 - Uses concurrency=6; run in slices for manthras > 100 due to 2-min timeout
 - Final 20 manthras (indices 100-119) restored separately due to ordering
+
+
+
+ npm run hermex:grantha -- "Brihadaranyaka Upanishad"

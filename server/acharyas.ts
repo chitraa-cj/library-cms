@@ -10,8 +10,7 @@
  */
 import { Router } from "express";
 import { readFileSync } from "fs";
-import { fileURLToPath } from "url";
-import { dirname, join } from "path";
+import { join } from "path";
 import { eq } from "drizzle-orm";
 import { db } from "./db";
 import { requireAuth, requireAdmin } from "./auth";
@@ -25,8 +24,11 @@ import {
   type User,
 } from "@shared/schema";
 
-const __dirname = dirname(fileURLToPath(import.meta.url));
-const SEED_PATH = join(__dirname, "..", "shared", "data", "acharya-profiles.seed.json");
+// Anchor to the repo root via process.cwd(), which is correct under both
+// `tsx server/index.ts` (dev) and pm2 `node dist/index.cjs` (prod).
+// Deriving the path from the ESM module URL is undefined in the bundled
+// CJS output and crashed cms-library at startup.
+const SEED_PATH = join(process.cwd(), "shared", "data", "acharya-profiles.seed.json");
 
 // ---------------------------------------------------------------- normalization
 /** Collapse a name to a comparison key: strip diacritics, honorifics, punctuation. */

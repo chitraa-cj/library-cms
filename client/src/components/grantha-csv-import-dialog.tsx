@@ -177,6 +177,16 @@ function lastToken(s: string): string {
   const parts = normLabel(s).split(/[.\-/:|]/).filter(Boolean);
   return parts.length ? parts[parts.length - 1] : normLabel(s);
 }
+/**
+ * Section-aware numeric path of a label: all numeric groups joined by ".", ignoring
+ * any prefix word. e.g. "Shloka 2.108" → "2.108", "Mantra 5" → "5", "1.2.3" → "1.2.3".
+ * Used so a CSV number like "2.108" matches only verse "2.108" — never "1.108" in another
+ * khanda that happens to share the trailing number.
+ */
+function numPath(s: string): string {
+  const nums = normLabel(s).match(/\d+/g);
+  return nums ? nums.join(".") : normLabel(s);
+}
 
 function flattenTree(adhyayas: AdhyayaNodeShape[]): FlatManthra[] {
   const out: FlatManthra[] = [];
@@ -389,6 +399,19 @@ export default function GranthaCsvImportDialog({
 
   const rangeIds = useMemo(() => new Set(rangeVerses.map((v) => v.manthraId)), [rangeVerses]);
 
+  // How many verses in the WHOLE grantha share each trailing token. A bare-number CSV
+  // (e.g. "5") may only fall back to last-token matching when that token is unique —
+  // otherwise "2.5" could wrongly match "1.5" in another khanda and be skipped as
+  // "out of range" instead of created as a new verse.
+  const tokenCounts = useMemo(() => {
+    const m = new Map<string, number>();
+    for (const v of flat) {
+      const t = lastToken(v.label);
+      m.set(t, (m.get(t) ?? 0) + 1);
+    }
+    return m;
+  }, [flat]);
+
   type PlanRow = {
     rowIndex: number;
     rowNumber: string;
@@ -419,11 +442,23 @@ export default function GranthaCsvImportDialog({
       if (!rawNum) { result.push({ rowIndex, rowNumber: "(blank)", action: "skip", reason: "no number" }); return; }
 
       const want = normLabel(rawNum);
+      const wantPath = numPath(rawNum);
       const wantTok = lastToken(rawNum);
-      // Match against the WHOLE grantha to decide exists-vs-create.
+      // A CSV number is "bare" when it's a single token (e.g. "5"), vs a dotted, section-
+      // qualified number (e.g. "2.108"). A dotted number is authoritative: it must match
+      // the SAME full path only ("2.108" ↦ "2.108", never "1.108" in another khanda).
+      const bareNumber = wantPath === wantTok;
+      // Match against the WHOLE grantha to decide exists-vs-create. Prefer an exact label
+      // match, then a section-aware numeric-path match. Only fall back to the loose
+      // trailing-token match for a BARE CSV number whose token is unique across the grantha —
+      // so importing a new khanda whose verse numbers overlap another khanda's trailing
+      // numbers creates new verses instead of skipping them as "out of range".
       let existing =
         flat.find((v) => !consumed.has(v.manthraId) && normLabel(v.label) === want) ??
-        flat.find((v) => !consumed.has(v.manthraId) && lastToken(v.label) === wantTok);
+        flat.find((v) => !consumed.has(v.manthraId) && numPath(v.label) === wantPath) ??
+        (bareNumber && (tokenCounts.get(wantTok) ?? 0) === 1
+          ? flat.find((v) => !consumed.has(v.manthraId) && lastToken(v.label) === wantTok)
+          : undefined);
 
       if (existing) {
         consumed.add(existing.manthraId);
@@ -439,7 +474,7 @@ export default function GranthaCsvImportDialog({
       }
     });
     return result;
-  }, [rows, matchMode, rangeVerses, rangeIds, flat, numberColumn, onMissing]);
+  }, [rows, matchMode, rangeVerses, rangeIds, flat, numberColumn, onMissing, tokenCounts]);
 
   const updateCount = plan.filter((p) => p.action === "update").length;
   const createCount = plan.filter((p) => p.action === "create").length;

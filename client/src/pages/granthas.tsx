@@ -2396,8 +2396,18 @@ export default function GranthasPage() {
       setFormData({
         GranthaName: item.GranthaName || "",
         GranthaType: item.GranthaType || "",
-        BhashyamName: item.BhashyamName || "",
-        BhashyamAuthor: item.BhashyamAuthor || "",
+        // Prefer the saved portal draft value (plain string) and fall back to
+        // Strapi when the draft has nothing — otherwise reopening an edited
+        // grantha silently discards a changed BhashyamName/BhashyamAuthor and
+        // the next save/publish reverts it back to the old Strapi value.
+        BhashyamName:
+          hasDraft && savedData.BhashyamName != null
+            ? savedData.BhashyamName
+            : item.BhashyamName || "",
+        BhashyamAuthor:
+          hasDraft && savedData.BhashyamAuthor != null
+            ? savedData.BhashyamAuthor
+            : item.BhashyamAuthor || "",
         // Rich text: prefer draft blocks (portal format) if present, else Strapi
         IntroductionToTextEnglish:
           hasBlocks(savedData?.IntroductionToTextEnglish)
@@ -6534,6 +6544,28 @@ export default function GranthasPage() {
                 className="mt-1.5"
                 data-testid="input-grantha-name"
               />
+              {(() => {
+                const typed = (formData.GranthaName || "").trim().toLowerCase();
+                if (!typed) return null;
+                const currentId = editingItem?.documentId;
+                const currentDraftId = editingItem?._draftId ?? editingDraftId;
+                const clash = mergedData.some((it) => {
+                  const isSelf =
+                    (currentId && it.documentId === currentId) ||
+                    (currentDraftId != null && it._draftId === currentDraftId);
+                  if (isSelf) return false;
+                  return (it.GranthaName || "").trim().toLowerCase() === typed;
+                });
+                if (!clash) return null;
+                return (
+                  <div className="flex items-center gap-1.5 mt-2 px-2 py-1 rounded-md bg-amber-50 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-800">
+                    <AlertTriangle className="w-3.5 h-3.5 text-amber-600 dark:text-amber-400 flex-shrink-0" />
+                    <p className="text-xs text-amber-700 dark:text-amber-400 font-medium">
+                      A grantha named &quot;{formData.GranthaName.trim()}&quot; already exists — this will create a duplicate.
+                    </p>
+                  </div>
+                );
+              })()}
             </div>
             <div>
               <Label>Grantha Type</Label>

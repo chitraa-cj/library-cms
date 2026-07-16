@@ -24,7 +24,7 @@ import {
   resolveAllowedTeekaAuthor,
   resolveAllowedBhashyamAuthor,
 } from "./cms-vocabulary";
-import { portalVocabularyKeys, type PortalVocabularyKey } from "@shared/schema";
+import { portalVocabularyKeys, bhashyamAuthors, type PortalVocabularyKey } from "@shared/schema";
 import Database from "better-sqlite3";
 import type { User, Draft } from "@shared/schema";
 import { gzipSync, gunzipSync } from "node:zlib";
@@ -2741,13 +2741,28 @@ async function publishGranthaWithHierarchy(
 
   const granthaPayload = cleanPayloadForStrapi(stripPortalMetaFromGranthaPayload(granthaDataRaw));
 
-  // BhashyamAuthor is a Strapi enum. Drafts can carry prasthana spellings or
-  // admin-added custom values that aren't in the grantha enum, which makes Strapi
-  // reject the publish with a 400 ValidationError. Normalize to an allowed value,
-  // or drop the field entirely so publish succeeds for granthas without a bhashyam.
+  // BhashyamAuthor is a Strapi enum that only accepts the two canonical grantha
+  // author spellings. Drafts can carry prasthana spellings (normalized via
+  // aliases) or admin-added custom values that Strapi's grantha enum does not
+  // accept. Resolve to an allowed value; if the author is empty just drop the
+  // field so granthas without a bhashyam still publish. But if the user picked a
+  // NON-EMPTY author that can't be mapped, fail loudly instead of silently
+  // dropping it — a dropped field makes Strapi keep the previous author, which
+  // looks like the author "reverted back to Sri Shankarayacharya".
+  const rawBhashyamAuthor = String(granthaPayload.BhashyamAuthor ?? "").trim();
   const resolvedBhashyamAuthor = resolveAllowedBhashyamAuthor(granthaPayload.BhashyamAuthor);
   if (resolvedBhashyamAuthor) {
     granthaPayload.BhashyamAuthor = resolvedBhashyamAuthor;
+  } else if (rawBhashyamAuthor) {
+    throw Object.assign(
+      new Error(
+        `Cannot publish: Bhashyam author "${rawBhashyamAuthor}" is not accepted by Strapi's grantha ` +
+          `BhashyamAuthor enum. Allowed values are: ${bhashyamAuthors.join(", ")}. ` +
+          `To use a new author, add it to the Strapi grantha content-type's BhashyamAuthor enum first ` +
+          `(and to bhashyamAuthors in shared/schema.ts), then republish.`,
+      ),
+      { status: 400 },
+    );
   } else if ("BhashyamAuthor" in granthaPayload) {
     delete granthaPayload.BhashyamAuthor;
   }

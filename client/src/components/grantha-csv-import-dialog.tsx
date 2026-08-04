@@ -270,6 +270,7 @@ export default function GranthaCsvImportDialog({
   // Missing-verse handling
   const [onMissing, setOnMissing] = useState<"create" | "skip">("create");
   const [placementMode, setPlacementMode] = useState<"single" | "group">("single");
+  const [placementModeTouched, setPlacementModeTouched] = useState(false);
   const [targetKey, setTargetKey] = useState<string>("");
   const [sectionLevels, setSectionLevels] = useState<number>(1);
   const [sectionLevelsTouched, setSectionLevelsTouched] = useState(false);
@@ -503,6 +504,16 @@ export default function GranthaCsvImportDialog({
     const def = Math.min(Math.max(maxTokens - 1, 1), maxSectionLevels);
     setSectionLevels(def);
   }, [createNumbers, maxSectionLevels, sectionLevelsTouched]);
+
+  // Default placement to "group" when verse numbers are prefixed (e.g. "5.1"), so
+  // an adhyaya-wise file routes each verse into its own chapter by the leading
+  // number instead of appending everything onto whichever section is first — which
+  // silently merged one adhyaya into the previous one. Explicit user choice wins.
+  useEffect(() => {
+    if (placementModeTouched || createNumbers.length === 0 || maxSectionLevels < 1) return;
+    const prefixed = createNumbers.some((n) => splitNumberTokens(n).length >= 2);
+    setPlacementMode(prefixed ? "group" : "single");
+  }, [createNumbers, maxSectionLevels, placementModeTouched]);
 
   // Preview: distinct section paths the create rows resolve to.
   const groupPreview = useMemo(() => {
@@ -754,7 +765,7 @@ export default function GranthaCsvImportDialog({
                   {onMissing === "create" && (
                     <div className="flex items-center gap-2 min-w-0">
                       <Label className="text-xs whitespace-nowrap">Placement</Label>
-                      <Select value={placementMode} onValueChange={(v) => setPlacementMode(v as any)}>
+                      <Select value={placementMode} onValueChange={(v) => { setPlacementMode(v as any); setPlacementModeTouched(true); }}>
                         <SelectTrigger className="w-56 shrink-0" data-testid="select-placement-mode">
                           <SelectValue />
                         </SelectTrigger>

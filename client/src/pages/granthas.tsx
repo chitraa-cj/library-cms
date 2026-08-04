@@ -5086,12 +5086,20 @@ export default function GranthasPage() {
 
         if (placement.mode === "group") {
           const D = placement.sectionLevels;
+          // Resolve each distinct section path ONCE and reuse it, so every verse
+          // sharing a path (e.g. all of "5.x") lands in the same section. Without
+          // this cache, a leading token past the current sibling count — importing
+          // adhyaya 5 into a tree that has fewer chapters — makes ensureChild()
+          // append a brand-new chapter for EACH verse instead of one shared chapter.
+          const leafByPath = new Map<string, ManthraNode[]>();
           for (const c of creates) {
             const toks = splitNumberTokens(c.number);
             const aTok = D >= 1 ? toks[0] ?? "1" : "1";
             const kTok = D >= 2 ? toks[1] ?? "1" : "1";
             const pTok = D >= 3 ? toks[2] ?? "1" : "1";
-            const list = leafListFor(aTok, kTok, pTok);
+            const pathKey = `${aTok}|${kTok}|${pTok}`;
+            let list = leafByPath.get(pathKey);
+            if (!list) { list = leafListFor(aTok, kTok, pTok); leafByPath.set(pathKey, list); }
             list.push(buildNode(c, nextOrder(list)));
           }
         } else {

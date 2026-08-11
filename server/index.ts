@@ -20,16 +20,20 @@ declare module "http" {
   }
 }
 
+// Body limit must comfortably exceed the largest full-grantha payload. Chandogya's
+// whole-grantha draft/publish payload is ~55MB and growing; 50mb caused 413s on Save.
+const BODY_LIMIT = process.env.BODY_LIMIT || "250mb";
+
 app.use(
   express.json({
-    limit: "50mb",
+    limit: BODY_LIMIT,
     verify: (req, _res, buf) => {
       req.rawBody = buf;
     },
   }),
 );
 
-app.use(express.urlencoded({ extended: false, limit: "50mb" }));
+app.use(express.urlencoded({ extended: false, limit: BODY_LIMIT }));
 
 registerApiCacheMiddleware(app);
 

@@ -758,20 +758,65 @@ export interface SyncAdhyayaNode {
 }
 
 /**
- * Sanskrit ordinals used for default section labels in the portal editor.
+ * Sanskrit ordinals (masculine `-a` form, as used for adhyaya / khanda / section
+ * numbering) used for default section labels in the portal editor.
+ * Index `i` (0-based) is the ordinal for position `i + 1`.
  * Keep in sync with `ORDINALS` in `client/src/pages/granthas.tsx`.
  */
 const PORTAL_SECTION_ORDINALS = [
-  "Prathama",
-  "Dvitiya",
-  "Tritiya",
-  "Chaturtha",
-  "Panchama",
-  "Shashthi",
-  "Saptama",
-  "Ashtama",
-  "Navama",
-  "Dashama",
+  "Prathama",       // 1
+  "Dvitiya",        // 2
+  "Tritiya",        // 3
+  "Chaturtha",      // 4
+  "Panchama",       // 5
+  "Shashtha",       // 6
+  "Saptama",        // 7
+  "Ashtama",        // 8
+  "Navama",         // 9
+  "Dashama",        // 10
+  "Ekadasha",       // 11
+  "Dvadasha",       // 12
+  "Trayodasha",     // 13
+  "Chaturdasha",    // 14
+  "Panchadasha",    // 15
+  "Shodasha",       // 16
+  "Saptadasha",     // 17
+  "Ashtadasha",     // 18
+  "Navadasha",      // 19
+  "Vimsha",         // 20
+  "Ekavimsha",      // 21
+  "Dvavimsha",      // 22
+  "Trayovimsha",    // 23
+  "Chaturvimsha",   // 24
+  "Panchavimsha",   // 25
+  "Shadvimsha",     // 26
+  "Saptavimsha",    // 27
+  "Ashtavimsha",    // 28
+  "Navavimsha",     // 29
+  "Trimsha",        // 30
+  "Ekatrimsha",     // 31
+  "Dvatrimsha",     // 32
+  "Trayastrimsha",  // 33
+  "Chatustrimsha",  // 34
+  "Panchatrimsha",  // 35
+  "Shattrimsha",    // 36
+  "Saptatrimsha",   // 37
+  "Ashtatrimsha",   // 38
+  "Navatrimsha",    // 39
+  "Chatvarimsha",   // 40
+] as const;
+
+/**
+ * Alternate spellings of auto-generated ordinals that older data may already contain,
+ * so syncing recognises them as auto titles (and rewrites them to the canonical form
+ * above) rather than treating them as custom names. Canonical forms live in
+ * `PORTAL_SECTION_ORDINALS`; these are only used for matching, never emitted.
+ */
+const PORTAL_SECTION_ORDINAL_ALIASES = [
+  "Shashthi",        // legacy spelling of 6th (now "Shashtha")
+  "Ekonavimsha",     // variant of 19th ("Navadasha")
+  "Ekonatrimsha",    // variant of 29th ("Navavimsha")
+  "Ekonachatvarimsha", // variant of 39th ("Navatrimsha")
 ] as const;
 
 export function editorOrdinalLabel(n: number): string {
@@ -795,7 +840,7 @@ export function syncPortalSectionTitle(
   if (t === "_default") return t;
   const name = (levelName ?? "").trim();
   if (!name) return t;
-  const ordAlt = PORTAL_SECTION_ORDINALS.join("|");
+  const ordAlt = [...PORTAL_SECTION_ORDINALS, ...PORTAL_SECTION_ORDINAL_ALIASES].join("|");
   const re = new RegExp(`^(?:${ordAlt}|\\d+)\\s+${escapeRegExp(name)}\\s*$`, "i");
   if (!t) return `${editorOrdinalLabel(position1Based)} ${name}`;
   if (!re.test(t)) return t;

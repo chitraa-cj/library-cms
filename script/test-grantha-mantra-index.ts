@@ -378,7 +378,16 @@ assert.equal(buildMantraDisplayTitle("M", 7, l2), "M 2.3.7");
 assert.equal(syncPortalSectionTitle("Dvitiya Adhyaya", "Adhyaya", 1), "Prathama Adhyaya");
 assert.equal(syncPortalSectionTitle("Arjuna Vishada", "Adhyaya", 1), "Arjuna Vishada");
 assert.equal(syncPortalSectionTitle("3 Khanda", "Khanda", 2), "Dvitiya Khanda");
-assert.equal(editorOrdinalLabel(11), "11");
+assert.equal(editorOrdinalLabel(11), "Ekadasha");
+assert.equal(editorOrdinalLabel(13), "Trayodasha");
+assert.equal(editorOrdinalLabel(20), "Vimsha");
+assert.equal(editorOrdinalLabel(40), "Chatvarimsha");
+assert.equal(editorOrdinalLabel(41), "41");
+// Existing numeric auto-titles get rewritten to the Sanskrit ordinal on sync.
+assert.equal(syncPortalSectionTitle("12 Adhyaya", "Adhyaya", 12), "Dvadasha Adhyaya");
+assert.equal(syncPortalSectionTitle("13 Adhyaya", "Adhyaya", 13), "Trayodasha Adhyaya");
+// Legacy "Shashthi" spelling is recognised and rewritten to canonical "Shashtha".
+assert.equal(syncPortalSectionTitle("Shashthi Adhyaya", "Adhyaya", 6), "Shashtha Adhyaya");
 
 const preserve = reindexMantraOrdersPreservingTitles([
   { id: "a", title: "Shloka 1.1.99", order: 5 },

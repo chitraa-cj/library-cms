@@ -153,6 +153,8 @@ export const granthaTypes = [
 export const bhashyamAuthors = [
   "Sri Shankarayacharya",
   "Upanishad Brahmendra",
+  "Mādhavācārya",
+  "Sringeri Madhavacharya",
 ] as const;
 
 export const prasthanaGranthaTypes = [
@@ -291,6 +293,8 @@ export const teekaAuthors = [
   "Shriharsha",
   "Chitsukha",
   "Vidyaranya",
+  "Hanuman",
+  "Venkatanatha",
 ] as const;
 
 /** Default top-level division labels (grantha structure wizard). */

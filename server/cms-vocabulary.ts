@@ -84,37 +84,45 @@ export async function isAllowedTeekaAuthor(name: string | undefined | null): Pro
   return resolveAllowedTeekaAuthor(name, allow) !== undefined;
 }
 
-/**
- * Strapi's grantha `BhashyamAuthor` field is an enum that only accepts the
- * canonical grantha author spellings. The CMS vocabulary dropdown also offers
- * the prasthana-thraya variants ("Sri Shankaracharya", "Sri Upanishad
- * Brahmendra") and admin-added custom values — none of which Strapi's grantha
- * enum accepts, so publishing a grantha with one of those 400s.
- */
-const granthaBhashyamAuthorAllow = new Set<string>(bhashyamAuthors);
-
-/** Known prasthana-spelling → grantha-enum-spelling equivalents (lower-cased keys). */
+/** Known prasthana-spelling → grantha-spelling equivalents (lower-cased keys). */
 const bhashyamAuthorAliases: Record<string, string> = {
   "sri shankaracharya": "Sri Shankarayacharya",
   "sri upanishad brahmendra": "Upanishad Brahmendra",
 };
 
 /**
- * Map a draft `BhashyamAuthor` to a value Strapi's grantha enum will accept.
- * Returns `undefined` when the value is empty or unrecognized — callers should
- * omit the field entirely in that case so Strapi validation passes.
+ * Allowed grantha `BhashyamAuthor` values = the merged Shared-list vocabulary
+ * (built-in defaults + admin-added custom names), i.e. the same source the
+ * dropdown reads. A name added via Shared lists is therefore publishable with no
+ * code change. Strapi's `BhashyamAuthor` field is now a plain string (no longer
+ * an enum), so this vocabulary is the sole guardrail against typos.
+ */
+export async function getBhashyamAuthorsAllowlist(): Promise<Set<string>> {
+  const vocab = await getPortalVocabulary();
+  return new Set(vocab.bhashyamAuthors);
+}
+
+/**
+ * Map a draft `BhashyamAuthor` to an allowed value. Known prasthana spellings are
+ * normalized to their canonical grantha spelling first (so a grantha shows one
+ * consistent author). Returns `undefined` when the value is empty or unrecognized
+ * — callers should omit the field entirely in that case. `allow` is the merged
+ * vocabulary set from `getBhashyamAuthorsAllowlist()`.
  */
 export function resolveAllowedBhashyamAuthor(
   author: string | undefined | null,
+  allow: Set<string>,
 ): string | undefined {
   const trimmed = String(author ?? "").trim();
   if (!trimmed) return undefined;
-  if (granthaBhashyamAuthorAllow.has(trimmed)) return trimmed;
   const lower = trimmed.toLowerCase();
-  for (const entry of granthaBhashyamAuthorAllow) {
+  const alias = bhashyamAuthorAliases[lower];
+  if (alias) return alias;
+  if (allow.has(trimmed)) return trimmed;
+  for (const entry of allow) {
     if (entry.toLowerCase() === lower) return entry;
   }
-  return bhashyamAuthorAliases[lower];
+  return undefined;
 }
 
 export async function addPortalVocabularyEntry(

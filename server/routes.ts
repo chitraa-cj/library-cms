@@ -23,8 +23,9 @@ import {
   removePortalVocabularyEntry,
   resolveAllowedTeekaAuthor,
   resolveAllowedBhashyamAuthor,
+  getBhashyamAuthorsAllowlist,
 } from "./cms-vocabulary";
-import { portalVocabularyKeys, bhashyamAuthors, type PortalVocabularyKey } from "@shared/schema";
+import { portalVocabularyKeys, type PortalVocabularyKey } from "@shared/schema";
 import Database from "better-sqlite3";
 import type { User, Draft } from "@shared/schema";
 import { gzipSync, gunzipSync } from "node:zlib";
@@ -2750,16 +2751,15 @@ async function publishGranthaWithHierarchy(
   // dropping it — a dropped field makes Strapi keep the previous author, which
   // looks like the author "reverted back to Sri Shankarayacharya".
   const rawBhashyamAuthor = String(granthaPayload.BhashyamAuthor ?? "").trim();
-  const resolvedBhashyamAuthor = resolveAllowedBhashyamAuthor(granthaPayload.BhashyamAuthor);
+  const bhashyamAuthorAllow = await getBhashyamAuthorsAllowlist();
+  const resolvedBhashyamAuthor = resolveAllowedBhashyamAuthor(granthaPayload.BhashyamAuthor, bhashyamAuthorAllow);
   if (resolvedBhashyamAuthor) {
     granthaPayload.BhashyamAuthor = resolvedBhashyamAuthor;
   } else if (rawBhashyamAuthor) {
     throw Object.assign(
       new Error(
-        `Cannot publish: Bhashyam author "${rawBhashyamAuthor}" is not accepted by Strapi's grantha ` +
-          `BhashyamAuthor enum. Allowed values are: ${bhashyamAuthors.join(", ")}. ` +
-          `To use a new author, add it to the Strapi grantha content-type's BhashyamAuthor enum first ` +
-          `(and to bhashyamAuthors in shared/schema.ts), then republish.`,
+        `Cannot publish: Bhashyam author "${rawBhashyamAuthor}" is not in the shared vocabulary. ` +
+          `Add it under Shared lists → Bhashyam authors, then republish.`,
       ),
       { status: 400 },
     );

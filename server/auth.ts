@@ -54,12 +54,19 @@ export function setupAuth(app: Express) {
       secure: process.env.NODE_ENV === "production",
       sameSite: "lax",
     },
-    store: new PgSession({
-      conString: process.env.DATABASE_URL,
-      createTableIfMissing: true,
-      ttl: Math.floor(SESSION_MAX_AGE_MS / 1000),
-      pruneSessionInterval: 60 * 60,
-    }),
+	store: new PgSession({
+  conObject: {
+    connectionString: process.env.DATABASE_URL,
+    ssl: {
+      rejectUnauthorized: false,
+    },
+  },
+  createTableIfMissing: true,
+  ttl: Math.floor(SESSION_MAX_AGE_MS / 1000),
+  pruneSessionInterval: 60 * 60,
+}),
+
+
   };
 
   app.use(session(sessionSettings));

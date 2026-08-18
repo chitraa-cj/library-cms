@@ -1259,9 +1259,15 @@ async function updateManthraIdentityOnly(
   label: string,
   order: number | undefined,
   warnings?: Array<{ manthra: string; error: string }>,
+  sectionDocId?: string,
 ): Promise<string> {
   const data: Record<string, any> = { ShlokaManthraNumber: label };
   if (order != null && !Number.isNaN(order)) data.order = order;
+  // Re-assert the Section link on every identity update. The same class of Strapi v5
+  // relation-drop that hid Chandogya khandas (grantha) can orphan a manthra from its
+  // section; re-connecting on each write keeps it anchored. `connect` sets both the
+  // draft and published versions.
+  if (sectionDocId) data.Section = { connect: [{ documentId: sectionDocId }] };
   await strapiManthraRequest(`/api/manthras/${strapiDocumentId}`, "PUT", data, label, warnings);
   return strapiDocumentId;
 }
@@ -1520,7 +1526,10 @@ async function findOrCreateSection(
         try {
           await strapiRequest(`/api/sections/${existingDocId}`, {
             method: "PUT",
-            body: JSON.stringify({ data: { type: effectiveType } }),
+            // Re-assert the grantha link alongside the type correction (see resolveSection).
+            body: JSON.stringify({
+              data: { type: effectiveType, grantha: { connect: [{ documentId: granthaDocId }] } },
+            }),
           });
           console.log(`[publish] Section "${title}" (${existingDocId}) type corrected: ${existingRecord?.type || "(none)"} → ${effectiveType}`);
         } catch (e: any) {
@@ -1587,15 +1596,23 @@ async function resolveSection(
     }
     // Fast path: we already know this section's Strapi ID — update it in place
     try {
-      const payload: Record<string, any> = {};
+      // Always re-assert the structural relations on every section update. Strapi v5 has
+      // been observed to silently drop a section's `grantha` (and, separately, `parent`)
+      // relation during publish, which hides the section from the editor's grantha-filtered
+      // load (/sections/by-grantha) or detaches a khanda from its adhyaya even though its
+      // content survives. Sending them on every PUT makes publish self-healing: any section
+      // a publish touches stays linked. The `connect` form (not a bare documentId) is
+      // required — it sets both the draft and published versions of the relation.
+      const payload: Record<string, any> = {
+        grantha: { connect: [{ documentId: granthaDocId }] },
+      };
+      if (parentDocId) payload.parent = { connect: [{ documentId: parentDocId }] };
       if (effectiveType) payload.type = effectiveType;
       if (order != null) payload.order = order;
-      if (Object.keys(payload).length > 0) {
-        await strapiRequest(`/api/sections/${knownDocId}`, {
-          method: "PUT",
-          body: JSON.stringify({ data: payload }),
-        });
-      }
+      await strapiRequest(`/api/sections/${knownDocId}`, {
+        method: "PUT",
+        body: JSON.stringify({ data: payload }),
+      });
       console.log(`[publish] Section "${title}" fast-path (known docId ${knownDocId})`);
       return knownDocId;
     } catch (e: any) {
@@ -2430,7 +2447,7 @@ async function publishManthraToStrapiInner(
   if (targetDocId && !manthraHasLocalPublishableContent(manthra)) {
     const order = publishOrder;
     try {
-      return await updateManthraIdentityOnly(targetDocId, label, order, publishFailures);
+      return await updateManthraIdentityOnly(targetDocId, label, order, publishFailures, sectionDocId);
     } catch (putErr: any) {
       if (isOrphanedDocError(putErr)) {
         console.warn(
@@ -2441,7 +2458,7 @@ async function publishManthraToStrapiInner(
           ? await findManthraDocIdByLabelInSection(sectionDocId, label, manthra.strapiDocumentId)
           : undefined;
         if (byLabel) {
-          return updateManthraIdentityOnly(byLabel, label, order, publishFailures);
+          return updateManthraIdentityOnly(byLabel, label, order, publishFailures, sectionDocId);
         }
         return createOrUpdateManthra(
           { ShlokaManthraNumber: label, order, Section: sectionDocId },
@@ -3505,6 +3522,66 @@ async function publishGranthaWithHierarchy(
       }
     });
     await Promise.all(workers);
+
+    // Self-heal safety net: guarantee every section this publish touched is still
+    // linked to the grantha. Strapi v5 has silently dropped section→grantha relations
+    // during publish, which hides khandas from the editor's grantha-filtered load even
+    // though their content + parent survive (Chandogya lost 73 khandas this way).
+    // resolveSection now re-asserts the link on every write; this pass additionally
+    // catches any straggler (a section skipped via skipMetadataUpdate, or dropped by a
+    // concurrent write) and re-links it. Best-effort — never fails the publish.
+    if (granthaDocId) {
+      const publishedSectionDocIds = new Set<string>([
+        ...adhyayaIdToDocId.values(),
+        ...khandaIdToDocId.values(),
+        ...padaIdToDocId.values(),
+      ]);
+      if (publishedSectionDocIds.size > 0) {
+        try {
+          const linked = new Set<string>();
+          let page = 1;
+          while (true) {
+            const resp = await strapiRequest(
+              `/api/sections?filters[grantha][documentId][$eq]=${encodeURIComponent(granthaDocId)}` +
+                `&fields[0]=documentId&pagination[pageSize]=100&pagination[page]=${page}`,
+            );
+            for (const s of resp?.data ?? []) if (s?.documentId) linked.add(s.documentId);
+            const pageCount = resp?.meta?.pagination?.pageCount ?? 1;
+            if (page >= pageCount) break;
+            page++;
+          }
+          const unlinked = [...publishedSectionDocIds].filter((id) => !linked.has(id));
+          if (unlinked.length > 0) {
+            console.warn(
+              `[publish] Grantha-link self-heal: ${unlinked.length} section(s) lost their grantha ` +
+                `relation during publish — re-linking: ${unlinked.join(", ")}`,
+            );
+            for (const docId of unlinked) {
+              try {
+                await strapiRequest(`/api/sections/${docId}`, {
+                  method: "PUT",
+                  body: JSON.stringify({
+                    data: { grantha: { connect: [{ documentId: granthaDocId }] } },
+                  }),
+                });
+              } catch (e: any) {
+                console.error(
+                  `[publish] Grantha-link self-heal failed for section ${docId}: ${e?.message || e}`,
+                );
+              }
+            }
+          } else {
+            console.log(
+              `[publish] Grantha-link self-heal: all ${publishedSectionDocIds.size} published section(s) correctly linked`,
+            );
+          }
+        } catch (e: any) {
+          console.warn(
+            `[publish] Grantha-link self-heal skipped (verification query failed): ${e?.message || e}`,
+          );
+        }
+      }
+    }
   }
 
   // 2d. Delete Teeka collection entries removed in Teeka Management (best-effort).

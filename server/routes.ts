@@ -2,6 +2,7 @@ import type { Express } from "express";
 import { type Server } from "http";
 import { setupAuth, requireAuth, requireAdmin, hashPassword } from "./auth";
 import { createStrapiRouter, strapiRequest, strapiRequestLarge, withSectionLock } from "./strapi";
+import { invalidateGranthaBulkCache, invalidateAllBulkCache } from "./grantha-bulk-cache";
 import { createAcharyaRouter, seedAcharyasIfEmpty } from "./acharyas";
 import { createMigrateRouter } from "./migrate-vivekachudamani";
 import { activityLogger } from "./activity-log";
@@ -2333,6 +2334,11 @@ async function publishManthraToStrapi(
     // Drop cached section reads after this mantra's writes so the NEXT publish in
     // the same section observes our changes (label, sort key, new docId).
     if (sectionDocId) invalidateSectionReadCache(sectionDocId);
+    // Bust the grantha editor's bulk cache (full/teekas/sections) so a re-open after
+    // publish shows the freshly written verse content, not a stale snapshot. This is
+    // the single choke point every verse publish (full grantha, single, batch) passes
+    // through, so invalidating here covers all publish paths.
+    if (granthaDocId) invalidateGranthaBulkCache(granthaDocId);
   }
 }
 
@@ -3703,6 +3709,16 @@ async function publishGranthaWithHierarchy(
     }
   }
 
+  // Final belt-and-suspenders invalidation — covers structure-only publishes that may
+  // touch sections without a per-verse publishManthraToStrapi call (which is the usual
+  // invalidation choke point). A fresh republish may land under a new docId, so flush
+  // that too. Cheap map deletes; safe to over-invalidate.
+  const finalGranthaDocId: string | undefined = strapiResult?.data?.documentId;
+  if (finalGranthaDocId) invalidateGranthaBulkCache(finalGranthaDocId);
+  if (oldGranthaDocIdForCleanup && oldGranthaDocIdForCleanup !== finalGranthaDocId) {
+    invalidateGranthaBulkCache(oldGranthaDocIdForCleanup);
+  }
+
   return {
     strapiResult,
     updatedHierarchy,
@@ -4848,6 +4864,8 @@ export async function registerRoutes(
           status: "draft",
         });
       }
+      // New CMS rows were created for portal-only verses — bust the grantha bulk cache.
+      if (result.patches.length > 0) invalidateGranthaBulkCache(granthaDocId);
 
       const hardErrors = result.errors.filter(
         (e) => !e.includes("still pending CMS slot sync"),
@@ -4895,6 +4913,7 @@ export async function registerRoutes(
       }
       const dryRun = req.body?.dryRun === true;
       const result = await deleteOrphanMantrasForGrantha(docId, { dryRun });
+      if (!dryRun && result.deleted.length > 0) invalidateGranthaBulkCache(docId);
       res.json({
         dryRun,
         orphanCount: result.orphans.length,
@@ -6088,6 +6107,7 @@ export async function registerRoutes(
 
       const { actions, skipped, errors } = await restoreSingleMantraFromBackup(bm, granthaDocId, scope);
       const label = bm.ShlokaManthraNumber ?? manthraDocumentId;
+      if (actions.length > 0) invalidateGranthaBulkCache(granthaDocId);
 
       if (errors.length > 0 && actions.length === 0) {
         return res.status(500).json({
@@ -6360,6 +6380,7 @@ export async function registerRoutes(
         }
 
         job.status = "done";
+        invalidateGranthaBulkCache(granthaDocId);
         console.log(`[restore-job ${jobId}] Done. restored=${job.results.filter(r => !r.action.includes("skipped")).length} errors=${job.errors.length}`);
       } catch (e: any) {
         job.status = "error";
@@ -6588,6 +6609,9 @@ export async function registerRoutes(
         }
         job.results.push({ manthra: "(manthras)", docId: newGid, action: `created ${created} manthra(s)` });
         job.status = "done";
+        // Full restore deletes the old grantha and creates a brand-new one (new ids),
+        // so flush every grantha's bulk cache rather than a single docId.
+        invalidateAllBulkCache();
       } catch (e: any) {
         job.status = "error";
         job.message = e.message;

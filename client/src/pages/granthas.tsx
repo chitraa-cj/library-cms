@@ -236,6 +236,12 @@ interface ManthraNode {
    *  CMS copy) is sent, and a deliberate clear actually removes the CMS content. Portal-only. */
   _shlokaEdited?: boolean;
   _bhashyamEdited?: boolean;
+  /** Set once this verse's FULL content (bhashyam, teekas, all OtherTranslations) has been
+   *  lazily loaded from the CMS by its own documentId — either by the per-verse dialog fetch
+   *  or a restore. The background bulk warm-up (which omits OtherTranslations to stay light)
+   *  does NOT set this, so opening a verse always ensures a full per-verse fetch first.
+   *  Portal-only; never sent to Strapi. */
+  _contentHydrated?: boolean;
 }
 
 interface PadaNode {
@@ -517,6 +523,72 @@ function hydrateHierarchyFromFullCmsContent(
       ...k,
       manthras: k.manthras.map(patchNode),
       padas: (k.padas ?? []).map((p) => ({ ...p, manthras: p.manthras.map(patchNode) })),
+    })),
+  }));
+}
+
+/**
+ * Compute the content patch to merge ONE verse's full CMS detail into its draft node when the
+ * verse dialog is opened (lazy per-verse hydration). Mirrors hydrateHierarchyFromFullCmsContent's
+ * patchNode exactly — merge is by the verse's OWN documentId only, edited fields
+ * (`_shlokaEdited`/`_bhashyamEdited`) stay authoritative, and OtherTranslations are preserved via
+ * mergeEntry. `cmsData` is the ResolvedManthraDetail.data shape (BhashyamEntry, not
+ * BhashyamForShlokaManthra). Sets `_contentHydrated` so subsequent opens skip the fetch.
+ */
+function computeManthraHydrationPatch(
+  node: ManthraNode,
+  cmsData: Record<string, any>,
+): Partial<ManthraNode> {
+  const cmsShloka = stripStubTextAndTranslationEntry(cmsData.ShlokaManthraEntry);
+  const cmsBhashyam = stripStubTextAndTranslationEntry(cmsData.BhashyamEntry);
+  const cmsTeekas = Array.isArray(cmsData.Teekas) ? cmsData.Teekas : [];
+  return {
+    ShlokaManthraEntry: node._shlokaEdited
+      ? node.ShlokaManthraEntry
+      : (mergeEntry(node.ShlokaManthraEntry, cmsShloka) ?? node.ShlokaManthraEntry),
+    BhashyamForShlokaManthra: node._bhashyamEdited
+      ? node.BhashyamForShlokaManthra
+      : (mergeEntry(node.BhashyamForShlokaManthra, cmsBhashyam) ?? node.BhashyamForShlokaManthra),
+    Teekas: cmsTeekas.length > 0 ? mergeTeekas(node.Teekas, cmsTeekas) : node.Teekas,
+    _contentHydrated: true,
+  };
+}
+
+/** Above this many total verses, a grantha opens with its sections collapsed so the browser
+ *  doesn't lay out hundreds of verse rows on first paint. Small texts keep the current
+ *  fully-expanded UX. Tunable if editors want a different cutoff. */
+const DEFAULT_COLLAPSE_LEAF_THRESHOLD = 50;
+
+function countHierarchyLeaves(tree: AdhyayaNode[]): number {
+  let n = 0;
+  for (const a of tree) {
+    for (const k of a.khandas) {
+      n += k.manthras.length;
+      for (const p of k.padas ?? []) n += p.manthras.length;
+    }
+  }
+  return n;
+}
+
+/**
+ * Collapse sections by default for large granthas so the editor paints only the first section's
+ * verse rows on open (the rest render on demand when the editor expands a section). The first
+ * chapter (and its first sub-section/pada) stays expanded for discoverability. `expanded` is a
+ * purely presentational flag — it never affects save/publish payloads — so collapsing is safe.
+ * Small granthas (≤ threshold) are returned unchanged, preserving the fully-expanded UX.
+ */
+function applyDefaultCollapseForLargeGrantha(tree: AdhyayaNode[]): AdhyayaNode[] {
+  if (countHierarchyLeaves(tree) <= DEFAULT_COLLAPSE_LEAF_THRESHOLD) return tree;
+  return tree.map((a, ai) => ({
+    ...a,
+    expanded: ai === 0,
+    khandas: a.khandas.map((k, ki) => ({
+      ...k,
+      expanded: ai === 0 && ki === 0,
+      padas: (k.padas ?? []).map((p, pi) => ({
+        ...p,
+        expanded: ai === 0 && ki === 0 && pi === 0,
+      })),
     })),
   }));
 }
@@ -1632,7 +1704,7 @@ export default function GranthasPage() {
     },
     opts?: { viewOnly?: boolean },
   ) {
-    mantraFetchGenRef.current += 1;
+    const gen = (mantraFetchGenRef.current += 1);
     manthraDialogDirtyRef.current = false;
     manthraSavedToDraftRef.current = false;
     setManthraDialogDirty(false);
@@ -1645,10 +1717,48 @@ export default function GranthasPage() {
           wasNewLocal: !!node._isNewLocal,
         }
       : { node: null, wasNewLocal: true };
-    // Draft is fully hydrated on grantha open (Change A), so opening a verse never fetches/merges
-    // from the CMS — the draft is the sole source of truth. No loading, no per-verse prefetch.
-    setManthraLoading(false);
     setEditingManthra(ctx);
+
+    // Lazy per-verse hydration (Google-Docs style): the editor tree opens instantly from the
+    // light skeleton + background warm-up (Sanskrit/English preview), which intentionally omits
+    // the heavy OtherTranslations. When a specific verse dialog opens we fetch its FULL content
+    // by its OWN documentId so bhashyam, teekas and all translations are present before editing.
+    // The verse's row is fetched strictly by documentId (never label-resolved to a sibling — that
+    // is what once grafted a neighbour's bhashyam onto the wrong verse). While loading, the dialog
+    // fieldset is disabled (spinner overlay), which also blocks Save / Save & Publish.
+    const docId = ctx.strapiDocumentId || node?.strapiDocumentId;
+    const needsHydration =
+      !opts?.viewOnly &&
+      !!node &&
+      !node._isNewLocal &&
+      !node._contentHydrated &&
+      isPublishedStrapiDocId(docId);
+    if (!needsHydration) {
+      setManthraLoading(false);
+      return;
+    }
+    setManthraLoading(true);
+    void (async () => {
+      const result = await fetchManthraForGranthaEditor({ documentId: docId as string });
+      // A newer open superseded this one — drop the stale response.
+      if (mantraFetchGenRef.current !== gen) return;
+      if (result?.data) {
+        const patch = computeManthraHydrationPatch(node, result.data);
+        updateManthraContent(ctx.adhyayaId, ctx.khandaId, ctx.manthraId, patch, ctx.padaId, {
+          markDirty: false,
+        });
+        // Refresh the open snapshot to the hydrated baseline so "discard" reverts correctly and
+        // closing an untouched verse does not falsely prompt to save.
+        if (mantraOpenSnapshotRef.current) {
+          mantraOpenSnapshotRef.current.node = JSON.parse(
+            JSON.stringify({ ...node, ...patch }),
+          ) as ManthraNode;
+        }
+      }
+      // On failure we keep the local draft node (never label-resolve) and leave it editable; the
+      // server-side publish merge is the authoritative guard against blanking existing CMS content.
+      setManthraLoading(false);
+    })();
   }
 
   function warmManthraOnHover(strapiDocumentId?: string) {
@@ -2200,7 +2310,9 @@ export default function GranthasPage() {
     }
   }
 
-  /** Re-run full-content hydration against the current draft tree (used by the error-state retry). */
+  /** Re-run the background preview warm-up against the current tree (non-blocking; used by the
+   *  "some previews couldn't warm" retry). Editing is never blocked — each verse loads its own
+   *  full content on open regardless. */
   async function retryGranthaContentHydration() {
     const granthaDocId = granthaHydrationDocIdRef.current;
     if (!granthaDocId) return;
@@ -2210,9 +2322,7 @@ export default function GranthasPage() {
     if (granthaHydrationDocIdRef.current !== granthaDocId) return;
     if (map === null) {
       setGranthaContentHydrating(false);
-      setGranthaHydrationError(
-        "Could not load verse content from the CMS. Editing is blocked until all content loads so existing bhashyam is never overwritten with empty content.",
-      );
+      setGranthaHydrationError("warm-failed");
       return;
     }
     const hydrated = hydrateHierarchyFromFullCmsContent(adhyayasRef.current as AdhyayaNode[], map);
@@ -2528,7 +2638,9 @@ export default function GranthasPage() {
       }
       setStructureConfig(effectiveStructureConfig);
       setAdhyayas(
-        hierarchyForSave(prepEarly.hierarchy as AdhyayaNode[], effectiveStructureConfig),
+        applyDefaultCollapseForLargeGrantha(
+          hierarchyForSave(prepEarly.hierarchy as AdhyayaNode[], effectiveStructureConfig),
+        ),
       );
       setStep(1);
       setView("form");
@@ -3407,42 +3519,15 @@ export default function GranthasPage() {
         withVerseGaps,
       );
 
-      // Change A — block on full-content hydration so the draft is self-contained before any
-      // editing. On failure (and only when the tree actually has published verses) we show the
-      // tree read-only with an error + retry rather than letting the user edit/publish on
-      // partial data (which could overwrite existing bhashyam with empty content).
-      const fullContentMap = await fullContentPromise;
-      if (!isCurrentOpenEditLoad(openEditLoadGen)) {
-        return;
-      }
-      const treeHasPublishedVerses = (() => {
-        for (const a of withPreservedContent) {
-          for (const k of a.khandas) {
-            if (k.manthras.some((m) => isPublishedStrapiDocId(m.strapiDocumentId))) return true;
-            for (const p of k.padas ?? []) {
-              if (p.manthras.some((m) => isPublishedStrapiDocId(m.strapiDocumentId))) return true;
-            }
-          }
-        }
-        return false;
-      })();
-      if (fullContentMap === null && treeHasPublishedVerses) {
-        adhyayasRef.current = withPreservedContent;
-        setAdhyayas(withPreservedContent);
-        setGranthaContentHydrating(false);
-        setGranthaHydrationError(
-          "Could not load verse content from the CMS. Editing is blocked until all content loads so existing bhashyam is never overwritten with empty content.",
-        );
-      } else {
-        const hydratedTree = hydrateHierarchyFromFullCmsContent(
-          withPreservedContent,
-          fullContentMap ?? new Map<string, FullCmsManthraContent>(),
-        );
-        adhyayasRef.current = hydratedTree;
-        setAdhyayas(hydratedTree);
-        setGranthaContentHydrating(false);
-      }
-
+      // Render the editor IMMEDIATELY from the section skeleton (Sanskrit/English preview from
+      // sections/by-grantha). The editor is interactive right away — no waiting on the heavy
+      // full-content fetch. Per-verse full content (bhashyam, teekas, all translations) loads on
+      // demand when a verse dialog opens (openManthraEditor); whole-grantha publish is protected by
+      // the server-side merge, which never blanks un-edited CMS fields.
+      // Large granthas open with sections collapsed so we don't paint hundreds of verse rows.
+      const initialTree = applyDefaultCollapseForLargeGrantha(withPreservedContent);
+      adhyayasRef.current = initialTree;
+      setAdhyayas(initialTree);
       bindGranthaMantraPrefetchContext();
       if (isPublishedStrapiDocId(granthaDocId)) {
         flushStrapiFullHierarchySectionOrderSyncNow(normalizedOpen, effectiveStructureConfig, true);
@@ -3454,6 +3539,29 @@ export default function GranthasPage() {
       setStep(1);
       setView("form");
       setEditingGranthaSectionsLoading(false);
+
+      // Background warm-up: fold the full-content preview map into the tree when it lands so
+      // previews (bhashyam/teeka snippets) fill in without a per-verse open. Non-blocking; the
+      // editor is already usable. Hydrates against the CURRENT tree so any interim edits (which
+      // carry _shlokaEdited/_bhashyamEdited) and per-verse loads are preserved by patchNode.
+      void fullContentPromise
+        .then((fullContentMap) => {
+          if (!isCurrentOpenEditLoad(openEditLoadGen)) return;
+          if (fullContentMap === null) {
+            // Warm-up failed — leave the skeleton; each verse still loads its full content on open.
+            setGranthaHydrationError("warm-failed");
+            return;
+          }
+          const hydratedTree = hydrateHierarchyFromFullCmsContent(
+            adhyayasRef.current as AdhyayaNode[],
+            fullContentMap,
+          );
+          adhyayasRef.current = hydratedTree;
+          setAdhyayas(hydratedTree);
+        })
+        .finally(() => {
+          if (isCurrentOpenEditLoad(openEditLoadGen)) setGranthaContentHydrating(false);
+        });
   }
 
   async function openView(item: any) {
@@ -5995,6 +6103,7 @@ export default function GranthasPage() {
           ShlokaManthraEntry: cmsShloka as TextAndTranslation | undefined,
           BhashyamForShlokaManthra: cmsBhashyam as TextAndTranslation | undefined,
           _isNewLocal: false,
+          _contentHydrated: true,
         },
         editingManthra.padaId,
         { markDirty: false },
@@ -7573,12 +7682,15 @@ export default function GranthasPage() {
           {granthaContentHydrating && !granthaHydrationError ? (
             <div className="flex items-center gap-2 rounded-lg border border-border bg-muted/40 px-3 py-2 text-sm text-muted-foreground">
               <Loader2 className="h-4 w-4 shrink-0 animate-spin" />
-              <span>Loading all verse content (bhashyam &amp; teekas) into the draft…</span>
+              <span>Warming verse previews in the background — the editor is ready to use. Opening a verse loads its full content on demand.</span>
             </div>
           ) : null}
           {granthaHydrationError ? (
-            <div className="flex flex-wrap items-center gap-3 rounded-lg border border-destructive/40 bg-destructive/10 px-3 py-2 text-sm text-destructive">
-              <span className="flex-1 min-w-[200px]">{granthaHydrationError}</span>
+            <div className="flex flex-wrap items-center gap-3 rounded-lg border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-sm text-amber-700 dark:text-amber-400">
+              <span className="flex-1 min-w-[200px]">
+                Some verse previews could not be warmed. You can still edit — each verse loads its full
+                content when you open it.
+              </span>
               <Button
                 size="sm"
                 variant="outline"
@@ -7608,16 +7720,13 @@ export default function GranthasPage() {
             </p>
           </div>
 
-          {/* Tree — blocked from interaction until full content is hydrated (Change A) so verse
-              edits never run on partial data. */}
-          <div
-            className={
-              granthaContentHydrating || granthaHydrationError
-                ? "space-y-3 pointer-events-none opacity-60"
-                : "space-y-3"
-            }
-            aria-busy={granthaContentHydrating || !!granthaHydrationError}
-          >
+          {/* Tree is interactive immediately. The heavy full-content hydration runs in the
+              background only to warm previews; per-verse full content (bhashyam, teekas, all
+              translations) is loaded on demand when a verse dialog opens (see openManthraEditor).
+              The empty-overwrite guard is enforced per-verse (dialog fieldset disabled while a
+              verse loads) and, authoritatively, by the server publish merge which never blanks
+              un-edited CMS fields. */}
+          <div className="space-y-3">
             {sortNodesByOrder(adhyayas).map((adhyaya, aIdx) => {
               const L1 = structureConfig.levelOneName;
               const L2 = structureConfig.levelTwoName;

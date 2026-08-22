@@ -17,6 +17,14 @@ import {
   sectionSuffixCollision,
 } from "@shared/grantha-publish-integrity";
 import { validateMantraLabelForCmsCreate } from "@shared/mantra-cms-guard";
+import {
+  getBulkCache,
+  setBulkCache,
+  rememberSectionGrantha,
+  invalidateGranthaBulkCache,
+  invalidateBySectionDocId,
+  invalidateAllBulkCache,
+} from "./grantha-bulk-cache";
 
 const STRAPI_URL = process.env.STRAPI_URL || "http://13.53.121.15:1337";
 const STRAPI_ADMIN_NOTE =
@@ -522,6 +530,9 @@ export function createStrapiRouter() {
   //      Strapi v5 25-item relation cap), then attach them to their sections server-side.
   router.get("/sections/by-grantha/:granthaDocId", async (req, res) => {
     try {
+      const cached = getBulkCache<any>("sections", req.params.granthaDocId);
+      if (cached) return res.json(cached);
+
       const g = encodeURIComponent(req.params.granthaDocId);
 
       // Section metadata populate — no manthras inline (avoids the 25-item cap issue).
@@ -589,10 +600,18 @@ export function createStrapiRouter() {
         manthras: manthrasBySection.get(s.documentId) ?? [],
       }));
 
-      res.json({
+      // Learn each section's grantha so section-scoped writes (which only know a
+      // section docId) can invalidate this grantha's bulk cache.
+      for (const s of enrichedSections) {
+        if (s?.documentId) rememberSectionGrantha(s.documentId, req.params.granthaDocId);
+      }
+
+      const payload = {
         data: enrichedSections,
         meta: { pagination: { page: 1, pageSize: enrichedSections.length, pageCount: 1, total: enrichedSections.length } },
-      });
+      };
+      setBulkCache("sections", req.params.granthaDocId, payload);
+      res.json(payload);
     } catch (error: any) {
       res.status(500).json({ message: error.message || "Failed to fetch sections for grantha" });
     }
@@ -610,6 +629,10 @@ export function createStrapiRouter() {
   router.post("/sections", async (req, res) => {
     try {
       const data = await strapiRequest("/api/sections", { method: "POST", body: JSON.stringify(req.body) });
+      // New section changes the grantha's structure — bust its bulk cache.
+      const granthaDocId = req.body?.data?.grantha;
+      if (typeof granthaDocId === "string" && granthaDocId) invalidateGranthaBulkCache(granthaDocId);
+      else invalidateAllBulkCache();
       res.json(data);
     } catch (error: any) {
       res.status(error.status || 500).json({ message: error.message });
@@ -618,6 +641,7 @@ export function createStrapiRouter() {
   router.put("/sections/:documentId", async (req, res) => {
     try {
       const data = await strapiRequest(`/api/sections/${req.params.documentId}`, { method: "PUT", body: JSON.stringify(req.body) });
+      invalidateBySectionDocId(req.params.documentId);
       res.json(data);
     } catch (error: any) {
       res.status(error.status || 500).json({ message: error.message });
@@ -626,6 +650,7 @@ export function createStrapiRouter() {
   router.delete("/sections/:documentId", async (req, res) => {
     try {
       const data = await strapiRequest(`/api/sections/${req.params.documentId}`, { method: "DELETE" });
+      invalidateBySectionDocId(req.params.documentId);
       res.json(data);
     } catch (error: any) {
       res.status(error.status || 500).json({ message: error.message });
@@ -728,6 +753,9 @@ export function createStrapiRouter() {
   router.get("/manthras/teekas-by-grantha/:granthaDocId", async (req, res) => {
     try {
       const { granthaDocId } = req.params;
+      const cachedTeekas = getBulkCache<any>("teekas", granthaDocId);
+      if (cachedTeekas) return res.json(cachedTeekas);
+
       const BULK_TEEKA_POPULATE = [
         `filters[Section][grantha][documentId][$eq]=${granthaDocId}`,
         "populate[Teekas][populate][teeka][fields][0]=documentId",
@@ -757,7 +785,9 @@ export function createStrapiRouter() {
         if (withContent.length > 0) result[m.documentId] = withContent;
       }
 
-      res.json({ data: result });
+      const payload = { data: result };
+      setBulkCache("teekas", granthaDocId, payload);
+      res.json(payload);
     } catch (error: any) {
       res.status(500).json({ message: error.message || "Failed to fetch bulk teekas" });
     }
@@ -772,19 +802,33 @@ export function createStrapiRouter() {
   router.get("/manthras/full-by-grantha/:granthaDocId", async (req, res) => {
     try {
       const { granthaDocId } = req.params;
+      const cachedFull = getBulkCache<any>("full", granthaDocId);
+      if (cachedFull) return res.json(cachedFull);
+
+      // This is a BACKGROUND warm-up of the editor tree preview (Sanskrit / English /
+      // IAST). It intentionally does NOT populate OtherTranslations — those (all 43
+      // languages per verse) are the bulk of the payload and are only needed when a
+      // specific verse dialog is opened, where the per-verse full fetch
+      // (/api/strapi/manthras/:documentId, MANTHRA_POPULATE) loads them on demand.
+      // Dropping them shrinks each record dramatically, so pages can be larger without
+      // tripping Strapi v5's sub-relation drop threshold.
       const BULK_FULL_POPULATE = [
         `filters[Section][grantha][documentId][$eq]=${granthaDocId}`,
         "fields[0]=documentId",
         "fields[1]=ShlokaManthraNumber",
-        "populate[ShlokaManthraEntry][populate]=*",
-        "populate[BhashyamEntry][populate]=*",
+        "populate[ShlokaManthraEntry][fields][0]=SanskritTextEntry",
+        "populate[ShlokaManthraEntry][fields][1]=EnglishTranslationText",
+        "populate[ShlokaManthraEntry][fields][2]=IASTTransliteration",
+        "populate[BhashyamEntry][fields][0]=SanskritTextEntry",
+        "populate[BhashyamEntry][fields][1]=EnglishTranslationText",
+        "populate[BhashyamEntry][fields][2]=IASTTransliteration",
         "populate[Teekas][populate][teeka][fields][0]=documentId",
         "populate[Teekas][populate][teeka][fields][1]=TeekaName",
         "populate[Teekas][populate][teeka][fields][2]=TeekaAuthor",
-        "populate[Teekas][populate][TeekaEntry][populate]=*",
-        // Heavy rich-text populate — keep pages small so payloads stay well under
-        // Strapi v5's sub-relation drop threshold.
-        "pagination[pageSize]=50",
+        "populate[Teekas][populate][TeekaEntry][fields][0]=SanskritTextEntry",
+        "populate[Teekas][populate][TeekaEntry][fields][1]=EnglishTranslationText",
+        "populate[Teekas][populate][TeekaEntry][fields][2]=IASTTransliteration",
+        "pagination[pageSize]=100",
       ].join("&");
 
       // Bounded-batch pagination — avoid firing every page at the remote Strapi at once.
@@ -803,7 +847,12 @@ export function createStrapiRouter() {
         };
       }
 
-      res.json({ data: result });
+      // `preview: true` signals to the client that OtherTranslations were NOT populated
+      // here — this map warms the tree preview only and must not be treated as full
+      // per-verse hydration. The verse dialog re-fetches full content on open.
+      const payload = { data: result, meta: { preview: true } };
+      setBulkCache("full", granthaDocId, payload);
+      res.json(payload);
     } catch (error: any) {
       res.status(500).json({ message: error.message || "Failed to fetch full mantra content for grantha" });
     }
@@ -1098,6 +1147,7 @@ export function createStrapiRouter() {
         return { data: created.data, sortKey: newSortKey, recompacted };
       });
 
+      invalidateBySectionDocId(sectionDocId);
       res.json({ ...result, shiftedCount: 0 });
     } catch (error: any) {
       res.status(error.status || 500).json({ message: error.message });
@@ -1262,6 +1312,9 @@ export function createStrapiRouter() {
         await runChunk(sortedUpdates.slice(i, i + CONCURRENCY));
       }
 
+      // Batch spans arbitrary verses across sections — no single section context to
+      // resolve, so flush all bulk caches (correctness over granularity).
+      invalidateAllBulkCache();
       res.json({ results });
     } catch (error: any) {
       res.status(error.status || 500).json({ message: error.message });
@@ -1328,6 +1381,7 @@ export function createStrapiRouter() {
         return { created, sortKey: newSortKey };
       });
 
+      invalidateBySectionDocId(sid);
       res.json({ data: created.data, sortKey });
     } catch (error: any) {
       const status = error.status || 500;
@@ -1341,6 +1395,9 @@ export function createStrapiRouter() {
   router.post("/manthras", async (req, res) => {
     try {
       const data = await strapiRequest("/api/manthras", { method: "POST", body: JSON.stringify(req.body) });
+      const sectionDocId = req.body?.data?.Section;
+      if (typeof sectionDocId === "string" && sectionDocId) invalidateBySectionDocId(sectionDocId);
+      else invalidateAllBulkCache();
       res.json(data);
     } catch (error: any) {
       res.status(error.status || 500).json({ message: error.message });
@@ -1349,6 +1406,10 @@ export function createStrapiRouter() {
   router.put("/manthras/:documentId", async (req, res) => {
     try {
       const data = await strapiRequest(`/api/manthras/${req.params.documentId}`, { method: "PUT", body: JSON.stringify(req.body) });
+      // Verse content changed — the grantha's cached full/teekas maps are now stale.
+      const sectionDocId = req.body?.data?.Section;
+      if (typeof sectionDocId === "string" && sectionDocId) invalidateBySectionDocId(sectionDocId);
+      else invalidateAllBulkCache();
       res.json(data);
     } catch (error: any) {
       res.status(error.status || 500).json({ message: error.message });
@@ -1357,6 +1418,8 @@ export function createStrapiRouter() {
   router.delete("/manthras/:documentId", async (req, res) => {
     try {
       const data = await strapiRequest(`/api/manthras/${req.params.documentId}`, { method: "DELETE" });
+      // No section context on a bare delete — flush all (correctness over granularity).
+      invalidateAllBulkCache();
       res.json(data);
     } catch (error: any) {
       res.status(error.status || 500).json({ message: error.message });

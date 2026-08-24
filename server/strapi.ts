@@ -25,6 +25,7 @@ import {
   invalidateBySectionDocId,
   invalidateAllBulkCache,
 } from "./grantha-bulk-cache";
+import { readGranthaManthraSkeleton } from "./strapi-sqlite-skeleton";
 
 const STRAPI_URL = process.env.STRAPI_URL || "http://13.53.121.15:1337";
 const STRAPI_ADMIN_NOTE =
@@ -564,20 +565,35 @@ export function createStrapiRouter() {
         "pagination[pageSize]=100",
       ].join("&");
 
-      // Sections and manthras are independent fetches — run both phases concurrently so the
-      // grantha editor load is bounded by the slower of the two, not their sum. Each phase
-      // still fetches its own remaining pages in parallel.
-      // Sections and manthras are independent — run both phases concurrently so editor load
-      // is bounded by the slower of the two, not their sum. Each phase fetches its own pages
-      // in bounded batches (not all at once) to avoid overwhelming the remote Strapi.
-      const [{ data: allSections }, { data: allManthras }] = await Promise.all([
-        fetchAllStrapiPages(
-          (page) => `/api/sections?${sectionFilter}&${sectionMeta}&pagination[page]=${page}`,
-        ),
-        fetchAllStrapiPages(
-          (page) => `/api/manthras?${manthraQuery}&pagination[page]=${page}`,
-        ),
-      ]);
+      // Manthra skeleton: read DIRECTLY from Strapi's SQLite (~50ms for 6k verses) instead of
+      // Strapi REST (~6-19s, because it populates the ShlokaManthraEntry component per row). This
+      // is the grantha-open critical path. Returns null if the DB isn't reachable, in which case we
+      // fall back to the REST pagination path below — so behaviour is unchanged where SQLite is
+      // absent. Sections (few, cheap) always come from REST.
+      const skeleton = readGranthaManthraSkeleton(req.params.granthaDocId);
+      let allSections: any[];
+      let allManthras: any[];
+      if (skeleton) {
+        allSections = (
+          await fetchAllStrapiPages(
+            (page) => `/api/sections?${sectionFilter}&${sectionMeta}&pagination[page]=${page}`,
+          )
+        ).data;
+        allManthras = skeleton;
+      } else {
+        // Fallback: sections + manthras both via REST (both paginated in bounded batches).
+        const [secRes, manRes] = await Promise.all([
+          fetchAllStrapiPages(
+            (page) => `/api/sections?${sectionFilter}&${sectionMeta}&pagination[page]=${page}`,
+          ),
+          fetchAllStrapiPages(
+            (page) => `/api/manthras?${manthraQuery}&pagination[page]=${page}`,
+            { batchSize: 12 },
+          ),
+        ]);
+        allSections = secRes.data;
+        allManthras = manRes.data;
+      }
 
       // ── Step 3: group manthras by section documentId ──
       const manthrasBySection = new Map<string, any[]>();
@@ -756,12 +772,17 @@ export function createStrapiRouter() {
       const cachedTeekas = getBulkCache<any>("teekas", granthaDocId);
       if (cachedTeekas) return res.json(cachedTeekas);
 
+      // NOTE: this endpoint is currently unused (the editor loads per-manthra teeka content via
+      // full-by-grantha, which excludes OtherTranslations, and per-verse MANTHRA_POPULATE). We keep
+      // the populate LIGHT — SanskritTextEntry only, NOT `populate=*` — so it can never bulk-load
+      // the 43-language OtherTranslations even if it is wired up again later.
       const BULK_TEEKA_POPULATE = [
         `filters[Section][grantha][documentId][$eq]=${granthaDocId}`,
         "populate[Teekas][populate][teeka][fields][0]=documentId",
         "populate[Teekas][populate][teeka][fields][1]=TeekaName",
         "populate[Teekas][populate][teeka][fields][2]=TeekaAuthor",
-        "populate[Teekas][populate][TeekaEntry][populate]=*",
+        "populate[Teekas][populate][TeekaEntry][fields][0]=SanskritTextEntry",
+        "populate[Teekas][populate][TeekaEntry][fields][1]=EnglishTranslationText",
         "fields[0]=documentId",
         "pagination[pageSize]=100",
       ].join("&");

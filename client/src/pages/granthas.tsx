@@ -67,6 +67,7 @@ import {
 import {
   cancelGranthaMantraPrefetch,
   prefetchManthraDocumentId,
+  prefetchManthraDocumentIds,
   setGranthaMantraPrefetchContext,
 } from "@/lib/grantha-mantra-prefetch";
 import {
@@ -558,6 +559,12 @@ function computeManthraHydrationPatch(
  *  doesn't lay out hundreds of verse rows on first paint. Small texts keep the current
  *  fully-expanded UX. Tunable if editors want a different cutoff. */
 const DEFAULT_COLLAPSE_LEAF_THRESHOLD = 50;
+
+/** Above this many total verses, opening a grantha SKIPS the full-content warm-up fetch
+ *  (~124KB per 100 verses). Small/medium granthas still warm previews for the nicest UX; large
+ *  granthas (e.g. Suta Samhita, 6k+ verses) load each verse's content on demand instead. The
+ *  has-content indicator keeps working from the sections skeleton preview regardless. */
+const FULL_WARMUP_MAX_LEAVES = 400;
 
 function countHierarchyLeaves(tree: AdhyayaNode[]): number {
   let n = 0;
@@ -1765,6 +1772,16 @@ export default function GranthasPage() {
     prefetchManthraDocumentId(strapiDocumentId);
   }
 
+  /** Warm the detail cache for a section's verses when it's expanded, so the common
+   *  "expand a section, then click a verse" flow opens instantly even on large granthas where the
+   *  bulk warm-up was skipped. Purely a cache warm (bounded concurrency, generation-guarded). */
+  function prefetchManthrasForNodes(nodes: Array<{ strapiDocumentId?: string }>) {
+    const ids = nodes
+      .map((n) => n.strapiDocumentId)
+      .filter((id): id is string => !!id);
+    if (ids.length) prefetchManthraDocumentIds(ids, { max: 80 });
+  }
+
   function renderManthraRowActions(params: {
     adhyayaId: string;
     khandaId: string;
@@ -2651,15 +2668,13 @@ export default function GranthasPage() {
     if (isCurrentOpenEditLoad(openEditLoadGen)) {
       setEditingGranthaSectionsLoading(true);
     }
-    // Change A — start full-content hydration in parallel with the section load. Every existing
-    // verse's bhashyam/shloka/teekas is pulled into the draft (keyed by its own documentId) so the
-    // editor renders entirely from draft state and never label-merges from Strapi per verse.
-    setGranthaContentHydrating(true);
+    // Full-content warm-up (bhashyam/shloka/teekas preview for every verse) is deferred until AFTER
+    // the section skeleton lands, because only then do we know the grantha's size. It runs only for
+    // small/medium granthas (see the size gate below). For large granthas (e.g. Suta Samhita, 6k+
+    // verses) the warm-up is ~7MB of pure overhead — skipped; each verse loads its full content on
+    // open (openManthraEditor) and hover/expand prefetch keeps that instant.
     setGranthaHydrationError(null);
     granthaHydrationDocIdRef.current = effectiveDocId || null;
-    const fullContentPromise = effectiveDocId
-      ? fetchFullGranthaContentMap(effectiveDocId)
-      : Promise.resolve(new Map<string, FullCmsManthraContent>());
     let fetchedSections: any[] = [];
     let strapiGranthaOne: any = null;
     try {
@@ -3544,24 +3559,36 @@ export default function GranthasPage() {
       // previews (bhashyam/teeka snippets) fill in without a per-verse open. Non-blocking; the
       // editor is already usable. Hydrates against the CURRENT tree so any interim edits (which
       // carry _shlokaEdited/_bhashyamEdited) and per-verse loads are preserved by patchNode.
-      void fullContentPromise
-        .then((fullContentMap) => {
-          if (!isCurrentOpenEditLoad(openEditLoadGen)) return;
-          if (fullContentMap === null) {
-            // Warm-up failed — leave the skeleton; each verse still loads its full content on open.
-            setGranthaHydrationError("warm-failed");
-            return;
-          }
-          const hydratedTree = hydrateHierarchyFromFullCmsContent(
-            adhyayasRef.current as AdhyayaNode[],
-            fullContentMap,
-          );
-          adhyayasRef.current = hydratedTree;
-          setAdhyayas(hydratedTree);
-        })
-        .finally(() => {
-          if (isCurrentOpenEditLoad(openEditLoadGen)) setGranthaContentHydrating(false);
-        });
+      //
+      // Size gate: only warm small/medium granthas. Large granthas skip the ~7MB fetch entirely —
+      // the has-content indicator still works from the sections skeleton's ShlokaManthraEntry
+      // preview, and each verse loads full content on open (openManthraEditor), warmed by
+      // hover/expand prefetch. This is the primary large-grantha load-time win.
+      const warmupLeafCount = countHierarchyLeaves(initialTree);
+      if (effectiveDocId && warmupLeafCount <= FULL_WARMUP_MAX_LEAVES) {
+        setGranthaContentHydrating(true);
+        void fetchFullGranthaContentMap(effectiveDocId)
+          .then((fullContentMap) => {
+            if (!isCurrentOpenEditLoad(openEditLoadGen)) return;
+            if (fullContentMap === null) {
+              // Warm-up failed — leave the skeleton; each verse still loads its full content on open.
+              setGranthaHydrationError("warm-failed");
+              return;
+            }
+            const hydratedTree = hydrateHierarchyFromFullCmsContent(
+              adhyayasRef.current as AdhyayaNode[],
+              fullContentMap,
+            );
+            adhyayasRef.current = hydratedTree;
+            setAdhyayas(hydratedTree);
+          })
+          .finally(() => {
+            if (isCurrentOpenEditLoad(openEditLoadGen)) setGranthaContentHydrating(false);
+          });
+      } else {
+        // Large grantha (or no Strapi docId): skip the bulk warm-up. Editor is fully usable now.
+        setGranthaContentHydrating(false);
+      }
   }
 
   async function openView(item: any) {
@@ -3776,6 +3803,13 @@ export default function GranthasPage() {
   }
 
   function toggleAdhyaya(id: string) {
+    const target = adhyayas.find((a) => a.id === id);
+    if (target && !target.expanded) {
+      prefetchManthrasForNodes([
+        ...target.khandas.flatMap((k) => k.manthras),
+        ...target.khandas.flatMap((k) => (k.padas ?? []).flatMap((p) => p.manthras)),
+      ]);
+    }
     setAdhyayas(adhyayas.map((a) => (a.id === id ? { ...a, expanded: !a.expanded } : a)));
   }
 
@@ -3919,6 +3953,15 @@ export default function GranthasPage() {
   }
 
   function toggleKhanda(adhyayaId: string, khandaId: string) {
+    const targetK = adhyayas
+      .find((a) => a.id === adhyayaId)
+      ?.khandas.find((k) => k.id === khandaId);
+    if (targetK && !targetK.expanded) {
+      prefetchManthrasForNodes([
+        ...targetK.manthras,
+        ...(targetK.padas ?? []).flatMap((p) => p.manthras),
+      ]);
+    }
     setAdhyayas(
       adhyayas.map((a) => {
         if (a.id !== adhyayaId) return a;
@@ -4290,6 +4333,11 @@ export default function GranthasPage() {
   }
 
   function togglePada(adhyayaId: string, khandaId: string, padaId: string) {
+    const targetP = adhyayas
+      .find((a) => a.id === adhyayaId)
+      ?.khandas.find((k) => k.id === khandaId)
+      ?.padas?.find((p) => p.id === padaId);
+    if (targetP && !targetP.expanded) prefetchManthrasForNodes(targetP.manthras);
     setAdhyayas(
       adhyayas.map((a) => {
         if (a.id !== adhyayaId) return a;
@@ -6990,7 +7038,7 @@ export default function GranthasPage() {
                             <SelectValue placeholder="Select author" />
                           </SelectTrigger>
                           <SelectContent>
-                            {vocabulary.teekaAuthors.map((a) => (
+                            {withCurrentSelection(vocabulary.teekaAuthors, teeka.TeekaAuthor).map((a) => (
                               <SelectItem key={a} value={a}>{a}</SelectItem>
                             ))}
                           </SelectContent>

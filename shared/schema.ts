@@ -567,7 +567,7 @@ export interface SeoComponent {
 
 /**
  * Teeka — an independent commentary work (api::teeka.teeka).
- * Fields: TeekaName (string), TeekaAuthor (enum), grantha (manyToOne → Grantha).
+ * Fields: TeekaName (string), TeekaAuthor (string — was an enum; now free-form, guarded by the shared vocabulary allowlist), grantha (manyToOne → Grantha).
  */
 export interface StrapiTeeka {
   id: number;
@@ -664,7 +664,7 @@ export interface StrapiManthra {
  *   order (integer)
  *   GranthaType (enum: Upanishad | Bhagavad Gita | Brahma Sutra | Prakarana Grantha | Bhakthi Grantha)
  *   BhashyamName (string)
- *   BhashyamAuthor (enum: Sri Shankarayacharya | Upanishad Brahmendra)
+ *   BhashyamAuthor (string — was an enum; now free-form, guarded by the shared vocabulary allowlist)
  *   IntroductionToTextEnglish (blocks — rich text)
  *   BhashyakaraIntroduction (shared.text-and-translation)
  *   introVideoId (string)

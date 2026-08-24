@@ -37,7 +37,7 @@ const SECTIONS: {
     key: "bhashyamAuthors",
     title: "Bhashyam authors",
     description:
-      "Shown in Bhashyam Author dropdowns on grantha and prasthana forms. New names must also exist in Strapi's BhashyamAuthor enum to publish.",
+      "Shown in Bhashyam Author dropdowns on grantha and prasthana forms. Names added here publish directly — this list is the guardrail.",
     defaults: [...new Set([...bhashyamAuthors, ...prasthanaBhashyamAuthors])],
   },
   {
@@ -208,7 +208,7 @@ export default function AdminVocabularyPage() {
         </div>
         <p className="text-sm text-muted-foreground">
           Add teeka author names and structure heading labels once — they appear in dropdowns for every
-          editor. New teeka authors must also exist in Strapi&apos;s TeekaAuthor enum to publish successfully.
+          editor and publish directly. This list is the guardrail; no Strapi change is needed to add a name.
         </p>
       </div>
 

@@ -80,10 +80,19 @@ export function readGranthaManthraSkeleton(granthaDocId: string): SkeletonManthr
   const conn = getDb();
   if (!conn) return null;
   try {
-    const g = conn
-      .prepare("select id from granthas where document_id = ?")
-      .get(granthaDocId) as { id: number } | undefined;
-    if (!g) return []; // grantha not in Strapi (yet) — an empty skeleton is correct, not a failure.
+    const exists = conn
+      .prepare("select 1 as ok from granthas where document_id = ? limit 1")
+      .get(granthaDocId) as { ok: number } | undefined;
+    if (!exists) return []; // grantha not in Strapi (yet) — an empty skeleton is correct, not a failure.
+    // Join the grantha by document_id (NOT by a single row id). A Strapi v5 document has TWO
+    // grantha rows — draft (published_at null) and published — and the section→grantha links may
+    // live on EITHER row. Resolving the grantha to one arbitrary row id (as this used to) breaks
+    // whenever the links sit on the row we didn't pick: for Prabodha Sudhakara every section→grantha
+    // link was on the published row while `select id ... where document_id` returned the draft row,
+    // so the join found 0 verses and the editor showed 19 empty chapters. Matching on document_id
+    // finds the links wherever they are; `group by m.id` collapses the duplicate rows that appear
+    // when a published verse is reachable via both the draft- and published-grantha link paths
+    // (draft & published share document_id, so sectionDocId is identical across the duplicates).
     const rows = conn
       .prepare(
         `select m.id as id, m.document_id as documentId, m.shloka_manthra_number as num,
@@ -93,12 +102,14 @@ export function readGranthaManthraSkeleton(granthaDocId: string): SkeletonManthr
          join manthras_section_lnk ml on ml.manthra_id = m.id
          join sections sec on sec.id = ml.section_id
          join sections_grantha_lnk sg on sg.section_id = ml.section_id
+         join granthas g on g.id = sg.grantha_id
          left join manthras_cmps mc on mc.entity_id = m.id and mc.field = 'ShlokaManthraEntry'
          left join components_shared_text_and_translations tt on tt.id = mc.cmp_id
-         where sg.grantha_id = ? and m.published_at is not null
+         where g.document_id = ? and m.published_at is not null
+         group by m.id
          order by m."order" asc`,
       )
-      .all(g.id) as any[];
+      .all(granthaDocId) as any[];
     return rows.map((r) => ({
       id: r.id,
       documentId: r.documentId,

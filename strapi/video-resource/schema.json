@@ -1,0 +1,48 @@
+{
+  "kind": "collectionType",
+  "collectionName": "video_resources",
+  "info": {
+    "singularName": "video-resource",
+    "pluralName": "video-resources",
+    "displayName": "Video Resource",
+    "description": "A YouTube video pinned to one node of the grantha hierarchy (whole grantha, a section such as adhyaya/khanda/kanda/pada, or a single manthra). Scope is read directly from target_type."
+  },
+  "options": {
+    "draftAndPublish": true
+  },
+  "pluginOptions": {},
+  "attributes": {
+    "youtube_url": {
+      "type": "string",
+      "required": true
+    },
+    "title": {
+      "type": "string"
+    },
+    "target_type": {
+      "type": "enumeration",
+      "enum": ["grantha", "section", "manthra"],
+      "required": true
+    },
+    "target_doc_id": {
+      "type": "string",
+      "required": true
+    },
+    "target_section_type": {
+      "type": "enumeration",
+      "enum": ["adhyaya", "khanda", "kanda", "pada"]
+    },
+    "start_seconds": {
+      "type": "integer",
+      "min": 0,
+      "default": 0
+    },
+    "language": {
+      "type": "string"
+    },
+    "sort_order": {
+      "type": "integer",
+      "default": 0
+    }
+  }
+}

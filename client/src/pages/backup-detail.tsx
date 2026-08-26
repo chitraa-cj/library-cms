@@ -53,11 +53,20 @@ type WordMeaning = {
   meaning?: string;
 };
 
-type GranthaInfo = { id: number; documentId: string; GranthaName: string; GranthaType?: string };
+type GranthaInfo = {
+  id: number; documentId: string; GranthaName: string; GranthaType?: string;
+  BhashyakaraIntroduction?: ShlokEntry | null;
+  IntroductionToTextEnglish?: Block[] | null;
+  GranthaNameTranslations?: Translation[] | null;
+};
 type SectionInfo = {
   id: number; documentId: string; title: string; type?: string | null;
-  order?: number | null; grantha?: GranthaInfo | null; manthraCount: number;
+  order?: number | null; grantha?: GranthaInfo | null;
+  parent?: { id: number; documentId: string; title?: string } | null;
+  manthraCount: number;
 };
+// A section positioned within its grantha's tree — `depth` drives the sidebar indent.
+type SectionNode = SectionInfo & { depth: number };
 
 type ManthraEntry = {
   id: number;
@@ -166,6 +175,65 @@ function EntryBlock({ entry, showBadge }: { entry: ShlokEntry; showBadge?: strin
 function countOtLangs(entry: ShlokEntry | undefined | null): number {
   return (
     entry?.OtherTranslations?.filter((t) => blocksToText(t.TranslationText)).length ?? 0
+  );
+}
+
+// Shown in the manthra pane when a grantha is open but no section is selected.
+// Surfaces the grantha's introduction (Bhashyakara intro + intro-to-text) and
+// name translations captured in the snapshot, falling back to a hint when empty.
+function GranthaIntroPanel({ grantha }: { grantha: GranthaInfo | null }) {
+  const intro = grantha?.BhashyakaraIntroduction ?? undefined;
+  const introText = blocksToText(grantha?.IntroductionToTextEnglish ?? undefined);
+  const nameTranslations = (grantha?.GranthaNameTranslations ?? []).filter(
+    (t) => blocksToText(t.TranslationText)
+  );
+  const hasIntroEntry =
+    !!blocksToText(intro?.SanskritTextEntry) ||
+    !!iastToText(intro?.IASTTransliteration) ||
+    !!blocksToText(intro?.EnglishTranslationText) ||
+    countOtLangs(intro) > 0;
+
+  if (!grantha || (!hasIntroEntry && !introText && !nameTranslations.length)) {
+    return (
+      <div className="flex-1 flex items-center justify-center text-muted-foreground text-sm">
+        Select a section to view manthras
+      </div>
+    );
+  }
+
+  return (
+    <ScrollArea className="flex-1">
+      <div className="p-4 space-y-5 max-w-3xl">
+        <p className="text-xs text-muted-foreground px-1">
+          {grantha.GranthaName} &middot; introduction
+        </p>
+        {nameTranslations.length > 0 && (
+          <div className="space-y-2">
+            <SectionLabel label="Name Translations" />
+            <div className="flex flex-wrap gap-2">
+              {nameTranslations.map((t) => (
+                <Badge key={t.id} variant="outline" className="text-xs font-normal">
+                  {t.LanguageOfTranslation}: {blocksToText(t.TranslationText)}
+                </Badge>
+              ))}
+            </div>
+          </div>
+        )}
+        {hasIntroEntry && intro && (
+          <div className="space-y-2">
+            <SectionLabel label="Bhashyakara Introduction" />
+            <EntryBlock entry={intro} />
+          </div>
+        )}
+        {introText && (
+          <div className="space-y-1">
+            <SectionLabel label="Introduction to Text" />
+            <BlockText blocks={grantha?.IntroductionToTextEnglish ?? undefined} className="text-sm" />
+          </div>
+        )}
+        <p className="text-xs text-muted-foreground px-1 pt-2">Select a section to view its manthras.</p>
+      </div>
+    </ScrollArea>
   );
 }
 
@@ -598,30 +666,71 @@ export default function BackupDetailPage() {
   });
 
   // ── Build grantha → sections map from summary ──
+  // Sections are ordered hierarchically (parent before its children) and tagged
+  // with a `depth` so the sidebar can indent nested khandas/padas under their
+  // parent adhyaya instead of showing one flat list.
   const { granthaList, sectionsByGrantha } = useMemo(() => {
-    if (!summary) return { granthaList: [] as GranthaInfo[], sectionsByGrantha: new Map<number, SectionInfo[]>() };
+    if (!summary) return { granthaList: [] as GranthaInfo[], sectionsByGrantha: new Map<number, SectionNode[]>() };
 
+    // Prefer the full grantha records (they carry the introduction + translations)
+    // and fall back to the lightweight grantha stub embedded on each section.
     const granthaMap = new Map<number, GranthaInfo>();
-    const sectionsByGrantha = new Map<number, SectionInfo[]>();
+    for (const g of (summary.granthas ?? [])) granthaMap.set(g.id, g);
 
+    const flatByGrantha = new Map<number, SectionInfo[]>();
     for (const sec of summary.sections) {
       const grantha = sec.grantha;
       const granthaId = grantha?.id ?? -1;
-      const granthaInfo: GranthaInfo = grantha ?? { id: -1, documentId: "", GranthaName: "Ungrouped" };
-      if (!granthaMap.has(granthaId)) granthaMap.set(granthaId, granthaInfo);
-      if (!sectionsByGrantha.has(granthaId)) sectionsByGrantha.set(granthaId, []);
-      sectionsByGrantha.get(granthaId)!.push(sec);
+      if (!granthaMap.has(granthaId)) {
+        granthaMap.set(granthaId, grantha ?? { id: -1, documentId: "", GranthaName: "Ungrouped" });
+      }
+      if (!flatByGrantha.has(granthaId)) flatByGrantha.set(granthaId, []);
+      flatByGrantha.get(granthaId)!.push(sec);
     }
 
-    for (const [, secs] of sectionsByGrantha) {
-      secs.sort((a, b) => (a.order ?? 999) - (b.order ?? 999));
+    // Flatten each grantha's sections into parent-before-children order with depth.
+    const sectionsByGrantha = new Map<number, SectionNode[]>();
+    for (const [granthaId, secs] of flatByGrantha) {
+      const byDocId = new Map<string, SectionInfo>();
+      for (const s of secs) if (s.documentId) byDocId.set(s.documentId, s);
+
+      const ROOT = "__root__";
+      const childrenOf = new Map<string, SectionInfo[]>();
+      for (const s of secs) {
+        const pid = s.parent?.documentId;
+        // Treat a section as top-level when it has no parent, or its parent lives
+        // in a different grantha / is absent from this snapshot.
+        const key = pid && byDocId.has(pid) ? pid : ROOT;
+        if (!childrenOf.has(key)) childrenOf.set(key, []);
+        childrenOf.get(key)!.push(s);
+      }
+      for (const [, arr] of childrenOf) {
+        arr.sort((a, b) => (a.order ?? 999) - (b.order ?? 999));
+      }
+
+      const ordered: SectionNode[] = [];
+      const visited = new Set<number>();
+      const walk = (key: string, depth: number) => {
+        for (const s of (childrenOf.get(key) ?? [])) {
+          if (visited.has(s.id)) continue; // guard against parent cycles
+          visited.add(s.id);
+          ordered.push({ ...s, depth });
+          if (s.documentId) walk(s.documentId, depth + 1);
+        }
+      };
+      walk(ROOT, 0);
+      // Append any sections stranded by a cycle so nothing silently disappears.
+      for (const s of secs) if (!visited.has(s.id)) ordered.push({ ...s, depth: 0 });
+      sectionsByGrantha.set(granthaId, ordered);
     }
 
-    const granthaList = Array.from(granthaMap.values()).sort((a, b) => {
-      if (a.id === -1) return 1;
-      if (b.id === -1) return -1;
-      return a.GranthaName.localeCompare(b.GranthaName);
-    });
+    const granthaList = Array.from(granthaMap.values())
+      .filter((g) => sectionsByGrantha.has(g.id))
+      .sort((a, b) => {
+        if (a.id === -1) return 1;
+        if (b.id === -1) return -1;
+        return a.GranthaName.localeCompare(b.GranthaName);
+      });
 
     return { granthaList, sectionsByGrantha };
   }, [summary]);
@@ -770,14 +879,18 @@ export default function BackupDetailPage() {
                         key={s.id}
                         onClick={() => setSelectedSectionId(s.id)}
                         data-testid={`button-section-${s.id}`}
-                        className={`w-full text-left px-3 py-2 rounded-lg text-sm transition-colors ${
+                        style={{ paddingLeft: 12 + s.depth * 16 }}
+                        className={`w-full text-left pr-3 py-2 rounded-lg text-sm transition-colors ${
                           isActive
                             ? "bg-sidebar-accent text-sidebar-foreground font-medium"
                             : "text-muted-foreground hover:text-sidebar-foreground hover:bg-sidebar-accent/50"
                         }`}
                       >
                         <div className="flex items-center justify-between gap-2">
-                          <span className="truncate">{s.title}</span>
+                          <span className="flex items-center gap-1.5 min-w-0">
+                            {s.depth > 0 && <span className="text-muted-foreground/40 flex-shrink-0">└</span>}
+                            <span className="truncate">{s.title}</span>
+                          </span>
                           <span className="text-xs text-muted-foreground flex-shrink-0 tabular-nums">{s.manthraCount}</span>
                         </div>
                         {s.type && <p className="text-[10px] text-muted-foreground/60 mt-0.5 capitalize">{s.type}</p>}
@@ -791,9 +904,7 @@ export default function BackupDetailPage() {
             {/* Manthra list */}
             <div className="flex-1 min-w-0 min-h-0 overflow-hidden flex flex-col">
               {!selectedSection ? (
-                <div className="flex-1 flex items-center justify-center text-muted-foreground text-sm">
-                  Select a section to view manthras
-                </div>
+                <GranthaIntroPanel grantha={selectedGrantha} />
               ) : manthrasLoading ? (
                 <div className="flex-1 flex flex-col items-center justify-center gap-3 text-muted-foreground">
                   <Loader2 className="w-6 h-6 animate-spin" />

@@ -26,6 +26,14 @@ import {
   invalidateAllBulkCache,
 } from "./grantha-bulk-cache";
 import { readGranthaManthraSkeleton } from "./strapi-sqlite-skeleton";
+import {
+  fromStrapiVideoResource,
+  indexVideosByTarget,
+  resolveVideosForNode,
+  type VideoNodeRef,
+  type VideoResource,
+  type VideoTargetType,
+} from "@shared/video-resource-resolve";
 
 const STRAPI_URL = process.env.STRAPI_URL || "http://13.53.121.15:1337";
 const STRAPI_ADMIN_NOTE =
@@ -409,6 +417,7 @@ export function createStrapiRouter() {
     { path: "authors", plural: "authors" },
     { path: "categories", plural: "categories" },
     { path: "chapters", plural: "chapters" },
+    { path: "video-resources", plural: "video-resources" },
   ];
 
   const DEEP_POPULATE: Record<string, string> = {
@@ -448,6 +457,11 @@ export function createStrapiRouter() {
       "populate=*",
       "pagination[pageSize]=100",
       "sort=name:asc",
+    ].join("&"),
+    "video-resources": [
+      "populate=*",
+      "pagination[pageSize]=100",
+      "sort=sort_order:asc",
     ].join("&"),
   };
 
@@ -1612,6 +1626,62 @@ export function createStrapiRouter() {
         return res.json({ data: [], meta: { pagination: { page: 1, pageSize: 25, pageCount: 0, total: 0 } } });
       }
       res.status(500).json({ message: error.message || "Failed to fetch granthas" });
+    }
+  });
+
+  // ── Video resources: resolve the video(s) for a node with inherit-with-fallback ──
+  // Must be registered BEFORE the generic `/video-resources/:documentId` route below,
+  // otherwise Express matches "for-node" as a documentId.
+  //   GET /video-resources/for-node
+  //     ?type=grantha|section|manthra
+  //     &docId=<node documentId>
+  //     &ancestors=<type:docId,type:docId,...>   (nearest-first, toward root; optional)
+  const VIDEO_TARGET_TYPES: VideoTargetType[] = ["grantha", "section", "manthra"];
+  const parseNodeRef = (raw: string): VideoNodeRef | null => {
+    const idx = raw.indexOf(":");
+    if (idx < 0) return null;
+    const type = raw.slice(0, idx).trim() as VideoTargetType;
+    const documentId = raw.slice(idx + 1).trim();
+    if (!documentId || !VIDEO_TARGET_TYPES.includes(type)) return null;
+    return { type, documentId };
+  };
+
+  router.get("/video-resources/for-node", async (req, res) => {
+    try {
+      const type = String(req.query.type ?? "") as VideoTargetType;
+      const docId = String(req.query.docId ?? "").trim();
+      if (!docId || !VIDEO_TARGET_TYPES.includes(type)) {
+        return res.status(400).json({
+          message: "type (grantha|section|manthra) and docId are required",
+        });
+      }
+
+      const chain: VideoNodeRef[] = [{ type, documentId: docId }];
+      const ancestorsRaw = String(req.query.ancestors ?? "").trim();
+      if (ancestorsRaw) {
+        for (const part of ancestorsRaw.split(",")) {
+          const ref = parseNodeRef(part);
+          if (ref) chain.push(ref);
+        }
+      }
+
+      // The collection is small; fetch all published rows and resolve in-process.
+      const all = await strapiRequest(
+        `/api/video-resources?populate=*&pagination[pageSize]=500&sort=sort_order:asc`,
+      );
+      const videos: VideoResource[] = (all?.data ?? [])
+        .map(fromStrapiVideoResource)
+        .filter(Boolean) as VideoResource[];
+
+      const resolved = resolveVideosForNode(chain, indexVideosByTarget(videos));
+      return res.json({ data: resolved });
+    } catch (error: any) {
+      if (error.status === 404) {
+        return res.json({ data: { videos: [], inheritedFrom: null } });
+      }
+      res
+        .status(500)
+        .json({ message: error.message || "Failed to resolve videos for node" });
     }
   });
 

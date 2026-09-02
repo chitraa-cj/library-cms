@@ -30,6 +30,7 @@ import { portalVocabularyKeys, type PortalVocabularyKey } from "@shared/schema";
 import Database from "better-sqlite3";
 import type { User, Draft } from "@shared/schema";
 import { gzipSync, gunzipSync } from "node:zlib";
+import { StringDecoder } from "node:string_decoder";
 import { createHash } from "node:crypto";
 import { z } from "zod";
 import {
@@ -83,14 +84,90 @@ function compressBackupData(data: any): any {
   return { _compressed: true, data: compressed.toString("base64") };
 }
 
+/**
+ * Decode a UTF-8 Buffer to a string, chunk by chunk.
+ *
+ * `Buffer.prototype.toString("utf8")` (and TextDecoder) throw
+ * `Cannot create a string longer than 0x1fffffe8 characters` whenever the
+ * buffer's BYTE length exceeds V8's max string length — a conservative
+ * pre-check that fires even when the DECODED string would fit (multi-byte
+ * text such as Devanagari collapses to far fewer UTF-16 code units than
+ * bytes). Large snapshots (e.g. a 576 MB buffer that decodes to only ~362 M
+ * code units) tripped this and became unreadable. Decoding via a streaming
+ * StringDecoder only ever materializes the final (in-limit) string, so it
+ * succeeds where a single toString() cannot.
+ */
+function decodeUtf8Buffer(buf: Buffer): string {
+  // Fast path: small buffers can't exceed the limit — decode directly.
+  const MAX_SAFE_BYTES = 0x1fffffe8; // V8 kStringMaxLength
+  if (buf.length <= MAX_SAFE_BYTES) return buf.toString("utf8");
+  const decoder = new StringDecoder("utf8");
+  const CHUNK = 64 * 1024 * 1024; // 64 MB
+  const parts: string[] = [];
+  for (let i = 0; i < buf.length; i += CHUNK) {
+    parts.push(decoder.write(buf.subarray(i, Math.min(i + CHUNK, buf.length))));
+  }
+  parts.push(decoder.end());
+  return parts.join("");
+}
+
 /** Decompress a snapshot payload returned from DB — handles both old (raw) and new (compressed) formats. */
 function decompressBackupData(raw: any): any {
   if (raw && raw._compressed === true && typeof raw.data === "string") {
     const buf = Buffer.from(raw.data, "base64");
     const decompressed = gunzipSync(buf);
-    return JSON.parse(decompressed.toString("utf8"));
+    return JSON.parse(decodeUtf8Buffer(decompressed));
   }
   return raw; // legacy uncompressed backups
+}
+
+/**
+ * Build the lightweight summary (grantha records + section tree with per-section
+ * manthra counts, no manthra text) from a fully-parsed snapshot. Stored in the
+ * `summary` column so the detail page renders without touching the big blob.
+ */
+function buildBackupSummaryPayload(d: any): { granthas: any[]; sections: any[] } {
+  const manthraCountBySection: Record<number, number> = {};
+  for (const m of (d?.manthras ?? [])) {
+    const sid = m?.Section?.id;
+    if (sid != null) manthraCountBySection[sid] = (manthraCountBySection[sid] ?? 0) + 1;
+  }
+  return {
+    granthas: d?.granthas ?? [],
+    sections: (d?.sections ?? []).map((s: any) => ({
+      id: s.id,
+      documentId: s.documentId,
+      title: s.title,
+      type: s.type,
+      order: s.order,
+      grantha: s.grantha,
+      parent: s.parent,
+      manthraCount: manthraCountBySection[s.id] ?? 0,
+    })),
+  };
+}
+
+/**
+ * In-memory cache of ONE fully-parsed backup. Backups are immutable, so once a
+ * snapshot is decompressed (~10-15s, ~500 MB) we keep it around so subsequent
+ * section-manthra fetches for the same snapshot are instant instead of
+ * re-decompressing per click. Capped at a single entry to bound memory on the
+ * small box; a different id evicts the previous one.
+ */
+let parsedBackupCache: { id: number; data: any; at: number } | null = null;
+const PARSED_BACKUP_TTL_MS = 10 * 60 * 1000;
+
+async function getParsedBackupCached(id: number): Promise<any | null> {
+  const now = Date.now();
+  if (parsedBackupCache && parsedBackupCache.id === id && now - parsedBackupCache.at < PARSED_BACKUP_TTL_MS) {
+    parsedBackupCache.at = now;
+    return parsedBackupCache.data;
+  }
+  const backup = await storage.getBackup(id);
+  if (!backup) return null;
+  const data = decompressBackupData(backup.data);
+  parsedBackupCache = { id, data, at: now }; // evicts any previous entry
+  return data;
 }
 
 function normalizeSnapshotPayload(input: any): any {
@@ -846,6 +923,16 @@ async function buildManthraData(
     Array.isArray(rawTeekas) && rawTeekas.length > 0 && resolvedTeekas.length > 0;
   // Always fetch teeka snapshot for existing mantras so partial edits never wipe sibling teekas.
   const needsTeekaMergeSnapshot = isExistingStrapi && localTeekasNeedMerge;
+  // Keys of Shloka/Bhashyam that carry local publishable content on this payload.
+  const localTextKeys = (["ShlokaManthraEntry", "BhashyamEntry"] as const).filter(
+    (k) => cleaned[k] && typeof cleaned[k] === "object" && !Array.isArray(cleaned[k]),
+  );
+  // Fast single-verse publish skips the full body merge (local body is authoritative), but a
+  // verse published from a partially-hydrated draft must still keep every other-language
+  // translation that already lives in Strapi. So when the fast path has local Shloka/Bhashyam
+  // content we still fetch the snapshot and UNION OtherTranslations (see the merge below).
+  const fastPublishTextMergeNeeded =
+    !!options?.fastSinglePublish && isExistingStrapi && localTextKeys.length > 0;
   // Doc id to read existing CMS content from: the row itself for a normal update, or the
   // row this verse was published from for a fresh republish (so un-hydrated content survives).
   const snapshotDocId = isExistingStrapi ? strapiDocId : priorContentDocId;
@@ -853,13 +940,18 @@ async function buildManthraData(
     !!snapshotDocId &&
     (needsTeekaMergeSnapshot ||
       !!priorContentDocId ||
+      fastPublishTextMergeNeeded ||
       (isExistingStrapi && editedTextKeys.size > 0));
 
   let strapiMantraSnapshot: any = null;
   if (fetchSnapshot) {
     try {
+      // Retry transient Strapi failures: this snapshot is what protects existing teekas /
+      // translations from being clobbered, so it's worth several attempts before giving up.
       strapiMantraSnapshot =
-        (await strapiRequest(`/api/manthras/${snapshotDocId}${MANTRA_EXISTING_MERGE_QUERY}`))?.data ?? null;
+        (await withPublishRetries(() =>
+          strapiRequest(`/api/manthras/${snapshotDocId}${MANTRA_EXISTING_MERGE_QUERY}`),
+        ))?.data ?? null;
       const n = strapiMantraSnapshot?.Teekas?.length ?? 0;
       console.log(
         `[buildManthraData] Fetched Strapi mantra snapshot (${n} teeka row(s))${
@@ -869,6 +961,22 @@ async function buildManthraData(
     } catch (e: any) {
       console.warn(`[buildManthraData] Could not fetch existing Strapi mantra for merge — ${e.message}`);
     }
+  }
+
+  // ASSURANCE: when we needed to read existing CMS content to avoid clobbering it but the
+  // snapshot is unavailable (even after retries), refuse to publish this verse rather than risk
+  // deleting existing teekas/translations. The retryable error lets the worker re-attempt and,
+  // if Strapi stays down, surfaces a clear failure instead of silent data loss.
+  const snapshotWasRequiredForSafety =
+    needsTeekaMergeSnapshot || fastPublishTextMergeNeeded || !!priorContentDocId;
+  if (snapshotWasRequiredForSafety && !strapiMantraSnapshot) {
+    const err: any = new Error(
+      `Cannot safely publish "${mData.ShlokaManthraNumber || snapshotDocId}": existing CMS content is temporarily unreadable. ` +
+        `Skipped to avoid overwriting existing teekas/translations — retry shortly.`,
+    );
+    err.code = "upstream_server";
+    err.status = 503;
+    throw err;
   }
 
   if (Array.isArray(rawTeekas)) {
@@ -893,7 +1001,18 @@ async function buildManthraData(
         //     + full TeekaEntry so Strapi doesn't clear it).
         for (const et of existingTeekas) {
           const tDocId = et.teeka?.documentId;
-          if (!tDocId) continue;
+          if (!tDocId) {
+            // Existing teeka whose `teeka` relation didn't populate (Strapi v5 can silently
+            // drop a nested relation). We can't match it to a local edit, but we must NOT drop
+            // it — re-send its component id + body so Strapi keeps the row and its content.
+            if (et.id != null) {
+              mergedTeekas.push({ id: et.id, TeekaEntry: et.TeekaEntry ?? null });
+              console.warn(
+                `[buildManthraData] Preserving existing teeka component ${et.id} with unpopulated relation (kept to avoid data loss)`,
+              );
+            }
+            continue;
+          }
           const local = localByTeekaDocId.get(tDocId);
           if (local) {
             // Use local edits merged into Strapi so partial draft never wipes OtherTranslations.
@@ -930,14 +1049,21 @@ async function buildManthraData(
     // so Strapi preserves whatever content it already holds for this manthra.
   }
 
-  // ── SAFETY: Merge ShlokaManthraEntry + BhashyamEntry (skip on fast single publish — local body is authoritative) ──
-  // Also runs when the user explicitly edited/cleared a field (editedTextKeys), even if the
-  // draft is now empty — so a deliberate removal is sent rather than silently kept.
-  if (!options?.fastSinglePublish && isExistingStrapi) {
+  // ── SAFETY: Merge ShlokaManthraEntry + BhashyamEntry ──
+  // Normal publish merges with placeholder protection and honours editedTextKeys (a deliberate
+  // clear is sent rather than kept). Fast single-verse publish keeps the draft body authoritative
+  // but STILL unions OtherTranslations so publishing one verse from a partially-hydrated draft
+  // never drops an existing other-language bhashyam/shloka translation. We express "draft body
+  // wins for the keys the fast path is writing" by treating those keys as edited (trustDraft),
+  // which also unions their OtherTranslations by language in mergeTeekaEntryForPut.
+  if (isExistingStrapi) {
+    const textMergeEditedKeys = options?.fastSinglePublish
+      ? new Set<string>(localTextKeys)
+      : editedTextKeys;
     if (strapiMantraSnapshot) {
-      applyMantraTextMergeFromStrapiData(cleaned, strapiMantraSnapshot, editedTextKeys);
-    } else if (mantraTextMergeNeeded(cleaned) || editedTextKeys.size > 0) {
-      await mergeMantraTextComponentsFromStrapi(cleaned, strapiDocId, editedTextKeys);
+      applyMantraTextMergeFromStrapiData(cleaned, strapiMantraSnapshot, textMergeEditedKeys);
+    } else if (mantraTextMergeNeeded(cleaned) || textMergeEditedKeys.size > 0) {
+      await mergeMantraTextComponentsFromStrapi(cleaned, strapiDocId, textMergeEditedKeys);
     }
   }
 
@@ -948,9 +1074,48 @@ async function buildManthraData(
     carryOverFreshRepublishContent(cleaned, strapiMantraSnapshot, editedTextKeys);
   }
 
+  // FINAL SAFETY NET: whenever we send a Teekas array to an existing mantra, guarantee it
+  // still contains every teeka that was already in Strapi. Even if the merge logic above ever
+  // regresses, this re-adds any dropped entry so a republish can only add/update teekas — never
+  // silently delete one. (Runs before sanitize so re-added rows get the same scrub.)
+  if (Array.isArray(cleaned.Teekas) && Array.isArray(strapiMantraSnapshot?.Teekas)) {
+    cleaned.Teekas = ensureNoExistingTeekaDropped(strapiMantraSnapshot.Teekas, cleaned.Teekas);
+  }
+
   pruneNonPublishableManthraTextFields(cleaned, editedTextKeys);
   sanitizeStrapiTextComponentsOnManthraLikePayload(cleaned);
   return cleaned;
+}
+
+/** Guarantee a merged Teekas array never drops a teeka that already exists in Strapi. Matches
+ *  existing entries by component `id` or relation documentId; re-adds any that the merge left
+ *  out (verbatim, so its content is preserved). A publish can then only add/update, never delete. */
+function ensureNoExistingTeekaDropped(existing: any[], merged: any[]): any[] {
+  if (!Array.isArray(existing) || existing.length === 0) return merged;
+  const mergedIds = new Set(merged.map((m) => m?.id).filter((v) => v != null));
+  const mergedDocIds = new Set(
+    merged
+      .map((m) => (typeof m?.teeka === "string" ? m.teeka : m?.teeka?.documentId))
+      .filter(Boolean),
+  );
+  const repaired = [...merged];
+  for (const et of existing) {
+    const id = et?.id;
+    const docId = et?.teeka?.documentId;
+    const present = (id != null && mergedIds.has(id)) || (docId && mergedDocIds.has(docId));
+    if (present) continue;
+    const restored = docId
+      ? { id, teeka: docId, TeekaEntry: et.TeekaEntry ?? null }
+      : id != null
+        ? { id, TeekaEntry: et.TeekaEntry ?? null }
+        : null;
+    if (!restored) continue;
+    repaired.push(restored);
+    console.warn(
+      `[publish] Safety net re-added existing teeka (id=${id ?? "?"}, docId=${docId ?? "none"}) the merge would have dropped`,
+    );
+  }
+  return repaired;
 }
 
 /** Drop Strapi row identity from draft rows so merges never overwrite a valid instance id
@@ -1138,11 +1303,41 @@ async function fetchGranthaTranslationsForMerge(documentId: string): Promise<any
       "populate[BhashyakaraIntroduction][populate]=*",
       "populate[GranthaNameTranslations]=*",
     ].join("&");
-    const res = await strapiRequest(`/api/granthas/${documentId}?${qs}`);
+    // Retry transient failures — this snapshot protects existing grantha translations
+    // (BhashyakaraIntroduction + GranthaNameTranslations) from being clobbered on merge.
+    const res = await withPublishRetries(() => strapiRequest(`/api/granthas/${documentId}?${qs}`));
     return res?.data ?? null;
   } catch (e: any) {
     console.warn(`[publish] Could not fetch existing grantha translations for merge: ${e.message}`);
     return null;
+  }
+}
+
+/** True when the grantha payload carries repeatable translation content whose PUT would
+ *  replace Strapi's — i.e. content we must merge with the existing record before sending. */
+function granthaPayloadHasMergeableTranslations(granthaPayload: Record<string, any>): boolean {
+  const gnt = granthaPayload.GranthaNameTranslations;
+  if (Array.isArray(gnt) && gnt.length > 0) return true;
+  const bh = granthaPayload.BhashyakaraIntroduction;
+  return !!bh && typeof bh === "object";
+}
+
+/** Refuse to publish a grantha update when its existing translations couldn't be read: sending a
+ *  partial local list would drop other-language names / bhashyakara intro. Retryable so the
+ *  caller re-attempts instead of silently overwriting. */
+function assertGranthaTranslationsSnapshot(
+  granthaPayload: Record<string, any>,
+  existingG: any | null,
+  docId: string,
+): void {
+  if (existingG === null && granthaPayloadHasMergeableTranslations(granthaPayload)) {
+    const err: any = new Error(
+      `Cannot safely publish grantha ${docId}: existing translations are temporarily unreadable. ` +
+        `Skipped to avoid overwriting existing name translations / bhashyakara introduction — retry shortly.`,
+    );
+    err.code = "upstream_server";
+    err.status = 503;
+    throw err;
   }
 }
 
@@ -1384,12 +1579,44 @@ function carryOverFreshRepublishContent(
       merged.push(lt);
     }
   }
+  // Content signatures of what's already merged, so a relation-less CMS teeka (no docId to
+  // dedupe on) is carried once but never re-appended on repeated fresh republishes.
+  const mergedSignatures = new Set<string>();
+  for (const m of merged) mergedSignatures.add(teekaEntrySignature(m?.TeekaEntry));
   for (const et of snapTeekas) {
     const tDocId = et?.teeka?.documentId;
-    if (!tDocId || used.has(tDocId)) continue;
-    merged.push({ teeka: tDocId, TeekaEntry: rebuildTeekaOrTextEntryFromSnapshot(et.TeekaEntry) });
+    if (tDocId) {
+      if (used.has(tDocId)) continue;
+      merged.push({ teeka: tDocId, TeekaEntry: rebuildTeekaOrTextEntryFromSnapshot(et.TeekaEntry) });
+      continue;
+    }
+    // Relation-less CMS teeka: keep its content (deduped) so no commentary is ever lost.
+    if (!textEntryHasPublishableContent(et?.TeekaEntry)) continue;
+    const sig = teekaEntrySignature(et.TeekaEntry);
+    if (mergedSignatures.has(sig)) continue;
+    mergedSignatures.add(sig);
+    merged.push({ TeekaEntry: rebuildTeekaOrTextEntryFromSnapshot(et.TeekaEntry) });
+    console.warn(
+      "[carryOverFreshRepublishContent] Carried relation-less CMS teeka by content (kept to avoid data loss)",
+    );
   }
   if (merged.length > 0) target.Teekas = merged;
+}
+
+/** Stable plain-text signature of a TeekaEntry (Sanskrit + English + IAST + each language),
+ *  used to dedupe teekas that have no relation documentId to key on. */
+function teekaEntrySignature(entry: any): string {
+  if (!entry || typeof entry !== "object") return "";
+  const parts = [
+    blocksPlainText(entry.SanskritTextEntry),
+    blocksPlainText(entry.EnglishTranslationText),
+    blocksPlainText(entry.IASTTransliteration),
+  ];
+  const ot = Array.isArray(entry.OtherTranslations) ? entry.OtherTranslations : [];
+  for (const row of ot) {
+    parts.push(`${row?.LanguageOfTranslation ?? ""}:${blocksPlainText(row?.TranslationText)}`);
+  }
+  return parts.join("").trim();
 }
 
 /** One Strapi GET for existing-mantra publish: teekas + Shloka + Bhashyam (avoids duplicate round-trips). */
@@ -2878,6 +3105,7 @@ async function publishGranthaWithHierarchy(
     });
   } else if (draft.strapiDocumentId) {
     const existingG = await fetchGranthaTranslationsForMerge(draft.strapiDocumentId);
+    assertGranthaTranslationsSnapshot(granthaPayload, existingG, draft.strapiDocumentId);
     mergeGranthaPayloadWithExistingStrapiTranslations(granthaPayload, existingG);
     scrubMergedGranthaRepeatableComponents(granthaPayload);
     if (
@@ -2922,6 +3150,7 @@ async function publishGranthaWithHierarchy(
 
     if (existingDocId) {
       const existingG = await fetchGranthaTranslationsForMerge(existingDocId);
+      assertGranthaTranslationsSnapshot(granthaPayload, existingG, existingDocId);
       mergeGranthaPayloadWithExistingStrapiTranslations(granthaPayload, existingG);
       scrubMergedGranthaRepeatableComponents(granthaPayload);
       if (
@@ -3914,7 +4143,7 @@ async function buildManthraPayloadAsync(
   const mergeQuery = pickMantraMergeQuery(localHasTeekas && isExistingStrapi, needsTextMerge);
   const snapshotPromise =
     mergeQuery && strapiDocumentId
-      ? strapiRequest(`/api/manthras/${strapiDocumentId}${mergeQuery}`)
+      ? withPublishRetries(() => strapiRequest(`/api/manthras/${strapiDocumentId}${mergeQuery}`))
           .then((r) => r?.data ?? null)
           .catch((e: any) => {
             console.warn(`[buildManthraPayloadAsync] Could not fetch existing Strapi mantra for merge — ${e.message}`);
@@ -3929,6 +4158,19 @@ async function buildManthraPayloadAsync(
   if (strapiMantraSnapshot && resolvedTeekas.length > 0) {
     const n = (strapiMantraSnapshot as any)?.Teekas?.length ?? 0;
     console.log(`[buildManthraPayloadAsync] Fetched Strapi mantra snapshot (${n} teeka row(s)) for merge`);
+  }
+
+  // ASSURANCE: a merge snapshot was needed (mergeQuery non-null) but is unavailable even after
+  // retries — refuse to publish rather than send a local-only payload that could delete existing
+  // teekas or drop other-language translations. Retryable so the caller can re-attempt.
+  if (mergeQuery && !strapiMantraSnapshot) {
+    const err: any = new Error(
+      `Cannot safely publish "${payload.ShlokaManthraNumber || strapiDocumentId}": existing CMS content is temporarily unreadable. ` +
+        `Skipped to avoid overwriting existing teekas/translations — retry shortly.`,
+    );
+    err.code = "upstream_server";
+    err.status = 503;
+    throw err;
   }
 
   if (Array.isArray(rawTeekas)) {
@@ -3947,7 +4189,17 @@ async function buildManthraPayloadAsync(
         // Pass 1 — walk existing Strapi entries; prefer local edits, keep rest unchanged
         for (const et of existingTeekas) {
           const tDocId = et.teeka?.documentId;
-          if (!tDocId) continue;
+          if (!tDocId) {
+            // Existing teeka whose `teeka` relation didn't populate — preserve it (re-send its
+            // component id + body) instead of dropping it, so no commentary is ever lost.
+            if (et.id != null) {
+              mergedTeekas.push({ id: et.id, TeekaEntry: et.TeekaEntry ?? null });
+              console.warn(
+                `[buildManthraPayloadAsync] Preserving existing teeka component ${et.id} with unpopulated relation (kept to avoid data loss)`,
+              );
+            }
+            continue;
+          }
           const local = localByTeekaDocId.get(tDocId);
           if (local) {
             mergedTeekas.push({
@@ -3986,6 +4238,11 @@ async function buildManthraPayloadAsync(
     applyMantraTextMergeFromStrapiData(payload, strapiMantraSnapshot);
   } else if (isExistingStrapi && strapiDocumentId && mantraTextMergeNeeded(payload) && !strapiMantraSnapshot) {
     await mergeMantraTextComponentsFromStrapi(payload, strapiDocumentId);
+  }
+
+  // FINAL SAFETY NET: never drop a teeka that already exists in Strapi (see buildManthraData).
+  if (Array.isArray(payload.Teekas) && Array.isArray(strapiMantraSnapshot?.Teekas)) {
+    payload.Teekas = ensureNoExistingTeekaDropped(strapiMantraSnapshot.Teekas, payload.Teekas);
   }
 
   pruneNonPublishableManthraTextFields(payload);
@@ -5774,35 +6031,33 @@ export async function registerRoutes(
     try {
       const id = parseInt(req.params.id);
       if (isNaN(id)) return res.status(400).json({ message: "Invalid backup ID" });
-      const backup = await storage.getBackup(id);
-      if (!backup) return res.status(404).json({ message: "Backup not found" });
-      const d = decompressBackupData(backup.data);
 
-      // Build per-section manthra count from the manthras array.
-      const manthraCountBySection: Record<number, number> = {};
-      for (const m of (d.manthras ?? [])) {
-        const sid = m?.Section?.id;
-        if (sid != null) manthraCountBySection[sid] = (manthraCountBySection[sid] ?? 0) + 1;
+      // Fast path: read the precomputed summary column (a few MB) without ever
+      // touching the ~500 MB `data` blob.
+      const row = await storage.getBackupSummaryRow(id);
+      if (!row) return res.status(404).json({ message: "Backup not found" });
+
+      let summary = row.summary as { granthas: any[]; sections: any[] } | null;
+      if (!summary) {
+        // Old backup with no precomputed summary — build it once from the full
+        // blob and persist so every later open is instant.
+        const d = await getParsedBackupCached(id);
+        if (!d) return res.status(404).json({ message: "Backup not found" });
+        summary = buildBackupSummaryPayload(d);
+        storage.setBackupSummary(id, summary).catch((err) =>
+          console.error(`[backup] failed to backfill summary for #${id}:`, err?.message)
+        );
       }
 
       res.json({
-        id: backup.id,
-        label: backup.label,
-        createdAt: backup.createdAt,
-        granthaCount: backup.granthaCount,
-        sectionCount: backup.sectionCount,
-        manthraCount: backup.manthraCount,
-        granthas: d.granthas ?? [],
-        sections: (d.sections ?? []).map((s: any) => ({
-          id: s.id,
-          documentId: s.documentId,
-          title: s.title,
-          type: s.type,
-          order: s.order,
-          grantha: s.grantha,
-          parent: s.parent,
-          manthraCount: manthraCountBySection[s.id] ?? 0,
-        })),
+        id: row.id,
+        label: row.label,
+        createdAt: row.createdAt,
+        granthaCount: row.granthaCount,
+        sectionCount: row.sectionCount,
+        manthraCount: row.manthraCount,
+        granthas: summary.granthas ?? [],
+        sections: summary.sections ?? [],
       });
     } catch (e: any) {
       res.status(500).json({ message: e.message || "Failed to load backup summary" });
@@ -5815,9 +6070,8 @@ export async function registerRoutes(
       const id = parseInt(req.params.id);
       const sectionId = parseInt(req.params.sectionId);
       if (isNaN(id) || isNaN(sectionId)) return res.status(400).json({ message: "Invalid ID" });
-      const backup = await storage.getBackup(id);
-      if (!backup) return res.status(404).json({ message: "Backup not found" });
-      const d = decompressBackupData(backup.data);
+      const d = await getParsedBackupCached(id);
+      if (!d) return res.status(404).json({ message: "Backup not found" });
       const manthras = (d.manthras ?? []).filter((m: any) => m?.Section?.id === sectionId);
       manthras.sort((a: any, b: any) => (a.order ?? 999) - (b.order ?? 999));
       res.json(manthras);
@@ -5885,6 +6139,7 @@ export async function registerRoutes(
         effectiveGranthaCount,
         effectiveSectionCount,
         effectiveManthraCount,
+        buildBackupSummaryPayload(normalized),
       );
       res.status(201).json({ id: backup.id, label: backup.label });
     } catch (e: any) {
@@ -6682,13 +6937,17 @@ export async function registerRoutes(
 
         console.log(`[backup] Compressing snapshot data...`);
         const compressedPayload = compressBackupData(snapshotData);
+        // Precompute the lightweight summary now (arrays already in memory) so the
+        // detail page never has to decompress the full blob to show grantha boxes.
+        const summaryPayload = buildBackupSummaryPayload(snapshotData);
         console.log(`[backup] Saving to database...`);
         const backup = await storage.createBackup(
           label,
           compressedPayload,
           granthas.length,
           sections.length,
-          manthras.length
+          manthras.length,
+          summaryPayload
         );
 
         console.log(`[backup] Saved as backup #${backup.id}`);

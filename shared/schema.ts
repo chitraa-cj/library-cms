@@ -122,10 +122,15 @@ export const granthaBackups = pgTable("grantha_backups", {
   sectionCount: integer("section_count").notNull().default(0),
   manthraCount: integer("manthra_count").notNull().default(0),
   data: jsonb("data").notNull(),
+  // Precomputed lightweight view (grantha records + section tree with per-section
+  // manthra counts, no manthra text) so the snapshot detail page can render the
+  // grantha boxes instantly instead of decompressing + parsing the full `data`
+  // blob (~500 MB) on every open. Nullable: backfilled lazily for old backups.
+  summary: jsonb("summary"),
 });
 
 export type GranthaBackup = typeof granthaBackups.$inferSelect;
-export type GranthaBackupMeta = Omit<GranthaBackup, "data">;
+export type GranthaBackupMeta = Omit<GranthaBackup, "data" | "summary">;
 
 export const granthaLocks = pgTable("grantha_locks", {
   id: serial("id").primaryKey(),

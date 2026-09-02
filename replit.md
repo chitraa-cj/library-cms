@@ -162,4 +162,4 @@ Run via testing skill. Verifies:
 
 
 
- npm run hermex:grantha -- "Brihadaranyaka Upanishad"
+ npm run hermex:grantha -- "Vivekachudamani"

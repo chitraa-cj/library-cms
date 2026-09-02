@@ -46,9 +46,11 @@ export interface IStorage {
   discardDraftWithDependencies(draftId: number, opts?: { userId?: string; dryRun?: boolean }): Promise<DraftDiscardResult>;
   purgeExpiredIdempotencyKeys(): Promise<number>;
   markDraftPublished(id: number, userId: string, strapiDocumentId?: string): Promise<Draft | undefined>;
-  createBackup(label: string, data: any, granthaCount: number, sectionCount: number, manthraCount: number): Promise<GranthaBackup>;
+  createBackup(label: string, data: any, granthaCount: number, sectionCount: number, manthraCount: number, summary?: any): Promise<GranthaBackup>;
   listBackups(): Promise<GranthaBackupMeta[]>;
   getBackup(id: number): Promise<GranthaBackup | null>;
+  getBackupSummaryRow(id: number): Promise<{ id: number; label: string; createdAt: Date; granthaCount: number; sectionCount: number; manthraCount: number; summary: any } | null>;
+  setBackupSummary(id: number, summary: any): Promise<void>;
   getGranthaLocks(): Promise<GranthaLock[]>;
   getGranthaLock(granthaDocId: string): Promise<GranthaLock | null>;
   lockGrantha(granthaDocId: string, granthaName: string | undefined, userId: string, username: string, reason?: string): Promise<GranthaLock>;
@@ -226,12 +228,32 @@ export class DatabaseStorage implements IStorage {
     return updated;
   }
 
-  async createBackup(label: string, data: any, granthaCount: number, sectionCount: number, manthraCount: number): Promise<GranthaBackup> {
+  async createBackup(label: string, data: any, granthaCount: number, sectionCount: number, manthraCount: number, summary?: any): Promise<GranthaBackup> {
     const [backup] = await db
       .insert(granthaBackups)
-      .values({ label, data, granthaCount, sectionCount, manthraCount })
+      .values({ label, data, granthaCount, sectionCount, manthraCount, summary })
       .returning();
     return backup;
+  }
+
+  async getBackupSummaryRow(id: number) {
+    const [row] = await db
+      .select({
+        id: granthaBackups.id,
+        label: granthaBackups.label,
+        createdAt: granthaBackups.createdAt,
+        granthaCount: granthaBackups.granthaCount,
+        sectionCount: granthaBackups.sectionCount,
+        manthraCount: granthaBackups.manthraCount,
+        summary: granthaBackups.summary,
+      })
+      .from(granthaBackups)
+      .where(eq(granthaBackups.id, id));
+    return row ?? null;
+  }
+
+  async setBackupSummary(id: number, summary: any): Promise<void> {
+    await db.update(granthaBackups).set({ summary }).where(eq(granthaBackups.id, id));
   }
 
   async listBackups(): Promise<GranthaBackupMeta[]> {
@@ -525,24 +547,49 @@ export class DatabaseStorage implements IStorage {
     return this.ensurePortalVocabularyRow();
   }
 
+  /**
+   * Atomically read-modify-write the single shared vocabulary row (`id:1`).
+   * All portal lists live in one JSONB blob, so two admins adding names at the
+   * same time — even to different lists — would clobber each other under a plain
+   * read-then-write. We serialize writers with `SELECT … FOR UPDATE` inside a
+   * transaction so every concurrent add/remove is applied on top of the latest
+   * committed state instead of a stale snapshot.
+   */
+  private async mutatePortalVocabulary(
+    userId: string,
+    mutate: (current: PortalVocabularyCustom) => PortalVocabularyCustom,
+  ): Promise<PortalVocabularyCustom> {
+    return db.transaction(async (tx) => {
+      await tx
+        .insert(cmsPortalVocabulary)
+        .values({ id: 1, custom: {} })
+        .onConflictDoNothing();
+      const [row] = await tx
+        .select()
+        .from(cmsPortalVocabulary)
+        .where(eq(cmsPortalVocabulary.id, 1))
+        .for("update");
+      const current = (row?.custom as PortalVocabularyCustom) ?? {};
+      const custom = mutate(current);
+      await tx
+        .update(cmsPortalVocabulary)
+        .set({ custom, updatedBy: userId, updatedAt: new Date() })
+        .where(eq(cmsPortalVocabulary.id, 1));
+      return custom;
+    });
+  }
+
   async addPortalVocabularyEntry(
     key: PortalVocabularyKey,
     value: string,
     userId: string,
   ): Promise<PortalVocabularyCustom> {
-    const current = await this.ensurePortalVocabularyRow();
-    const list = [...(current[key] ?? [])];
-    const exists = list.some((v) => v.toLowerCase() === value.toLowerCase());
-    if (!exists) list.push(value);
-    const custom: PortalVocabularyCustom = { ...current, [key]: list };
-    await db
-      .insert(cmsPortalVocabulary)
-      .values({ id: 1, custom, updatedBy: userId, updatedAt: new Date() })
-      .onConflictDoUpdate({
-        target: cmsPortalVocabulary.id,
-        set: { custom, updatedBy: userId, updatedAt: new Date() },
-      });
-    return custom;
+    return this.mutatePortalVocabulary(userId, (current) => {
+      const list = [...(current[key] ?? [])];
+      const exists = list.some((v) => v.toLowerCase() === value.toLowerCase());
+      if (!exists) list.push(value);
+      return { ...current, [key]: list };
+    });
   }
 
   async removePortalVocabularyEntry(
@@ -550,17 +597,10 @@ export class DatabaseStorage implements IStorage {
     value: string,
     userId: string,
   ): Promise<PortalVocabularyCustom> {
-    const current = await this.ensurePortalVocabularyRow();
-    const list = (current[key] ?? []).filter((v) => v.toLowerCase() !== value.toLowerCase());
-    const custom: PortalVocabularyCustom = { ...current, [key]: list };
-    await db
-      .insert(cmsPortalVocabulary)
-      .values({ id: 1, custom, updatedBy: userId, updatedAt: new Date() })
-      .onConflictDoUpdate({
-        target: cmsPortalVocabulary.id,
-        set: { custom, updatedBy: userId, updatedAt: new Date() },
-      });
-    return custom;
+    return this.mutatePortalVocabulary(userId, (current) => {
+      const list = (current[key] ?? []).filter((v) => v.toLowerCase() !== value.toLowerCase());
+      return { ...current, [key]: list };
+    });
   }
 }
 

@@ -205,3 +205,121 @@ export function readAllManthrasSkeleton(): AllManthraRow[] | null {
     return null; // schema drift / locked / any error → REST fallback
   }
 }
+
+/** A lightweight grantha "card" row for the names-first Granthas list: scalar fields
+ *  the grid needs, plus lightweight section + teeka metadata (no intro/translations/
+ *  cover/full mantras — the editor re-fetches those on open). Mirrors the fields the
+ *  REST `/api/strapi/granthas` list item exposes that the card + merge actually read. */
+export interface GranthaLiteRow {
+  documentId: string;
+  GranthaName: string | null;
+  GranthaType: string | null;
+  BhashyamName: string | null;
+  BhashyamAuthor: string | null;
+  slug: string | null;
+  order: number | null;
+  sections: Array<{
+    documentId: string;
+    title: string | null;
+    type: string | null;
+    order: number | null;
+    parent: { documentId: string } | null;
+  }>;
+  teekas: Array<{ documentId: string; TeekaName: string | null }>;
+}
+
+/**
+ * Return every PUBLISHED grantha with just the fields the Granthas grid needs — name,
+ * type, bhashya labels, and lightweight section + teeka metadata — read straight from
+ * Strapi's co-located SQLite file (~milliseconds). Returns `null` if the DB isn't
+ * reachable / the query fails so the caller falls back to REST.
+ *
+ * WHY: the Granthas tab's `/api/strapi/granthas` deep-populates intro + translations +
+ * cover + teekas and returns every heavy scalar field (introduction_to_text_english)
+ * for all 130+ granthas — ~2.5MB, seconds — none of which the CARDS use (the editor
+ * re-fetches deep data on open). This lean read powers a names-first list instantly.
+ *
+ * Section→grantha and teeka→grantha links are joined by grantha document_id (not a
+ * single row id) because a Strapi v5 document has draft + published rows and the link
+ * may sit on either — same reasoning as readGranthaManthraSkeleton.
+ */
+export function readAllGranthasLite(): GranthaLiteRow[] | null {
+  const conn = getDb();
+  if (!conn) return null;
+  try {
+    const granthas = conn
+      .prepare(
+        `select g.document_id as documentId, g.grantha_name as GranthaName,
+                g.grantha_type as GranthaType, g.bhashyam_name as BhashyamName,
+                g.bhashyam_author as BhashyamAuthor, g.slug as slug, g."order" as ord
+         from granthas g
+         where g.published_at is not null
+         group by g.document_id
+         order by g.grantha_name asc`,
+      )
+      .all() as any[];
+
+    const sectionRows = conn
+      .prepare(
+        `select g.document_id as granthaDocId, sec.document_id as documentId,
+                sec.title as title, sec.type as type, sec."order" as ord,
+                psec.document_id as parentDocId
+         from sections sec
+         join sections_grantha_lnk sg on sg.section_id = sec.id
+         join granthas g on g.id = sg.grantha_id
+         left join sections_parent_lnk sp on sp.section_id = sec.id
+         left join sections psec on psec.id = sp.inv_section_id
+         where sec.published_at is not null
+         group by sec.id`,
+      )
+      .all() as any[];
+
+    const teekaRows = conn
+      .prepare(
+        `select g.document_id as granthaDocId, t.document_id as documentId,
+                t.teeka_name as TeekaName
+         from teekas t
+         join teekas_grantha_lnk tg on tg.teeka_id = t.id
+         join granthas g on g.id = tg.grantha_id
+         where t.published_at is not null
+         group by t.id`,
+      )
+      .all() as any[];
+
+    const sectionsByGrantha = new Map<string, GranthaLiteRow["sections"]>();
+    for (const s of sectionRows) {
+      if (!s.granthaDocId) continue;
+      let arr = sectionsByGrantha.get(s.granthaDocId);
+      if (!arr) sectionsByGrantha.set(s.granthaDocId, (arr = []));
+      arr.push({
+        documentId: s.documentId,
+        title: s.title ?? null,
+        type: s.type ?? null,
+        order: s.ord ?? null,
+        parent: s.parentDocId ? { documentId: s.parentDocId } : null,
+      });
+    }
+
+    const teekasByGrantha = new Map<string, GranthaLiteRow["teekas"]>();
+    for (const t of teekaRows) {
+      if (!t.granthaDocId) continue;
+      let arr = teekasByGrantha.get(t.granthaDocId);
+      if (!arr) teekasByGrantha.set(t.granthaDocId, (arr = []));
+      arr.push({ documentId: t.documentId, TeekaName: t.TeekaName ?? null });
+    }
+
+    return granthas.map((g) => ({
+      documentId: g.documentId,
+      GranthaName: g.GranthaName ?? null,
+      GranthaType: g.GranthaType ?? null,
+      BhashyamName: g.BhashyamName ?? null,
+      BhashyamAuthor: g.BhashyamAuthor ?? null,
+      slug: g.slug ?? null,
+      order: g.ord ?? null,
+      sections: sectionsByGrantha.get(g.documentId) ?? [],
+      teekas: teekasByGrantha.get(g.documentId) ?? [],
+    }));
+  } catch {
+    return null; // schema drift / locked / any error → REST fallback
+  }
+}

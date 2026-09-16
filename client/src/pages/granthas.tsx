@@ -1858,12 +1858,13 @@ export default function GranthasPage() {
   }, [editingManthra?.adhyayaId, editingManthra?.khandaId, editingManthra?.padaId, editingManthra?.manthraId]);
 
   // Data
-  // The granthas list is a large, deep-populated payload. Don't poll it on a timer or
-  // re-fetch on every mount — that re-downloaded the whole list every 30s and on each
-  // tab visit. A 60s staleTime serves the cached copy across navigation/focus; writes
-  // still invalidate the query explicitly, and the server keeps its own warm copy.
+  // Names-first: the grid renders from the LITE grantha list (name + type + bhashya
+  // labels + lightweight section/teeka metadata), served from SQLite in ~ms instead of
+  // the multi-second deep payload. The editor re-fetches deep data per grantha on open
+  // (openEdit → /api/strapi/granthas/:docId), so the cards never need it. Prefix-keyed
+  // under ["/api/strapi","granthas",…] so existing granthas invalidations still match.
   const { data, isLoading } = useQuery<StrapiResponse<StrapiGrantha>>({
-    queryKey: ["/api/strapi", "granthas"],
+    queryKey: ["/api/strapi", "granthas", "lite"],
     staleTime: 60_000,
     refetchOnWindowFocus: false,
   });
@@ -2446,6 +2447,10 @@ export default function GranthasPage() {
     let mergeDraftName: GranthaNameTranslationEntry[] = [];
     let mergeStrapiBHForFallback: any = undefined;
     let mergeStrapiGTForFallback: any[] | undefined = undefined;
+    // For a PUBLISHED grantha the list is now "lite" (no intro/cover/introVideo/deep
+    // fields), so those come from the per-grantha deep fetch (strapiGranthaOne) after it
+    // resolves — preferring any in-progress draft override captured here.
+    let savedDataForDeep: any = null;
 
     if (item._isDraft) {
       // Local draft that is editing an existing Strapi grantha.
@@ -2518,6 +2523,7 @@ export default function GranthasPage() {
 
       loadedDraftId = matchingDraft?.id ?? null;
       setEditingDraftId(loadedDraftId);
+      savedDataForDeep = savedData ?? null;
 
       // For each field: prefer saved portal draft value (already in portal format)
       // and fall back to Strapi data (which needs mapping) when draft has nothing.
@@ -2759,6 +2765,36 @@ export default function GranthasPage() {
     const gtMergeSource = strapiGranthaOne?.GranthaNameTranslations ?? mergeStrapiGTForFallback;
     setOtherTranslations(mergeBhashyakaraPortalOtherTranslations(mergeDraftOther, bhMergeSource));
     setGranthaNameTranslations(mergeGranthaNameTranslationsPortal(mergeDraftName, gtMergeSource));
+
+    // Published grantha: the grid list is "lite", so the deep fields (intro text,
+    // Bhashyakara introduction, cover image, intro video) come from the per-grantha
+    // deep fetch here — preferring an in-progress draft override when present. Draft
+    // branches already populated these from their own draft data above, so skip them.
+    if (!item._isDraft && strapiGranthaOne) {
+      const sd = savedDataForDeep;
+      setFormData((prev) => ({
+        ...prev,
+        IntroductionToTextEnglish: hasBlocks(sd?.IntroductionToTextEnglish)
+          ? sd.IntroductionToTextEnglish
+          : strapiGranthaOne.IntroductionToTextEnglish || [],
+        BhashyakaraIntroductionSanskrit: hasBlocks(sd?.BhashyakaraIntroductionSanskrit)
+          ? sd.BhashyakaraIntroductionSanskrit
+          : strapiGranthaOne.BhashyakaraIntroduction?.SanskritTextEntry || [],
+        BhashyakaraIntroductionEnglish: hasBlocks(sd?.BhashyakaraIntroductionEnglish)
+          ? sd.BhashyakaraIntroductionEnglish
+          : strapiGranthaOne.BhashyakaraIntroduction?.EnglishTranslationText || [],
+        BhashyakaraIntroductionIAST: hasBlocks(sd?.BhashyakaraIntroductionIAST)
+          ? sd.BhashyakaraIntroductionIAST
+          : strapiGranthaOne.BhashyakaraIntroduction?.IASTTransliteration || [],
+        introVideoId: prev.introVideoId || strapiGranthaOne.introVideoId || "",
+        introVideoTitle: prev.introVideoTitle || strapiGranthaOne.introVideoTitle || "",
+        // Live Strapi cover wins (cover edits write to Strapi immediately); keep any
+        // draft-overlay cover only as a fallback for a not-yet-published grantha.
+        coverImage: strapiGranthaOne.coverImage || prev.coverImage || null,
+        slug: prev.slug || strapiGranthaOne.slug || "",
+        order: prev.order || (strapiGranthaOne.order != null ? String(strapiGranthaOne.order) : ""),
+      }));
+    }
 
     // Hierarchy: prefer portal draft (or linked-draft hierarchy); fall back to reconstructing from Strapi sections.
     const hierToUse2 =

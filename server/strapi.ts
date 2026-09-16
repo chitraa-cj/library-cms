@@ -25,7 +25,7 @@ import {
   invalidateBySectionDocId,
   invalidateAllBulkCache,
 } from "./grantha-bulk-cache";
-import { readGranthaManthraSkeleton, readAllManthrasSkeleton } from "./strapi-sqlite-skeleton";
+import { readGranthaManthraSkeleton, readAllManthrasSkeleton, readAllGranthasLite } from "./strapi-sqlite-skeleton";
 import { cachedList, invalidateListCache } from "./list-cache";
 import {
   fromStrapiVideoResource,
@@ -184,6 +184,17 @@ export async function uploadToStrapi(
     return JSON.parse(text);
   } finally {
     clearTimeout(timer);
+  }
+}
+
+/** Drop the cached list(s) affected by a write to `ctPath`. Grantha and teeka writes
+ *  also change the Granthas grid (teeka names + counts show on cards), so they clear
+ *  both the deep and the names-first (lite) grantha lists. */
+function invalidateContentTypeListCaches(ctPath: string): void {
+  invalidateListCache(`list:${ctPath}`);
+  if (ctPath === "granthas" || ctPath === "teekas") {
+    invalidateListCache("list:granthas");
+    invalidateListCache("list:granthas-lite");
   }
 }
 
@@ -1671,6 +1682,79 @@ export function createStrapiRouter() {
     }
   });
 
+  // ── Granthas LITE list: names + card metadata only (names-first loading) ──
+  // Registered BEFORE the generic /granthas/:documentId so "lite" isn't matched as a
+  // documentId. Powers the Granthas tab's instant initial render: name, type, bhashya
+  // labels, and lightweight section + teeka metadata — NOT the heavy intro/translations/
+  // full scalar fields the deep list returns. The editor re-fetches deep data on open.
+  router.get("/granthas/lite", async (_req, res) => {
+    try {
+      const payload = await cachedList("list:granthas-lite", 30_000, async () => {
+        // FAST PATH: read straight from Strapi's co-located SQLite file (~ms).
+        const lite = readAllGranthasLite();
+        if (lite) {
+          return {
+            data: lite,
+            meta: { pagination: { page: 1, pageSize: lite.length, pageCount: 1, total: lite.length }, source: "sqlite" },
+          };
+        }
+
+        // FALLBACK (SQLite unavailable): light REST — restricted grantha fields + teeka
+        // names + section meta, NO deep populate. Paginates both to stay complete.
+        const GRANTHA_LITE = [
+          "fields[0]=documentId", "fields[1]=GranthaName", "fields[2]=GranthaType",
+          "fields[3]=BhashyamName", "fields[4]=BhashyamAuthor", "fields[5]=slug", "fields[6]=order",
+          "populate[teekas][fields][0]=documentId", "populate[teekas][fields][1]=TeekaName",
+          "pagination[pageSize]=100", "sort=GranthaName:asc",
+        ].join("&");
+        const SECTION_META = [
+          "fields[0]=documentId", "fields[1]=title", "fields[2]=type", "fields[3]=order",
+          "populate[grantha][fields][0]=documentId", "populate[parent][fields][0]=documentId",
+          "pagination[pageSize]=100",
+        ].join("&");
+
+        const { data: allGranthas } = await fetchAllStrapiPages(
+          (page) => `/api/granthas?${GRANTHA_LITE}&pagination[page]=${page}`,
+        );
+        const { data: allSectionsMeta } = await fetchAllStrapiPages(
+          (page) => `/api/sections?${SECTION_META}&pagination[page]=${page}`,
+        );
+
+        const sectionsByGrantha = new Map<string, any[]>();
+        for (const s of allSectionsMeta) {
+          const gDocId = s.grantha?.documentId;
+          if (!gDocId) continue;
+          if (!sectionsByGrantha.has(gDocId)) sectionsByGrantha.set(gDocId, []);
+          sectionsByGrantha.get(gDocId)!.push({
+            documentId: s.documentId, title: s.title, type: s.type, order: s.order,
+            parent: s.parent ? { documentId: s.parent.documentId } : null,
+          });
+        }
+        const data = allGranthas.map((g: any) => ({
+          documentId: g.documentId,
+          GranthaName: g.GranthaName ?? null,
+          GranthaType: g.GranthaType ?? null,
+          BhashyamName: g.BhashyamName ?? null,
+          BhashyamAuthor: g.BhashyamAuthor ?? null,
+          slug: g.slug ?? null,
+          order: g.order ?? null,
+          sections: sectionsByGrantha.get(g.documentId) ?? [],
+          teekas: (g.teekas ?? []).map((t: any) => ({ documentId: t.documentId, TeekaName: t.TeekaName ?? null })),
+        }));
+        return {
+          data,
+          meta: { pagination: { page: 1, pageSize: data.length, pageCount: 1, total: data.length }, source: "rest" },
+        };
+      });
+      res.json(payload);
+    } catch (error: any) {
+      if (error.status === 404) {
+        return res.json({ data: [], meta: { pagination: { page: 1, pageSize: 25, pageCount: 0, total: 0 } } });
+      }
+      res.status(500).json({ message: error.message || "Failed to fetch granthas (lite)" });
+    }
+  });
+
   // ── Video resources: resolve the video(s) for a node with inherit-with-fallback ──
   // Must be registered BEFORE the generic `/video-resources/:documentId` route below,
   // otherwise Express matches "for-node" as a documentId.
@@ -1801,7 +1885,7 @@ export function createStrapiRouter() {
           method: "POST",
           body: JSON.stringify({ data: req.body }),
         });
-        invalidateListCache(`list:${ct.path}`);
+        invalidateContentTypeListCaches(ct.path);
         res.status(201).json(data);
       } catch (error: any) {
         res.status(500).json({ message: error.message || "Failed to create entry" });
@@ -1817,7 +1901,7 @@ export function createStrapiRouter() {
             body: JSON.stringify({ data: req.body }),
           }
         );
-        invalidateListCache(`list:${ct.path}`);
+        invalidateContentTypeListCaches(ct.path);
         res.json(data);
       } catch (error: any) {
         res.status(500).json({ message: error.message || "Failed to update entry" });
@@ -1845,7 +1929,7 @@ export function createStrapiRouter() {
         if (draft) {
           await storage.deleteDraftById(draft.id);
         }
-        invalidateListCache(`list:${ct.path}`);
+        invalidateContentTypeListCaches(ct.path);
         res.json(data);
       } catch (error: any) {
         res.status(500).json({ message: error.message || "Failed to delete entry" });

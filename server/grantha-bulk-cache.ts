@@ -86,6 +86,7 @@ export function invalidateGranthaBulkCache(granthaDocId: string): void {
   // cached envelopes so the next tab load reflects the write.
   invalidateListCache("list:manthras");
   invalidateListCache("list:granthas");
+  invalidateListCache("list:granthas-lite");
 }
 
 /**

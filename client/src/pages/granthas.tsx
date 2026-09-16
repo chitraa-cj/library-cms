@@ -46,7 +46,6 @@ import {
   type TextAndTranslation,
 } from "@shared/schema";
 import StrapiSyncBar from "@/components/strapi-sync-bar";
-import { STRAPI_POLL_INTERVAL } from "@/hooks/use-strapi-sync";
 import {
   blocksToText,
   entryContentCharCount,
@@ -1859,10 +1858,14 @@ export default function GranthasPage() {
   }, [editingManthra?.adhyayaId, editingManthra?.khandaId, editingManthra?.padaId, editingManthra?.manthraId]);
 
   // Data
+  // The granthas list is a large, deep-populated payload. Don't poll it on a timer or
+  // re-fetch on every mount — that re-downloaded the whole list every 30s and on each
+  // tab visit. A 60s staleTime serves the cached copy across navigation/focus; writes
+  // still invalidate the query explicitly, and the server keeps its own warm copy.
   const { data, isLoading } = useQuery<StrapiResponse<StrapiGrantha>>({
     queryKey: ["/api/strapi", "granthas"],
-    refetchInterval: STRAPI_POLL_INTERVAL,
-    refetchOnWindowFocus: true,
+    staleTime: 60_000,
+    refetchOnWindowFocus: false,
   });
 
   const {

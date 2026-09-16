@@ -80,7 +80,6 @@ import {
   invalidateManthraCache,
   invalidateManthraCacheOnDocIdCorrection,
 } from "@/lib/mantra-cms-cache";
-import { STRAPI_POLL_INTERVAL } from "@/hooks/use-strapi-sync";
 
 const EMPTY_TT: TextAndTranslation = {
   SanskritTextEntry: "",
@@ -201,11 +200,15 @@ export default function ManthrasPage() {
     wordMeanings: [] as (WordMeaning & { _id: string })[],
   });
 
+  // The Mantras tab loads the ENTIRE manthra collection. Don't poll it on a timer or
+  // force a full re-fetch on every mount/focus — that re-downloaded everything each
+  // time and was the main cause of the multi-minute load. A 60s staleTime serves the
+  // cached copy across navigation; writes invalidate the query explicitly, and the
+  // server keeps its own warm (SQLite-backed) copy.
   const { data, isLoading } = useQuery<StrapiResponse<StrapiManthra>>({
     queryKey: ["/api/strapi", "manthras"],
-    refetchInterval: STRAPI_POLL_INTERVAL,
-    refetchOnWindowFocus: true,
-    refetchOnMount: "always",
+    staleTime: 60_000,
+    refetchOnWindowFocus: false,
   });
 
   const { data: sectionsData } = useQuery<StrapiResponse<StrapiSection>>({

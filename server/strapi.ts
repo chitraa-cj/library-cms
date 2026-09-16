@@ -25,7 +25,8 @@ import {
   invalidateBySectionDocId,
   invalidateAllBulkCache,
 } from "./grantha-bulk-cache";
-import { readGranthaManthraSkeleton } from "./strapi-sqlite-skeleton";
+import { readGranthaManthraSkeleton, readAllManthrasSkeleton } from "./strapi-sqlite-skeleton";
+import { cachedList, invalidateListCache } from "./list-cache";
 import {
   fromStrapiVideoResource,
   indexVideosByTarget,
@@ -725,52 +726,85 @@ export function createStrapiRouter() {
 
   router.get("/manthras", async (_req, res) => {
     try {
-      // Fetch all pages — Strapi hard-caps pageSize at 100, so we loop until we
-      // have collected every manthra rather than silently dropping page 2+.
-      function normaliseManthra(m: any) {
-        const sec = m.Section;
+      // Cached, stale-while-revalidate: the Mantras tab opens + polls every 30s and
+      // this fetches the WHOLE collection, so serving a warm in-memory copy is what
+      // takes the tab from minutes to instant. Writes invalidate "list:manthras".
+      const payload = await cachedList("list:manthras", 30_000, async () => {
+        // FAST PATH: read every published manthra straight from Strapi's co-located
+        // SQLite file (~tens of ms) instead of paging the REST API with populate
+        // (6–19s per grantha-worth). Returns null on any problem → REST fallback.
+        const skeleton = readAllManthrasSkeleton();
+        if (skeleton) {
+          return {
+            data: skeleton,
+            meta: {
+              pagination: {
+                page: 1,
+                pageSize: skeleton.length,
+                pageCount: 1,
+                total: skeleton.length,
+              },
+              cmsFetch: {
+                rowsReturned: skeleton.length,
+                strapiTotal: skeleton.length,
+                pagesExpected: 1,
+                pagesFetched: 1,
+                complete: true,
+                source: "sqlite",
+              },
+            },
+          };
+        }
+
+        // FALLBACK: Strapi hard-caps pageSize at 100, so loop until we have every
+        // manthra rather than silently dropping page 2+. Fetched in bounded batches
+        // so the remote Strapi isn't hit with dozens of simultaneous requests.
+        function normaliseManthra(m: any) {
+          const sec = m.Section;
+          return {
+            ...m,
+            section: sec ? { id: sec.id, documentId: sec.documentId, title: sec.title, type: sec.type } : null,
+            grantha: sec?.grantha ?? null,
+          };
+        }
+
+        const { data: rawManthras, firstPage, pageCount, total: strapiTotal } =
+          await fetchAllStrapiPages(
+            (page) => `/api/manthras?${MANTHRA_LIST_POPULATE}&pagination[page]=${page}`,
+          );
+        const allManthras: any[] = rawManthras.map(normaliseManthra);
+
+        const fetchComplete = allManthras.length >= strapiTotal;
+        if (!fetchComplete) {
+          console.warn(
+            `[strapi] Manthras list incomplete: fetched ${allManthras.length}/${strapiTotal} (${pageCount} pages)`,
+          );
+        }
+
         return {
-          ...m,
-          section: sec ? { id: sec.id, documentId: sec.documentId, title: sec.title, type: sec.type } : null,
-          grantha: sec?.grantha ?? null,
+          ...firstPage,
+          data: allManthras,
+          meta: {
+            ...(firstPage.meta ?? {}),
+            pagination: {
+              ...(firstPage.meta?.pagination ?? {}),
+              total: strapiTotal,
+              pageCount,
+              pageSize: allManthras.length,
+            },
+            cmsFetch: {
+              rowsReturned: allManthras.length,
+              strapiTotal,
+              pagesExpected: pageCount,
+              pagesFetched: pageCount,
+              complete: fetchComplete,
+              source: "rest",
+            },
+          },
         };
-      }
-
-      // Fetch every page in bounded batches (not all at once) so the remote Strapi isn't
-      // hit with dozens of simultaneous requests — that throttles and slows the whole load.
-      const { data: rawManthras, firstPage, pageCount, total: strapiTotal } =
-        await fetchAllStrapiPages(
-          (page) => `/api/manthras?${MANTHRA_LIST_POPULATE}&pagination[page]=${page}`,
-        );
-      const allManthras: any[] = rawManthras.map(normaliseManthra);
-
-      const fetchComplete = allManthras.length >= strapiTotal;
-      if (!fetchComplete) {
-        console.warn(
-          `[strapi] Manthras list incomplete: fetched ${allManthras.length}/${strapiTotal} (${pageCount} pages)`,
-        );
-      }
-
-      res.json({
-        ...firstPage,
-        data: allManthras,
-        meta: {
-          ...(firstPage.meta ?? {}),
-          pagination: {
-            ...(firstPage.meta?.pagination ?? {}),
-            total: strapiTotal,
-            pageCount,
-            pageSize: allManthras.length,
-          },
-          cmsFetch: {
-            rowsReturned: allManthras.length,
-            strapiTotal,
-            pagesExpected: pageCount,
-            pagesFetched: pageCount,
-            complete: fetchComplete,
-          },
-        },
       });
+
+      res.json(payload);
     } catch (error: any) {
       res.status(500).json({ message: error.message || "Failed to fetch manthras" });
     }
@@ -1547,6 +1581,11 @@ export function createStrapiRouter() {
         return res.json(data);
       }
 
+      // Base list (no custom query): cache the computed envelope, stale-while-revalidate.
+      // The Granthas tab opens + polls this deep-populated list (teekas, translations,
+      // cover, intro) across every page, which is the bulk of its multi-minute load;
+      // serving a warm copy makes repeat loads instant. Grantha writes invalidate it.
+      const cached = await cachedList("list:granthas", 30_000, async () => {
       const granthaPopulate = DEEP_POPULATE["granthas"];
 
       // Fetch granthas and sections metadata in parallel
@@ -1617,10 +1656,13 @@ export function createStrapiRouter() {
         sections: sectionsByGrantha.get(g.documentId) ?? [],
       }));
 
-      return res.json({
+      return {
         data: enriched,
         meta: { pagination: { page: 1, pageSize: enriched.length, pageCount: 1, total: enriched.length } },
+      };
       });
+
+      return res.json(cached);
     } catch (error: any) {
       if (error.status === 404) {
         return res.json({ data: [], meta: { pagination: { page: 1, pageSize: 25, pageCount: 0, total: 0 } } });
@@ -1697,36 +1739,43 @@ export function createStrapiRouter() {
           return res.json(data);
         }
 
-        // No custom query: paginate through ALL pages so we never silently drop records
-        // when a collection has more than Strapi's default 25-item page limit.
-        const firstPage = await strapiRequest(
-          `/api/${ct.plural}?${defaultPopulate}&pagination[page]=1`
-        );
-        const total: number = firstPage?.meta?.pagination?.total ?? 0;
-        const pageSize: number = firstPage?.meta?.pagination?.pageSize ?? 25;
-        const pageCount = Math.ceil(total / pageSize) || 1;
+        // No custom query: cache the full paginated list (stale-while-revalidate) so
+        // heavy collections like teekas don't re-fetch every page on each tab open +
+        // 30s poll. Writes below invalidate `list:${ct.path}`.
+        const payload = await cachedList(`list:${ct.path}`, 30_000, async () => {
+          // Paginate through ALL pages so we never silently drop records when a
+          // collection has more than Strapi's default 25-item page limit.
+          const firstPage = await strapiRequest(
+            `/api/${ct.plural}?${defaultPopulate}&pagination[page]=1`
+          );
+          const total: number = firstPage?.meta?.pagination?.total ?? 0;
+          const pageSize: number = firstPage?.meta?.pagination?.pageSize ?? 25;
+          const pageCount = Math.ceil(total / pageSize) || 1;
 
-        if (pageCount <= 1) {
-          return res.json(firstPage);
-        }
+          if (pageCount <= 1) {
+            return firstPage;
+          }
 
-        const restPages = await Promise.all(
-          Array.from({ length: pageCount - 1 }, (_, i) =>
-            strapiRequest(
-              `/api/${ct.plural}?${defaultPopulate}&pagination[page]=${i + 2}`
+          const restPages = await Promise.all(
+            Array.from({ length: pageCount - 1 }, (_, i) =>
+              strapiRequest(
+                `/api/${ct.plural}?${defaultPopulate}&pagination[page]=${i + 2}`
+              )
             )
-          )
-        );
+          );
 
-        const allData = [
-          ...(firstPage?.data ?? []),
-          ...restPages.flatMap((p: any) => p?.data ?? []),
-        ];
+          const allData = [
+            ...(firstPage?.data ?? []),
+            ...restPages.flatMap((p: any) => p?.data ?? []),
+          ];
 
-        return res.json({
-          data: allData,
-          meta: { pagination: { page: 1, pageSize: allData.length, pageCount: 1, total: allData.length } },
+          return {
+            data: allData,
+            meta: { pagination: { page: 1, pageSize: allData.length, pageCount: 1, total: allData.length } },
+          };
         });
+
+        return res.json(payload);
       } catch (error: any) {
         if (error.status === 404) {
           return res.json({ data: [], meta: { pagination: { page: 1, pageSize: 25, pageCount: 0, total: 0 } } });
@@ -1752,6 +1801,7 @@ export function createStrapiRouter() {
           method: "POST",
           body: JSON.stringify({ data: req.body }),
         });
+        invalidateListCache(`list:${ct.path}`);
         res.status(201).json(data);
       } catch (error: any) {
         res.status(500).json({ message: error.message || "Failed to create entry" });
@@ -1767,6 +1817,7 @@ export function createStrapiRouter() {
             body: JSON.stringify({ data: req.body }),
           }
         );
+        invalidateListCache(`list:${ct.path}`);
         res.json(data);
       } catch (error: any) {
         res.status(500).json({ message: error.message || "Failed to update entry" });
@@ -1794,6 +1845,7 @@ export function createStrapiRouter() {
         if (draft) {
           await storage.deleteDraftById(draft.id);
         }
+        invalidateListCache(`list:${ct.path}`);
         res.json(data);
       } catch (error: any) {
         res.status(500).json({ message: error.message || "Failed to delete entry" });

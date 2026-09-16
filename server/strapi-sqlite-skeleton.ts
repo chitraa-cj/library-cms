@@ -125,3 +125,83 @@ export function readGranthaManthraSkeleton(granthaDocId: string): SkeletonManthr
     return null; // schema drift / locked / any error → REST fallback
   }
 }
+
+/** A manthra row for the whole-collection Mantras tab: same preview shape as the
+ *  per-grantha skeleton, but with the Section title/type and the owning grantha
+ *  attached so the tab can group/label rows without a second lookup. */
+export interface AllManthraRow {
+  id: number;
+  documentId: string;
+  ShlokaManthraNumber: string | null;
+  order: number | null;
+  Section: { documentId: string; title: string | null; type: string | null };
+  // Lowercase `section` + `grantha` mirror the REST endpoint's normaliseManthra output,
+  // which is what the Mantras-tab normaliser reads (m.section?.documentId, m.grantha).
+  section: { documentId: string; title: string | null; type: string | null };
+  grantha: { documentId: string; GranthaName: string | null } | null;
+  ShlokaManthraEntry: { SanskritTextEntry: any; EnglishTranslationText: any } | null;
+}
+
+/**
+ * Return EVERY published manthra across all granthas (label + section + grantha +
+ * Sanskrit/English preview) for the Mantras tab, or `null` if the SQLite DB isn't
+ * reachable / the query fails — caller must fall back to the REST pagination path.
+ *
+ * WHY: the Mantras tab's `/api/strapi/manthras` fetches the entire collection over
+ * Strapi REST with populate, page by page (6–19s per grantha-worth) — minutes for a
+ * large corpus. The same rows read straight from the co-located SQLite file take tens
+ * of milliseconds. Shape mirrors the REST list (Section + grantha) so the tab's
+ * normaliser renders from it with no client change; published-only matches the REST
+ * default (drafts load via a separate query).
+ */
+export function readAllManthrasSkeleton(): AllManthraRow[] | null {
+  const conn = getDb();
+  if (!conn) return null;
+  try {
+    // Same document_id-based join as readGranthaManthraSkeleton (links may sit on the
+    // draft OR published grantha row); `group by m.id` collapses the duplicate paths.
+    const rows = conn
+      .prepare(
+        `select m.id as id, m.document_id as documentId, m.shloka_manthra_number as num,
+                m."order" as ord,
+                sec.document_id as sectionDocId, sec.title as sectionTitle, sec.type as sectionType,
+                g.document_id as granthaDocId, g.grantha_name as granthaName,
+                tt.sanskrit_text_entry as skt, tt.english_translation_text as eng
+         from manthras m
+         join manthras_section_lnk ml on ml.manthra_id = m.id
+         join sections sec on sec.id = ml.section_id
+         join sections_grantha_lnk sg on sg.section_id = ml.section_id
+         join granthas g on g.id = sg.grantha_id
+         left join manthras_cmps mc on mc.entity_id = m.id and mc.field = 'ShlokaManthraEntry'
+         left join components_shared_text_and_translations tt on tt.id = mc.cmp_id
+         where m.published_at is not null
+         group by m.id
+         order by g.grantha_name asc, m."order" asc`,
+      )
+      .all() as any[];
+    return rows.map((r) => {
+      const section = {
+        documentId: r.sectionDocId,
+        title: r.sectionTitle ?? null,
+        type: r.sectionType ?? null,
+      };
+      return {
+        id: r.id,
+        documentId: r.documentId,
+        ShlokaManthraNumber: r.num ?? null,
+        order: r.ord ?? null,
+        Section: section,
+        section,
+        grantha: r.granthaDocId
+          ? { documentId: r.granthaDocId, GranthaName: r.granthaName ?? null }
+          : null,
+        ShlokaManthraEntry:
+          r.skt || r.eng
+            ? { SanskritTextEntry: parseBlocks(r.skt), EnglishTranslationText: parseBlocks(r.eng) }
+            : null,
+      };
+    });
+  } catch {
+    return null; // schema drift / locked / any error → REST fallback
+  }
+}

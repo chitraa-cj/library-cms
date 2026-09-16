@@ -19,6 +19,8 @@
 // instance's write will not invalidate this instance's cache; the short TTL bounds
 // that staleness. Mirrors the sectionReadCache precedent in routes.ts.
 
+import { invalidateListCache } from "./list-cache";
+
 type BulkKind = "sections" | "teekas" | "full";
 
 // Sections change rarely mid-session but structural inserts must show up quickly;
@@ -80,6 +82,10 @@ export function invalidateGranthaBulkCache(granthaDocId: string): void {
   for (const kind of ["sections", "teekas", "full"] as BulkKind[]) {
     cache.delete(keyFor(kind, granthaDocId));
   }
+  // The top-level Mantras/Granthas tab lists include this grantha's rows — drop their
+  // cached envelopes so the next tab load reflects the write.
+  invalidateListCache("list:manthras");
+  invalidateListCache("list:granthas");
 }
 
 /**
@@ -101,4 +107,5 @@ export function invalidateBySectionDocId(sectionDocId: string): boolean {
 /** Nuclear flush — used when a write cannot be mapped to a grantha. */
 export function invalidateAllBulkCache(): void {
   cache.clear();
+  invalidateListCache(); // also drop every cached top-level list
 }

@@ -57,7 +57,6 @@ import {
   ChevronRight,
   Lock,
   Eye,
-  AlertTriangle,
 } from "lucide-react";
 import { blocksToText, textToBlocks } from "@/lib/strapi-blocks";
 import {
@@ -200,16 +199,24 @@ export default function ManthrasPage() {
     wordMeanings: [] as (WordMeaning & { _id: string })[],
   });
 
-  // The Mantras tab loads the ENTIRE manthra collection. Don't poll it on a timer or
-  // force a full re-fetch on every mount/focus — that re-downloaded everything each
-  // time and was the main cause of the multi-minute load. A 60s staleTime serves the
-  // cached copy across navigation; writes invalidate the query explicitly, and the
-  // server keeps its own warm (SQLite-backed) copy.
-  const { data, isLoading } = useQuery<StrapiResponse<StrapiManthra>>({
-    queryKey: ["/api/strapi", "manthras"],
+  // Progressive drill-down: the Mantras tab no longer loads all ~28k verses. The
+  // grantha picker comes from the lite grantha list; a grantha's verses load on demand
+  // when one is picked; and search hits a bounded cross-grantha endpoint. Nothing loads
+  // the whole collection or renders 28k rows into the DOM at once.
+  const { data: granthasLiteData, isLoading: isLoadingGranthas } = useQuery<StrapiResponse<any>>({
+    queryKey: ["/api/strapi", "granthas", "lite"],
     staleTime: 60_000,
     refetchOnWindowFocus: false,
   });
+  const granthasList: any[] = granthasLiteData?.data ?? [];
+
+  // Debounce the search box so we don't fire a request per keystroke.
+  const [debouncedSearch, setDebouncedSearch] = useState("");
+  useEffect(() => {
+    const t = setTimeout(() => setDebouncedSearch(searchQuery.trim()), 250);
+    return () => clearTimeout(t);
+  }, [searchQuery]);
+  const searchActive = debouncedSearch.length >= 2;
 
   const { data: sectionsData } = useQuery<StrapiResponse<StrapiSection>>({
     queryKey: ["/api/strapi", "sections"],
@@ -264,18 +271,17 @@ export default function ManthrasPage() {
     );
   }, [unifiedPendingData, granthaDrafts]);
 
-  // Derive unique granthas from sections AND from manthras data
+  // Unique granthas for the picker + filter dropdown — from the lite grantha list
+  // (authoritative), supplemented by sections and pending-draft granthas.
   const allGranthasFromSections = useMemo(() => {
     const seen = new Set<string>();
     const result: { name: string }[] = [];
-    // From sections
-    allSections.forEach((s) => {
-      const name = (s as any).grantha?.GranthaName;
+    granthasList.forEach((g: any) => {
+      const name = g.GranthaName;
       if (name && !seen.has(name)) { seen.add(name); result.push({ name }); }
     });
-    // From published manthras (m.grantha is the top-level field set by server normalization)
-    (data?.data || []).forEach((m: any) => {
-      const name = m.grantha?.GranthaName;
+    allSections.forEach((s) => {
+      const name = (s as any).grantha?.GranthaName;
       if (name && !seen.has(name)) { seen.add(name); result.push({ name }); }
     });
     pendingGranthaMantras.forEach((p) => {
@@ -285,7 +291,23 @@ export default function ManthrasPage() {
       }
     });
     return result.sort((a, b) => a.name.localeCompare(b.name));
-  }, [allSections, data, pendingGranthaMantras]);
+  }, [granthasList, allSections, pendingGranthaMantras]);
+
+  // Grantha name → documentId, needed to fetch a picked grantha's verses on demand.
+  const granthaNameToDocId = useMemo(() => {
+    const m = new Map<string, string>();
+    for (const g of granthasList) if (g.GranthaName) m.set(g.GranthaName, g.documentId);
+    for (const s of allSections) {
+      const gn = (s as any).grantha?.GranthaName;
+      const gd = (s as any).grantha?.documentId;
+      if (gn && gd && !m.has(gn)) m.set(gn, gd);
+    }
+    return m;
+  }, [granthasList, allSections]);
+
+  // The drill-down "selected grantha": whichever the Grantha filter points at.
+  const selectedGranthaDocId =
+    filterGrantha === "__all__" ? null : (granthaNameToDocId.get(filterGrantha) ?? null);
 
   // Sections filtered by selected grantha (for filter dropdown cascading)
   const sectionsForFilter = useMemo(() => {
@@ -293,28 +315,68 @@ export default function ManthrasPage() {
     return allSections.filter((s) => (s as any).grantha?.GranthaName === filterGrantha);
   }, [allSections, filterGrantha]);
 
-  // Build a fast lookup: sectionDocId → section (with grantha) from the sections list.
-  // This is used to fill in missing grantha data on manthras where Strapi's nested
-  // populate didn't return the grantha (Strapi v5 nested populate can silently omit
-  // sub-relations for some records when the response is very large).
   const sectionByDocId = useMemo(() => buildSectionByDocIdMap(allSections), [allSections]);
 
+  // On-demand: the picked grantha's sections + verse skeleton (SQLite-backed, cached).
+  const { data: granthaVersesData, isFetching: isFetchingVerses } = useQuery<StrapiResponse<any>>({
+    queryKey: ["/api/strapi/sections/by-grantha", selectedGranthaDocId],
+    enabled: !!selectedGranthaDocId && !searchActive,
+    staleTime: 60_000,
+    refetchOnWindowFocus: false,
+  });
+
+  const perGranthaManthras = useMemo(() => {
+    const sections = granthaVersesData?.data ?? [];
+    const rows: any[] = [];
+    for (const sec of sections) {
+      const grantha = sec.grantha
+        ? { documentId: sec.grantha.documentId, GranthaName: sec.grantha.GranthaName }
+        : selectedGranthaDocId
+          ? { documentId: selectedGranthaDocId, GranthaName: filterGrantha }
+          : null;
+      for (const m of sec.manthras ?? []) {
+        rows.push({
+          id: m.id,
+          documentId: m.documentId,
+          ShlokaManthraNumber: m.ShlokaManthraNumber,
+          order: m.order,
+          ShlokaManthraEntry: m.ShlokaManthraEntry ?? null,
+          section: { documentId: sec.documentId, title: sec.title, type: sec.type },
+          grantha,
+        });
+      }
+    }
+    return rows;
+  }, [granthaVersesData, selectedGranthaDocId, filterGrantha]);
+
+  // On-demand: cross-grantha verse search (bounded, SQLite substring scan).
+  const { data: searchData, isFetching: isSearching } = useQuery<StrapiResponse<any>>({
+    queryKey: ["/api/strapi/manthras/search", debouncedSearch],
+    enabled: searchActive,
+    staleTime: 30_000,
+    refetchOnWindowFocus: false,
+    queryFn: async () => {
+      const res = await fetch(
+        `/api/strapi/manthras/search?q=${encodeURIComponent(debouncedSearch)}`,
+        CMS_FETCH_INIT,
+      );
+      if (!res.ok) throw new Error("Manthra search failed");
+      return res.json();
+    },
+  });
+
+  // Published verses currently in view: search results (global) when searching, else the
+  // picked grantha's verses, else none (the picker is shown instead).
   const strapiManthras = useMemo(() => {
-    return normalizeManthrasForMantrasTab([...(data?.data || [])], allSections as any[]);
-  }, [data, allSections]);
+    const rows = searchActive
+      ? (searchData?.data ?? [])
+      : selectedGranthaDocId
+        ? perGranthaManthras
+        : [];
+    return normalizeManthrasForMantrasTab([...rows], allSections as any[]);
+  }, [searchActive, searchData, selectedGranthaDocId, perGranthaManthras, allSections]);
 
-  const manthrasFetchMeta = (data as { meta?: { cmsFetch?: {
-    rowsReturned?: number;
-    strapiTotal?: number;
-    complete?: boolean;
-  } } } | undefined)?.meta?.cmsFetch;
-
-  const rawManthraCount = data?.data?.length ?? 0;
-  const fetchLooksIncomplete =
-    !!manthrasFetchMeta &&
-    (manthrasFetchMeta.complete === false ||
-      (typeof manthrasFetchMeta.strapiTotal === "number" &&
-        rawManthraCount < manthrasFetchMeta.strapiTotal));
+  const searchTruncated = !!(searchActive && (searchData as any)?.meta?.truncated);
 
   function getGranthaForSection(sectionDocId: string) {
     const sec = allSections.find((s) => s.documentId === sectionDocId);
@@ -730,33 +792,40 @@ export default function ManthrasPage() {
         </Alert>
       )}
 
-      {fetchLooksIncomplete && (
-        <div
-          className="mb-4 flex items-start gap-2 rounded-md border border-amber-300 bg-amber-50 dark:bg-amber-950/30 dark:border-amber-800 px-3 py-2 text-sm text-amber-900 dark:text-amber-200"
-          data-testid="manthras-incomplete-fetch-banner"
-        >
-          <AlertTriangle className="w-4 h-4 shrink-0 mt-0.5" />
-          <div>
-            <p className="font-medium">Incomplete mantra list loaded</p>
-            <p className="text-xs mt-0.5 opacity-90">
-              CMS returned {rawManthraCount} of {manthrasFetchMeta?.strapiTotal ?? "?"} rows.
-              Refresh the page (or use the &quot;Update available&quot; prompt after deploy).
-            </p>
-          </div>
+      {/* Drill-down context: back to the grantha picker + what's currently in view */}
+      {(selectedGranthaDocId || searchActive) && (
+        <div className="mb-3 flex items-center gap-2 text-sm" data-testid="manthras-breadcrumb">
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={() => { setFilterGrantha("__all__"); setFilterSection("__all__"); setSearchQuery(""); }}
+            data-testid="button-back-to-granthas"
+          >
+            ← All granthas
+          </Button>
+          <span className="text-muted-foreground">
+            {searchActive
+              ? <>Search results for &ldquo;{debouncedSearch}&rdquo;</>
+              : <>Viewing <span className="font-medium text-foreground">{filterGrantha}</span></>}
+          </span>
+          {searchTruncated && (
+            <Badge variant="outline" className="text-xs">showing first {strapiManthras.length}</Badge>
+          )}
         </div>
       )}
 
       <div className="rounded-lg border border-border bg-card overflow-hidden">
-        {isLoading || isLoadingDrafts || isLoadingGranthaDrafts || isLoadingUnifiedPending ? (
+        {(isLoadingGranthas || isLoadingDrafts || isLoadingGranthaDrafts || isLoadingUnifiedPending) ||
+        ((isFetchingVerses || isSearching) &&
+          displayedPublished.length === 0 &&
+          displayedDrafts.length === 0 &&
+          displayedPendingGrantha.length === 0) ? (
           <div className="flex justify-center items-center py-20">
             <Loader2 className="w-6 h-6 animate-spin text-muted-foreground" />
           </div>
-        ) : displayedDrafts.length === 0 && displayedPendingGrantha.length === 0 && displayedPublished.length === 0 ? (
-          <div className="py-20 text-center text-muted-foreground">
-            <Hash className="w-10 h-10 mx-auto mb-3 opacity-30" />
-            <p>{hasActiveFilters ? "No manthras match the current filters." : "No manthras found. Add the first manthra above."}</p>
-          </div>
         ) : (
+          <>
+            {displayedDrafts.length > 0 || displayedPendingGrantha.length > 0 || displayedPublished.length > 0 ? (
           <table className="w-full text-sm">
             <thead>
               <tr className="border-b border-border bg-muted/40">
@@ -1037,6 +1106,43 @@ export default function ManthrasPage() {
               })()}
             </tbody>
           </table>
+            ) : (searchActive || selectedGranthaDocId) ? (
+              <div className="py-20 text-center text-muted-foreground">
+                <Hash className="w-10 h-10 mx-auto mb-3 opacity-30" />
+                <p>{searchActive ? "No verses match your search." : "No verses in this grantha yet."}</p>
+              </div>
+            ) : null}
+
+            {/* IDLE: names-first grantha picker — click to load that grantha's verses */}
+            {!searchActive && !selectedGranthaDocId && (
+              <div className="p-4" data-testid="grantha-picker">
+                <p className="px-1 pb-3 text-xs font-medium text-muted-foreground">
+                  {allGranthasFromSections.length} grantha{allGranthasFromSections.length !== 1 ? "s" : ""} — pick one to view its verses, or search above to find a verse across all granthas
+                </p>
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2">
+                  {allGranthasFromSections.map((g) => {
+                    const gDocId = granthaNameToDocId.get(g.name);
+                    const gLocked = gDocId ? lockedDocIds.has(gDocId) : false;
+                    return (
+                      <button
+                        key={g.name}
+                        type="button"
+                        onClick={() => { setFilterGrantha(g.name); setFilterSection("__all__"); }}
+                        className="flex items-center justify-between gap-2 rounded-md border border-border bg-background px-3 py-2.5 text-left text-sm hover:bg-muted/50 transition-colors"
+                        data-testid={`grantha-pick-${g.name}`}
+                      >
+                        <span className="font-medium text-foreground truncate">{g.name}</span>
+                        <span className="flex items-center gap-1 shrink-0 text-muted-foreground">
+                          {gLocked && <Lock className="w-3 h-3 text-orange-500" />}
+                          <ChevronRight className="w-4 h-4" />
+                        </span>
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
+          </>
         )}
       </div>
 

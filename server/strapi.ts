@@ -1142,6 +1142,59 @@ export function createStrapiRouter() {
     }
   });
 
+  // Cross-grantha verse search for the Mantras tab drill-down. Filters the cached full
+  // skeleton (list:manthras — loaded once from SQLite in ~1.3s, then instant for 30s)
+  // in memory by label + Sanskrit/English content. A raw SQL LIKE over the content
+  // block columns was ~3s per query; this is instant once the cache is warm. Registered
+  // BEFORE /manthras/:documentId so "search" isn't matched as a documentId.
+  router.get("/manthras/search", async (req, res) => {
+    try {
+      const q = String(req.query.q ?? "").trim().toLowerCase();
+      const limit = Math.max(1, Math.min(1000, Number(req.query.limit) || 200));
+      if (q.length < 2) {
+        return res.json({ data: [], meta: { query: q, count: 0, truncated: false } });
+      }
+
+      // Reuse the same cached envelope the (SQLite-backed) manthras list builds.
+      const all: any = await cachedList("list:manthras", 30_000, async () => {
+        const skeleton = readAllManthrasSkeleton();
+        if (skeleton) return { data: skeleton };
+        const { data: rawManthras } = await fetchAllStrapiPages(
+          (page) => `/api/manthras?${MANTHRA_LIST_POPULATE}&pagination[page]=${page}`,
+        );
+        return {
+          data: rawManthras.map((m: any) => {
+            const sec = m.Section;
+            return {
+              ...m,
+              section: sec ? { id: sec.id, documentId: sec.documentId, title: sec.title, type: sec.type } : null,
+              grantha: sec?.grantha ?? null,
+            };
+          }),
+        };
+      });
+
+      const rows: any[] = all?.data ?? [];
+      const matched: any[] = [];
+      for (const m of rows) {
+        const num = String(m.ShlokaManthraNumber ?? "").toLowerCase();
+        let hit = num.includes(q);
+        if (!hit && m.ShlokaManthraEntry) {
+          const skt = JSON.stringify(m.ShlokaManthraEntry.SanskritTextEntry ?? "").toLowerCase();
+          const eng = JSON.stringify(m.ShlokaManthraEntry.EnglishTranslationText ?? "").toLowerCase();
+          hit = skt.includes(q) || eng.includes(q);
+        }
+        if (hit) {
+          matched.push(m);
+          if (matched.length >= limit) break;
+        }
+      }
+      res.json({ data: matched, meta: { query: q, count: matched.length, truncated: matched.length >= limit } });
+    } catch (error: any) {
+      res.status(500).json({ message: error.message || "Failed to search manthras" });
+    }
+  });
+
   router.get("/manthras/:documentId", async (req, res) => {
     try {
       const data = await strapiRequest(`/api/manthras/${req.params.documentId}?${MANTHRA_POPULATE}`);

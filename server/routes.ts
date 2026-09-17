@@ -3046,9 +3046,14 @@ async function publishGranthaWithHierarchy(
     if (m?.id && changedManthraIdSet?.has(m.id)) return true; // explicitly content-changed
     const live = liveVerseByDocId.get(docId);
     if (!live) return true; // not found live → publish to be safe
-    // Relabeled? Normalise both sides through the same label logic before comparing.
-    const portalLabel = portalMantraTitleForConfiguredLeaf(m?.ShlokaManthraNumber, diffConfiguredLeaf);
-    const liveLabel = portalMantraTitleForConfiguredLeaf(live.label, diffConfiguredLeaf);
+    // Relabeled? Normalise both sides through the SAME label logic publishManthra uses
+    // (the portal node's label lives in `title`, falling back to ShlokaManthraNumber).
+    const portalLabel = portalMantraTitleForConfiguredLeaf(
+      m?.title || m?.ShlokaManthraNumber,
+      diffConfiguredLeaf,
+      m?.ShlokaManthraNumber,
+    );
+    const liveLabel = portalMantraTitleForConfiguredLeaf(live.label, diffConfiguredLeaf, live.label);
     if (portalLabel !== liveLabel) return true;
     // Moved to a different section?
     if (targetSectionDocId && live.sectionDocId && targetSectionDocId !== live.sectionDocId) return true;

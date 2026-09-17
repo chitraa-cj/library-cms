@@ -27,6 +27,7 @@ import {
   getBhashyamAuthorsAllowlist,
 } from "./cms-vocabulary";
 import { portalVocabularyKeys, type PortalVocabularyKey } from "@shared/schema";
+import { readGranthaManthraSkeleton } from "./strapi-sqlite-skeleton";
 import Database from "better-sqlite3";
 import type { User, Draft } from "@shared/schema";
 import { gzipSync, gunzipSync } from "node:zlib";
@@ -2990,18 +2991,20 @@ async function publishGranthaWithHierarchy(
     draft = { ...draft, strapiDocumentId: undefined };
   }
 
-  // ── Scope-aware verse publishing ────────────────────────────────────────────
-  // When the grantha is ALREADY published and this is an in-place update with NO
-  // structural change and NO deletions — i.e. it was routed to the full publish only
-  // because grantha metadata (name/intro/teekas/…) changed — we do NOT need to
-  // re-publish every verse, only the verses the editor marked changed. This turns a
-  // metadata edit on a 6000-verse grantha from thousands of Strapi writes into a
-  // handful, which is the dominant cause of publish-time Strapi saturation.
+  // ── Diff-based verse publishing ─────────────────────────────────────────────
+  // For an IN-PLACE update on an already-published grantha with NO deletions, publish
+  // only the verses that actually DIFFER from what is currently live — new, edited
+  // (changedManthraIds), relabeled, or moved to a different section — and skip verses
+  // that are byte-identical in placement. This turns "add one verse to a 6000-verse
+  // grantha" (a structural change that used to re-publish all 6000) into a handful of
+  // writes, which is the dominant cause of publish-time Strapi saturation.
   //
-  // Guarded conservatively: any ambiguity (no scope, structural change /
-  // requiresFullPublish, pending deletions, or a fresh rebuild) falls back to
-  // publishing EVERY verse (unchanged behaviour). Safety net: a verse not yet linked
-  // to a real Strapi row (no valid documentId) is ALWAYS published.
+  // Correctness through renumbering: an insert can renumber siblings without marking
+  // them "content changed", so changedManthraIds alone is NOT enough. We read the live
+  // labels + section links once (fast, from Strapi's co-located SQLite) and re-publish
+  // any verse whose label or section no longer matches live. Safety: verses with no
+  // valid Strapi documentId are always published; if the live snapshot can't be read,
+  // or there's no scope, or it's a fresh rebuild, we fall back to publishing EVERYTHING.
   const hasPendingDeletions =
     (Array.isArray(deletedStrapiSectionDocIds) && deletedStrapiSectionDocIds.length > 0) ||
     (Array.isArray(deletedStrapiManthraDocIds) && deletedStrapiManthraDocIds.length > 0);
@@ -3009,23 +3012,47 @@ async function publishGranthaWithHierarchy(
     _publishScope && Array.isArray(_publishScope.changedManthraIds)
       ? (_publishScope.changedManthraIds as string[])
       : null;
-  const scopeLimitVerses =
+  const liveVerseByDocId = new Map<string, { label: string; sectionDocId: string | undefined }>();
+  let diffLimitVerses = false;
+  if (
     !republishFresh &&
     !!draft.strapiDocumentId &&
-    !!_publishScope &&
-    _publishScope.requiresFullPublish === false &&
     !hasPendingDeletions &&
-    scopeChangedManthraIds !== null;
-  const changedManthraIdSet: Set<string> | null = scopeLimitVerses
+    !!_publishScope &&
+    scopeChangedManthraIds !== null
+  ) {
+    const liveSkeleton = readGranthaManthraSkeleton(draft.strapiDocumentId);
+    if (liveSkeleton) {
+      for (const r of liveSkeleton) {
+        if (r.documentId) {
+          liveVerseByDocId.set(r.documentId, {
+            label: r.ShlokaManthraNumber ?? "",
+            sectionDocId: r.Section?.documentId,
+          });
+        }
+      }
+      diffLimitVerses = true;
+    }
+  }
+  const diffConfiguredLeaf = String(structureConfig?.leafName || "Mantra").trim() || "Mantra";
+  const changedManthraIdSet: Set<string> | null = diffLimitVerses
     ? new Set(scopeChangedManthraIds as string[])
     : null;
   let scopeSkippedVerses = 0;
-  const shouldPublishVerse = (m: any): boolean => {
-    if (!changedManthraIdSet) return true; // full publish → publish everything
-    if (m?.id && changedManthraIdSet.has(m.id)) return true; // explicitly changed
-    // Safety net: always publish a verse not yet linked to a real Strapi row.
+  const shouldPublishVerse = (m: any, targetSectionDocId?: string): boolean => {
+    if (!diffLimitVerses) return true; // full publish → publish everything
     const docId = m?.strapiDocumentId;
-    return !(typeof docId === "string" && docId.length >= 10);
+    if (!(typeof docId === "string" && docId.length >= 10)) return true; // new / not linked
+    if (m?.id && changedManthraIdSet?.has(m.id)) return true; // explicitly content-changed
+    const live = liveVerseByDocId.get(docId);
+    if (!live) return true; // not found live → publish to be safe
+    // Relabeled? Normalise both sides through the same label logic before comparing.
+    const portalLabel = portalMantraTitleForConfiguredLeaf(m?.ShlokaManthraNumber, diffConfiguredLeaf);
+    const liveLabel = portalMantraTitleForConfiguredLeaf(live.label, diffConfiguredLeaf);
+    if (portalLabel !== liveLabel) return true;
+    // Moved to a different section?
+    if (targetSectionDocId && live.sectionDocId && targetSectionDocId !== live.sectionDocId) return true;
+    return false; // identical label + section, not content-changed → skip
   };
 
   const granthaPayload = cleanPayloadForStrapi(stripPortalMetaFromGranthaPayload(granthaDataRaw));
@@ -3517,13 +3544,14 @@ async function publishGranthaWithHierarchy(
     const portalSiblings = [...manthras]
       .map((m) => ({ id: m.id, strapiDocumentId: m.strapiDocumentId, order: m.order }))
       .sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
-    // Scope-aware: publish only changed (or not-yet-linked) verses when the guard above
-    // enabled it; still report progress for skipped verses so the bar reaches 100%.
+    // Diff-based: publish only verses that differ from live (new/edited/relabeled/moved)
+    // when the guard above enabled it; still report progress for skipped verses so the
+    // bar reaches 100%.
     let toPublish = manthras;
-    if (changedManthraIdSet) {
+    if (diffLimitVerses) {
       toPublish = [];
       for (const m of manthras) {
-        if (shouldPublishVerse(m)) toPublish.push(m);
+        if (shouldPublishVerse(m, sectionDocId)) toPublish.push(m);
         else {
           scopeSkippedVerses++;
           reportProgress(m.title || m.id, "mantra");
@@ -3811,10 +3839,10 @@ async function publishGranthaWithHierarchy(
     });
     await Promise.all(workers);
 
-    if (scopeLimitVerses) {
+    if (diffLimitVerses) {
       console.log(
-        `[publish] scope-limited: published ${changedManthraIdSet?.size ?? 0} changed verse(s), ` +
-          `skipped ${scopeSkippedVerses} unchanged verse(s) (grantha ${draft.strapiDocumentId})`,
+        `[publish] diff-limited: skipped ${scopeSkippedVerses} unchanged verse(s) ` +
+          `(grantha ${draft.strapiDocumentId})`,
       );
     }
 

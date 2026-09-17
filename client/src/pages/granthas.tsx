@@ -144,10 +144,11 @@ import {
 import { STRAPI_SORT_GAP } from "@shared/mantra-sort-key";
 import { usePortalVocabulary } from "@/hooks/use-portal-vocabulary";
 import OtherTranslationsHermex from "@/components/other-translations-hermex";
-import GranthaCsvImportDialog, {
-  type GranthaCsvImportPayload,
-  type GranthaCsvNewVerse,
-} from "@/components/grantha-csv-import-dialog";
+import GranthaCsvImportDialog from "@/components/grantha-csv-import-dialog";
+import type {
+  GranthaCsvImportPayload,
+  GranthaCsvNewVerse,
+} from "@/lib/grantha-csv-import";
 import { placeCsvCreates } from "@/lib/grantha-csv-placement";
 import {
   postStrapiSection,

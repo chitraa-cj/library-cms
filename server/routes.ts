@@ -2990,6 +2990,44 @@ async function publishGranthaWithHierarchy(
     draft = { ...draft, strapiDocumentId: undefined };
   }
 
+  // ── Scope-aware verse publishing ────────────────────────────────────────────
+  // When the grantha is ALREADY published and this is an in-place update with NO
+  // structural change and NO deletions — i.e. it was routed to the full publish only
+  // because grantha metadata (name/intro/teekas/…) changed — we do NOT need to
+  // re-publish every verse, only the verses the editor marked changed. This turns a
+  // metadata edit on a 6000-verse grantha from thousands of Strapi writes into a
+  // handful, which is the dominant cause of publish-time Strapi saturation.
+  //
+  // Guarded conservatively: any ambiguity (no scope, structural change /
+  // requiresFullPublish, pending deletions, or a fresh rebuild) falls back to
+  // publishing EVERY verse (unchanged behaviour). Safety net: a verse not yet linked
+  // to a real Strapi row (no valid documentId) is ALWAYS published.
+  const hasPendingDeletions =
+    (Array.isArray(deletedStrapiSectionDocIds) && deletedStrapiSectionDocIds.length > 0) ||
+    (Array.isArray(deletedStrapiManthraDocIds) && deletedStrapiManthraDocIds.length > 0);
+  const scopeChangedManthraIds =
+    _publishScope && Array.isArray(_publishScope.changedManthraIds)
+      ? (_publishScope.changedManthraIds as string[])
+      : null;
+  const scopeLimitVerses =
+    !republishFresh &&
+    !!draft.strapiDocumentId &&
+    !!_publishScope &&
+    _publishScope.requiresFullPublish === false &&
+    !hasPendingDeletions &&
+    scopeChangedManthraIds !== null;
+  const changedManthraIdSet: Set<string> | null = scopeLimitVerses
+    ? new Set(scopeChangedManthraIds as string[])
+    : null;
+  let scopeSkippedVerses = 0;
+  const shouldPublishVerse = (m: any): boolean => {
+    if (!changedManthraIdSet) return true; // full publish → publish everything
+    if (m?.id && changedManthraIdSet.has(m.id)) return true; // explicitly changed
+    // Safety net: always publish a verse not yet linked to a real Strapi row.
+    const docId = m?.strapiDocumentId;
+    return !(typeof docId === "string" && docId.length >= 10);
+  };
+
   const granthaPayload = cleanPayloadForStrapi(stripPortalMetaFromGranthaPayload(granthaDataRaw));
 
   // BhashyamAuthor is a Strapi enum that only accepts the two canonical grantha
@@ -3474,15 +3512,30 @@ async function publishGranthaWithHierarchy(
     Math.max(4, Number(process.env.PUBLISH_MANTHRA_CONCURRENCY) || 10),
   );
   const publishManthrasBatch = async (manthras: any[], sectionDocId: string | undefined): Promise<void> => {
+    // portalSiblings must reflect ALL siblings (for stable sort-key derivation), even
+    // when scope-limiting skips publishing some of them.
     const portalSiblings = [...manthras]
       .map((m) => ({ id: m.id, strapiDocumentId: m.strapiDocumentId, order: m.order }))
       .sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
+    // Scope-aware: publish only changed (or not-yet-linked) verses when the guard above
+    // enabled it; still report progress for skipped verses so the bar reaches 100%.
+    let toPublish = manthras;
+    if (changedManthraIdSet) {
+      toPublish = [];
+      for (const m of manthras) {
+        if (shouldPublishVerse(m)) toPublish.push(m);
+        else {
+          scopeSkippedVerses++;
+          reportProgress(m.title || m.id, "mantra");
+        }
+      }
+    }
     if (!jobId) {
       // Synchronous path: sort keys are derived from the portal index (no read-modify-
       // write on Strapi state) and labels are unique per section by preflight, so we
       // can publish intra-section mantras in parallel without the section lock.
-      for (let i = 0; i < manthras.length; i += MANTHRA_CONCURRENCY) {
-        const batch = manthras.slice(i, i + MANTHRA_CONCURRENCY);
+      for (let i = 0; i < toPublish.length; i += MANTHRA_CONCURRENCY) {
+        const batch = toPublish.slice(i, i + MANTHRA_CONCURRENCY);
         await Promise.all(
           batch.map(async (m) => {
             await publishManthra(m, sectionDocId, portalSiblings);
@@ -3493,7 +3546,7 @@ async function publishGranthaWithHierarchy(
       return;
     }
 
-    for (const manthra of manthras) {
+    for (const manthra of toPublish) {
       await storage.enqueuePublishJobTask({
         jobId,
         draftId: draft.id,
@@ -3757,6 +3810,13 @@ async function publishGranthaWithHierarchy(
       }
     });
     await Promise.all(workers);
+
+    if (scopeLimitVerses) {
+      console.log(
+        `[publish] scope-limited: published ${changedManthraIdSet?.size ?? 0} changed verse(s), ` +
+          `skipped ${scopeSkippedVerses} unchanged verse(s) (grantha ${draft.strapiDocumentId})`,
+      );
+    }
 
     // Self-heal safety net: guarantee every section this publish touched is still
     // linked to the grantha. Strapi v5 has silently dropped section→grantha relations
@@ -5382,42 +5442,78 @@ export async function registerRoutes(
       const published: Array<{ manthraId: string; strapiDocumentId?: string }> = [];
       const failures: Array<{ manthraId: string; error: string }> = [];
       const warnings: Array<{ manthra: string; error: string }> = [];
-      let lastData: any;
 
-      for (const t of targets) {
-        if (!t.adhyayaId || !t.khandaId || !t.manthraId) {
-          failures.push({ manthraId: t.manthraId || "(unknown)", error: "Invalid target (missing ids)" });
-          continue;
-        }
-        try {
-          const result = await publishOneManthraFromGranthaDraft(id, user.id, t);
-          lastData = result.data;
-          const hard = result.publishFailures.filter((f) => !f.error.startsWith("[WARNING]"));
-          warnings.push(...result.publishFailures.filter((f) => f.error.startsWith("[WARNING]")));
-          if (hard.length > 0) {
-            failures.push({ manthraId: t.manthraId, error: hard[0].error });
-          } else {
-            published.push({ manthraId: t.manthraId, strapiDocumentId: result.returnedDocId });
+      // Publish the changed verses with BOUNDED CONCURRENCY instead of one-at-a-time.
+      // Each verse is independent (an existing row on an already-published grantha), so
+      // they can go in parallel; the JS event loop keeps the shared result arrays' .push
+      // calls safe. Resolved docIds are merged back into the draft ONCE at the end (see
+      // below) so parallelism can't lose a docId the way saving a single result.data would.
+      const BATCH_CONCURRENCY = Math.max(
+        1,
+        Math.min(10, Number(process.env.PUBLISH_MANTHRA_CONCURRENCY) || 8),
+      );
+      let cursor = 0;
+      const runBatchWorker = async (): Promise<void> => {
+        while (true) {
+          const i = cursor++;
+          if (i >= targets.length) return;
+          const t = targets[i];
+          if (!t.adhyayaId || !t.khandaId || !t.manthraId) {
+            failures.push({ manthraId: t.manthraId || "(unknown)", error: "Invalid target (missing ids)" });
+            continue;
           }
-        } catch (e: any) {
-          failures.push({ manthraId: t.manthraId, error: e?.message || "Publish failed" });
+          try {
+            const result = await publishOneManthraFromGranthaDraft(id, user.id, t);
+            const hard = result.publishFailures.filter((f) => !f.error.startsWith("[WARNING]"));
+            warnings.push(...result.publishFailures.filter((f) => f.error.startsWith("[WARNING]")));
+            if (hard.length > 0) {
+              failures.push({ manthraId: t.manthraId, error: hard[0].error });
+            } else {
+              published.push({ manthraId: t.manthraId, strapiDocumentId: result.returnedDocId });
+            }
+          } catch (e: any) {
+            failures.push({ manthraId: t.manthraId, error: e?.message || "Publish failed" });
+          }
         }
-      }
+      };
+      await Promise.all(
+        Array.from({ length: Math.min(BATCH_CONCURRENCY, targets.length) }, runBatchWorker),
+      );
 
-      if (lastData) {
-        try {
-          const clearedScope = {
-            ...lastData,
-            publishScope: {
-              changedManthraIds: [],
-              requiresFullPublish: false,
-              granthaMetaDirty: false,
-            },
-          };
-          await storage.updateDraft(id, user.id, { data: clearedScope, status: "draft" });
-        } catch (saveErr: any) {
-          console.warn(`[publish-manthras-batch] Could not save draft:`, saveErr.message);
+      // Persist resolved docIds + clear publish scope in ONE draft write. We re-read the
+      // draft and apply every resolved docId by manthra id, so a parallel run never drops
+      // a docId (which a single result.data snapshot would).
+      try {
+        const draft = await storage.getDraft(id, user.id);
+        const data: any = draft?.data;
+        if (data) {
+          const docIdByManthraId = new Map<string, string>(
+            published
+              .filter((p) => typeof p.strapiDocumentId === "string" && p.strapiDocumentId.length >= 10)
+              .map((p) => [p.manthraId, p.strapiDocumentId as string]),
+          );
+          if (docIdByManthraId.size > 0 && Array.isArray(data.hierarchy)) {
+            const applyDoc = (m: any) =>
+              m?.id && docIdByManthraId.has(m.id)
+                ? { ...m, strapiDocumentId: docIdByManthraId.get(m.id) }
+                : m;
+            data.hierarchy = data.hierarchy.map((a: any) => ({
+              ...a,
+              khandas: (a.khandas || []).map((k: any) => ({
+                ...k,
+                manthras: (k.manthras || []).map(applyDoc),
+                padas: (k.padas || []).map((p: any) => ({
+                  ...p,
+                  manthras: (p.manthras || []).map(applyDoc),
+                })),
+              })),
+            }));
+          }
+          data.publishScope = { changedManthraIds: [], requiresFullPublish: false, granthaMetaDirty: false };
+          await storage.updateDraft(id, user.id, { data, status: "draft" });
         }
+      } catch (saveErr: any) {
+        console.warn(`[publish-manthras-batch] Could not save draft:`, saveErr.message);
       }
 
       if (published.length === 0 && failures.length > 0) {

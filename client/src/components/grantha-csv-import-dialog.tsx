@@ -30,8 +30,9 @@ import {
 import { Upload, Plus, Trash2, FileSpreadsheet, AlertCircle, Check } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import {
+  duplicateVerseNumberGroups,
   missingLeadingSectionNumbers,
-  splitNumberTokens,
+  sectionPathTokens,
 } from "@/lib/grantha-csv-placement";
 import {
   buildCoreTargets,
@@ -256,7 +257,7 @@ export default function GranthaCsvImportDialog({
   // Default section-levels = (segments − 1), clamped — until the user overrides.
   useEffect(() => {
     if (sectionLevelsTouched || createNumbers.length === 0) return;
-    const maxTokens = createNumbers.reduce((m, n) => Math.max(m, splitNumberTokens(n).length), 1);
+    const maxTokens = createNumbers.reduce((m, n) => Math.max(m, sectionPathTokens(n).length), 1);
     const def = Math.min(Math.max(maxTokens - 1, 1), maxSectionLevels);
     setSectionLevels(def);
   }, [createNumbers, maxSectionLevels, sectionLevelsTouched]);
@@ -267,7 +268,7 @@ export default function GranthaCsvImportDialog({
   // silently merged one adhyaya into the previous one. Explicit user choice wins.
   useEffect(() => {
     if (placementModeTouched || createNumbers.length === 0 || maxSectionLevels < 1) return;
-    const prefixed = createNumbers.some((n) => splitNumberTokens(n).length >= 2);
+    const prefixed = createNumbers.some((n) => sectionPathTokens(n).length >= 2);
     setPlacementMode(prefixed ? "group" : "single");
   }, [createNumbers, maxSectionLevels, placementModeTouched]);
 
@@ -275,7 +276,7 @@ export default function GranthaCsvImportDialog({
   const groupPreview = useMemo(() => {
     const paths = new Set<string>();
     for (const n of createNumbers) {
-      const toks = splitNumberTokens(n);
+      const toks = sectionPathTokens(n);
       const path = Array.from({ length: sectionLevels }, (_, i) => toks[i] ?? "1");
       paths.add(path.join(" › "));
     }
@@ -288,6 +289,15 @@ export default function GranthaCsvImportDialog({
   const sectionNumberGaps = useMemo(
     () => (placementMode === "group" ? missingLeadingSectionNumbers(createNumbers) : []),
     [createNumbers, placementMode],
+  );
+
+  // Verse numbers that collide once their digits are compared. Two rows numbered "1.1",
+  // or "1.1" next to "1.1a": saving renumbers the odd one out from its position, which
+  // lands it straight on its neighbour's number, and publish then has two verses fighting
+  // over one CMS row. Caught here, before any of it is written.
+  const duplicateNumbers = useMemo(
+    () => duplicateVerseNumberGroups(createNumbers),
+    [createNumbers],
   );
 
   const fieldMapping: FieldMapping = { coreTargets, coreMapping, translationRows, teekas };
@@ -513,6 +523,23 @@ export default function GranthaCsvImportDialog({
                       </Alert>
                     )}
                   </div>
+                )}
+
+                {onMissing === "create" && duplicateNumbers.length > 0 && (
+                  <Alert variant="destructive" data-testid="alert-duplicate-numbers">
+                    <AlertCircle className="h-4 w-4" />
+                    <AlertTitle>
+                      {duplicateNumbers.length} verse number
+                      {duplicateNumbers.length === 1 ? "" : "s"} used more than once
+                    </AlertTitle>
+                    <AlertDescription className="text-xs">
+                      {duplicateNumbers.slice(0, 5).map((g) => g.join(" = ")).join("; ")}
+                      {duplicateNumbers.length > 5 ? "; …" : ""}. Two verses cannot share a number
+                      in one section — the odd one out gets renumbered from its position, onto its
+                      neighbour's number. Fix the numbers in the file, or import these rows
+                      separately.
+                    </AlertDescription>
+                  </Alert>
                 )}
 
                 {onMissing === "create" && (

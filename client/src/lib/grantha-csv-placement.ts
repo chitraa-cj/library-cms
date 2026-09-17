@@ -72,6 +72,46 @@ export function splitNumberTokens(s: string): string[] {
   return s.trim().split(/[.\-/:|\s]+/).filter(Boolean);
 }
 
+/**
+ * The number tokens of a verse number, ignoring any leaf word in front of them:
+ * "Shloka 1.1" → ["1","1"], "1-2" → ["1","2"], "Mangala" → [].
+ *
+ * Section paths must come from this, not from `splitNumberTokens`: a file that writes
+ * its numbers as "Shloka 1.1" would otherwise hand every row the same first token
+ * ("Shloka") and pile all its chapters into one.
+ */
+export function numberTokens(s: string): string[] {
+  return s.match(/\d+/g) ?? [];
+}
+
+/**
+ * Section-path tokens for one verse number. Numbers win; a number with no digits at all
+ * keeps its raw token so it lands in a section of its own rather than being folded
+ * silently into chapter 1.
+ */
+export function sectionPathTokens(verseNumber: string): string[] {
+  const nums = numberTokens(verseNumber);
+  return nums.length > 0 ? nums : splitNumberTokens(verseNumber);
+}
+
+/**
+ * Verse numbers that collide once their digits are compared: exact repeats, and variants
+ * a portal save would flatten onto each other ("1.1" and "1.1a" both key as 1.1, and the
+ * letter form gets relabelled from its position — straight onto its neighbour's number).
+ * Returned as one group per colliding key, in first-seen order.
+ */
+export function duplicateVerseNumberGroups(numbers: readonly string[]): string[][] {
+  const byKey = new Map<string, string[]>();
+  for (const n of numbers) {
+    const key = numberTokens(n).join(".");
+    if (!key) continue; // no digits: not a numbering collision, handled elsewhere
+    const list = byKey.get(key);
+    if (list) list.push(n);
+    else byKey.set(key, [n]);
+  }
+  return [...byKey.values()].filter((g) => g.length > 1);
+}
+
 /** A section number from one path token, or null when it isn't a positive integer. */
 export function sectionNumberFromToken(token: string): number | null {
   const n = Number.parseInt(token, 10);
@@ -125,7 +165,7 @@ export function sortManthrasByVerseNumber<M extends PlacementManthra>(list: read
 export function missingLeadingSectionNumbers(numbers: readonly string[]): number[] {
   const present = new Set<number>();
   for (const n of numbers) {
-    const num = sectionNumberFromToken(splitNumberTokens(n)[0] ?? "");
+    const num = sectionNumberFromToken(numberTokens(n)[0] ?? "");
     if (num != null) present.add(num);
   }
   if (present.size === 0) return [];
@@ -241,7 +281,7 @@ export function placeCsvCreates<C extends { number: string }, A extends Placemen
     // is number-keyed and therefore idempotent.
     const leafByPath = new Map<string, PlacementManthra[]>();
     for (const c of creates) {
-      const toks = splitNumberTokens(c.number);
+      const toks = sectionPathTokens(c.number);
       const aTok = depth >= 1 ? (toks[0] ?? "1") : "1";
       const kTok = depth >= 2 ? (toks[1] ?? "1") : "1";
       const pTok = depth >= 3 ? (toks[2] ?? "1") : "1";

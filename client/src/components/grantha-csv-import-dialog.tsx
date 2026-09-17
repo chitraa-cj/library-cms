@@ -30,6 +30,10 @@ import {
 import { Upload, Plus, Trash2, FileSpreadsheet, AlertCircle, Check } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { textToBlocks } from "@/lib/strapi-blocks";
+import {
+  missingLeadingSectionNumbers,
+  splitNumberTokens,
+} from "@/lib/grantha-csv-placement";
 import { translationLanguages, type TextAndTranslation } from "@shared/schema";
 
 // ── Minimal structural mirrors of the grantha editor's tree node types.
@@ -122,11 +126,6 @@ export interface GranthaCsvImportPayload {
   updates: GranthaCsvImportUpdate[];
   creates: GranthaCsvNewVerse[];
   placement: GranthaCsvPlacement | null;
-}
-
-/** Split a dotted/hyphenated verse number into tokens, e.g. "1.2.3" → ["1","2","3"]. */
-export function splitNumberTokens(s: string): string[] {
-  return s.trim().split(/[.\-/:|\s]+/).filter(Boolean);
 }
 
 interface Props {
@@ -526,6 +525,14 @@ export default function GranthaCsvImportDialog({
     return Array.from(paths);
   }, [createNumbers, sectionLevels]);
 
+  // Section numbers the file never fills (numbers 1.x, 2.x, 5.x → 3 and 4 are missing).
+  // Almost always a truncated export or the wrong number column: importing it leaves
+  // sections whose ordinal name no longer matches their position, so say so up front.
+  const sectionNumberGaps = useMemo(
+    () => (placementMode === "group" ? missingLeadingSectionNumbers(createNumbers) : []),
+    [createNumbers, placementMode],
+  );
+
   /** Build merged content for one row, starting from `base` (existing node content or empty). */
   function buildContentForRow(row: string[], base: ManthraNodeShape | null): ContentUpdates {
     const shloka: TextAndTranslation = { ...(base?.ShlokaManthraEntry ?? {}) };
@@ -826,12 +833,28 @@ export default function GranthaCsvImportDialog({
                         e.g. {groupPreview.slice(0, 4).join(", ")}{groupPreview.length > 4 ? ", …" : ""}
                       </p>
                     )}
+                    {sectionNumberGaps.length > 0 && (
+                      <Alert variant="destructive" data-testid="alert-section-gaps">
+                        <AlertCircle className="h-4 w-4" />
+                        <AlertTitle>
+                          {structureConfig.levelOneName} {sectionNumberGaps.slice(0, 8).join(", ")}
+                          {sectionNumberGaps.length > 8 ? ", …" : ""} missing from this file
+                        </AlertTitle>
+                        <AlertDescription className="text-xs">
+                          The verse numbers jump over {sectionNumberGaps.length === 1 ? "it" : "them"},
+                          so the file is probably truncated or the wrong column is mapped as the verse
+                          number. Importing anyway is safe — each verse still goes to the section its
+                          own number names — but the grantha will have gaps until you import the rest.
+                        </AlertDescription>
+                      </Alert>
+                    )}
                   </div>
                 )}
 
                 {onMissing === "create" && (
                   <p className="text-xs text-muted-foreground">
-                    New verses keep the full CSV number as their verse label, in file order.
+                    New verses keep the full CSV number as their verse label, and are placed in
+                    verse-number order — row order in the file doesn't matter.
                   </p>
                 )}
               </section>

@@ -145,10 +145,10 @@ import { STRAPI_SORT_GAP } from "@shared/mantra-sort-key";
 import { usePortalVocabulary } from "@/hooks/use-portal-vocabulary";
 import OtherTranslationsHermex from "@/components/other-translations-hermex";
 import GranthaCsvImportDialog, {
-  splitNumberTokens,
   type GranthaCsvImportPayload,
   type GranthaCsvNewVerse,
 } from "@/components/grantha-csv-import-dialog";
+import { placeCsvCreates } from "@/lib/grantha-csv-placement";
 import {
   postStrapiSection,
   collectSectionDocumentIdsChildToParentForAdhyaya,
@@ -5210,22 +5210,12 @@ export default function GranthasPage() {
 
     // 2) Create new verses, placed either in one section or grouped across sections
     //    by the leading tokens of each verse number. Sections are auto-created as needed.
+    //    Placement itself lives in `lib/grantha-csv-placement` (pure + unit-tested): a
+    //    number token names its section, so an out-of-order CSV can no longer merge two
+    //    chapters into one or leave verses in file order instead of verse order.
     if (creates.length > 0 && placement) {
       const cfg = structureConfigRef.current;
       setAdhyayas((prev) => {
-        // Clone the parts we mutate so pushes don't touch the previous state.
-        const next: AdhyayaNode[] = prev.map((a) => ({
-          ...a,
-          khandas: a.khandas.map((k) => ({
-            ...k,
-            manthras: [...k.manthras],
-            padas: (k.padas ?? []).map((p) => ({ ...p, manthras: [...p.manthras] })),
-          })),
-        }));
-
-        const nextOrder = (list: { order?: number }[]) =>
-          list.reduce((m, x) => Math.max(m, x.order ?? 0), 0) + 1;
-
         const buildNode = (c: GranthaCsvNewVerse, order: number): ManthraNode => ({
           id: uid(),
           title: c.number,
@@ -5240,79 +5230,22 @@ export default function GranthasPage() {
           _bhashyamEdited: !!c.updates.BhashyamForShlokaManthra,
         });
 
-        // Find an existing sibling by 1-based numeric token position, else append a new one.
-        function ensureChild<T extends { id: string; title: string; order: number }>(
-          siblings: T[],
-          token: string,
-          makeTitle: (order: number) => string,
-          makeExtra: () => Partial<T>,
-        ): T {
-          const idx = parseInt(token, 10);
-          const sorted = [...siblings].sort((x, y) => (x.order ?? 0) - (y.order ?? 0));
-          if (Number.isFinite(idx) && idx >= 1 && idx <= sorted.length) return sorted[idx - 1];
-          const order = nextOrder(siblings);
-          const node = { id: uid(), title: makeTitle(order), order, ...makeExtra() } as T;
-          siblings.push(node);
-          return node;
-        }
-
-        // Resolve the leaf manthra list (creating chapter/section/sub-section) for a path.
-        const leafListFor = (aTok: string, kTok: string, pTok: string): ManthraNode[] => {
-          const a = ensureChild(
-            next, aTok,
-            (o) => `${ordinal(o)} ${cfg.levelOneName}`,
-            () => ({ khandas: [], expanded: true } as any),
-          );
-          const k = ensureChild(
-            a.khandas, kTok,
-            (o) => (cfg.levelTwoEnabled ? `${ordinal(o)} ${cfg.levelTwoName}` : "_default"),
-            () => ({ padas: [], manthras: [], expanded: true } as any),
-          );
-          if (cfg.levelThreeEnabled) {
-            const p = ensureChild(
-              k.padas, pTok,
-              (o) => `${ordinal(o)} ${cfg.levelThreeName}`,
-              () => ({ manthras: [], expanded: true } as any),
-            );
-            return p.manthras;
-          }
-          return k.manthras;
-        };
-
-        if (placement.mode === "group") {
-          const D = placement.sectionLevels;
-          // Resolve each distinct section path ONCE and reuse it, so every verse
-          // sharing a path (e.g. all of "5.x") lands in the same section. Without
-          // this cache, a leading token past the current sibling count — importing
-          // adhyaya 5 into a tree that has fewer chapters — makes ensureChild()
-          // append a brand-new chapter for EACH verse instead of one shared chapter.
-          const leafByPath = new Map<string, ManthraNode[]>();
-          for (const c of creates) {
-            const toks = splitNumberTokens(c.number);
-            const aTok = D >= 1 ? toks[0] ?? "1" : "1";
-            const kTok = D >= 2 ? toks[1] ?? "1" : "1";
-            const pTok = D >= 3 ? toks[2] ?? "1" : "1";
-            const pathKey = `${aTok}|${kTok}|${pTok}`;
-            let list = leafByPath.get(pathKey);
-            if (!list) { list = leafListFor(aTok, kTok, pTok); leafByPath.set(pathKey, list); }
-            list.push(buildNode(c, nextOrder(list)));
-          }
-        } else {
-          // Single section — honour explicit ids, auto-create whatever's missing.
-          const t = placement.target;
-          const a =
-            (t.adhyayaId && next.find((x) => x.id === t.adhyayaId)) ||
-            ensureChild(next, "", (o) => `${ordinal(o)} ${cfg.levelOneName}`, () => ({ khandas: [], expanded: true } as any));
-          const k =
-            (t.khandaId && a.khandas.find((x) => x.id === t.khandaId)) ||
-            ensureChild(a.khandas, "", (o) => (cfg.levelTwoEnabled ? `${ordinal(o)} ${cfg.levelTwoName}` : "_default"), () => ({ padas: [], manthras: [], expanded: true } as any));
-          const pada = t.padaId ? k.padas?.find((x) => x.id === t.padaId) : undefined;
-          const list = pada ? pada.manthras : k.manthras;
-          for (const c of creates) list.push(buildNode(c, nextOrder(list)));
-        }
+        const placed = placeCsvCreates<GranthaCsvNewVerse, AdhyayaNode>(
+          prev,
+          creates,
+          placement,
+          {
+            levelOneName: cfg.levelOneName,
+            levelTwoName: cfg.levelTwoName,
+            levelThreeName: cfg.levelThreeName,
+            levelTwoEnabled: cfg.levelTwoEnabled !== false,
+            levelThreeEnabled: !!cfg.levelThreeEnabled,
+          },
+          { uid, buildManthra: buildNode },
+        );
 
         // Fix orders / dedupe WITHOUT rewriting our CSV-number labels.
-        const normalized = hierarchyForSave(next, cfg);
+        const normalized = hierarchyForSave(placed, cfg);
         adhyayasRef.current = normalized;
         return normalized;
       });

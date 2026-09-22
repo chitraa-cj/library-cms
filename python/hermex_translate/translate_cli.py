@@ -148,7 +148,10 @@ def _extract_translations(text: str, expected: set[str]) -> list[dict[str, Any]]
         return []
     cleaned = _strip_fences(text)
 
-    # 1) Strict JSON array
+    # 1) Strict JSON array. Only accept a list of translation-shaped OBJECTS: Gemini
+    # now appends source citation markers ("… [2]") to marker-format replies, and the
+    # first-"[" → last-"]" span can then be a perfectly valid JSON array like [2] that
+    # hijacks this branch and makes a complete translation parse to zero rows.
     array_body = cleaned
     start = cleaned.find("[")
     end = cleaned.rfind("]")
@@ -156,7 +159,7 @@ def _extract_translations(text: str, expected: set[str]) -> list[dict[str, Any]]
         array_body = cleaned[start : end + 1]
     try:
         data = json.loads(array_body)
-        if isinstance(data, list) and data:
+        if isinstance(data, list) and data and all(isinstance(r, dict) for r in data):
             return data
     except json.JSONDecodeError as e:
         _log(f"[hermex] JSON array parse failed ({e}); trying JSONL / loose parse")
@@ -184,6 +187,25 @@ def _extract_translations(text: str, expected: set[str]) -> list[dict[str, Any]]
         return loose
 
     raise ValueError(f"Could not parse translations. Snippet: {cleaned[:400]}")
+
+
+def _dump_raw_response(raw: str, label: str) -> str | None:
+    """Persist a Gemini reply for post-mortem (always on an unusable reply,
+    or for every reply when HERMEX_RAW_DUMP=1). Empty-chunk failures are
+    otherwise invisible: the parse 'succeeds' with zero rows and the raw text
+    is lost."""
+    try:
+        import os, datetime
+        out_dir = os.environ.get("HERMEX_RAW_DUMP_DIR", "logs/hermex-raw")
+        os.makedirs(out_dir, exist_ok=True)
+        slug = re.sub(r"[^A-Za-z0-9]+", "-", label).strip("-")[:60] or "chunk"
+        stamp = datetime.datetime.now().strftime("%Y%m%d-%H%M%S-%f")
+        path = os.path.join(out_dir, f"{stamp}-{slug}.txt")
+        with open(path, "w", encoding="utf-8") as fh:
+            fh.write(raw)
+        return path
+    except Exception:
+        return None
 
 
 def _effective_chunk_size(source_text: str, chunk_size: int) -> int:
@@ -762,19 +784,38 @@ def _translate_chunks(
         _log(f"[hermex] Long source ({len(source_text)} chars) — chunk size {chunk_size} → {eff_size}")
     chunks = _chunk(target_languages, eff_size)
 
-    def _parse_chunk_response(raw: str, chunk: list[str]) -> list[dict[str, str]]:
+    def _parse_chunk_response(raw: str, chunk: list[str], label: str = "chunk") -> list[dict[str, str]]:
+        import os
+
+        if os.environ.get("HERMEX_RAW_DUMP") == "1":
+            dumped = _dump_raw_response(raw, label)
+            if dumped:
+                _log(f"[hermex] Raw reply ({len(raw)} chars) saved to {dumped}")
         if not raw:
             raise RuntimeError("Empty Gemini response")
         expected = set(chunk)
         try:
             parsed = _extract_translations(raw, expected)
             rows = _normalize_rows(parsed, expected)
+            if not rows:
+                # A parse that "succeeded" but yielded nothing usable (wrong shape,
+                # wrong language names) must still try the salvage parsers before the
+                # chunk is written off as empty.
+                rows = _normalize_rows(_salvage_translations(raw, expected), expected)
         except ValueError as parse_err:
             _log(f"[hermex] Parse failed ({parse_err}) — salvaging from response body")
             salvaged = _salvage_translations(raw, expected)
             rows = _normalize_rows(salvaged, expected)
             if not rows:
-                raise RuntimeError(f"Could not parse response. Snippet: {raw[:500]}") from parse_err
+                dumped = _dump_raw_response(raw, label)
+                raise RuntimeError(
+                    f"Could not parse response (raw saved to {dumped}). Snippet: {raw[:500]}"
+                ) from parse_err
+        if not rows:
+            dumped = _dump_raw_response(raw, label)
+            _log(
+                f"[hermex] No usable rows parsed from a {len(raw)}-char reply — raw saved to {dumped}"
+            )
         return rows
 
     def _translate_language_batch(
@@ -794,7 +835,7 @@ def _translate_chunks(
             timeout=query_timeout,
         )
         raw = (msg.text or "").strip()
-        return _parse_chunk_response(raw, chunk)
+        return _parse_chunk_response(raw, chunk, chunk_label)
 
     def _run_one_chunk(gemini: Any, idx: int, chunk: list[str]) -> None:
         label = context or "translation"
@@ -808,6 +849,19 @@ def _translate_chunks(
         if missing:
             if len(missing) == len(chunk):
                 _log(f"[hermex] WARN entire chunk empty — will retry languages individually")
+                try:
+                    import os, datetime
+
+                    out_dir = os.environ.get("HERMEX_RAW_DUMP_DIR", "logs/hermex-raw")
+                    os.makedirs(out_dir, exist_ok=True)
+                    shot = os.path.join(
+                        out_dir,
+                        datetime.datetime.now().strftime("%Y%m%d-%H%M%S") + "-empty-chunk.png",
+                    )
+                    gemini.driver.save_screenshot(shot)
+                    _log(f"[hermex] Saved page screenshot to {shot}")
+                except Exception as shot_err:
+                    _log(f"[hermex] Screenshot failed: {shot_err}")
             else:
                 _log(
                     f"[hermex] Partial chunk ({len(rows)}/{len(chunk)}) — retrying: {', '.join(missing)}"

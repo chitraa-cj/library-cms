@@ -24,6 +24,7 @@ import {
   DatabaseBackup,
   ListPlus,
   GraduationCap,
+  ScanText,
 } from "lucide-react";
 import { useEffect, useState } from "react";
 import { cn } from "@/lib/utils";
@@ -219,6 +220,7 @@ export default function DashboardLayout({
                   {[
                     { label: "User Management", path: "/admin/users", icon: ShieldCheck },
                     { label: "Shared Lists", path: "/admin/vocabulary", icon: ListPlus },
+                    { label: "OCR Docs", path: "/admin/ocr", icon: ScanText },
                   ].map((item) => {
                     const isActive = location.startsWith(item.path);
                     return (

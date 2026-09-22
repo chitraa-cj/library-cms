@@ -5,6 +5,7 @@ import session from "express-session";
 import { scrypt, randomBytes, timingSafeEqual } from "crypto";
 import { promisify } from "util";
 import { storage } from "./storage";
+import { pool } from "./db";
 import { User } from "@shared/schema";
 import connectPg from "connect-pg-simple";
 
@@ -54,19 +55,14 @@ export function setupAuth(app: Express) {
       secure: process.env.NODE_ENV === "production",
       sameSite: "lax",
     },
-	store: new PgSession({
-  conObject: {
-    connectionString: process.env.DATABASE_URL,
-    ssl: {
-      rejectUnauthorized: false,
-    },
-  },
-  createTableIfMissing: true,
-  ttl: Math.floor(SESSION_MAX_AGE_MS / 1000),
-  pruneSessionInterval: 60 * 60,
-}),
-
-
+    // Reuse the shared pool so the session store inherits the same SSL decision
+    // (TLS for RDS, plain for a local Postgres that refuses SSL).
+    store: new PgSession({
+      pool,
+      createTableIfMissing: true,
+      ttl: Math.floor(SESSION_MAX_AGE_MS / 1000),
+      pruneSessionInterval: 60 * 60,
+    }),
   };
 
   app.use(session(sessionSettings));

@@ -449,6 +449,85 @@ export const updateAcharyaSchema = z.object({
 });
 export type UpdateAcharya = z.infer<typeof updateAcharyaSchema>;
 
+// ─── OCR documents (admin-only Gemini OCR) ───────────────────────────────────
+// A job owns one uploaded file; the file is split into fixed page-range chunks
+// and each chunk is one Gemini request. Chunk rows are the unit of work, of
+// retry and of accounting, so a failed page range never re-runs the pages that
+// already succeeded.
+
+export const ocrJobStatuses = ["queued", "running", "done", "partial", "failed", "cancelled"] as const;
+export type OcrJobStatus = (typeof ocrJobStatuses)[number];
+
+export const ocrChunkStatuses = ["queued", "running", "done", "failed", "skipped"] as const;
+export type OcrChunkStatus = (typeof ocrChunkStatuses)[number];
+
+/** Transcription profiles exposed in the UI — mapped to a Gemini model server-side. */
+export const ocrQualities = ["fast", "accurate"] as const;
+export type OcrQuality = (typeof ocrQualities)[number];
+
+export const ocrJobs = pgTable("cms_ocr_jobs", {
+  id: varchar("id").primaryKey(),
+  userId: varchar("user_id").references(() => users.id, { onDelete: "set null" }),
+  fileName: text("file_name").notNull(),
+  mimeType: text("mime_type").notNull(),
+  fileSize: integer("file_size").notNull().default(0),
+  /** sha256 of the upload — lets an identical re-upload be recognised. */
+  fileHash: text("file_hash"),
+  pageCount: integer("page_count").notNull().default(1),
+  /** Pages per Gemini request. */
+  chunkSize: integer("chunk_size").notNull().default(8),
+  quality: text("quality").$type<OcrQuality>().notNull().default("fast"),
+  model: text("model").notNull(),
+  /** Free-text hint sent with every chunk (script, layout, domain vocabulary). */
+  instructions: text("instructions"),
+  status: text("status").$type<OcrJobStatus>().notNull().default("queued"),
+  chunksTotal: integer("chunks_total").notNull().default(0),
+  chunksDone: integer("chunks_done").notNull().default(0),
+  chunksFailed: integer("chunks_failed").notNull().default(0),
+  requestCount: integer("request_count").notNull().default(0),
+  inputTokens: integer("input_tokens").notNull().default(0),
+  outputTokens: integer("output_tokens").notNull().default(0),
+  error: text("error"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+  startedAt: timestamp("started_at"),
+  finishedAt: timestamp("finished_at"),
+});
+
+export const ocrJobChunks = pgTable("cms_ocr_job_chunks", {
+  id: serial("id").primaryKey(),
+  jobId: varchar("job_id")
+    .notNull()
+    .references(() => ocrJobs.id, { onDelete: "cascade" }),
+  chunkIndex: integer("chunk_index").notNull(),
+  /** 1-based, inclusive page range this chunk covers in the source document. */
+  startPage: integer("start_page").notNull(),
+  endPage: integer("end_page").notNull(),
+  status: text("status").$type<OcrChunkStatus>().notNull().default("queued"),
+  attempts: integer("attempts").notNull().default(0),
+  /** Model that actually produced this range (may be a fallback, see ocr/jobs.ts). */
+  model: text("model"),
+  markdown: text("markdown"),
+  inputTokens: integer("input_tokens").notNull().default(0),
+  outputTokens: integer("output_tokens").notNull().default(0),
+  durationMs: integer("duration_ms").notNull().default(0),
+  error: text("error"),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+});
+
+export type OcrJob = typeof ocrJobs.$inferSelect;
+export type InsertOcrJob = typeof ocrJobs.$inferInsert;
+export type OcrJobChunk = typeof ocrJobChunks.$inferSelect;
+export type InsertOcrJobChunk = typeof ocrJobChunks.$inferInsert;
+
+/** One transcribed page, as the viewer paginates it. */
+export interface OcrPage {
+  page: number;
+  markdown: string;
+}
+
+export const ocrJobStatusTerminal: readonly OcrJobStatus[] = ["done", "partial", "failed", "cancelled"];
+
 /** An acharya plus the texts derived as "under" them from Strapi. */
 export type AcharyaLinkedText = {
   documentId: string;

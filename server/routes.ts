@@ -4,6 +4,8 @@ import { setupAuth, requireAuth, requireAdmin, hashPassword } from "./auth";
 import { createStrapiRouter, strapiRequest, strapiRequestLarge, withSectionLock } from "./strapi";
 import { invalidateGranthaBulkCache, invalidateAllBulkCache } from "./grantha-bulk-cache";
 import { createAcharyaRouter, seedAcharyasIfEmpty } from "./acharyas";
+import ocrRouter from "./ocr/routes";
+import { reconcileOcrJobsOnBoot } from "./ocr/jobs";
 import { createMigrateRouter } from "./migrate-vivekachudamani";
 import { activityLogger } from "./activity-log";
 import { readLatestDraftSnapshot, writeDraftSnapshot } from "./data-safety";
@@ -4447,6 +4449,11 @@ export async function registerRoutes(
   // Acharyas (guru-parampara) — portal-only, local Postgres. Seed on first boot.
   app.use("/api/acharyas", createAcharyaRouter());
   void seedAcharyasIfEmpty();
+
+  // OCR Docs (admin-only) — Gemini transcription of uploaded PDFs/scans.
+  // Admin gate lives here so every route in the sub-router inherits it.
+  app.use("/api/admin/ocr", requireAuth, requireAdmin, ocrRouter);
+  void reconcileOcrJobsOnBoot();
 
   const hermexTranslateBodySchema = z.object({
     sourceText: z.string().min(1).max(120_000),

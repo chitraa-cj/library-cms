@@ -22,6 +22,8 @@ const allowlist = [
   "nanoid",
   "nodemailer",
   "openai",
+  // Bundled so an OCR deploy works even if the box has not re-run npm install.
+  "pdf-lib",
   "passport",
   "passport-local",
   "pg",

@@ -236,4 +236,8 @@ Run via testing skill. Verifies:
 - Uses concurrency=6; run in slices for manthras > 100 due to 2-min timeout
 - Final 20 manthras (indices 100-119) restored separately due to ordering
 
+
+
+ssh -i "ekatmadham-key.pem" ubuntu@ec2-16-16-4-251.eu-north-1.compute.amazonaws.com
+
   npm run hermex:grantha -- "Vedanta Paribhasha"

@@ -2004,6 +2004,59 @@ export default function GranthasPage() {
     structureConfig.levelThreeName,
   );
   const leafNameOptions = withCurrentSelection(vocabulary.structureLeafNames, structureConfig.leafName);
+
+  // A heading may name only one level. Level 3 starts at the default "Pada", so a
+  // grantha whose sub-sections are Padas used to show "Pada" selected both as the
+  // sub-section and the sub-sub-section once level 3 was switched on. Names already
+  // used by another *enabled* level are disabled here, and a stale default is moved
+  // off the collision when a level is enabled or renamed.
+  const sameLevelName = (a: string | undefined, b: string | undefined) => {
+    const x = (a ?? "").trim().toLowerCase();
+    const y = (b ?? "").trim().toLowerCase();
+    return x !== "" && x === y;
+  };
+
+  const activeLevelName = (cfg: typeof structureConfig, level: "one" | "two" | "three") => {
+    if (level === "one") return cfg.levelOneEnabled ? cfg.levelOneName : "";
+    if (level === "two") return cfg.levelTwoEnabled ? cfg.levelTwoName : "";
+    return cfg.levelTwoEnabled && cfg.levelThreeEnabled ? cfg.levelThreeName : "";
+  };
+
+  const nameUsedByOtherLevel = (
+    name: string,
+    level: "one" | "two" | "three",
+    cfg: typeof structureConfig = structureConfig,
+  ) =>
+    (["one", "two", "three"] as const)
+      .filter((other) => other !== level)
+      .some((other) => sameLevelName(activeLevelName(cfg, other), name));
+
+  // First option not claimed by another level, so an auto-corrected default lands
+  // on something usable instead of silently staying on the duplicate.
+  const firstFreeLevelName = (
+    options: string[],
+    level: "one" | "two" | "three",
+    cfg: typeof structureConfig,
+    fallback: string,
+  ) => options.find((o) => !nameUsedByOtherLevel(o, level, cfg)) ?? fallback;
+
+  const setLevelName = (level: "one" | "two" | "three", name: string) => {
+    setStructureConfig((prev) => {
+      const next = { ...prev };
+      if (level === "one") next.levelOneName = name;
+      else if (level === "two") next.levelTwoName = name;
+      else next.levelThreeName = name;
+
+      // Push the deeper levels off a name a shallower level just took.
+      if (level === "one" && nameUsedByOtherLevel(next.levelTwoName, "two", next)) {
+        next.levelTwoName = firstFreeLevelName(levelTwoOptions, "two", next, next.levelTwoName);
+      }
+      if (level !== "three" && nameUsedByOtherLevel(next.levelThreeName, "three", next)) {
+        next.levelThreeName = firstFreeLevelName(levelThreeOptions, "three", next, next.levelThreeName);
+      }
+      return next;
+    });
+  };
   const bhashyamAuthorOptions = withCurrentSelection(
     vocabulary.bhashyamAuthors,
     formData.BhashyamAuthor,
@@ -7294,21 +7347,28 @@ export default function GranthasPage() {
               <div>
                 <p className="text-xs text-muted-foreground mb-2">What are these top-level divisions called?</p>
                 <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
-                  {levelOneOptions.map((name) => (
-                    <button
-                      key={name}
-                      type="button"
-                      onClick={() => setStructureConfig({ ...structureConfig, levelOneName: name })}
-                      className={`px-3 py-2 rounded-lg border text-sm font-medium transition-colors text-left ${
-                        structureConfig.levelOneName === name
-                          ? "border-primary bg-primary/10 text-primary"
-                          : "border-border hover:border-primary/50 hover:bg-muted/50"
-                      }`}
-                      data-testid={`select-level1-${name}`}
-                    >
-                      {name}
-                    </button>
-                  ))}
+                  {levelOneOptions.map((name) => {
+                    const takenElsewhere = nameUsedByOtherLevel(name, "one");
+                    return (
+                      <button
+                        key={name}
+                        type="button"
+                        disabled={takenElsewhere}
+                        title={takenElsewhere ? "Already used by another level" : undefined}
+                        onClick={() => setLevelName("one", name)}
+                        className={`px-3 py-2 rounded-lg border text-sm font-medium transition-colors text-left ${
+                          structureConfig.levelOneName === name
+                            ? "border-primary bg-primary/10 text-primary"
+                            : takenElsewhere
+                              ? "border-border opacity-40 cursor-not-allowed"
+                              : "border-border hover:border-primary/50 hover:bg-muted/50"
+                        }`}
+                        data-testid={`select-level1-${name}`}
+                      >
+                        {name}
+                      </button>
+                    );
+                  })}
                 </div>
                 {isAdmin && (
                   <div className="mt-3 flex gap-2">
@@ -7322,9 +7382,7 @@ export default function GranthasPage() {
                       onKeyDown={(e) => {
                         if (e.key === "Enter") {
                           e.preventDefault();
-                          void addSharedOption("structureLevelOneNames", (value) =>
-                            setStructureConfig({ ...structureConfig, levelOneName: value }),
-                          );
+                          void addSharedOption("structureLevelOneNames", (value) => setLevelName("one", value));
                         }
                       }}
                     />
@@ -7333,9 +7391,7 @@ export default function GranthasPage() {
                       size="sm"
                       disabled={addingSharedOptionKey === "structureLevelOneNames"}
                       onClick={() =>
-                        void addSharedOption("structureLevelOneNames", (value) =>
-                          setStructureConfig({ ...structureConfig, levelOneName: value }),
-                        )
+                        void addSharedOption("structureLevelOneNames", (value) => setLevelName("one", value))
                       }
                     >
                       {addingSharedOptionKey === "structureLevelOneNames" ? (
@@ -7363,7 +7419,14 @@ export default function GranthasPage() {
               </div>
               <button
                 type="button"
-                onClick={() => setStructureConfig({ ...structureConfig, levelTwoEnabled: !structureConfig.levelTwoEnabled })}
+                onClick={() => {
+                  const levelTwoEnabled = !structureConfig.levelTwoEnabled;
+                  const next = { ...structureConfig, levelTwoEnabled };
+                  if (levelTwoEnabled && nameUsedByOtherLevel(next.levelTwoName, "two", next)) {
+                    next.levelTwoName = firstFreeLevelName(levelTwoOptions, "two", next, next.levelTwoName);
+                  }
+                  setStructureConfig(next);
+                }}
                 className={`relative inline-flex h-6 w-11 flex-shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 focus:outline-none ${
                   structureConfig.levelTwoEnabled ? "bg-primary" : "bg-muted"
                 }`}
@@ -7380,21 +7443,28 @@ export default function GranthasPage() {
               <div>
                 <p className="text-xs text-muted-foreground mb-2">What are these sub-sections called?</p>
                 <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
-                  {levelTwoOptions.map((name) => (
-                    <button
-                      key={name}
-                      type="button"
-                      onClick={() => setStructureConfig({ ...structureConfig, levelTwoName: name })}
-                      className={`px-3 py-2 rounded-lg border text-sm font-medium transition-colors text-left ${
-                        structureConfig.levelTwoName === name
-                          ? "border-primary bg-primary/10 text-primary"
-                          : "border-border hover:border-primary/50 hover:bg-muted/50"
-                      }`}
-                      data-testid={`select-level2-${name}`}
-                    >
-                      {name}
-                    </button>
-                  ))}
+                  {levelTwoOptions.map((name) => {
+                    const takenElsewhere = nameUsedByOtherLevel(name, "two");
+                    return (
+                      <button
+                        key={name}
+                        type="button"
+                        disabled={takenElsewhere}
+                        title={takenElsewhere ? "Already used by another level" : undefined}
+                        onClick={() => setLevelName("two", name)}
+                        className={`px-3 py-2 rounded-lg border text-sm font-medium transition-colors text-left ${
+                          structureConfig.levelTwoName === name
+                            ? "border-primary bg-primary/10 text-primary"
+                            : takenElsewhere
+                              ? "border-border opacity-40 cursor-not-allowed"
+                              : "border-border hover:border-primary/50 hover:bg-muted/50"
+                        }`}
+                        data-testid={`select-level2-${name}`}
+                      >
+                        {name}
+                      </button>
+                    );
+                  })}
                 </div>
                 {isAdmin && (
                   <div className="mt-3 flex gap-2">
@@ -7408,9 +7478,7 @@ export default function GranthasPage() {
                       onKeyDown={(e) => {
                         if (e.key === "Enter") {
                           e.preventDefault();
-                          void addSharedOption("structureLevelTwoNames", (value) =>
-                            setStructureConfig({ ...structureConfig, levelTwoName: value }),
-                          );
+                          void addSharedOption("structureLevelTwoNames", (value) => setLevelName("two", value));
                         }
                       }}
                     />
@@ -7419,9 +7487,7 @@ export default function GranthasPage() {
                       size="sm"
                       disabled={addingSharedOptionKey === "structureLevelTwoNames"}
                       onClick={() =>
-                        void addSharedOption("structureLevelTwoNames", (value) =>
-                          setStructureConfig({ ...structureConfig, levelTwoName: value }),
-                        )
+                        void addSharedOption("structureLevelTwoNames", (value) => setLevelName("two", value))
                       }
                     >
                       {addingSharedOptionKey === "structureLevelTwoNames" ? (
@@ -7448,7 +7514,14 @@ export default function GranthasPage() {
                 </div>
                 <button
                   type="button"
-                  onClick={() => setStructureConfig({ ...structureConfig, levelThreeEnabled: !structureConfig.levelThreeEnabled })}
+                  onClick={() => {
+                    const levelThreeEnabled = !structureConfig.levelThreeEnabled;
+                    const next = { ...structureConfig, levelThreeEnabled };
+                    if (levelThreeEnabled && nameUsedByOtherLevel(next.levelThreeName, "three", next)) {
+                      next.levelThreeName = firstFreeLevelName(levelThreeOptions, "three", next, next.levelThreeName);
+                    }
+                    setStructureConfig(next);
+                  }}
                   className={`relative inline-flex h-6 w-11 flex-shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 focus:outline-none ${
                     structureConfig.levelThreeEnabled ? "bg-primary" : "bg-muted"
                   }`}
@@ -7464,22 +7537,35 @@ export default function GranthasPage() {
               {structureConfig.levelThreeEnabled && (
                 <div>
                   <p className="text-xs text-muted-foreground mb-2">What are these sub-sub-sections called?</p>
+                  {nameUsedByOtherLevel(structureConfig.levelThreeName, "three") && (
+                    <p className="text-xs text-destructive mb-2" data-testid="warning-level3-duplicate">
+                      “{structureConfig.levelThreeName}” is already the name of another level — pick a
+                      different heading for these sub-sub-sections.
+                    </p>
+                  )}
                   <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
-                    {levelThreeOptions.map((name) => (
-                      <button
-                        key={name}
-                        type="button"
-                        onClick={() => setStructureConfig({ ...structureConfig, levelThreeName: name })}
-                        className={`px-3 py-2 rounded-lg border text-sm font-medium transition-colors text-left ${
-                          structureConfig.levelThreeName === name
-                            ? "border-primary bg-primary/10 text-primary"
-                            : "border-border hover:border-primary/50 hover:bg-muted/50"
-                        }`}
-                        data-testid={`select-level3-${name}`}
-                      >
-                        {name}
-                      </button>
-                    ))}
+                    {levelThreeOptions.map((name) => {
+                      const takenElsewhere = nameUsedByOtherLevel(name, "three");
+                      return (
+                        <button
+                          key={name}
+                          type="button"
+                          disabled={takenElsewhere}
+                          title={takenElsewhere ? "Already used by another level" : undefined}
+                          onClick={() => setLevelName("three", name)}
+                          className={`px-3 py-2 rounded-lg border text-sm font-medium transition-colors text-left ${
+                            structureConfig.levelThreeName === name
+                              ? "border-primary bg-primary/10 text-primary"
+                              : takenElsewhere
+                                ? "border-border opacity-40 cursor-not-allowed"
+                                : "border-border hover:border-primary/50 hover:bg-muted/50"
+                          }`}
+                          data-testid={`select-level3-${name}`}
+                        >
+                          {name}
+                        </button>
+                      );
+                    })}
                   </div>
                   {isAdmin && (
                     <div className="mt-3 flex gap-2">
@@ -7493,9 +7579,7 @@ export default function GranthasPage() {
                         onKeyDown={(e) => {
                           if (e.key === "Enter") {
                             e.preventDefault();
-                            void addSharedOption("structureLevelThreeNames", (value) =>
-                              setStructureConfig({ ...structureConfig, levelThreeName: value }),
-                            );
+                            void addSharedOption("structureLevelThreeNames", (value) => setLevelName("three", value));
                           }
                         }}
                       />
@@ -7504,9 +7588,7 @@ export default function GranthasPage() {
                         size="sm"
                         disabled={addingSharedOptionKey === "structureLevelThreeNames"}
                         onClick={() =>
-                          void addSharedOption("structureLevelThreeNames", (value) =>
-                            setStructureConfig({ ...structureConfig, levelThreeName: value }),
-                          )
+                          void addSharedOption("structureLevelThreeNames", (value) => setLevelName("three", value))
                         }
                       >
                         {addingSharedOptionKey === "structureLevelThreeNames" ? (

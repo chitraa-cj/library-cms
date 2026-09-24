@@ -37,6 +37,7 @@ import {
 } from "@/components/ui/alert-dialog";
 import {
   granthaTypes,
+  sectionTypeLabels,
   translationLanguages,
   type PortalVocabularyKey,
   type StrapiGrantha,
@@ -99,6 +100,9 @@ import {
   mantraNumberSuffix,
   portalMantraTitleForLeaf,
   inferLeafNameFromStrapiMantras,
+  inferLevelNamesFromStrapiSections,
+  applyInferredLevelNames,
+  resolveLevelNameCollisions,
   strapiGranthaHasKhandaSections,
   sanitizeHierarchyPortalMeta,
   sortMantrasByDisplayOrder,
@@ -2313,9 +2317,12 @@ export default function GranthasPage() {
   // a genuinely custom saved config is respected so user edits are preserved.
   function migrateStructureConfig(raw: any, granthaName?: string) {
     const override = structureOverrideForName(granthaName);
-    const cfg = override && isDefaultLikeStructure(raw) ? override : raw || DEFAULT_STRUCTURE;
-    if (cfg.leafName === "Khanda") return { ...cfg, leafName: "Mantra" };
-    return cfg;
+    let cfg = override && isDefaultLikeStructure(raw) ? override : raw || DEFAULT_STRUCTURE;
+    if (cfg.leafName === "Khanda") cfg = { ...cfg, leafName: "Mantra" };
+    // Configs saved before a heading could only name one level can carry the same name on
+    // two levels (e.g. sub-sections "Pada" with level 3 still on its "Pada" default), which
+    // opens the structure page on the duplicate-heading warning. Push them apart on load.
+    return resolveLevelNameCollisions(cfg);
   }
 
   function migrateHierarchyLeafName(hierarchy: any[], oldLeaf: string, newLeaf: string) {
@@ -2884,57 +2891,44 @@ export default function GranthasPage() {
           effectiveStructureConfig = { ...effectiveStructureConfig, levelThreeEnabled: true };
         }
 
-        // Auto-detect L2/L3 display names from section titles when the saved config
-        // still has the defaults ("Khanda" / "Pada"). This handles older drafts that
-        // were saved before the name was chosen, and granthas loaded straight from Strapi.
-        // Strategy: scan every L2 (or L3) title for known Sanskrit section-type words
-        // and use the most frequently occurring one.
-        const L2_KEYWORDS = ["Brahmana", "Valli", "Anuvaka", "Adhikarana", "Adhikaranam", "Varnaka", "Pada", "Sukta", "Kanda"];
-        const L3_KEYWORDS = ["Pada", "Anuvaka", "Varga", "Sukta", "Adhikaranam", "Adhikarana"];
-
-        const detectNameFromTitles = (titles: string[], keywords: string[]): string | undefined => {
-          const counts = new Map<string, number>();
-          for (const title of titles) {
-            const words = title.split(/[\s\-–—]+/);
-            for (const word of words) {
-              const cap = word.charAt(0).toUpperCase() + word.slice(1).toLowerCase();
-              if (keywords.includes(cap)) counts.set(cap, (counts.get(cap) || 0) + 1);
-            }
-          }
-          if (!counts.size) return undefined;
-          return Array.from(counts.entries()).sort((a, b) => b[1] - a[1])[0][0];
-        };
-
-        // L2 name auto-detect: only when still at default "Khanda"
-        if (effectiveStructureConfig.levelTwoEnabled && effectiveStructureConfig.levelTwoName === "Khanda") {
-          const l2Titles = hierToUse2
-            .flatMap((a: any) => a.khandas || [])
-            .filter((k: any) => k.title && k.title !== "_default")
-            .map((k: any) => k.title as string);
-          const detected = detectNameFromTitles(l2Titles, L2_KEYWORDS);
-          if (detected) {
-            effectiveStructureConfig = { ...effectiveStructureConfig, levelTwoName: detected };
-          }
-        }
-
-        // L3 name auto-detect: only when still at default "Pada" and L3 is enabled
-        const hasPadasForName = hierToUse2.some((a: any) =>
-          (a.khandas || []).some((k: any) => (k.padas?.length ?? 0) > 0)
+        // Auto-detect each level's display name from the CMS data whenever the config is
+        // still on a wizard default. `structureConfig` never reaches Strapi, so a grantha
+        // whose only draft was published opens on DEFAULT_STRUCTURE and the structure page
+        // would otherwise claim "Adhyaya / Khanda" for a book whose sections are Kandas or
+        // Prakaranas. `section.type` is authoritative; numbered titles ("Pada 2") are the
+        // fallback, first from Strapi sections and then from the draft hierarchy (which may
+        // hold sections not yet published). A name the editor picked by hand is never
+        // overwritten, and level names that collide are pushed apart.
+        const levelNamesFromSections = inferLevelNamesFromStrapiSections(
+          fetchedSections,
+          sectionTypeLabels,
         );
-        if (
-          (effectiveStructureConfig.levelThreeEnabled || hasPadasForName) &&
-          effectiveStructureConfig.levelThreeName === "Pada"
-        ) {
-          const l3Titles = hierToUse2
-            .flatMap((a: any) => a.khandas || [])
-            .flatMap((k: any) => k.padas || [])
-            .filter((p: any) => p.title)
-            .map((p: any) => p.title as string);
-          const detected = detectNameFromTitles(l3Titles, L3_KEYWORDS);
-          if (detected && detected !== "Pada") {
-            effectiveStructureConfig = { ...effectiveStructureConfig, levelThreeName: detected };
-          }
-        }
+        const levelNamesFromHierarchy = inferLevelNamesFromStrapiSections(
+          hierToUse2.flatMap((a: any, ai: number) => {
+            const aDoc = a.documentId || `hier-a-${ai}`;
+            return [
+              { documentId: aDoc, title: a.title, type: null, parent: null },
+              ...(a.khandas || []).flatMap((k: any, ki: number) => {
+                const kDoc = k.documentId || `hier-k-${ai}-${ki}`;
+                return [
+                  { documentId: kDoc, title: k.title, type: null, parent: { documentId: aDoc } },
+                  ...(k.padas || []).map((pd: any, pi: number) => ({
+                    documentId: pd.documentId || `hier-p-${ai}-${ki}-${pi}`,
+                    title: pd.title,
+                    type: null,
+                    parent: { documentId: kDoc },
+                  })),
+                ];
+              }),
+            ];
+          }),
+          sectionTypeLabels,
+        );
+        effectiveStructureConfig = applyInferredLevelNames(effectiveStructureConfig, {
+          one: levelNamesFromSections.one ?? levelNamesFromHierarchy.one,
+          two: levelNamesFromSections.two ?? levelNamesFromHierarchy.two,
+          three: levelNamesFromSections.three ?? levelNamesFromHierarchy.three,
+        });
       }
 
       // Build lookup maps from fetched sections so we can enrich hierarchy nodes

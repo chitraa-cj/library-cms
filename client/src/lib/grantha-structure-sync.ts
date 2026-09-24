@@ -1703,3 +1703,201 @@ export function isMantraSectionMisplacedOnAdhyaya(
   const path = buildSectionAncestorPath(mantraSectionDocId, byId);
   return path.length === 1;
 }
+
+// ─── Level-name inference from CMS sections ──────────────────────────────────
+// `structureConfig` lives only in portal drafts, never in Strapi, so a grantha
+// whose draft was published (or that was never edited in the portal) opens with
+// the wizard defaults — the structure page then claims "Adhyaya / Khanda / Mantra"
+// while the editor tree shows the real sections. These helpers read the level
+// names back out of the CMS data: `section.type` first (the authoritative field),
+// falling back to the leading word of numbered section titles ("Pada 2" → "Pada").
+
+/** Wizard defaults — a level still sitting on its default may be overwritten by an inferred name. */
+export const DEFAULT_LEVEL_NAMES = { one: "Adhyaya", two: "Khanda", three: "Pada" } as const;
+
+/** Candidate names used when a level must move off a heading another level already claims. */
+const LEVEL_NAME_FALLBACKS = [
+  "Pada",
+  "Adhikaranam",
+  "Anuvaka",
+  "Khanda",
+  "Varga",
+  "Sukta",
+  "Section",
+  "Part",
+] as const;
+
+export interface StrapiSectionForInference {
+  documentId?: string;
+  title?: string | null;
+  type?: string | null;
+  parent?: { documentId?: string | null } | null;
+}
+
+/** "Pada 2" → "Pada"; a title that isn't `<word> <number>` ("Madhu Kanda") yields nothing. */
+export function sectionTitleLevelWord(title: string | null | undefined): string | undefined {
+  const m = String(title ?? "")
+    .trim()
+    .match(/^([A-Za-zऀ-ॿ]+)[\s\-–—:.]+\d/);
+  if (!m) return undefined;
+  const w = m[1];
+  if (w.length < 3) return undefined;
+  return w.charAt(0).toUpperCase() + w.slice(1).toLowerCase();
+}
+
+/**
+ * A known section-type word anywhere in an unnumbered title ("Madhu Brahmana" → "Brahmana").
+ * Only used when the title isn't of the `<word> <number>` form, so a book-specific
+ * section name never gets mistaken for the level heading.
+ */
+export function knownLevelWordInTitle(
+  title: string | null | undefined,
+  typeLabels: Record<string, string>,
+): string | undefined {
+  const known = new Set(
+    [...Object.values(typeLabels), ...LEVEL_NAME_FALLBACKS, "Brahmana", "Adhikarana", "Varnaka"].map(
+      (n) => n.toLowerCase(),
+    ),
+  );
+  for (const raw of String(title ?? "").split(/[\s\-–—:.]+/)) {
+    const w = raw.trim().toLowerCase();
+    if (w.length >= 3 && known.has(w)) return w.charAt(0).toUpperCase() + w.slice(1);
+  }
+  return undefined;
+}
+
+/** Most frequent non-empty value, or undefined when nothing was counted. */
+function majority(counts: Map<string, number>): string | undefined {
+  let best: string | undefined;
+  let bestN = 0;
+  for (const [name, n] of counts) {
+    if (n > bestN) {
+      best = name;
+      bestN = n;
+    }
+  }
+  return best;
+}
+
+/** 0 for a top-level section, 1 for its children, 2 for grandchildren; deeper levels are clamped to 2. */
+function sectionDepth(
+  section: StrapiSectionForInference,
+  byDocId: Map<string, StrapiSectionForInference>,
+): number {
+  let depth = 0;
+  let cur = section;
+  const seen = new Set<string>();
+  while (depth < 2) {
+    const pid = cur.parent?.documentId;
+    if (!pid) break;
+    if (seen.has(pid)) break; // defensive: a cyclic parent chain must not hang the loader
+    seen.add(pid);
+    const parent = byDocId.get(pid);
+    if (!parent) break;
+    cur = parent;
+    depth++;
+  }
+  return depth;
+}
+
+/**
+ * Read the level headings a grantha actually uses out of its Strapi sections.
+ * `typeLabels` maps the Strapi `type` enum key to its display label (shared/schema's
+ * `sectionTypeLabels`); a section with no usable type falls back to its title word.
+ */
+export function inferLevelNamesFromStrapiSections(
+  sections: StrapiSectionForInference[] | undefined,
+  typeLabels: Record<string, string>,
+): { one?: string; two?: string; three?: string } {
+  if (!sections?.length) return {};
+  const byDocId = new Map<string, StrapiSectionForInference>();
+  for (const s of sections) if (s.documentId) byDocId.set(s.documentId, s);
+
+  // Per depth: names from `type` win outright; title words are only consulted
+  // when no section at that depth carries a type.
+  const typeCounts: Map<string, number>[] = [new Map(), new Map(), new Map()];
+  const titleCounts: Map<string, number>[] = [new Map(), new Map(), new Map()];
+  for (const s of sections) {
+    const depth = sectionDepth(s, byDocId);
+    const typeKey = String(s.type ?? "").trim().toLowerCase();
+    const typeLabel = typeKey ? typeLabels[typeKey] : undefined;
+    if (typeLabel) {
+      typeCounts[depth].set(typeLabel, (typeCounts[depth].get(typeLabel) ?? 0) + 1);
+      continue;
+    }
+    const word = sectionTitleLevelWord(s.title) ?? knownLevelWordInTitle(s.title, typeLabels);
+    if (word) titleCounts[depth].set(word, (titleCounts[depth].get(word) ?? 0) + 1);
+  }
+
+  const pick = (depth: number) => majority(typeCounts[depth]) ?? majority(titleCounts[depth]);
+  return { one: pick(0), two: pick(1), three: pick(2) };
+}
+
+/**
+ * Apply inferred headings to a config, then make sure no two enabled levels share one.
+ * A level name is replaced only when it is absent or still on the wizard default, so a
+ * heading the editor picked by hand is never overwritten.
+ */
+export function applyInferredLevelNames<T extends GranthaStructureConfig>(
+  cfg: T,
+  inferred: { one?: string; two?: string; three?: string },
+): T {
+  const next = { ...cfg };
+  const isDefaultOrEmpty = (value: string | undefined, dflt: string) => {
+    const v = (value ?? "").trim();
+    return v === "" || v.toLowerCase() === dflt.toLowerCase();
+  };
+
+  if (inferred.one && isDefaultOrEmpty(next.levelOneName, DEFAULT_LEVEL_NAMES.one)) {
+    next.levelOneName = inferred.one;
+  }
+  if (inferred.two && isDefaultOrEmpty(next.levelTwoName, DEFAULT_LEVEL_NAMES.two)) {
+    next.levelTwoName = inferred.two;
+  }
+  if (inferred.three && isDefaultOrEmpty(next.levelThreeName, DEFAULT_LEVEL_NAMES.three)) {
+    next.levelThreeName = inferred.three;
+  }
+  return resolveLevelNameCollisions(next, inferred);
+}
+
+/**
+ * A heading may name only one level. Deeper levels give way: level 3 moves first,
+ * then level 2 — onto its inferred name if that is free, else the first free fallback.
+ */
+export function resolveLevelNameCollisions<T extends GranthaStructureConfig>(
+  cfg: T,
+  inferred: { one?: string; two?: string; three?: string } = {},
+): T {
+  const next = { ...cfg };
+  const same = (a: string | undefined, b: string | undefined) => {
+    const x = (a ?? "").trim().toLowerCase();
+    const y = (b ?? "").trim().toLowerCase();
+    return x !== "" && x === y;
+  };
+  const levelOneActive = next.levelOneEnabled !== false;
+  const levelTwoActive = next.levelTwoEnabled !== false;
+  const levelThreeActive = levelTwoActive && !!next.levelThreeEnabled;
+
+  const firstFree = (taken: (string | undefined)[], preferred: string | undefined) => {
+    const free = (name: string) => !taken.some((t) => same(t, name));
+    if (preferred && free(preferred)) return preferred;
+    return LEVEL_NAME_FALLBACKS.find(free);
+  };
+
+  if (levelTwoActive && levelOneActive && same(next.levelTwoName, next.levelOneName)) {
+    const replacement = firstFree([next.levelOneName, next.levelThreeName], inferred.two);
+    if (replacement) next.levelTwoName = replacement;
+  }
+  if (
+    levelThreeActive &&
+    ((levelOneActive && same(next.levelThreeName, next.levelOneName)) ||
+      same(next.levelThreeName, next.levelTwoName))
+  ) {
+    const replacement = firstFree(
+      [levelOneActive ? next.levelOneName : undefined, next.levelTwoName],
+      inferred.three,
+    );
+    if (replacement) next.levelThreeName = replacement;
+  }
+  return next;
+}

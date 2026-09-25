@@ -148,6 +148,11 @@ import {
 import { STRAPI_SORT_GAP } from "@shared/mantra-sort-key";
 import { usePortalVocabulary } from "@/hooks/use-portal-vocabulary";
 import OtherTranslationsHermex from "@/components/other-translations-hermex";
+import GranthaVideos, {
+  granthaVideosFromDraftPayload,
+  granthaVideosToDraftPayload,
+  type GranthaVideoDraft,
+} from "@/components/grantha-videos";
 import GranthaCsvImportDialog from "@/components/grantha-csv-import-dialog";
 import type {
   GranthaCsvImportPayload,
@@ -1492,6 +1497,10 @@ export default function GranthasPage() {
   });
   const [coverImageUploading, setCoverImageUploading] = useState(false);
   const coverImageInputRef = useRef<HTMLInputElement>(null);
+  // Ordered YouTube videos for this grantha. Lives outside formData (like teekas)
+  // because each row is its own Strapi VideoResource, not a grantha field; list
+  // position is the display order on the reading site.
+  const [granthaVideos, setGranthaVideos] = useState<GranthaVideoDraft[]>([]);
   const [teekas, setTeekas] = useState<TeekaDefinition[]>([]);
   const [otherTranslations, setOtherTranslations] = useState<OtherTranslationEntry[]>([]);
   const [granthaNameTranslations, setGranthaNameTranslations] = useState<GranthaNameTranslationEntry[]>([]);
@@ -2349,6 +2358,7 @@ export default function GranthasPage() {
     publishScopeReadyRef.current = false;
     resetPublishScope();
     setFormData(EMPTY_FORM);
+    setGranthaVideos([]);
     setTeekas([]);
     setOtherTranslations([]);
     setGranthaNameTranslations([]);
@@ -2433,6 +2443,7 @@ export default function GranthasPage() {
       is_locked: isItemLocked,
     });
     setEditingItem(item);
+    setGranthaVideos([]);
 
     // If this grantha is locked, open in view-only mode
     if (isItemLocked) {
@@ -2459,6 +2470,7 @@ export default function GranthasPage() {
         introVideoTitle: d.introVideoTitle || "",
         coverImage: d._coverImageMeta ?? null,
       });
+      setGranthaVideos(granthaVideosFromDraftPayload(d._videos));
       setTeekas(d.teekas || []);
       setOtherTranslations(
         (d.otherTranslations || []).map((t: any) => ({
@@ -2533,6 +2545,7 @@ export default function GranthasPage() {
         introVideoTitle: d.introVideoTitle || "",
         coverImage: d._coverImageMeta ?? null,
       });
+      setGranthaVideos(granthaVideosFromDraftPayload(d._videos));
       setTeekas(d.teekas || []);
       mergeDraftOther = (d.otherTranslations || []).map((t: any) => ({
         ...t,
@@ -5463,6 +5476,7 @@ export default function GranthasPage() {
       introVideoTitle: d.introVideoTitle || "",
       coverImage: d._coverImageMeta ?? null,
     });
+    setGranthaVideos(granthaVideosFromDraftPayload(d._videos));
     setTeekas(d.teekas || []);
     setOtherTranslations(
       (d.otherTranslations || []).map((t: any) => ({
@@ -5541,6 +5555,33 @@ export default function GranthasPage() {
       return "written";
     } catch {
       return "failed";
+    }
+  }
+
+  /**
+   * Write the whole video list to Strapi for a grantha that now exists there. Used as
+   * the fallback after a NEW grantha's first publish — until then there is no
+   * documentId to pin the videos to, so they only live in the portal draft. The server
+   * reconciles the list and renumbers `sort_order` 1..n.
+   */
+  async function persistGranthaVideosToStrapi(
+    docId: string,
+    videos: GranthaVideoDraft[],
+  ): Promise<boolean> {
+    try {
+      const res = await apiRequest("PUT", `/api/strapi/video-resources/for-grantha/${docId}`, {
+        videos: granthaVideosToDraftPayload(videos),
+      });
+      const json = (await res.json()) as { data?: any[] };
+      if (Array.isArray(json?.data)) {
+        setGranthaVideos(granthaVideosFromDraftPayload(json.data));
+      }
+      queryClient.invalidateQueries({
+        queryKey: ["/api/strapi/video-resources/for-grantha", docId],
+      });
+      return true;
+    } catch {
+      return false;
     }
   }
 
@@ -5664,6 +5705,15 @@ export default function GranthasPage() {
     if (formData.coverImage?.id) {
       payload.coverImage = formData.coverImage.id;
       payload._coverImageMeta = formData.coverImage;
+    }
+
+    // Videos: each row is its own Strapi VideoResource, not a grantha field. For an
+    // existing grantha "Save videos" already wrote them to the CMS; this `_`-prefixed
+    // copy (stripped from the Strapi payload by the server) keeps the list in the
+    // portal draft so it survives a reload and can be written on a new grantha's
+    // first publish.
+    if (granthaVideos.length > 0) {
+      payload._videos = granthaVideosToDraftPayload(granthaVideos);
     }
 
     if (hasBlocks(formData.IntroductionToTextEnglish)) {
@@ -5870,6 +5920,20 @@ export default function GranthasPage() {
           const granthaSidForFlush =
             newStrapiDocId ||
             (editingItem && !editingItem._isDraft ? editingItem.documentId : editingItem?._strapiDocId);
+          // Videos added before the grantha existed in the CMS (or added and not yet
+          // saved) had no documentId to pin to — write them now that there is one.
+          if (granthaSidForFlush && granthaVideos.some((v) => !v.documentId)) {
+            void persistGranthaVideosToStrapi(granthaSidForFlush, granthaVideos).then((ok) => {
+              if (!ok) {
+                toast({
+                  variant: "destructive",
+                  title: "Video links not saved",
+                  description:
+                    "The grantha published, but its videos could not be written — reopen it and use Save videos.",
+                });
+              }
+            });
+          }
           if (Array.isArray(updatedHierarchy)) {
             const merged = mergePublishedHierarchyPreservingContent(
               adhyayasRef.current,
@@ -7270,6 +7334,12 @@ export default function GranthasPage() {
                   </div>
                 </div>
               </div>
+              <GranthaVideos
+                videos={granthaVideos}
+                onChange={setGranthaVideos}
+                granthaDocId={currentStrapiGranthaDocId()}
+                viewOnly={viewOnly}
+              />
             </div>
           </div>
 

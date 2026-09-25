@@ -35,6 +35,7 @@ import {
   type VideoResource,
   type VideoTargetType,
 } from "@shared/video-resource-resolve";
+import { canonicalYouTubeUrl, parseYouTubeLink } from "@shared/youtube-url";
 
 const STRAPI_URL = process.env.STRAPI_URL || "http://13.53.121.15:1337";
 const STRAPI_ADMIN_NOTE =
@@ -1861,6 +1862,141 @@ export function createStrapiRouter() {
       res
         .status(500)
         .json({ message: error.message || "Failed to resolve videos for node" });
+    }
+  });
+
+  // ── One grantha's YouTube videos: list + whole-list save ──
+  // The grantha editor manages a grantha's videos the way it manages its cover image:
+  // the ordered list is edited in the form and written straight to the CMS, no
+  // republish needed. The client sends the WHOLE list and this endpoint reconciles it
+  // against Strapi (update / create / delete) and renumbers `sort_order` 1..n, so the
+  // reading app renders the videos in exactly the order shown in the editor.
+  // Registered before the generic `/video-resources/:documentId` routes below.
+  type PortalGranthaVideo = {
+    documentId: string;
+    youtubeUrl: string;
+    videoId: string | null;
+    title: string;
+    startSeconds: number;
+    language: string | null;
+    order: number;
+  };
+
+  const toPortalGranthaVideo = (row: any, index: number): PortalGranthaVideo => {
+    const youtubeUrl = row?.youtube_url ?? "";
+    return {
+      documentId: row?.documentId,
+      youtubeUrl,
+      videoId: parseYouTubeLink(youtubeUrl)?.videoId ?? null,
+      title: row?.title ?? "",
+      startSeconds: row?.start_seconds ?? 0,
+      language: row?.language ?? null,
+      order: row?.sort_order ?? index + 1,
+    };
+  };
+
+  /** Every video pinned to this grantha, ascending by the order it is shown in. */
+  const fetchGranthaVideoRows = async (granthaDocId: string): Promise<any[]> => {
+    const query = [
+      "filters[target_type][$eq]=grantha",
+      `filters[target_doc_id][$eq]=${encodeURIComponent(granthaDocId)}`,
+      "pagination[pageSize]=200",
+      "sort=sort_order:asc",
+    ].join("&");
+    const result = await strapiRequest(`/api/video-resources?${query}`);
+    return (result?.data ?? []) as any[];
+  };
+
+  /** A 404 here means the Video Resource content type isn't deployed on Strapi yet. */
+  const isVideoTypeMissing = (error: any) => error?.status === 404;
+  const VIDEO_TYPE_MISSING_MESSAGE =
+    "The Video Resource content type is not deployed on the CMS yet (see strapi/README.md).";
+
+  router.get("/video-resources/for-grantha/:granthaDocId", async (req, res) => {
+    try {
+      const rows = await fetchGranthaVideoRows(req.params.granthaDocId);
+      res.json({ data: rows.map(toPortalGranthaVideo), available: true });
+    } catch (error: any) {
+      if (isVideoTypeMissing(error)) {
+        return res.json({ data: [], available: false, message: VIDEO_TYPE_MISSING_MESSAGE });
+      }
+      res.status(500).json({ message: error.message || "Failed to fetch grantha videos" });
+    }
+  });
+
+  router.put("/video-resources/for-grantha/:granthaDocId", async (req, res) => {
+    const granthaDocId = String(req.params.granthaDocId || "").trim();
+    const incoming = Array.isArray(req.body?.videos) ? req.body.videos : null;
+    if (!granthaDocId || !incoming) {
+      return res.status(400).json({ message: "granthaDocId and a `videos` array are required" });
+    }
+
+    // Normalize every row up front so a bad link fails the whole save instead of
+    // leaving the list half-written.
+    const normalized: Array<{ documentId?: string; attrs: Record<string, any> }> = [];
+    for (let i = 0; i < incoming.length; i++) {
+      const row = incoming[i] ?? {};
+      const raw = String(row.youtubeUrl ?? "").trim();
+      const parsed = parseYouTubeLink(raw);
+      if (!parsed) {
+        return res.status(400).json({
+          message: `Video ${i + 1}: "${raw || "(empty)"}" is not a YouTube link.`,
+        });
+      }
+      const explicitStart = Number(row.startSeconds);
+      normalized.push({
+        documentId: typeof row.documentId === "string" && row.documentId ? row.documentId : undefined,
+        attrs: {
+          youtube_url: canonicalYouTubeUrl(parsed.videoId),
+          title: String(row.title ?? "").trim() || null,
+          target_type: "grantha",
+          target_doc_id: granthaDocId,
+          target_section_type: null,
+          start_seconds: Number.isFinite(explicitStart) && explicitStart > 0
+            ? Math.floor(explicitStart)
+            : parsed.startSeconds,
+          language: String(row.language ?? "").trim() || null,
+          // Display order on the reading site: 1, 2, 3… by position in the editor.
+          sort_order: i + 1,
+        },
+      });
+    }
+
+    try {
+      const existing = await fetchGranthaVideoRows(granthaDocId);
+      const existingDocIds = new Set(existing.map((r: any) => r.documentId));
+      const kept = new Set<string>();
+
+      for (const { documentId, attrs } of normalized) {
+        if (documentId && existingDocIds.has(documentId)) {
+          kept.add(documentId);
+          await strapiRequest(`/api/video-resources/${documentId}`, {
+            method: "PUT",
+            body: JSON.stringify({ data: attrs }),
+          });
+        } else {
+          await strapiRequest(`/api/video-resources`, {
+            method: "POST",
+            body: JSON.stringify({ data: attrs }),
+          });
+        }
+      }
+
+      // Rows the editor dropped.
+      for (const row of existing) {
+        if (!kept.has(row.documentId)) {
+          await strapiRequest(`/api/video-resources/${row.documentId}`, { method: "DELETE" });
+        }
+      }
+
+      invalidateContentTypeListCaches("video-resources");
+      const saved = await fetchGranthaVideoRows(granthaDocId);
+      res.json({ data: saved.map(toPortalGranthaVideo), available: true });
+    } catch (error: any) {
+      if (isVideoTypeMissing(error)) {
+        return res.status(503).json({ message: VIDEO_TYPE_MISSING_MESSAGE });
+      }
+      res.status(500).json({ message: error.message || "Failed to save grantha videos" });
     }
   });
 

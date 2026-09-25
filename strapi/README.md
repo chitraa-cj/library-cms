@@ -15,6 +15,28 @@ Pins a YouTube video to one node of the grantha hierarchy. `target_type` is the 
 | `section`   | a section's `documentId`            | that adhyaya/khanda/kanda/pada header (see `target_section_type`) |
 | `manthra`   | a manthra's `documentId`            | that single verse   |
 
+`draftAndPublish` is **off** for this type on purpose: the rows are written only by
+the portal (the grantha editor's *Videos* list), and a draft row would be invisible to
+the default REST read the portal reconciles against — every save would then re-create
+the same videos. With it off, a written row is immediately live.
+
+### Grantha video list (portal)
+
+The grantha editor edits a grantha's videos as an ordered list and saves the WHOLE list
+through the portal proxy:
+
+- `GET  /api/strapi/video-resources/for-grantha/:granthaDocId` → the grantha's rows,
+  ascending by `sort_order`. Returns `available: false` (not an error) while this
+  content type is missing from Strapi, so the editor can say so instead of failing.
+- `PUT  /api/strapi/video-resources/for-grantha/:granthaDocId` with
+  `{ videos: [{ documentId?, youtubeUrl, title?, startSeconds? }] }` → reconciles
+  against the existing rows (update / create / delete) and rewrites `sort_order` to
+  1..n in the order sent. Position in the list IS the display order on the site.
+
+Pasted links are normalized by `shared/youtube-url.ts`: watch / share / shorts / embed /
+live URLs and bare ids are all accepted, stored as `https://www.youtube.com/watch?v=<id>`,
+with any `t=` / `start=` timestamp moved into `start_seconds`.
+
 Reader render policy is **inherit-with-fallback, many-per-node**: a node shows all its
 own videos; if it has none, it borrows the nearest ancestor's. Resolution logic lives in
 `shared/video-resource-resolve.ts` and the portal endpoint `GET /api/strapi/video-resources/for-node`.

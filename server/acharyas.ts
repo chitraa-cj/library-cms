@@ -4,9 +4,12 @@
  *
  *  - Biographies + works live in the `acharya_profiles` table, seeded from
  *    shared/data/acharya-profiles.seed.json (scraped from advaitadhara).
- *  - "Texts under an acharya" are derived at read time by matching each
- *    acharya's `aliases` against a Grantha's BhashyamAuthor and a Teeka's
- *    TeekaAuthor in Strapi — so linking works with the data that already exists.
+ *  - "Texts under an acharya" come from two places, merged at read time:
+ *    granthas picked by hand in the portal (`linkedGranthaDocIds`), and the ones
+ *    derived by matching each acharya's `aliases` against a Grantha's
+ *    BhashyamAuthor / a Teeka's TeekaAuthor in Strapi — so an acharya typed in
+ *    today can be given their texts explicitly, while the existing author-name
+ *    links keep working for everything already in the CMS.
  */
 import { Router } from "express";
 import { readFileSync } from "fs";
@@ -17,7 +20,9 @@ import { requireAuth, requireAdmin } from "./auth";
 import { strapiRequest, absolutizeMediaUrl } from "./strapi";
 import {
   acharyaProfiles,
+  createAcharyaSchema,
   updateAcharyaSchema,
+  type AcharyaGranthaOption,
   type AcharyaProfile,
   type AcharyaLinkedText,
   type InsertAcharyaProfile,
@@ -39,6 +44,31 @@ function normName(s: string): string {
     .toLowerCase()
     .replace(/\b(sri|shri|sree|acharya|bhagavatpada|swami)\b/g, "")
     .replace(/[^a-z0-9ऀ-ॿ]+/g, "");
+}
+
+/** URL key for a hand-typed acharya: ASCII-ish, lowercase, hyphenated. */
+function slugifyName(name: string): string {
+  const base = name
+    .normalize("NFKD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "");
+  // Devanagari-only names leave nothing usable behind — fall back to a stable stub.
+  return base || `acharya-${Date.now().toString(36)}`;
+}
+
+/** First free slug of the form `base`, `base-2`, `base-3`… */
+async function uniqueSlug(base: string): Promise<string> {
+  for (let n = 1; n < 100; n++) {
+    const candidate = n === 1 ? base : `${base}-${n}`;
+    const [taken] = await db
+      .select({ id: acharyaProfiles.id })
+      .from(acharyaProfiles)
+      .where(eq(acharyaProfiles.slug, candidate));
+    if (!taken) return candidate;
+  }
+  return `${base}-${Date.now().toString(36)}`;
 }
 
 // --------------------------------------------------------------------- storage
@@ -173,7 +203,23 @@ export function invalidateAcharyaTextIndex(): void {
   textIndexCache = null;
 }
 
-/** Return the Granthas + Teekas attributed to an acharya via alias matching. */
+/** Every grantha in the CMS, as the portal's "granthas under this acharya" picker
+ *  shows them. Served from the same cached index the author matching uses. */
+export async function listGranthaOptions(): Promise<AcharyaGranthaOption[]> {
+  const index = await getTextIndex();
+  return index.granthas.map((g: any) => ({
+    documentId: g.documentId,
+    name: g.GranthaName ?? "(untitled)",
+    granthaType: g.GranthaType ?? null,
+    bhashyamAuthor: g.BhashyamAuthor ?? null,
+  }));
+}
+
+/**
+ * Return the Granthas + Teekas under an acharya: the granthas picked by hand in the
+ * portal first (in the order they were picked), then everything matched by author
+ * name that isn't already there.
+ */
 export async function linkedTextsFor(
   acharya: AcharyaProfile,
 ): Promise<{ granthas: AcharyaLinkedText[]; teekas: AcharyaLinkedText[] }> {
@@ -182,7 +228,8 @@ export async function linkedTextsFor(
       .map(normName)
       .filter(Boolean),
   );
-  if (keys.size === 0) return { granthas: [], teekas: [] };
+  const manualDocIds = acharya.linkedGranthaDocIds ?? [];
+  if (keys.size === 0 && manualDocIds.length === 0) return { granthas: [], teekas: [] };
 
   let index: { granthas: any[]; teekas: any[] };
   try {
@@ -191,18 +238,34 @@ export async function linkedTextsFor(
     return { granthas: [], teekas: [] };
   }
 
+  const granthaByDocId = new Map<string, any>(
+    index.granthas.map((g: any) => [g.documentId, g]),
+  );
+  const toLinkedGrantha = (g: any, linkedBy: "manual" | "author"): AcharyaLinkedText => ({
+    documentId: g.documentId,
+    name: g.GranthaName,
+    kind: "grantha",
+    granthaType: g.GranthaType ?? null,
+    slug: g.slug ?? null,
+    coverImageUrl: absolutizeMediaUrl(g?.coverImage?.url) ?? null,
+    linkedBy,
+  });
+
   const granthas: AcharyaLinkedText[] = [];
+  const seen = new Set<string>();
+  for (const docId of manualDocIds) {
+    const g = granthaByDocId.get(docId);
+    // A grantha deleted in Strapi since it was picked simply drops out of the list.
+    if (!g || seen.has(docId)) continue;
+    seen.add(docId);
+    granthas.push(toLinkedGrantha(g, "manual"));
+  }
   for (const g of index.granthas) {
+    if (seen.has(g.documentId)) continue;
     const author = g?.BhashyamAuthor;
     if (author && keys.has(normName(String(author)))) {
-      granthas.push({
-        documentId: g.documentId,
-        name: g.GranthaName,
-        kind: "grantha",
-        granthaType: g.GranthaType ?? null,
-        slug: g.slug ?? null,
-        coverImageUrl: absolutizeMediaUrl(g?.coverImage?.url) ?? null,
-      });
+      seen.add(g.documentId);
+      granthas.push(toLinkedGrantha(g, "author"));
     }
   }
 
@@ -214,6 +277,7 @@ export async function linkedTextsFor(
         documentId: t.documentId,
         name: t.TeekaName,
         kind: "teeka",
+        linkedBy: "author",
       });
     }
   }
@@ -231,6 +295,53 @@ export function createAcharyaRouter(): Router {
       res.json({ data: await listAcharyas() });
     } catch (error: any) {
       res.status(500).json({ message: error?.message || "Failed to load acharyas" });
+    }
+  });
+
+  // Granthas offered in the "granthas under this acharya" picker. Registered before
+  // "/:slug" so it isn't swallowed as a slug.
+  router.get("/granthas", async (_req, res) => {
+    try {
+      res.json({ data: await listGranthaOptions() });
+    } catch (error: any) {
+      res.status(500).json({ message: error?.message || "Failed to load granthas" });
+    }
+  });
+
+  // Add an acharya typed into the portal (name, dates, biography, their granthas).
+  router.post("/", requireAdmin, async (req, res) => {
+    try {
+      const parsed = createAcharyaSchema.safeParse(req.body);
+      if (!parsed.success) {
+        return res.status(400).json({ message: "Invalid payload", issues: parsed.error.issues });
+      }
+      const user = req.user as User;
+      const input = parsed.data;
+      const biography = input.biography ?? [];
+      // The typed name is the display name; Devanagari/IAST fall back to it so the
+      // profile header and the author matching both have something to work with.
+      const [created] = await db
+        .insert(acharyaProfiles)
+        .values({
+          slug: await uniqueSlug(slugifyName(input.nameIast || input.name)),
+          nameDevanagari: input.nameDevanagari?.trim() || input.name,
+          nameIast: input.nameIast?.trim() || null,
+          nameDisplay: input.name,
+          aliases: input.aliases ?? [input.name],
+          dates: input.dates ?? null,
+          avatarUrl: input.avatarUrl ?? null,
+          biography,
+          linkedGranthaDocIds: input.linkedGranthaDocIds ?? [],
+          bioStatus: biography.some((section) => section.paragraphs.length > 0)
+            ? "custom"
+            : "empty",
+          updatedBy: user.id,
+        })
+        .returning();
+      invalidateAcharyaTextIndex();
+      res.status(201).json(created);
+    } catch (error: any) {
+      res.status(500).json({ message: error?.message || "Failed to create acharya" });
     }
   });
 
@@ -257,12 +368,19 @@ export function createAcharyaRouter(): Router {
       const patch = parsed.data;
       const set: Record<string, unknown> = { updatedAt: new Date(), updatedBy: user.id };
       if (patch.nameDisplay !== undefined) set.nameDisplay = patch.nameDisplay;
+      if (patch.nameDevanagari !== undefined) set.nameDevanagari = patch.nameDevanagari;
+      if (patch.nameIast !== undefined) set.nameIast = patch.nameIast;
       if (patch.dates !== undefined) set.dates = patch.dates;
       if (patch.avatarUrl !== undefined) set.avatarUrl = patch.avatarUrl;
       if (patch.aliases !== undefined) set.aliases = patch.aliases;
       if (patch.biography !== undefined) {
         set.biography = patch.biography;
-        set.bioStatus = "custom";
+        set.bioStatus = patch.biography.some((section) => section.paragraphs.length > 0)
+          ? "custom"
+          : "empty";
+      }
+      if (patch.linkedGranthaDocIds !== undefined) {
+        set.linkedGranthaDocIds = patch.linkedGranthaDocIds;
       }
       const [updated] = await db
         .update(acharyaProfiles)

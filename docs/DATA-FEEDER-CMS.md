@@ -315,6 +315,7 @@ SQL migrations live in `script/migrations/`. Apply with npm scripts:
 npm run migrate:draft-fk-cascade
 npm run migrate:portal-vocabulary
 npm run migrate:acharyas
+npm run migrate:acharya-granthas
 ```
 
 Schema changes also sync via `npm run db:push` (Drizzle).
@@ -818,11 +819,26 @@ Acharya profiles live in **portal PostgreSQL** (`acharya_profiles`), not Strapi.
 | Method | Path | Auth | Description |
 |--------|------|------|-------------|
 | GET | `/api/acharyas` | Auth | List all acharyas |
-| GET | `/api/acharyas/:slug` | Auth | One acharya + linked granthas/teekas |
+| GET | `/api/acharyas/granthas` | Auth | Every grantha in the CMS, for the "granthas under this acharya" picker |
+| GET | `/api/acharyas/:slug` | Auth | One acharya + the granthas/teekas under them |
+| POST | `/api/acharyas` | Admin | Add an acharya (name, dates, biography, picked granthas) |
 | PATCH | `/api/acharyas/:slug` | Admin | Update profile |
 | POST | `/api/acharyas/seed` | Admin | Re-seed from scraped data |
 
 Seed script: `npm run seed:acharyas`
+
+**Which texts sit under an acharya** comes from two sources, merged when the profile is
+read (picked first, then matched, deduped by documentId):
+
+1. **Picked in the portal** — the Acharyas page editor lists every grantha with a
+   checkbox; ticked ones are stored on the profile as `linked_grantha_doc_ids` and are
+   reported with `linkedBy: "manual"`. This works regardless of what (if anything) the
+   grantha records as its BhashyamAuthor.
+2. **Matched by author name** — a grantha's `BhashyamAuthor` / a teeka's `TeekaAuthor`
+   normalized against the acharya's name + aliases, reported as `linkedBy: "author"`.
+
+`linked_grantha_doc_ids` needs `npm run migrate:acharya-granthas` before the portal is
+deployed — without the column every acharya query fails.
 
 ---
 

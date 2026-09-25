@@ -377,8 +377,9 @@ export type CmsPortalVocabularyRow = typeof cmsPortalVocabulary.$inferSelect;
 // ---------- Acharyas (guru-parampara) ----------
 // Portal-only entity, stored entirely in local Postgres (no Strapi change).
 // Biographies + works are seeded from advaitadhara.sanatana.in and can be
-// edited in the portal. "Texts under an acharya" are NOT stored here — they are
-// derived at read time by matching `aliases` against a Grantha's BhashyamAuthor
+// edited in the portal. "Texts under an acharya" come from two places, merged at
+// read time: Granthas picked by hand in the portal (`linkedGranthaDocIds`), and
+// Granthas/Teekas derived by matching `aliases` against a Grantha's BhashyamAuthor
 // and a Teeka's TeekaAuthor in Strapi.
 
 /** One heading + its paragraphs within a biography (Sanskrit prose). */
@@ -422,6 +423,9 @@ export const acharyaProfiles = pgTable("acharya_profiles", {
   category: text("category"),
   biography: jsonb("biography").$type<AcharyaBioSection[]>().notNull().default([]),
   worksList: jsonb("works_list").$type<AcharyaWork[]>().notNull().default([]),
+  /** Granthas placed under this acharya by hand in the portal (Strapi documentIds).
+   *  Merged with the alias-derived ones when the profile is read. */
+  linkedGranthaDocIds: jsonb("linked_grantha_doc_ids").$type<string[]>().notNull().default([]),
   avatarUrl: text("avatar_url"),
   bioStatus: text("bio_status").$type<AcharyaBioStatus>().notNull().default("empty"),
   createdAt: timestamp("created_at").defaultNow(),
@@ -432,22 +436,41 @@ export const acharyaProfiles = pgTable("acharya_profiles", {
 export type AcharyaProfile = typeof acharyaProfiles.$inferSelect;
 export type InsertAcharyaProfile = typeof acharyaProfiles.$inferInsert;
 
+const acharyaBiographySchema = z.array(
+  z.object({
+    heading: z.string().nullable(),
+    paragraphs: z.array(z.string()),
+  }),
+);
+
 /** Fields a portal editor may update on an acharya. */
 export const updateAcharyaSchema = z.object({
   nameDisplay: z.string().trim().min(1).optional(),
+  nameDevanagari: z.string().trim().min(1).optional(),
+  nameIast: z.string().trim().nullable().optional(),
   dates: z.string().trim().nullable().optional(),
   avatarUrl: z.string().trim().nullable().optional(),
   aliases: z.array(z.string().trim().min(1)).optional(),
-  biography: z
-    .array(
-      z.object({
-        heading: z.string().nullable(),
-        paragraphs: z.array(z.string()),
-      }),
-    )
-    .optional(),
+  biography: acharyaBiographySchema.optional(),
+  /** Strapi documentIds of the granthas placed under this acharya. */
+  linkedGranthaDocIds: z.array(z.string().trim().min(1)).optional(),
 });
 export type UpdateAcharya = z.infer<typeof updateAcharyaSchema>;
+
+/** A new acharya typed into the portal. Only the name is required — the rest of the
+ *  profile (dates, biography, the granthas under them) can be filled in as it is known. */
+export const createAcharyaSchema = z.object({
+  /** The name as it should read on the profile; also seeds the slug. */
+  name: z.string().trim().min(1),
+  nameDevanagari: z.string().trim().optional(),
+  nameIast: z.string().trim().optional(),
+  dates: z.string().trim().nullable().optional(),
+  avatarUrl: z.string().trim().nullable().optional(),
+  aliases: z.array(z.string().trim().min(1)).optional(),
+  biography: acharyaBiographySchema.optional(),
+  linkedGranthaDocIds: z.array(z.string().trim().min(1)).optional(),
+});
+export type CreateAcharya = z.infer<typeof createAcharyaSchema>;
 
 // ─── OCR documents (admin-only Gemini OCR) ───────────────────────────────────
 // A job owns one uploaded file; the file is split into fixed page-range chunks
@@ -536,6 +559,16 @@ export type AcharyaLinkedText = {
   granthaType?: string | null;
   slug?: string | null;
   coverImageUrl?: string | null;
+  /** "manual" = picked in the portal, "author" = matched via the text's author name. */
+  linkedBy?: "manual" | "author";
+};
+
+/** One grantha as offered in the portal's "granthas under this acharya" picker. */
+export type AcharyaGranthaOption = {
+  documentId: string;
+  name: string;
+  granthaType?: string | null;
+  bhashyamAuthor?: string | null;
 };
 
 export type AcharyaWithTexts = AcharyaProfile & {

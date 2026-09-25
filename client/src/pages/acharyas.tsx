@@ -1,12 +1,8 @@
-import { useMemo, useRef, useState } from "react";
-import { useQuery, useMutation } from "@tanstack/react-query";
-import { queryClient, apiRequest } from "@/lib/queryClient";
-import { useToast } from "@/hooks/use-toast";
+import { useMemo, useState } from "react";
+import { useQuery } from "@tanstack/react-query";
 import { useAuth } from "@/hooks/use-auth";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
-import { Textarea } from "@/components/ui/textarea";
 import { Badge } from "@/components/ui/badge";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Card } from "@/components/ui/card";
@@ -17,21 +13,14 @@ import {
   AccordionItem,
   AccordionTrigger,
 } from "@/components/ui/accordion";
-import {
-  Dialog,
-  DialogContent,
-  DialogHeader,
-  DialogTitle,
-  DialogDescription,
-  DialogFooter,
-} from "@/components/ui/dialog";
+import AcharyaEditorDialog from "@/components/acharya-editor-dialog";
 import {
   BookOpen,
   Library,
   Loader2,
   Pencil,
+  Plus,
   Search,
-  Upload,
   ExternalLink,
 } from "lucide-react";
 import type {
@@ -50,12 +39,12 @@ function initials(name: string): string {
 }
 
 export default function AcharyasPage() {
-  const { toast } = useToast();
   const { user } = useAuth();
   const isAdmin = user?.role === "admin";
 
   const [search, setSearch] = useState("");
   const [selectedSlug, setSelectedSlug] = useState<string | null>(null);
+  const [addOpen, setAddOpen] = useState(false);
 
   const { data: listData, isLoading } = useQuery<ListResponse>({
     queryKey: ["/api/acharyas"],
@@ -82,13 +71,28 @@ export default function AcharyasPage() {
 
   return (
     <div className="p-6 lg:p-8 max-w-7xl mx-auto">
-      <div className="mb-6">
-        <h1 className="text-2xl font-semibold">Acharyas</h1>
-        <p className="text-muted-foreground text-sm mt-1">
-          Guru-parampara — biographies, works, and the texts (Upanishads &amp; commentaries)
-          linked under each acharya.
-        </p>
+      <div className="mb-6 flex items-start justify-between gap-4">
+        <div>
+          <h1 className="text-2xl font-semibold">Acharyas</h1>
+          <p className="text-muted-foreground text-sm mt-1">
+            Guru-parampara — biographies, works, and the texts (Upanishads &amp; commentaries)
+            linked under each acharya.
+          </p>
+        </div>
+        {isAdmin ? (
+          <Button onClick={() => setAddOpen(true)} data-testid="button-add-acharya">
+            <Plus className="w-4 h-4 mr-2" />
+            Add acharya
+          </Button>
+        ) : null}
       </div>
+      {isAdmin ? (
+        <AcharyaEditorDialog
+          open={addOpen}
+          onOpenChange={setAddOpen}
+          onCreated={(slug) => setSelectedSlug(slug)}
+        />
+      ) : null}
 
       <div className="grid grid-cols-1 md:grid-cols-[320px_1fr] gap-6">
         {/* List */}
@@ -202,8 +206,8 @@ function AcharyaDetail({ acharya, isAdmin }: { acharya: AcharyaWithTexts; isAdmi
         </div>
       </div>
 
-      {/* Linked texts */}
-      {(acharya.granthas.length > 0 || acharya.teekas.length > 0) && (
+      {/* Texts under this acharya */}
+      {(acharya.granthas.length > 0 || acharya.teekas.length > 0 || isAdmin) && (
         <>
           <Separator className="my-5" />
           <div className="grid sm:grid-cols-2 gap-5">
@@ -211,6 +215,7 @@ function AcharyaDetail({ acharya, isAdmin }: { acharya: AcharyaWithTexts; isAdmi
               icon={<BookOpen className="w-4 h-4" />}
               title="Granthas (texts)"
               items={acharya.granthas}
+              emptyHint={isAdmin ? "Use Edit to pick the granthas under this acharya." : undefined}
             />
             <LinkedTextList
               icon={<Library className="w-4 h-4" />}
@@ -257,7 +262,7 @@ function AcharyaDetail({ acharya, isAdmin }: { acharya: AcharyaWithTexts; isAdmi
       )}
 
       {isAdmin ? (
-        <EditAcharyaDialog acharya={acharya} open={editOpen} onOpenChange={setEditOpen} />
+        <AcharyaEditorDialog acharya={acharya} open={editOpen} onOpenChange={setEditOpen} />
       ) : null}
     </Card>
   );
@@ -310,10 +315,12 @@ function LinkedTextList({
   icon,
   title,
   items,
+  emptyHint,
 }: {
   icon: React.ReactNode;
   title: string;
   items: AcharyaLinkedText[];
+  emptyHint?: string;
 }) {
   return (
     <div>
@@ -323,12 +330,17 @@ function LinkedTextList({
         <span className="text-muted-foreground">({items.length})</span>
       </div>
       {items.length === 0 ? (
-        <p className="text-xs text-muted-foreground">None linked.</p>
+        <p className="text-xs text-muted-foreground">{emptyHint ?? "None linked."}</p>
       ) : (
         <ul className="space-y-1">
           {items.map((t) => (
             <li key={t.documentId} className="text-sm flex items-center gap-2">
               <span className="truncate">{t.name}</span>
+              {t.linkedBy === "author" ? (
+                <Badge variant="secondary" className="text-[10px] shrink-0" title="Matched by author name">
+                  by author
+                </Badge>
+              ) : null}
               {t.granthaType ? (
                 <Badge variant="outline" className="text-[10px] shrink-0">
                   {t.granthaType}
@@ -340,145 +352,4 @@ function LinkedTextList({
       )}
     </div>
   );
-}
-
-function EditAcharyaDialog({
-  acharya,
-  open,
-  onOpenChange,
-}: {
-  acharya: AcharyaWithTexts;
-  open: boolean;
-  onOpenChange: (v: boolean) => void;
-}) {
-  const { toast } = useToast();
-  const fileRef = useRef<HTMLInputElement>(null);
-  const [nameDisplay, setNameDisplay] = useState(acharya.nameDisplay ?? "");
-  const [dates, setDates] = useState(acharya.dates ?? "");
-  const [aliases, setAliases] = useState((acharya.aliases ?? []).join(", "));
-  const [avatarUrl, setAvatarUrl] = useState(acharya.avatarUrl ?? "");
-  const [uploading, setUploading] = useState(false);
-
-  const save = useMutation({
-    mutationFn: async () => {
-      const payload = {
-        nameDisplay: nameDisplay.trim() || undefined,
-        dates: dates.trim() ? dates.trim() : null,
-        avatarUrl: avatarUrl.trim() ? avatarUrl.trim() : null,
-        aliases: aliases
-          .split(",")
-          .map((s) => s.trim())
-          .filter(Boolean),
-      };
-      const res = await apiRequest("PATCH", `/api/acharyas/${acharya.slug}`, payload);
-      return res.json();
-    },
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["/api/acharyas"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/acharyas", acharya.slug] });
-      toast({ title: "Acharya updated" });
-      onOpenChange(false);
-    },
-    onError: (err: any) => toast({ variant: "destructive", title: "Error", description: err.message }),
-  });
-
-  async function handleUpload(e: React.ChangeEvent<HTMLInputElement>) {
-    const file = e.target.files?.[0];
-    e.target.value = "";
-    if (!file) return;
-    if (!file.type.startsWith("image/")) {
-      toast({ variant: "destructive", title: "Please choose an image file" });
-      return;
-    }
-    setUploading(true);
-    try {
-      const dataBase64 = await fileToBase64(file);
-      const res = await apiRequest("POST", "/api/strapi/upload", {
-        filename: file.name,
-        mimeType: file.type,
-        dataBase64,
-      });
-      const media = (await res.json()) as { url?: string };
-      if (media.url) setAvatarUrl(media.url);
-      toast({ title: "Avatar uploaded", description: "Remember to Save." });
-    } catch (err: any) {
-      toast({ variant: "destructive", title: "Upload failed", description: err?.message });
-    } finally {
-      setUploading(false);
-    }
-  }
-
-  return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-lg">
-        <DialogHeader>
-          <DialogTitle>Edit {acharya.nameDevanagari}</DialogTitle>
-          <DialogDescription>
-            Display name, life-dates, avatar, and the name aliases used to link texts.
-          </DialogDescription>
-        </DialogHeader>
-        <div className="space-y-4">
-          <div className="flex items-center gap-4">
-            <Avatar className="w-14 h-14">
-              {avatarUrl ? <AvatarImage src={avatarUrl} alt="" /> : null}
-              <AvatarFallback>{initials(acharya.nameIast ?? "?")}</AvatarFallback>
-            </Avatar>
-            <div>
-              <input ref={fileRef} type="file" accept="image/*" hidden onChange={handleUpload} />
-              <Button
-                type="button"
-                variant="outline"
-                size="sm"
-                onClick={() => fileRef.current?.click()}
-                disabled={uploading}
-              >
-                {uploading ? (
-                  <Loader2 className="w-4 h-4 mr-2 animate-spin" />
-                ) : (
-                  <Upload className="w-4 h-4 mr-2" />
-                )}
-                Upload avatar
-              </Button>
-            </div>
-          </div>
-          <div>
-            <Label>Display name</Label>
-            <Input value={nameDisplay} onChange={(e) => setNameDisplay(e.target.value)} className="mt-1.5" />
-          </div>
-          <div>
-            <Label>Life dates</Label>
-            <Input value={dates} onChange={(e) => setDates(e.target.value)} placeholder="e.g. 788-820 A.D." className="mt-1.5" />
-          </div>
-          <div>
-            <Label>
-              Aliases <span className="text-muted-foreground text-xs">(comma-separated — used to link Granthas &amp; Teekas)</span>
-            </Label>
-            <Textarea value={aliases} onChange={(e) => setAliases(e.target.value)} className="mt-1.5" rows={2} />
-          </div>
-        </div>
-        <DialogFooter>
-          <Button variant="outline" onClick={() => onOpenChange(false)}>
-            Cancel
-          </Button>
-          <Button onClick={() => save.mutate()} disabled={save.isPending} data-testid="button-save-acharya">
-            {save.isPending && <Loader2 className="w-4 h-4 mr-2 animate-spin" />}
-            Save
-          </Button>
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>
-  );
-}
-
-function fileToBase64(file: File): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = () => {
-      const result = reader.result as string;
-      const comma = result.indexOf(",");
-      resolve(comma >= 0 ? result.slice(comma + 1) : result);
-    };
-    reader.onerror = () => reject(reader.error ?? new Error("Failed to read file"));
-    reader.readAsDataURL(file);
-  });
 }

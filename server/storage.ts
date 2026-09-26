@@ -35,6 +35,8 @@ export interface IStorage {
   updateUserPassword(id: string, hashedPassword: string): Promise<User | undefined>;
   getDrafts(userId: string): Promise<Draft[]>;
   getDraftsByType(contentType: string, userId: string): Promise<Draft[]>;
+  getDraftsSlim(userId: string, contentType?: string): Promise<Draft[]>;
+  getStructureConfigForStrapiDoc(strapiDocumentId: string, userId: string): Promise<unknown | null>;
   getDraft(id: number, userId: string): Promise<Draft | undefined>;
   getDraftByStrapiDocId(strapiDocumentId: string): Promise<Draft | undefined>;
   createDraft(draft: InsertDraft): Promise<Draft>;
@@ -131,6 +133,90 @@ export class DatabaseStorage implements IStorage {
       .from(contentDrafts)
       .where(and(eq(contentDrafts.contentType, contentType), eq(contentDrafts.createdBy, userId)))
       .orderBy(desc(contentDrafts.updatedAt));
+  }
+
+  /**
+   * Drafts for the list views, with grantha `data` blobs left behind in Postgres.
+   *
+   * A grantha draft is one JSON document holding the whole text, so the full list is enormous:
+   * on prod one editor's 172 grantha drafts total ~198MB (165 published snapshots at 150MB plus a
+   * 48MB Chandogya draft). Shipping that through `select *` cost 16-94s per request — and because
+   * Node parses and re-serializes it on the single event loop, it stalled every *other* request
+   * too, which is why "publish one mantra" felt like minutes. The publish write itself is ~1s.
+   *
+   * So grantha rows get only what the cards and the shadow/overlay logic actually read, computed
+   * in Postgres so the blob never crosses the wire:
+   *   • `status = 'draft'` rows (10 on prod) → card fields, `structureConfig`, `_hasLocalEdits`
+   *   • published snapshot rows (187 on prod, 167MB) → no `data` at all; the list only ever uses
+   *     their metadata (id / strapiDocumentId / status / createdBy / updatedAt)
+   * Every other content type keeps its full `data` — those drafts are all together under 40KB, and
+   * their pages read the blob straight off the list.
+   * `_hasLocalEdits` mirrors the client's `overlayDraftHasLocalEdits` walk as a jsonb path test.
+   * The CASE is what keeps this fast: its `else` branch never mentions `data`, so Postgres skips
+   * detoasting the 167MB of published blobs entirely (252,284 buffers -> 17).
+   *
+   * Anything needing the real hierarchy fetches the single row it opens via `getDraft`.
+   */
+  async getDraftsSlim(userId: string, contentType?: string): Promise<Draft[]> {
+    const verseEdited = (versePath: string) => {
+      const jsonPath = `$.${versePath} ? (@._isNewLocal == true || @._shlokaEdited == true || @._bhashyamEdited == true)`;
+      return sql`jsonb_path_exists(data, ${jsonPath}::jsonpath)`;
+    };
+    const typeFilter = contentType ? sql` and content_type = ${contentType}` : sql``;
+    const result = await db.execute(sql`
+      select id, content_type, title, strapi_document_id, status, created_by, created_at, updated_at,
+        case
+        when content_type <> 'granthas' then data
+        when status = 'draft' then jsonb_build_object(
+          'GranthaName', data->'GranthaName',
+          'GranthaType', data->'GranthaType',
+          'BhashyamName', data->'BhashyamName',
+          'BhashyamAuthor', data->'BhashyamAuthor',
+          'structureConfig', data->'structureConfig',
+          '_slim', true,
+          '_hasLocalEdits',
+            coalesce(jsonb_array_length(data->'deletedStrapiSectionDocIds'), 0) > 0
+            or coalesce(jsonb_array_length(data->'deletedStrapiManthraDocIds'), 0) > 0
+            or coalesce(jsonb_array_length(data->'deletedStrapiTeekaDocIds'), 0) > 0
+            or ${verseEdited("hierarchy[*].khandas[*].manthras[*]")}
+            or ${verseEdited("hierarchy[*].khandas[*].padas[*].manthras[*]")}
+        ) else jsonb_build_object('_slim', true) end as data
+      from ${contentDrafts}
+      where created_by = ${userId}${typeFilter}
+      order by updated_at desc
+    `);
+    const rows = ((result as any)?.rows ?? []) as Record<string, any>[];
+    return rows.map((r) => ({
+      id: r.id,
+      contentType: r.content_type,
+      strapiDocumentId: r.strapi_document_id,
+      title: r.title,
+      data: r.data,
+      status: r.status,
+      createdBy: r.created_by,
+      createdAt: r.created_at,
+      updatedAt: r.updated_at,
+    })) as Draft[];
+  }
+
+  /**
+   * Newest `structureConfig` saved for a Strapi grantha, from any of this user's drafts.
+   * The slim list omits `data` for published snapshots, so the editor recovers the portal-only
+   * structure (never stored in Strapi) through this one-grantha lookup instead.
+   */
+  async getStructureConfigForStrapiDoc(strapiDocumentId: string, userId: string): Promise<unknown | null> {
+    const result = await db.execute(sql`
+      select data->'structureConfig' as structure_config
+      from ${contentDrafts}
+      where content_type = 'granthas'
+        and strapi_document_id = ${strapiDocumentId}
+        and created_by = ${userId}
+        and jsonb_exists(data, 'structureConfig')
+      order by updated_at desc
+      limit 1
+    `);
+    const rows = ((result as any)?.rows ?? []) as { structure_config?: unknown }[];
+    return rows[0]?.structure_config ?? null;
   }
 
   async getDraft(id: number, userId: string): Promise<Draft | undefined> {

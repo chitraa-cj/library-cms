@@ -262,6 +262,9 @@ export default function ManthrasPage() {
   const pendingGranthaMantras = useMemo(() => {
     const fromServer = unifiedPendingData?.pendingGranthaMantras;
     if (fromServer) return fromServer;
+    // Fallback only. /api/cms/manthras-unified is the authoritative source; the drafts list is slim
+    // (no hierarchy — see storage.getDraftsSlim), so rows that were never hydrated contribute
+    // nothing here and the list simply fills in when the unified query resolves.
     return granthaDrafts.flatMap((d) =>
       collectUnlinkedMantrasFromGranthaDraft({
         id: d.id,

@@ -4545,12 +4545,34 @@ export async function registerRoutes(
       if (contentType && !VALID_CONTENT_TYPES.includes(contentType as string)) {
         return res.status(400).json({ message: "Invalid content type" });
       }
-      const drafts = contentType
-        ? await storage.getDraftsByType(contentType as string, user.id)
-        : await storage.getDrafts(user.id);
+      // Grantha drafts carry the whole text in one JSON blob, so the full list runs to hundreds of
+      // MB and stalls the event loop for every other request (see getGranthaDraftsSlim). The list
+      // view only needs card fields + overlay flags, so serve those; `?full=1` opts back in.
+      const wantsFull = req.query.full === "1" || req.query.full === "true";
+      const drafts = wantsFull
+        ? contentType
+          ? await storage.getDraftsByType(contentType as string, user.id)
+          : await storage.getDrafts(user.id)
+        : await storage.getDraftsSlim(user.id, contentType as string | undefined);
       res.json(drafts);
     } catch (error: any) {
       res.status(500).json({ message: error.message || "Failed to fetch drafts" });
+    }
+  });
+
+  // Must stay ahead of "/api/drafts/:id" — that route parses the segment as an integer.
+  // The slim list drops `data` for published grantha snapshots, so the editor recovers a
+  // grantha's portal-only structureConfig (never stored in Strapi) through this lookup.
+  app.get("/api/drafts/structure-config/:strapiDocumentId", requireAuth, async (req, res) => {
+    try {
+      const user = req.user as User;
+      const structureConfig = await storage.getStructureConfigForStrapiDoc(
+        req.params.strapiDocumentId,
+        user.id,
+      );
+      res.json({ structureConfig });
+    } catch (error: any) {
+      res.status(500).json({ message: error.message || "Failed to fetch structure config" });
     }
   });
 

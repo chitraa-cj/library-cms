@@ -126,6 +126,8 @@ export function useDrafts(contentType: string) {
       if (!res.ok) throw new Error("Failed to fetch drafts");
       return res.json();
     },
+    // Writes invalidate this key explicitly, so remounts don't need to refetch on their own.
+    staleTime: 60_000,
   });
 
   const saveDraftMutation = useMutation({

@@ -344,6 +344,8 @@ function hasBlocks(v: StrapiBlock[] | string | null | undefined): boolean {
  */
 function overlayDraftHasLocalEdits(data: any): boolean {
   if (!data || typeof data !== "object") return false;
+  // Rows from the slim list have no hierarchy to walk — Postgres computed the same answer.
+  if (data._slim) return data._hasLocalEdits === true;
   for (const key of [
     "deletedStrapiSectionDocIds",
     "deletedStrapiManthraDocIds",
@@ -2423,10 +2425,46 @@ export default function GranthasPage() {
     setGranthaContentHydrating(false);
   }
 
+  /**
+   * The drafts LIST is slim — grantha `data` is hundreds of MB across all rows, so `/api/drafts`
+   * returns card fields + overlay flags only (see storage.getDraftsSlim). Whenever a path needs the
+   * real hierarchy it fetches the single draft it is opening. Returns full data, or the slim object
+   * unchanged if the fetch fails, so a network blip degrades instead of wiping the editor.
+   */
+  async function fullDraftData(draft: { id: number; data?: any } | null | undefined): Promise<any> {
+    const data = draft?.data;
+    if (!draft || !data?._slim) return data;
+    try {
+      const res = await apiRequest("GET", `/api/drafts/${draft.id}`);
+      const full = (await res.json()) as { data?: any };
+      return full?.data ?? data;
+    } catch {
+      return data;
+    }
+  }
+
+  /** structureConfig saved on an already-published draft, whose `data` the slim list omits. */
+  async function fetchStructureConfigForDoc(strapiDocId: string): Promise<any | undefined> {
+    try {
+      const res = await apiRequest("GET", `/api/drafts/structure-config/${strapiDocId}`);
+      const body = (await res.json()) as { structureConfig?: any };
+      return body?.structureConfig ?? undefined;
+    } catch {
+      return undefined;
+    }
+  }
+
   async function openEdit(item: any) {
     cancelGranthaMantraPrefetch();
     invalidateManthraCache();
     const openEditLoadGen = ++openEditLoadGenRef.current;
+    // Hydrate the slim list row before anything reads item._draftData / the spread card fields.
+    // The generation is claimed first so a second open during this fetch supersedes this one.
+    if (item?._isDraft && item._draftId != null && (item._draftData as any)?._slim) {
+      const full = await fullDraftData({ id: item._draftId, data: item._draftData });
+      if (!isCurrentOpenEditLoad(openEditLoadGen)) return;
+      if (full && !full._slim) item = { ...item, ...full, _draftData: full };
+    }
     publishScopeReadyRef.current = false;
     publishScopeMetaEffectSkipRef.current = true;
     setDraftSyncedForPublish(false);
@@ -2579,7 +2617,7 @@ export default function GranthasPage() {
       const matchingDraft = allGranthaDrafts.find(
         (d) => d.strapiDocumentId === item.documentId && d.status !== "published",
       );
-      const savedData = matchingDraft?.data as any;
+      const savedData = (await fullDraftData(matchingDraft as any)) as any;
       publishScopeDraftData = savedData ?? item._draftData;
 
       // structureConfig lives only in portal drafts (never in Strapi). When there's
@@ -2587,13 +2625,18 @@ export default function GranthasPage() {
       // saved structure isn't lost and replaced by DEFAULT_STRUCTURE on reload.
       // (Published drafts must not mask live Strapi *content*, but structureConfig is
       // portal-only metadata, so reading just that field is safe.)
+      // In-progress drafts carry structureConfig in the slim list; published snapshots don't
+      // (their `data` is omitted), so fall back to the per-grantha server lookup.
       const structureFromPublishedDraft = savedData?.structureConfig
         ? undefined
-        : (allGranthaDrafts.find(
+        : ((allGranthaDrafts.find(
             (d) =>
               d.strapiDocumentId === item.documentId &&
               !!(d.data as any)?.structureConfig,
-          )?.data as any)?.structureConfig;
+          )?.data as any)?.structureConfig ??
+          (item.documentId ? await fetchStructureConfigForDoc(item.documentId) : undefined));
+      // Both lookups above may hit the network; bail if another card was opened meanwhile.
+      if (!isCurrentOpenEditLoad(openEditLoadGen)) return;
 
       loadedDraftId = matchingDraft?.id ?? null;
       setEditingDraftId(loadedDraftId);

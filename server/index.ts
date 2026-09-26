@@ -5,6 +5,7 @@ import { registerRoutes } from "./routes";
 import { registerApiCacheMiddleware } from "./http-cache";
 import { serveStatic } from "./static";
 import { createServer } from "http";
+import { inspect } from "node:util";
 import { db } from "./db";
 import { publishJobs, publishJobTasks, users } from "@shared/schema";
 import { storage } from "./storage";
@@ -65,7 +66,17 @@ app.use((req, res, next) => {
       let logLine = `${req.method} ${path} ${res.statusCode} in ${duration}ms`;
       if (capturedJsonResponse !== undefined) {
         // Avoid logging multi‑MB bodies or leaking full draft payloads to stdout (accountability + I/O).
-        const snippet = JSON.stringify(capturedJsonResponse);
+        // `inspect` with hard limits instead of JSON.stringify: stringifying the whole body to keep
+        // 1200 chars meant a SECOND full serialization of every response on the event loop — on the
+        // hundreds-of-MB drafts list that cost seconds per request and could trip Node's 512MB
+        // max-string limit. These limits keep the work bounded by the snippet, not the payload.
+        const snippet = inspect(capturedJsonResponse, {
+          depth: 3,
+          maxArrayLength: 2,
+          maxStringLength: 400,
+          breakLength: Infinity,
+          compact: true,
+        });
         const max = 1200;
         logLine +=
           snippet.length > max

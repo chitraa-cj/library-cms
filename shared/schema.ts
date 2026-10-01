@@ -538,6 +538,94 @@ export const ocrJobChunks = pgTable("cms_ocr_job_chunks", {
   updatedAt: timestamp("updated_at").defaultNow().notNull(),
 });
 
+// ---------- Translation jobs (admin-only Hermex/Gemini batch translation) ----------
+// A job owns one ordered list of mantras; one row per mantra. The worker
+// (server/translation/worker.ts) claims a row at a time with FOR UPDATE SKIP
+// LOCKED, so the queue survives a crash and no mantra is ever processed twice.
+// The DB is the source of truth for progress — nothing lives only in memory.
+
+export const translationJobStatuses = [
+  "queued",
+  "processing",
+  "completed",
+  "partially_failed",
+  "failed",
+  "cancelled",
+] as const;
+export type TranslationJobStatus = (typeof translationJobStatuses)[number];
+
+export const translationItemStatuses = ["queued", "processing", "completed", "failed"] as const;
+export type TranslationItemStatus = (typeof translationItemStatuses)[number];
+
+/** A job no worker will pick up again. */
+export const translationJobStatusTerminal: readonly TranslationJobStatus[] = [
+  "completed",
+  "partially_failed",
+  "failed",
+  "cancelled",
+];
+
+export const translationJobs = pgTable("cms_translation_jobs", {
+  id: varchar("id").primaryKey(),
+  createdBy: varchar("created_by").references(() => users.id, { onDelete: "set null" }),
+  status: text("status").$type<TranslationJobStatus>().notNull().default("queued"),
+  /** What is being translated — a whole grantha, resolved at creation time. */
+  granthaDocId: varchar("grantha_doc_id"),
+  granthaName: text("grantha_name"),
+  /** Languages requested; empty means "every missing OtherTranslations language". */
+  targetLanguages: jsonb("target_languages").$type<string[]>().notNull().default([]),
+  /** Counters, maintained by the worker from the item rows (never only in memory). */
+  totalItems: integer("total_items").notNull().default(0),
+  completedItems: integer("completed_items").notNull().default(0),
+  failedItems: integer("failed_items").notNull().default(0),
+  processingItems: integer("processing_items").notNull().default(0),
+  queuedItems: integer("queued_items").notNull().default(0),
+  /** Sum of item attempts beyond the first — how much retrying this job has cost. */
+  retryCount: integer("retry_count").notNull().default(0),
+  error: text("error"),
+  /** Where the work came from / where it lands. Strapi is the real output store. */
+  inputRef: text("input_ref"),
+  outputRef: text("output_ref"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  startedAt: timestamp("started_at"),
+  completedAt: timestamp("completed_at"),
+  lastActivityAt: timestamp("last_activity_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+});
+
+export const translationItems = pgTable("cms_translation_items", {
+  id: serial("id").primaryKey(),
+  jobId: varchar("job_id")
+    .notNull()
+    .references(() => translationJobs.id, { onDelete: "cascade" }),
+  /** 1-based position in the job, and the order the worker walks them in. */
+  sequenceNumber: integer("sequence_number").notNull(),
+  /** Strapi documentId of the mantra this row translates. */
+  mantraDocId: varchar("mantra_doc_id"),
+  /** Human label ("1.1.1") — what the admin UI shows. */
+  mantraLabel: text("mantra_label"),
+  /** Source text, when the caller supplied it explicitly. For a grantha job the
+   *  worker reads the live English text out of Strapi at claim time instead. */
+  originalText: text("original_text"),
+  /** What was written back, as a per-field summary of languages (not the prose). */
+  translatedText: text("translated_text"),
+  status: text("status").$type<TranslationItemStatus>().notNull().default("queued"),
+  attempts: integer("attempts").notNull().default(0),
+  error: text("error"),
+  /** Lease held by the worker while processing; expiry = the crash-recovery signal. */
+  leaseExpiresAt: timestamp("lease_expires_at"),
+  leaseOwner: text("lease_owner"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  startedAt: timestamp("started_at"),
+  completedAt: timestamp("completed_at"),
+  lastAttemptAt: timestamp("last_attempt_at"),
+});
+
+export type TranslationJob = typeof translationJobs.$inferSelect;
+export type InsertTranslationJob = typeof translationJobs.$inferInsert;
+export type TranslationItem = typeof translationItems.$inferSelect;
+export type InsertTranslationItem = typeof translationItems.$inferInsert;
+
 export type OcrJob = typeof ocrJobs.$inferSelect;
 export type InsertOcrJob = typeof ocrJobs.$inferInsert;
 export type OcrJobChunk = typeof ocrJobChunks.$inferSelect;

@@ -151,8 +151,15 @@ import OtherTranslationsHermex from "@/components/other-translations-hermex";
 import GranthaVideos, {
   granthaVideosFromDraftPayload,
   granthaVideosToDraftPayload,
+  granthaVideosQueryKey,
   type GranthaVideoDraft,
 } from "@/components/grantha-videos";
+import NodeVideos, {
+  nodeVideosFromDraftPayload,
+  nodeVideosToDraftPayload,
+  nodeVideosQueryKey,
+  type NodeVideoDraft,
+} from "@/components/node-videos";
 import GranthaCsvImportDialog from "@/components/grantha-csv-import-dialog";
 import type {
   GranthaCsvImportPayload,
@@ -231,6 +238,17 @@ interface ManthraTeekaEntry {
   TeekaEntry?: TextAndTranslation;
 }
 
+/** One YouTube link pinned to a verse, as it is kept inside the portal draft. */
+interface ManthraVideoLink {
+  /** Strapi documentId of the VideoResource row, once it exists in the CMS. */
+  documentId?: string;
+  youtubeUrl: string;
+  title: string;
+  startSeconds: number;
+  /** Display order on the reading site, 1-based. */
+  order: number;
+}
+
 interface ManthraNode {
   id: string;
   title: string;
@@ -246,6 +264,11 @@ interface ManthraNode {
    *  CMS copy) is sent, and a deliberate clear actually removes the CMS content. Portal-only. */
   _shlokaEdited?: boolean;
   _bhashyamEdited?: boolean;
+  /** YouTube links pinned to THIS verse. For a verse that already exists in the CMS the
+   *  rows live there (saved straight from the dialog, no republish) and this key stays
+   *  empty; for a verse that doesn't exist yet the links wait here and are flushed to the
+   *  CMS on its first publish. Portal-only (underscore ⇒ stripped from the Strapi payload). */
+  _videos?: ManthraVideoLink[];
   /** Set once this verse's FULL content (bhashyam, teekas, all OtherTranslations) has been
    *  lazily loaded from the CMS by its own documentId — either by the per-verse dialog fetch
    *  or a restore. The background bulk warm-up (which omits OtherTranslations to stay light)
@@ -976,12 +999,16 @@ function mergePublishedHierarchyPreservingContent(
   const mergeManthra = (m: ManthraNode): ManthraNode => {
     const prior = prevById.get(m.id);
     if (!prior) return m;
+    // `_videos` is portal-only, so the published hierarchy never carries it — keep the
+    // editor's copy or the pending links would be lost before they can be flushed.
+    const videos = m._videos?.length ? m._videos : prior._videos;
     if (!hasManthraContent(m) && hasManthraContent(prior)) {
       return {
         ...m,
         ShlokaManthraEntry: prior.ShlokaManthraEntry,
         BhashyamForShlokaManthra: prior.BhashyamForShlokaManthra,
         Teekas: prior.Teekas,
+        ...(videos?.length ? { _videos: videos } : {}),
       };
     }
     return {
@@ -992,6 +1019,7 @@ function mergePublishedHierarchyPreservingContent(
         m.Teekas?.length || !prior.Teekas?.length
           ? m.Teekas
           : prior.Teekas,
+      ...(videos?.length ? { _videos: videos } : {}),
     };
   };
 
@@ -1612,6 +1640,8 @@ export default function GranthasPage() {
   } | null>(null);
   const [manthraDialogDirty, setManthraDialogDirty] = useState(false);
   const [manthraDialogViewOnly, setManthraDialogViewOnly] = useState(false);
+  /** The open verse's video list. Seeded from the draft on open, then owned by the dialog. */
+  const [manthraVideos, setManthraVideos] = useState<NodeVideoDraft[]>([]);
   const [pendingCloseManthra, setPendingCloseManthra] = useState(false);
   const [mantraPublishStatus, setMantraPublishStatus] = useState<string | null>(null);
   const [newSharedOption, setNewSharedOption] = useState<Record<PortalVocabularyKey, string>>({
@@ -1739,6 +1769,9 @@ export default function GranthasPage() {
           wasNewLocal: !!node._isNewLocal,
         }
       : { node: null, wasNewLocal: true };
+    // Links the draft is holding for a verse the CMS doesn't have yet. For a verse that IS
+    // in the CMS, NodeVideos replaces this with the saved list as soon as it loads.
+    setManthraVideos(nodeVideosFromDraftPayload(node?._videos ?? []));
     setEditingManthra(ctx);
 
     // Lazy per-verse hydration (Google-Docs style): the editor tree opens instantly from the
@@ -2230,6 +2263,20 @@ export default function GranthasPage() {
           params.padaId,
           { markDirty: false }
         );
+        // Links the draft was holding for a verse that only now exists in the CMS.
+        if (params.manthraData._videos?.length && isPublishedStrapiDocId(data.strapiDocumentId)) {
+          const docId = data.strapiDocumentId as string;
+          void persistManthraVideosToStrapi(docId, params.manthraData._videos).then((ok) => {
+            if (ok) clearDraftVideosForManthras(new Set([docId]));
+            else
+              toast({
+                variant: "destructive",
+                title: "Video links not saved",
+                description:
+                  "The verse published, but its videos could not be written — reopen it and use Save videos.",
+              });
+          });
+        }
       }
       setPendingCloseManthra(false);
       const warnCount = data.warnings?.length ?? 0;
@@ -5383,6 +5430,32 @@ export default function GranthasPage() {
     };
   })();
 
+  /** The open verse's CMS row, or undefined while it is still draft-only. */
+  const manthraVideoDocId = (() => {
+    const docId = editingManthra?.strapiDocumentId || currentManthra?.strapiDocumentId;
+    return isPublishedStrapiDocId(docId) ? docId : undefined;
+  })();
+
+  /**
+   * A verse that exists in the CMS writes its videos straight there (the dialog's own
+   * "Save videos" button), so the draft keeps no copy. A verse the CMS has never seen
+   * holds them in `_videos` until the publish that creates its row.
+   */
+  function handleManthraVideosChange(next: NodeVideoDraft[]) {
+    setManthraVideos(next);
+    if (!editingManthra || manthraDialogViewOnly || manthraVideoDocId) return;
+    const payload = nodeVideosToDraftPayload(next);
+    const current = currentManthra?._videos ?? [];
+    if (JSON.stringify(current) === JSON.stringify(payload)) return;
+    updateManthraContent(
+      editingManthra.adhyayaId,
+      editingManthra.khandaId,
+      editingManthra.manthraId,
+      { _videos: payload },
+      editingManthra.padaId,
+    );
+  }
+
   // ---------- Validation ----------
 
   function validateSectionTitles(
@@ -5620,11 +5693,88 @@ export default function GranthasPage() {
         setGranthaVideos(granthaVideosFromDraftPayload(json.data));
       }
       queryClient.invalidateQueries({
-        queryKey: ["/api/strapi/video-resources/for-grantha", docId],
+        queryKey: granthaVideosQueryKey(docId),
       });
       return true;
     } catch {
       return false;
+    }
+  }
+
+  /**
+   * Write one verse's whole video list to Strapi. Used for a verse whose CMS row only
+   * just came into being — until it has a documentId there is nothing to pin videos to,
+   * so they ride along in the draft (`_videos`) and are flushed the moment it publishes.
+   */
+  async function persistManthraVideosToStrapi(
+    docId: string,
+    videos: ManthraVideoLink[],
+  ): Promise<boolean> {
+    try {
+      await apiRequest("PUT", `/api/strapi/video-resources/for-target/manthra/${docId}`, {
+        videos,
+      });
+      queryClient.invalidateQueries({ queryKey: nodeVideosQueryKey("manthra", docId) });
+      queryClient.invalidateQueries({ queryKey: ["/api/strapi/video-resources/for-node"] });
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  /** The CMS now owns these verses' videos — drop the draft copy so it can't go stale. */
+  function clearDraftVideosForManthras(docIds: Set<string>) {
+    if (!docIds.size) return;
+    const clear = (m: ManthraNode): ManthraNode => {
+      if (!m.strapiDocumentId || !docIds.has(m.strapiDocumentId) || !m._videos) return m;
+      const { _videos: _flushed, ...rest } = m;
+      return rest as ManthraNode;
+    };
+    const next = (adhyayasRef.current as AdhyayaNode[]).map((a) => ({
+      ...a,
+      khandas: (a.khandas ?? []).map((k) => ({
+        ...k,
+        manthras: (k.manthras ?? []).map(clear),
+        padas: (k.padas ?? []).map((p) => ({ ...p, manthras: (p.manthras ?? []).map(clear) })),
+      })),
+    })) as AdhyayaNode[];
+    adhyayasRef.current = next;
+    setAdhyayas(next);
+  }
+
+  /**
+   * Flush every verse whose links were waiting in the draft. Mirrors
+   * {@link persistGranthaVideosToStrapi} one level down, and runs right after the grantha
+   * publish that created the CMS rows those links need to point at.
+   */
+  async function flushPendingManthraVideos(tree: AdhyayaNode[]): Promise<void> {
+    const pending: Array<{ docId: string; videos: ManthraVideoLink[] }> = [];
+    for (const a of tree) {
+      for (const k of a.khandas ?? []) {
+        const buckets = [k.manthras ?? [], ...(k.padas ?? []).map((p) => p.manthras ?? [])];
+        for (const bucket of buckets) {
+          for (const m of bucket) {
+            if (!m._videos?.length || !isPublishedStrapiDocId(m.strapiDocumentId)) continue;
+            pending.push({ docId: m.strapiDocumentId!, videos: m._videos });
+          }
+        }
+      }
+    }
+    if (!pending.length) return;
+
+    const flushed = new Set<string>();
+    for (const { docId, videos } of pending) {
+      if (await persistManthraVideosToStrapi(docId, videos)) flushed.add(docId);
+    }
+    clearDraftVideosForManthras(flushed);
+
+    const failed = pending.length - flushed.size;
+    if (failed > 0) {
+      toast({
+        variant: "destructive",
+        title: "Some verse videos not saved",
+        description: `${failed} verse(s) published, but their video links could not be written — reopen the verse and use Save videos.`,
+      });
     }
   }
 
@@ -5988,6 +6138,8 @@ export default function GranthasPage() {
             );
             adhyayasRef.current = nh;
             setAdhyayas(nh);
+            // Verses that had video links but no CMS row until this publish.
+            void flushPendingManthraVideos(nh as AdhyayaNode[]);
             if (isPublishedStrapiDocId(granthaSidForFlush)) {
               void runStrapiFullHierarchySectionOrderSync(nh, structureConfig, true);
             }
@@ -9100,6 +9252,26 @@ export default function GranthasPage() {
                   })}
                 </section>
               )}
+
+              {/* Videos pinned to THIS verse */}
+              <section className="pt-3 border-t" data-testid="section-manthra-videos-block">
+                <NodeVideos
+                  targetType="manthra"
+                  targetDocId={manthraVideoDocId}
+                  videos={manthraVideos}
+                  onChange={handleManthraVideosChange}
+                  viewOnly={manthraDialogViewOnly}
+                  label="Videos"
+                  description={
+                    "YouTube links for this verse alone, shown on the site in the order " +
+                    "listed here. Saving writes to the CMS immediately — no republish. A " +
+                    "verse with no videos of its own shows its section's or the grantha's."
+                  }
+                  unsavedNodeHint="Saved with the draft — written to the CMS when this verse is first published."
+                  testIdPrefix="manthra-video"
+                  compact
+                />
+              </section>
 
               <div className="flex items-center justify-between pt-2 gap-2 border-t mt-2">
                 <div className="flex flex-wrap gap-2">

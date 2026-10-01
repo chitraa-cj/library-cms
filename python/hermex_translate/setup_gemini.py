@@ -52,7 +52,9 @@ def run_setup() -> int:
 
     with warnings.catch_warnings():
         warnings.simplefilter("ignore", UserWarning)
-        gemini = Gemini(headless=False)
+        # Web security must stay ON — Gemini rejects sends from a browser started
+        # with --disable-web-security (see _disable_web_security in translate_cli).
+        gemini = Gemini(headless=False, disable_web_security=False)
 
     try:
         if not gemini.driver:

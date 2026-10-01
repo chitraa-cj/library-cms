@@ -40,6 +40,87 @@ HERMEX_ENABLED=true
 # HERMEX_TRANSLATE_TIMEOUT_MS=2700000
 ```
 
+## On EC2 (the deployed setup)
+
+The server has a **persistent, already-authenticated Hermex install that this repo
+does not own and must never modify**:
+
+| Thing | Path on EC2 |
+| --- | --- |
+| Hermex install root | `/home/ubuntu/hermex-translation` |
+| Python with `hermex` | `/home/ubuntu/hermex-translation/.venv/bin/python` |
+| Gemini Chrome profile | `/home/ubuntu/hermex-translation/chrome-profile` |
+| Virtual display | `DISPLAY=:99` (Xvfb) |
+| Deployed CMS | `/home/ubuntu/library/library-cms` |
+
+Those paths are **deployment configuration**, never assumptions in code. Put them in
+the CMS `.env` on the box (which is gitignored — no server path or session ever
+reaches GitHub):
+
+```env
+HERMEX_ENABLED=true
+HERMEX_DIR=/home/ubuntu/hermex-translation
+HERMEX_PYTHON=/home/ubuntu/hermex-translation/.venv/bin/python
+HERMEX_CHROME_PROFILE=/home/ubuntu/hermex-translation/chrome-profile
+HERMEX_DISPLAY=:99
+```
+
+`HERMEX_CHROME_PROFILE` is the one that is easy to forget and silently fatal: hermex
+otherwise falls back to its own default profile directory, which on the server is a
+*different*, not-logged-in profile. Every query then fails with a login error even
+though setup was completed. The adapter passes it to `Gemini(data_dir=…)` and also
+hands the child `DISPLAY`, so **pm2 does not need a display in its own environment**.
+
+### Verify it
+
+```bash
+cd /home/ubuntu/library/library-cms
+npm run hermex:check     # config + files + Xvfb socket. No Gemini request.
+npm run hermex:smoke     # the real round-trip: expects "HERMEX_TEST_OK"
+```
+
+Or over HTTP, as an admin: `GET /api/hermex/health` (cheap) and
+`GET /api/hermex/health?deep=1` (one real Gemini request — never on a timer).
+
+### Xvfb
+
+Chrome runs **headful on the virtual display** — the mode proven on this box — so
+`HERMEX_HEADLESS` stays unset. Check how Xvfb is started before changing anything:
+
+```bash
+ls -l /tmp/.X11-unix/        # X99 present = something is serving :99
+pgrep -af Xvfb
+systemctl list-units | grep -i xvfb
+```
+
+If it was started by hand it will not survive a reboot. `deploy/xvfb-hermex.service`
+is a ready systemd unit with step-by-step switch-over instructions in its header —
+read it, do not apply it blindly, and never run two X servers on `:99`.
+
+### Concurrency
+
+One Chrome profile cannot serve two requests at once. Two layers prevent it:
+
+1. In-process: every call goes through the adapter's browser mutex, so concurrent
+   API requests queue instead of racing.
+2. Across processes: exactly **one** `cms-translation-worker` pm2 instance, with
+   Postgres (`FOR UPDATE SKIP LOCKED`) deciding what it works on next.
+
+Do not start a second worker, and do not open Chrome on that profile by hand while
+the worker is running.
+
+### When Chrome wedges
+
+```bash
+pm2 stop cms-translation-worker
+pkill -f chromedriver
+rm -f /home/ubuntu/hermex-translation/chrome-profile/Singleton*
+pm2 start cms-translation-worker
+npm run hermex:smoke
+```
+
+Queued work is untouched; anything in flight returns via its lease.
+
 ## Using in the CMS
 
 1. Start the app: `npm run dev`

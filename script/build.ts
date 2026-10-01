@@ -73,6 +73,25 @@ async function buildAll() {
     logLevel: "info",
   });
 
+  // The translation worker is its own process (pm2 app `cms-translation-worker`),
+  // so it gets its own bundle from the same sources and the same externals.
+  console.log("building translation worker...");
+  await esbuild({
+    entryPoints: ["server/translation/worker-main.ts"],
+    platform: "node",
+    bundle: true,
+    format: "cjs",
+    outfile: "dist/translation-worker.cjs",
+    define: {
+      "process.env.NODE_ENV": '"production"',
+    },
+    minifyWhitespace: true,
+    minifySyntax: true,
+    minifyIdentifiers: false,
+    external: externals,
+    logLevel: "info",
+  });
+
   // connect-pg-simple reads its session-table DDL from a non-JS asset at runtime:
   //   fs.readFile(path.resolve(__dirname, './table.sql'))
   // esbuild bundles the JS but not the .sql file, and at runtime __dirname is dist/.

@@ -1,0 +1,51 @@
+# Xvfb on :99 for Hermex's Chrome — PROPOSAL, not applied by any deploy.
+#
+# Hermex drives a real (headful) Chrome on a virtual display. If Xvfb :99 was
+# started by hand it will not survive an EC2 reboot, and every translation after
+# the reboot fails with "cannot open display :99". This unit makes it persistent.
+#
+# INSPECT FIRST — do not install this blindly, and never run two X servers on :99:
+#
+#   # Is something already serving :99, and how was it started?
+#   ls -l /tmp/.X11-unix/            # X99 present = a server is listening
+#   pgrep -af Xvfb                   # the actual command line
+#   systemctl list-units | grep -i xvfb
+#   ls /etc/systemd/system | grep -i xvfb
+#   crontab -l; grep -rn Xvfb ~/.bashrc ~/.profile /etc/rc.local 2>/dev/null
+#
+# If a unit already exists, keep it and change nothing.
+# If Xvfb is running from a shell/nohup, install this unit, then switch over
+# during a quiet moment:
+#
+#   sudo cp deploy/xvfb-hermex.service /etc/systemd/system/
+#   sudo systemctl daemon-reload
+#   pm2 stop cms-translation-worker          # stop users of the display first
+#   pkill -f chromedriver || true
+#   pkill -f "Xvfb :99" || true              # retire the hand-started one
+#   sudo systemctl enable --now xvfb-hermex
+#   systemctl status xvfb-hermex --no-pager
+#   ls -l /tmp/.X11-unix/X99                 # back, now managed
+#   pm2 start cms-translation-worker
+#   cd /home/ubuntu/library/library-cms && npm run hermex:smoke
+#
+# Screen geometry matters: Gemini's web UI needs a desktop-sized viewport, and a
+# cramped one changes which controls hermex can click.
+
+[Unit]
+Description=Xvfb virtual display :99 for Hermex/Gemini Chrome
+Documentation=file:///home/ubuntu/library/library-cms/docs/HERMEX.md
+After=network.target
+
+[Service]
+Type=simple
+User=ubuntu
+Group=ubuntu
+# -nolisten tcp: the display is for local Chrome only, never over the network.
+ExecStart=/usr/bin/Xvfb :99 -screen 0 1920x1080x24 -nolisten tcp
+Restart=always
+RestartSec=3
+# Chrome writes a lot into the profile; give it a sane file limit.
+LimitNOFILE=16384
+
+[Install]
+WantedBy=multi-user.target

@@ -1865,14 +1865,14 @@ export function createStrapiRouter() {
     }
   });
 
-  // ── One grantha's YouTube videos: list + whole-list save ──
-  // The grantha editor manages a grantha's videos the way it manages its cover image:
-  // the ordered list is edited in the form and written straight to the CMS, no
-  // republish needed. The client sends the WHOLE list and this endpoint reconciles it
-  // against Strapi (update / create / delete) and renumbers `sort_order` 1..n, so the
-  // reading app renders the videos in exactly the order shown in the editor.
+  // ── Videos pinned to one node (grantha / section / manthra): list + whole-list save ──
+  // A node's videos are managed the way a grantha's cover image is: the ordered list is
+  // edited in the form and written straight to the CMS, no republish needed. The client
+  // sends the WHOLE list and this endpoint reconciles it against Strapi (update / create /
+  // delete) and renumbers `sort_order` 1..n, so the reading app renders the videos in
+  // exactly the order shown in the editor.
   // Registered before the generic `/video-resources/:documentId` routes below.
-  type PortalGranthaVideo = {
+  type PortalNodeVideo = {
     documentId: string;
     youtubeUrl: string;
     videoId: string | null;
@@ -1882,7 +1882,7 @@ export function createStrapiRouter() {
     order: number;
   };
 
-  const toPortalGranthaVideo = (row: any, index: number): PortalGranthaVideo => {
+  const toPortalNodeVideo = (row: any, index: number): PortalNodeVideo => {
     const youtubeUrl = row?.youtube_url ?? "";
     return {
       documentId: row?.documentId,
@@ -1895,11 +1895,14 @@ export function createStrapiRouter() {
     };
   };
 
-  /** Every video pinned to this grantha, ascending by the order it is shown in. */
-  const fetchGranthaVideoRows = async (granthaDocId: string): Promise<any[]> => {
+  /** Every video pinned to this node, ascending by the order it is shown in. */
+  const fetchNodeVideoRows = async (
+    targetType: VideoTargetType,
+    targetDocId: string,
+  ): Promise<any[]> => {
     const query = [
-      "filters[target_type][$eq]=grantha",
-      `filters[target_doc_id][$eq]=${encodeURIComponent(granthaDocId)}`,
+      `filters[target_type][$eq]=${encodeURIComponent(targetType)}`,
+      `filters[target_doc_id][$eq]=${encodeURIComponent(targetDocId)}`,
       "pagination[pageSize]=200",
       "sort=sort_order:asc",
     ].join("&");
@@ -1912,24 +1915,38 @@ export function createStrapiRouter() {
   const VIDEO_TYPE_MISSING_MESSAGE =
     "The Video Resource content type is not deployed on the CMS yet (see strapi/README.md).";
 
-  router.get("/video-resources/for-grantha/:granthaDocId", async (req, res) => {
+  const listNodeVideos = async (
+    res: any,
+    targetType: VideoTargetType,
+    targetDocId: string,
+  ) => {
     try {
-      const rows = await fetchGranthaVideoRows(req.params.granthaDocId);
-      res.json({ data: rows.map(toPortalGranthaVideo), available: true });
+      const rows = await fetchNodeVideoRows(targetType, targetDocId);
+      res.json({ data: rows.map(toPortalNodeVideo), available: true });
     } catch (error: any) {
       if (isVideoTypeMissing(error)) {
         return res.json({ data: [], available: false, message: VIDEO_TYPE_MISSING_MESSAGE });
       }
-      res.status(500).json({ message: error.message || "Failed to fetch grantha videos" });
+      res.status(500).json({ message: error.message || `Failed to fetch ${targetType} videos` });
     }
-  });
+  };
 
-  router.put("/video-resources/for-grantha/:granthaDocId", async (req, res) => {
-    const granthaDocId = String(req.params.granthaDocId || "").trim();
+  const saveNodeVideos = async (
+    req: any,
+    res: any,
+    targetType: VideoTargetType,
+    targetDocId: string,
+  ) => {
     const incoming = Array.isArray(req.body?.videos) ? req.body.videos : null;
-    if (!granthaDocId || !incoming) {
-      return res.status(400).json({ message: "granthaDocId and a `videos` array are required" });
+    if (!targetDocId || !incoming) {
+      return res.status(400).json({ message: "a target documentId and a `videos` array are required" });
     }
+    // Only a section-scoped video carries which kind of section it sits on; a grantha or
+    // manthra video has no section kind, so the column is cleared for them.
+    const sectionType =
+      targetType === "section" && typeof req.body?.sectionType === "string" && req.body.sectionType
+        ? req.body.sectionType
+        : null;
 
     // Normalize every row up front so a bad link fails the whole save instead of
     // leaving the list half-written.
@@ -1949,9 +1966,9 @@ export function createStrapiRouter() {
         attrs: {
           youtube_url: canonicalYouTubeUrl(parsed.videoId),
           title: String(row.title ?? "").trim() || null,
-          target_type: "grantha",
-          target_doc_id: granthaDocId,
-          target_section_type: null,
+          target_type: targetType,
+          target_doc_id: targetDocId,
+          target_section_type: sectionType,
           start_seconds: Number.isFinite(explicitStart) && explicitStart > 0
             ? Math.floor(explicitStart)
             : parsed.startSeconds,
@@ -1963,7 +1980,7 @@ export function createStrapiRouter() {
     }
 
     try {
-      const existing = await fetchGranthaVideoRows(granthaDocId);
+      const existing = await fetchNodeVideoRows(targetType, targetDocId);
       const existingDocIds = new Set(existing.map((r: any) => r.documentId));
       const kept = new Set<string>();
 
@@ -1990,14 +2007,44 @@ export function createStrapiRouter() {
       }
 
       invalidateContentTypeListCaches("video-resources");
-      const saved = await fetchGranthaVideoRows(granthaDocId);
-      res.json({ data: saved.map(toPortalGranthaVideo), available: true });
+      const saved = await fetchNodeVideoRows(targetType, targetDocId);
+      res.json({ data: saved.map(toPortalNodeVideo), available: true });
     } catch (error: any) {
       if (isVideoTypeMissing(error)) {
         return res.status(503).json({ message: VIDEO_TYPE_MISSING_MESSAGE });
       }
-      res.status(500).json({ message: error.message || "Failed to save grantha videos" });
+      res.status(500).json({ message: error.message || `Failed to save ${targetType} videos` });
     }
+  };
+
+  const parseTargetType = (raw: string): VideoTargetType | null => {
+    const type = String(raw ?? "").trim() as VideoTargetType;
+    return VIDEO_TARGET_TYPES.includes(type) ? type : null;
+  };
+
+  router.get("/video-resources/for-target/:type/:docId", async (req, res) => {
+    const targetType = parseTargetType(req.params.type);
+    if (!targetType) {
+      return res.status(400).json({ message: "type must be grantha, section or manthra" });
+    }
+    await listNodeVideos(res, targetType, String(req.params.docId || "").trim());
+  });
+
+  router.put("/video-resources/for-target/:type/:docId", async (req, res) => {
+    const targetType = parseTargetType(req.params.type);
+    if (!targetType) {
+      return res.status(400).json({ message: "type must be grantha, section or manthra" });
+    }
+    await saveNodeVideos(req, res, targetType, String(req.params.docId || "").trim());
+  });
+
+  // Kept as the grantha-shaped alias the grantha wizard has always called.
+  router.get("/video-resources/for-grantha/:granthaDocId", async (req, res) => {
+    await listNodeVideos(res, "grantha", String(req.params.granthaDocId || "").trim());
+  });
+
+  router.put("/video-resources/for-grantha/:granthaDocId", async (req, res) => {
+    await saveNodeVideos(req, res, "grantha", String(req.params.granthaDocId || "").trim());
   });
 
   for (const ct of contentTypes) {

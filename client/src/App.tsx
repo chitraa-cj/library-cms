@@ -23,6 +23,7 @@ import GlobalPage from "@/pages/global";
 import AdminUsersPage from "@/pages/admin-users";
 import AdminVocabularyPage from "@/pages/admin-vocabulary";
 import AdminOcrPage from "@/pages/admin-ocr";
+import AdminTranslationsPage from "@/pages/admin-translations";
 import BackupsPage from "@/pages/backups";
 import BackupDetailPage from "@/pages/backup-detail";
 import NotFound from "@/pages/not-found";
@@ -86,6 +87,7 @@ function AuthenticatedRoutes() {
         <Route path="/admin/users" component={AdminUsersPage} />
         <Route path="/admin/vocabulary" component={AdminVocabularyPage} />
         <Route path="/admin/ocr" component={AdminOcrPage} />
+        <Route path="/admin/translations" component={AdminTranslationsPage} />
         <Route path="/admin/backups" component={BackupsPage} />
         <Route path="/admin/backups/:id" component={BackupDetailPage} />
         <Route component={NotFound} />

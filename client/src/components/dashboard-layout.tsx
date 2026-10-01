@@ -25,6 +25,7 @@ import {
   ListPlus,
   GraduationCap,
   ScanText,
+  Languages,
 } from "lucide-react";
 import { useEffect, useState } from "react";
 import { cn } from "@/lib/utils";
@@ -221,6 +222,7 @@ export default function DashboardLayout({
                     { label: "User Management", path: "/admin/users", icon: ShieldCheck },
                     { label: "Shared Lists", path: "/admin/vocabulary", icon: ListPlus },
                     { label: "OCR Docs", path: "/admin/ocr", icon: ScanText },
+                    { label: "Translation Jobs", path: "/admin/translations", icon: Languages },
                   ].map((item) => {
                     const isActive = location.startsWith(item.path);
                     return (

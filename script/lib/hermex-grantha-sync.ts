@@ -530,9 +530,12 @@ export async function syncJobToStrapi(job: TranslateJob, newRows: HermexTranslat
       teekasOut[job.teekaIndex] = { ...t, TeekaEntry: merged };
       await putTeekas(job.mantraDocId, teekasOut);
     } else {
-      const strapiEntry = fresh[job.field] ?? {};
+      // Reached only when field is NOT "teeka" (the branch above owns that case),
+      // but TypeScript cannot narrow a FieldKind through the conjunction above.
+      const field = job.field as Exclude<FieldKind, "teeka">;
+      const strapiEntry = fresh[field] ?? {};
       const merged = mergeTeekaEntry(strapiEntry, { OtherTranslations: newOT });
-      await putManthraField(job.mantraDocId, job.field, merged);
+      await putManthraField(job.mantraDocId, field, merged);
     }
   });
 }

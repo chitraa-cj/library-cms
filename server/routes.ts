@@ -6,6 +6,8 @@ import { invalidateGranthaBulkCache, invalidateAllBulkCache } from "./grantha-bu
 import { createAcharyaRouter, seedAcharyasIfEmpty } from "./acharyas";
 import ocrRouter from "./ocr/routes";
 import { reconcileOcrJobsOnBoot } from "./ocr/jobs";
+import translationJobsRouter from "./translation/routes";
+import { ensureTranslationSchema } from "./translation/store";
 import { createMigrateRouter } from "./migrate-vivekachudamani";
 import { activityLogger } from "./activity-log";
 import { readLatestDraftSnapshot, writeDraftSnapshot } from "./data-safety";
@@ -37,11 +39,17 @@ import { StringDecoder } from "node:string_decoder";
 import { createHash } from "node:crypto";
 import { z } from "zod";
 import {
+  HermexError,
+  hermexAvailability,
   hermexEnabled,
   hermexPythonBin,
+  hermexQueueDepth,
   hermexTranslateScriptPath,
+  runHermexSmokeTest,
   runHermexTranslate,
+  scrubHermexText,
 } from "./hermex-translate";
+import { hermexConfigSummary } from "./hermex/config";
 import { otherTranslationLanguages } from "@shared/schema";
 import {
   portalIndexToStrapiSortKey,
@@ -4455,6 +4463,14 @@ export async function registerRoutes(
   app.use("/api/admin/ocr", requireAuth, requireAdmin, ocrRouter);
   void reconcileOcrJobsOnBoot();
 
+  // Translation queue (admin-only). The API only ever writes queue rows; the
+  // translating itself happens in the separate worker process
+  // (server/translation/worker-main.ts), so no request here can be long-running.
+  app.use("/api/translation-jobs", requireAuth, requireAdmin, translationJobsRouter);
+  void ensureTranslationSchema().catch((e) =>
+    console.error("[translation] schema bootstrap failed:", e?.message || e),
+  );
+
   const hermexTranslateBodySchema = z.object({
     sourceText: z.string().min(1).max(120_000),
     sourceLanguage: z.enum(["English", "Sanskrit"]),
@@ -4466,14 +4482,66 @@ export async function registerRoutes(
   });
 
   app.get("/api/hermex/status", requireAuth, (_req, res) => {
+    const availability = hermexAvailability();
     res.json({
       enabled: hermexEnabled(),
       python: hermexPythonBin(),
       script: hermexTranslateScriptPath(),
+      /** Can this host actually translate right now? The editor uses it to explain itself. */
+      ready: availability.ok,
+      queueDepth: hermexQueueDepth(),
       otherTranslationLanguageCount: otherTranslationLanguages.length,
       otherTranslationLanguages: [...otherTranslationLanguages],
       sourceLanguages: ["English", "Sanskrit"],
     });
+  });
+
+  /**
+   * Hermex health, admin-only because it reports server paths.
+   *
+   * Cheap by default: filesystem + X-socket checks only, so a dashboard may poll
+   * it. `?deep=1` additionally performs ONE real Gemini round-trip — never do
+   * that on a timer.
+   */
+  app.get("/api/hermex/health", requireAuth, requireAdmin, async (req, res) => {
+    const availability = hermexAvailability();
+    const payload: Record<string, unknown> = {
+      ok: availability.ok,
+      checks: {
+        enabled: availability.enabled,
+        pythonExists: availability.pythonExists,
+        scriptExists: availability.scriptExists,
+        chromeProfileExists: availability.chromeProfileExists,
+        geminiSetupComplete: availability.geminiSetupComplete,
+        displayConfigured: Boolean(availability.display),
+        displaySocketExists: availability.displaySocketExists,
+      },
+      config: hermexConfigSummary(),
+      queueDepth: hermexQueueDepth(),
+      problems: availability.problems,
+      checkedAt: new Date().toISOString(),
+    };
+
+    if (req.query.deep === "1" || req.query.deep === "true") {
+      if (!availability.ok) {
+        payload.deep = { ok: false, skipped: true, reason: "Configuration is incomplete — not spending a Gemini request." };
+        return res.status(503).json(payload);
+      }
+      try {
+        const smoke = await runHermexSmokeTest();
+        payload.deep = { ok: true, response: smoke.response, expected: smoke.expected, durationMs: smoke.durationMs };
+      } catch (err: any) {
+        payload.ok = false;
+        payload.deep = {
+          ok: false,
+          reason: err instanceof HermexError ? err.reason : "unknown",
+          message: scrubHermexText(err, 300),
+        };
+        return res.status(err instanceof HermexError ? err.status : 502).json(payload);
+      }
+    }
+
+    return res.status(availability.ok ? 200 : 503).json(payload);
   });
 
   app.post("/api/hermex/translate", requireAuth, async (req, res) => {
@@ -4504,9 +4572,16 @@ export async function registerRoutes(
         })),
       });
     } catch (error: any) {
-      console.error("[hermex] translate failed:", error?.message || error);
-      res.status(500).json({
-        message: error?.message || "Hermex translation failed",
+      // The adapter classifies the failure (login expired / Xvfb down / Chrome
+      // wedged / timeout / …) so the editor can say something true instead of
+      // "500". Text is scrubbed before it leaves the server.
+      const reason = error instanceof HermexError ? error.reason : "unknown";
+      const status = error instanceof HermexError ? error.status : 500;
+      console.error(`[hermex] translate failed (${reason}):`, scrubHermexText(error, 300));
+      res.status(status).json({
+        message: scrubHermexText(error, 400) || "Hermex translation failed",
+        reason,
+        retryable: error instanceof HermexError ? error.retryable : true,
       });
     }
   });

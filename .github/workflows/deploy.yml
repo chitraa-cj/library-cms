@@ -36,7 +36,45 @@ jobs:
             NODE_TLS_REJECT_UNAUTHORIZED=0 npm run db:push
 
             echo "Restarting PM2..."
-            pm2 restart cms-library --update-env
+            # The API process is named `cmslibrary` on this box (verified with
+            # `pm2 list`), not `cms-library`. `pm2 restart <unknown>` only prints an
+            # error and this script has no `set -e`, so the old wording silently did
+            # NOTHING on every deploy: pm2 kept serving the previous bundle while the
+            # new client assets were live, which is exactly the "feature works
+            # locally, dead on the box, /api/* returns SPA HTML" symptom.
+            # Resolve the real name instead of hard-coding one spelling.
+            API_APP=""
+            for candidate in cmslibrary cms-library; do
+              if pm2 describe "$candidate" > /dev/null 2>&1; then API_APP="$candidate"; break; fi
+            done
+            if [ -n "$API_APP" ]; then
+              echo "Restarting $API_APP..."
+              pm2 restart "$API_APP" --update-env
+            else
+              echo "ERROR: no CMS API process found in pm2 (looked for cmslibrary, cms-library)."
+              pm2 list
+              exit 1
+            fi
+
+            # The translation worker is a SEPARATE pm2 process that drains the
+            # Hermex/Gemini queue. It is restarted only if it already exists, so
+            # this step never fails on a box where it has not been started yet
+            # (first run is manual: pm2 start ecosystem.config.cjs --only
+            # cms-translation-worker && pm2 save).
+            #
+            # Nothing here installs or touches Hermex, Chrome, Xvfb or the Gemini
+            # profile — that environment lives at /home/ubuntu/hermex-translation
+            # and is persistent across deployments by design.
+            if pm2 describe cms-translation-worker > /dev/null 2>&1; then
+              echo "Restarting translation worker..."
+              pm2 restart cms-translation-worker --update-env
+            else
+              echo "Translation worker not registered with pm2 — skipping (start it once by hand)."
+            fi
+
             pm2 save
+
+            echo "Verifying Hermex configuration (no Gemini request)..."
+            npm run hermex:check || echo "WARNING: Hermex is not ready — translations will fail until this is fixed."
 
             echo "Deployment complete."

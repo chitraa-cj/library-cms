@@ -19,6 +19,7 @@ Response:
 from __future__ import annotations
 
 import json
+import os
 import re
 import sys
 import time
@@ -251,7 +252,13 @@ def _looks_like_clipboard_or_shell_garbage(text: str) -> bool:
         return True
     if "npm run hermex" in low:
         return True
-    if t.startswith("HERMEX_") or t.startswith("export "):
+    # An env-var ASSIGNMENT pasted in from a terminal is garbage
+    # ("HERMEX_PYTHON=/path", "export HERMEX_ENABLED=1"). A bare HERMEX_* token is
+    # not: the smoke test deliberately asks Gemini to answer "HERMEX_TEST_OK", and
+    # rejecting that made a perfectly good round-trip look like an empty response.
+    if t.startswith("export "):
+        return True
+    if t.startswith("HERMEX_") and "=" in t.split("\n", 1)[0]:
         return True
     return False
 
@@ -405,8 +412,10 @@ def _cleanup_stale_chrome() -> None:
     # Remove stale Singleton lock files — a hard-killed Chrome leaves these, and a
     # fresh Chrome on the same profile then exits immediately ('cannot connect to
     # chrome'). Chrome recreates them on a clean launch, so removal is safe.
-    profile_dir = os.environ.get("HERMEX_CHROME_PROFILE_DIR") or os.path.expanduser(
-        "~/Library/Application Support/hermex/chrome_profile"
+    profile_dir = (
+        os.environ.get("HERMEX_CHROME_PROFILE_DIR")
+        or os.environ.get("HERMEX_CHROME_PROFILE")
+        or os.path.expanduser("~/Library/Application Support/hermex/chrome_profile")
     )
     for lock in ("SingletonLock", "SingletonSocket", "SingletonCookie"):
         lock_path = os.path.join(profile_dir, lock)
@@ -430,6 +439,24 @@ def _headless_fallback_enabled() -> bool:
     return sys.platform == "darwin"
 
 
+def _disable_web_security() -> bool:
+    """Whether to launch Chrome with --disable-web-security (hermex's default).
+
+    Gemini's web app stopped accepting message sends from a browser started with
+    --disable-web-security (and the IsolateOrigins/site-per-process opt-out that
+    hermex pairs with it): the chat loads and reads fine, but pressing Send — or
+    even switching the model — silently fails with a "Something went wrong (1)"
+    toast and the prompt stays sitting in the input box. get_state() then reports
+    TYPING forever, so every chunk died in _wait_idle_or_stall as a 150s
+    "generation stall". Verified by A/B on 2026-09-28: identical profile/account,
+    disable_web_security=True → never sends, False → answers in ~3s.
+    Set HERMEX_DISABLE_WEB_SECURITY=1 to restore the old behaviour."""
+    import os
+
+    v = os.environ.get("HERMEX_DISABLE_WEB_SECURITY", "").strip().lower()
+    return v in ("1", "true", "yes")
+
+
 def _launch_attempts() -> int:
     """How many full launch passes to make before giving up. Long grantha runs
     on macOS wedge Chrome ('cannot connect to chrome') and only recover after a
@@ -439,6 +466,33 @@ def _launch_attempts() -> int:
 
     n = int(os.environ.get("HERMEX_LAUNCH_ATTEMPTS", "0") or 0)
     return n if n > 0 else 4
+
+
+def _chrome_profile_dir() -> str | None:
+    """The persistent Chrome profile holding the Gemini login.
+
+    On EC2 this is /home/ubuntu/hermex-translation/chrome-profile, passed in as
+    HERMEX_CHROME_PROFILE by the CMS backend. It MUST be handed to Gemini as
+    data_dir: without it hermex falls back to its own default profile directory,
+    which on the server is a *different*, unauthenticated profile — every query
+    then fails with a login error even though `hermex:setup` was completed. Left
+    unset (local dev), hermex keeps using its own default, which is where
+    `npm run hermex:setup` logged in."""
+    import os
+
+    value = (os.environ.get("HERMEX_CHROME_PROFILE") or "").strip()
+    return value or None
+
+
+def _gemini_kwargs(headless: bool) -> dict[str, Any]:
+    kwargs: dict[str, Any] = {
+        "headless": headless,
+        "disable_web_security": _disable_web_security(),
+    }
+    profile = _chrome_profile_dir()
+    if profile:
+        kwargs["data_dir"] = profile
+    return kwargs
 
 
 def _open_gemini_browser(headless: bool, *, after_cleanup: bool = False) -> Any:
@@ -458,8 +512,12 @@ def _open_gemini_browser(headless: bool, *, after_cleanup: bool = False) -> Any:
             if after_cleanup or attempt > 1:
                 _cleanup_stale_chrome()
             try:
-                _log(f"[hermex] Launching Chrome (headless={mode}, attempt {attempt}/{max_attempts})")
-                gemini = Gemini(headless=mode)
+                profile = _chrome_profile_dir()
+                _log(
+                    f"[hermex] Launching Chrome (headless={mode}, attempt {attempt}/{max_attempts}, "
+                    f"profile={profile or 'hermex default'}, display={os.environ.get('DISPLAY') or 'none'})"
+                )
+                gemini = Gemini(**_gemini_kwargs(mode))
                 gemini.open_url("https://gemini.google.com/app")
                 _dismiss_gemini_overlays(gemini)
                 if not getattr(gemini, "is_logged_in", True):

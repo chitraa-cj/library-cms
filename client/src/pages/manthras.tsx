@@ -79,6 +79,7 @@ import {
   invalidateManthraCache,
   invalidateManthraCacheOnDocIdCorrection,
 } from "@/lib/mantra-cms-cache";
+import NodeVideos, { type NodeVideoDraft } from "@/components/node-videos";
 
 const EMPTY_TT: TextAndTranslation = {
   SanskritTextEntry: "",
@@ -156,6 +157,8 @@ export default function ManthrasPage() {
   const [formOpen, setFormOpen] = useState(false);
   const [deleteTarget, setDeleteTarget] = useState<any>(null);
   const [editingItem, setEditingItem] = useState<any>(null);
+  /** The open verse's video list. Cleared between verses; NodeVideos refills it from the CMS. */
+  const [manthraVideos, setManthraVideos] = useState<NodeVideoDraft[]>([]);
   const [editingDraftId, setEditingDraftId] = useState<number | null>(null);
   const [viewOnly, setViewOnly] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
@@ -393,6 +396,7 @@ export default function ManthrasPage() {
 
   function resetForm() {
     invalidateManthraCache();
+    setManthraVideos([]);
     setFormData({
       ShlokaManthraNumber: "",
       order: "",
@@ -459,6 +463,7 @@ export default function ManthrasPage() {
   }
 
   function openView(item: any) {
+    setManthraVideos([]);
     setViewOnly(true);
     if (item._isDraft) {
       setEditingItem(item);
@@ -543,6 +548,7 @@ export default function ManthrasPage() {
   }
 
   function openEdit(item: any) {
+    setManthraVideos([]);
     const granthaDocId = item._isDraft
       ? getGranthaDocIdForSection(item._draftData?._section || "")
       : (item as any).grantha?.documentId;
@@ -1314,6 +1320,27 @@ export default function ManthrasPage() {
                 </div>
               )}
             </div>
+
+            {/* Videos pinned to THIS verse. Only a verse that already exists in the CMS has a
+                documentId to pin them to; a draft-only verse gets the list once published. */}
+            {editingItem && !editingItem._isDraft && editingItem.documentId ? (
+              <div className="space-y-3 pt-3 border-t">
+                <NodeVideos
+                  targetType="manthra"
+                  targetDocId={editingItem.documentId}
+                  videos={manthraVideos}
+                  onChange={setManthraVideos}
+                  viewOnly={viewOnly}
+                  label="Videos"
+                  description={
+                    "YouTube links for this verse alone, shown on the site in the order listed " +
+                    "here. Saving writes to the CMS immediately — it is independent of Save as Draft."
+                  }
+                  testIdPrefix="manthra-video"
+                  compact
+                />
+              </div>
+            ) : null}
 
           </fieldset>
 

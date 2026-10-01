@@ -19,3 +19,16 @@ logs/
 
 # OCR Docs uploads (source PDFs/scans — never in git)
 .ocr-store/
+
+# Hermex / Gemini browser session — MUST stay on the server only.
+# The authenticated profile lives at /home/ubuntu/hermex-translation/chrome-profile
+# on EC2 (outside this repo). These patterns are a backstop in case a profile is
+# ever copied in by accident: a committed profile would publish a live Google
+# session to GitHub.
+chrome-profile/
+chrome_profile/
+**/chrome-profile/
+**/chrome_profile/
+.venv-hermex/
+hermex-translation/
+*.setup_gemini

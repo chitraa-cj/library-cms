@@ -354,13 +354,23 @@ def _is_gemini_transient(err: BaseException) -> bool:
     return isinstance(err, GeminiTransientError)
 
 
-def _transient_backoff_sec() -> int:
-    """Base cool-off after a canned error reply. Seconds, not the 8s used elsewhere —
-    these replies mean Gemini is under pressure, and hammering it keeps it there."""
+_TRANSIENT_BACKOFF_STEPS = (1, 6, 18)
+
+
+def _transient_backoff_sec(attempt: int = 1) -> int:
+    """Cool-off after a canned error reply, escalating with the attempt number.
+
+    Measured on the EC2 box: a single error reply almost always clears on the very next
+    send, so attempt 1 waits seconds — a flat 60s there cost ~12 minutes of pure sleep
+    per mantra (roughly half of 4 parts x 6 languages). A *repeat* is the signal that
+    Gemini is genuinely under pressure, and only then is a long pause worth the wall
+    clock. HERMEX_TRANSIENT_BACKOFF_SEC sets the first step; later steps scale from it."""
+    base = 10
     raw = (os.environ.get("HERMEX_TRANSIENT_BACKOFF_SEC") or "").strip()
     if raw.isdigit() and int(raw) > 0:
-        return int(raw)
-    return 60
+        base = int(raw)
+    step = _TRANSIENT_BACKOFF_STEPS[min(max(attempt, 1), len(_TRANSIENT_BACKOFF_STEPS)) - 1]
+    return base * step
 
 
 def _transient_abort_after() -> int:
@@ -910,7 +920,7 @@ def _gemini_query_with_recovery(
             cool = 4
             if _is_gemini_transient(e):
                 kind = "Gemini backend error reply"
-                cool = _transient_backoff_sec() * attempt
+                cool = _transient_backoff_sec(attempt)
             elif _is_click_intercepted(e):
                 kind = "UI overlay blocked input"
             elif _is_empty_response_error(e):

@@ -89,6 +89,19 @@ check(
     ),
 )
 
+print("\n_transient_backoff_sec schedule")
+from hermex_translate.translate_cli import _transient_backoff_sec  # noqa: E402
+
+os.environ.pop("HERMEX_TRANSIENT_BACKOFF_SEC", None)
+check("first retry is quick (a single hiccup usually clears)", _transient_backoff_sec(1) == 10)
+check("second retry backs off hard", _transient_backoff_sec(2) == 60)
+check("third retry backs off harder", _transient_backoff_sec(3) == 180)
+check("escalates monotonically", _transient_backoff_sec(1) < _transient_backoff_sec(2) < _transient_backoff_sec(3))
+check("out-of-range attempts are clamped", _transient_backoff_sec(0) == 10 and _transient_backoff_sec(99) == 180)
+os.environ["HERMEX_TRANSIENT_BACKOFF_SEC"] = "60"
+check("the env override sets the FIRST step", _transient_backoff_sec(1) == 60)
+os.environ.pop("HERMEX_TRANSIENT_BACKOFF_SEC", None)
+
 print("\n_build_prompt part framing")
 p1 = _build_prompt("body text", "Sanskrit", ["Bengali"], "ctx", part_info=(2, 4), preceding="earlier text")
 check("names the part number", "PART 2 of 4" in p1)

@@ -121,7 +121,7 @@ On a Mac, headless Chrome is unreliable for Hermex; run the worker with
 ## On EC2
 
 ```bash
-cd ~/library/Data-Feeder-CMS           # repo root on the box
+cd /home/ubuntu/library/library-cms    # the deployed CMS on the box
 git pull
 npm ci                                 # only if dependencies changed
 npm run migrate:translation-jobs       # idempotent
@@ -152,32 +152,50 @@ psql "$DATABASE_URL" -c "select id, status, completed_items, total_items, last_a
 `last_activity_at` moving is the liveness signal; the worker touches it on every
 heartbeat.
 
-## Initialising the Gemini session on the box
+## The Gemini session on the box
 
-The worker drives a **server-side authenticated Chrome profile**. There are no Google
-credentials anywhere in this repo, the database, the API responses or the logs, and
-nothing here automates password entry — a human signs in once, interactively:
+**It already exists — do not re-create it.** The authenticated Chrome profile lives in
+the persistent Hermex install this repo does not own:
 
-```bash
-# on the box, with a display forwarded (ssh -X) or a VNC/Xvfb session
-cd ~/library/Data-Feeder-CMS
-npm run hermex:install        # once — creates .venv-hermex
-npm run hermex:setup          # opens Chrome at gemini.google.com
-
-#  → sign in with the Google account in the window
-#  → return to the terminal and press ENTER (not Ctrl+C) to save the session
+```
+/home/ubuntu/hermex-translation/.venv/bin/python      # the Python that has hermex
+/home/ubuntu/hermex-translation/chrome-profile        # the Gemini login (+ .setup_gemini)
+DISPLAY=:99                                           # Xvfb
 ```
 
-The profile lives outside the repo (`~/.local/share/hermex/chrome_profile` or the
-platform equivalent printed by setup). Re-run `npm run hermex:setup` whenever Google
-expires the session — the symptom is every item failing with a Gemini/login error.
+The CMS finds it through `HERMEX_DIR` / `HERMEX_PYTHON` / `HERMEX_CHROME_PROFILE` /
+`HERMEX_DISPLAY` in the box's `.env` (gitignored). No Google credential exists in this
+repo, the database, API responses or logs, and nothing automates password entry.
+
+Do **not** run `npm run hermex:install` / `npm run hermex:setup` on the box: those
+build the repo's own `.venv-hermex` and log in to hermex's *default* profile
+directory, which is a different, empty profile. The symptom of using it is every item
+failing with a Gemini login error even though setup "succeeded".
+
+When Google eventually expires the session, re-authenticate **that** profile
+interactively (a human signs in; there is no scripted path):
+
+```bash
+# with a display reachable — e.g. ssh -L 5900:localhost:5900 + a VNC viewer on :99
+DISPLAY=:99 /home/ubuntu/hermex-translation/.venv/bin/python - <<'PY'
+from hermex import Gemini
+g = Gemini(headless=False, disable_web_security=False,
+           data_dir="/home/ubuntu/hermex-translation/chrome-profile")
+g.open_url(timeout=60)
+input("Sign in in the Chrome window, then press ENTER here...")
+g.close()
+PY
+
+cd /home/ubuntu/library/library-cms && npm run hermex:smoke   # confirm it answers
+```
 
 If Chrome wedges after a long run (a known failure mode, see `docs/HERMEX.md`):
 
 ```bash
 pm2 stop cms-translation-worker
-pkill -f chromedriver
-rm -f "$HOME/.local/share/hermex/chrome_profile"/Singleton*
+pkill -x chromedriver          # -x, not -f: `pkill -f chromedriver` over ssh also
+                               # matches your own ssh command line and kills the session
+rm -f /home/ubuntu/hermex-translation/chrome-profile/Singleton*
 pm2 start cms-translation-worker
 ```
 
@@ -237,7 +255,7 @@ paths are redacted. Credentials, cookies and browser session data are never logg
 | `TRANSLATION_RETRY_BACKOFF_MS` | `60000` | Multiplied by attempts already made. |
 | `TRANSLATION_MAX_ITEMS_PER_JOB` | `20000` | Guard on one job's size. |
 | `TRANSLATION_INSERT_BATCH` | `500` | Rows per INSERT when creating a job. |
-| `TRANSLATION_WORKER_HEADLESS` | `true` | `false` on a desktop with a display. |
+| `TRANSLATION_WORKER_HEADLESS` | unset | Unset = follow the host: headful when `DISPLAY` is set (the EC2/Xvfb mode), headless otherwise. |
 | `TRANSLATION_WORKER_ID` | `worker-<pid>@<host>` | Identifies the lease owner. |
 | `HERMEX_ENABLED` | `true` | `0` parks the worker: it claims nothing and spends no retries. |
 | `HERMEX_CHUNK_SIZE` / `HERMEX_CHUNK_DELAY_MS` / `HERMEX_MAX_RETRIES` | `3` / `8000` / `3` | Passed straight to the existing Hermex runner. |

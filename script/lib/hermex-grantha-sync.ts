@@ -248,8 +248,21 @@ export async function strapiWithRetry<T>(
   throw last;
 }
 
+/**
+ * Token the Python circuit breaker puts in its abort message.
+ *
+ * Checked BEFORE the generic classification below, which matches the substring
+ * "hermex" — the old abort message mentioned HERMEX_MAX_SOURCE_CHARS, so the breaker
+ * that exists to STOP wasted Gemini round trips was itself classified as retryable
+ * and the whole 6-language subprocess was relaunched three times. Keep in sync with
+ * TRANSIENT_ABORT_MARKER in python/hermex_translate/translate_cli.py.
+ */
+export const NON_RETRYABLE_HERMEX_MARKER = "GEMINI_BACKEND_ERROR_LIMIT";
+
 export function isHermexRetryableError(err: unknown): boolean {
   const msg = (err instanceof Error ? err.message : String(err)).toLowerCase();
+  // Final conditions win over every pattern below.
+  if (msg.includes(NON_RETRYABLE_HERMEX_MARKER.toLowerCase())) return false;
   return (
     msg.includes("chrome") ||
     msg.includes("chromedriver") ||

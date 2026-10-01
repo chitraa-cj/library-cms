@@ -18,6 +18,7 @@ Response:
 
 from __future__ import annotations
 
+import datetime
 import json
 import os
 import re
@@ -395,6 +396,14 @@ def _transient_backoff_sec(attempt: int = 1) -> int:
     return base * step
 
 
+# Marker the TypeScript layer checks BEFORE its generic retry classification. The old
+# abort message contained "HERMEX_MAX_SOURCE_CHARS", and isHermexRetryableError()
+# matches the substring "hermex" — so the breaker aborted the job and the outer loop
+# immediately relaunched the whole 6-language subprocess, three times over. Keep this
+# token in sync with NON_RETRYABLE_HERMEX_MARKER in script/lib/hermex-grantha-sync.ts.
+TRANSIENT_ABORT_MARKER = "GEMINI_BACKEND_ERROR_LIMIT"
+
+
 def _transient_abort_after() -> int:
     """Consecutive chunk attempts ending in a canned error reply that end the job.
 
@@ -583,20 +592,55 @@ def _should_reopen_browser(err: BaseException) -> bool:
     )
 
 
+_SINGLETON_FILES = ("SingletonLock", "SingletonSocket", "SingletonCookie")
+
+
+def _configured_profile_dir() -> str:
+    """The data_dir we hand to hermex, from the environment."""
+    return (
+        os.environ.get("HERMEX_CHROME_PROFILE_DIR")
+        or os.environ.get("HERMEX_CHROME_PROFILE")
+        or os.path.expanduser("~/Library/Application Support/hermex/chrome_profile")
+    )
+
+
+def _profile_lock_dirs() -> list[str]:
+    """Every directory that can hold Chrome's Singleton* locks for OUR profile.
+
+    hermex does not use `data_dir` as the Chrome profile — it appends its own
+    `chrome_profile` subdirectory, so the real user-data-dir is
+
+        <data_dir>/chrome_profile
+
+    (verified on the EC2 box: --user-data-dir=.../chrome-profile/chrome_profile,
+    SingletonLock -> ip-172-31-6-203-54673 living there, while the outer directory
+    held none). Cleaning only the outer path meant the lock cleanup had never once
+    removed a real lock: an orphaned Chrome kept the profile forever and every
+    relaunch died with "cannot connect to chrome". Both levels are checked now, and
+    nothing outside the configured profile is ever touched."""
+    base = _configured_profile_dir().rstrip(os.sep)
+    dirs = [base]
+    nested = os.path.join(base, "chrome_profile")
+    if nested != base:
+        dirs.append(nested)
+    return dirs
+
+
 def _cleanup_stale_chrome() -> None:
     """Kill orphaned chromedriver / automation Chrome after launch failures.
 
-    Includes the Hermex Chrome profile dir so orphaned *visible*-fallback Chrome
-    windows (which the headless-only patterns miss) are reaped — these accumulate
-    on long macOS runs and wedge every subsequent launch with 'cannot connect to
-    chrome'. The profile marker is automation-only, so a user's personal browser
-    (default profile) is never touched. Override the marker with
-    HERMEX_CHROME_PROFILE_MARKER if your Chrome profile path differs."""
-    import os
+    Scoped to OUR profile path so a human's own browser is never touched: the
+    pkill pattern is derived from the configured profile rather than a hard-coded
+    marker that did not match the real nested path on this server."""
     import subprocess
 
     _log("[hermex] Cleaning up stale chromedriver before relaunch")
-    profile_marker = os.environ.get("HERMEX_CHROME_PROFILE_MARKER", "hermex/chrome_profile").strip()
+    profile_dir = _configured_profile_dir()
+    # An explicit marker still wins, but the default is now the configured path —
+    # the old default ("hermex/chrome_profile") never matched
+    # ".../hermex-translation/chrome-profile/chrome_profile", so orphaned visible
+    # Chrome on this box was never reaped.
+    profile_marker = (os.environ.get("HERMEX_CHROME_PROFILE_MARKER") or profile_dir).strip()
     if sys.platform in ("darwin", "linux"):
         patterns = [
             "chromedriver",
@@ -605,6 +649,7 @@ def _cleanup_stale_chrome() -> None:
             "Google Chrome --headless",
         ]
         if profile_marker:
+            # Matches `--user-data-dir=<profile>` and `<profile>/chrome_profile`.
             patterns.append(profile_marker)
         for pattern in patterns:
             subprocess.run(["pkill", "-f", pattern], capture_output=True)
@@ -612,19 +657,15 @@ def _cleanup_stale_chrome() -> None:
     # Remove stale Singleton lock files — a hard-killed Chrome leaves these, and a
     # fresh Chrome on the same profile then exits immediately ('cannot connect to
     # chrome'). Chrome recreates them on a clean launch, so removal is safe.
-    profile_dir = (
-        os.environ.get("HERMEX_CHROME_PROFILE_DIR")
-        or os.environ.get("HERMEX_CHROME_PROFILE")
-        or os.path.expanduser("~/Library/Application Support/hermex/chrome_profile")
-    )
-    for lock in ("SingletonLock", "SingletonSocket", "SingletonCookie"):
-        lock_path = os.path.join(profile_dir, lock)
-        try:
-            if os.path.lexists(lock_path):
-                os.remove(lock_path)
-                _log(f"[hermex] Removed stale {lock}")
-        except OSError as lock_err:
-            _log(f"[hermex] Could not remove {lock}: {lock_err}")
+    for directory in _profile_lock_dirs():
+        for lock in _SINGLETON_FILES:
+            lock_path = os.path.join(directory, lock)
+            try:
+                if os.path.lexists(lock_path):
+                    os.remove(lock_path)
+                    _log(f"[hermex] Removed stale {lock} from {directory}")
+            except OSError as lock_err:
+                _log(f"[hermex] Could not remove {lock}: {lock_err}")
     time.sleep(5)
 
 
@@ -693,6 +734,96 @@ def _gemini_kwargs(headless: bool) -> dict[str, Any]:
     if profile:
         kwargs["data_dir"] = profile
     return kwargs
+
+
+class HermexBusyError(RuntimeError):
+    """Another process already holds the Chrome profile.
+
+    Not a transient condition and not retryable: two Chrome instances cannot share
+    one user-data-dir, and the loser's launch dies with "cannot connect to chrome"
+    while leaving orphans that wedge the winner too. Proven on the EC2 box — a
+    diagnostic run and a production run overlapped and the diagnostic burned all four
+    launch attempts without sending a single prompt."""
+
+
+def _lock_path() -> str:
+    """Where the single-flight lock lives.
+
+    `<HERMEX_DIR>/.hermex.lock` when HERMEX_DIR is configured (the EC2 layout), else
+    beside the profile, so the lock always sits next to the thing it protects. Never
+    inside the Chrome profile itself — that directory belongs to Chrome."""
+    override = (os.environ.get("HERMEX_LOCK_FILE") or "").strip()
+    if override:
+        return override
+    hermex_dir = (os.environ.get("HERMEX_DIR") or "").strip()
+    if hermex_dir:
+        return os.path.join(hermex_dir, ".hermex.lock")
+    return os.path.join(os.path.dirname(_configured_profile_dir().rstrip(os.sep)), ".hermex.lock")
+
+
+class _ProfileLock:
+    """Exclusive, non-blocking `flock` around everything that drives the browser.
+
+    Unix only (fcntl), which is what the server runs; on a platform without fcntl it
+    degrades to a no-op rather than refusing to work. The lock is advisory and tied to
+    the open file descriptor, so it is released even on SIGKILL — no stale lock file to
+    clean up, which is why the file is never deleted.
+
+    Deliberately `LOCK_NB`: waiting would turn a collision into two jobs silently
+    queueing for hours. The caller gets an immediate, explicit failure instead."""
+
+    def __init__(self, path: str) -> None:
+        self.path = path
+        self._fh: Any = None
+
+    def acquire(self) -> None:
+        try:
+            import fcntl
+        except ImportError:  # pragma: no cover - non-Unix
+            _log("[hermex] No fcntl on this platform — single-flight lock skipped")
+            return
+        directory = os.path.dirname(self.path)
+        if directory:
+            os.makedirs(directory, exist_ok=True)
+        # Opened "a" so the file is created once and never truncated; the lock lives on
+        # the descriptor, not on the contents.
+        self._fh = open(self.path, "a")
+        try:
+            fcntl.flock(self._fh.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except OSError:
+            self._fh.close()
+            self._fh = None
+            raise HermexBusyError(
+                "Hermex translation already running: another process holds the Chrome "
+                f"profile lock ({self.path}). Wait for it to finish, or check with: "
+                "ps -eo pid,etimes,args | grep -E '[t]ranslate_cli|[h]ermex-grantha'"
+            ) from None
+        try:
+            self._fh.write(f"{os.getpid()} {datetime.datetime.now().isoformat(timespec='seconds')}\n")
+            self._fh.flush()
+        except OSError:
+            pass  # The lock is what matters; the breadcrumb is a nicety.
+
+    def release(self) -> None:
+        if self._fh is None:
+            return
+        try:
+            import fcntl
+
+            fcntl.flock(self._fh.fileno(), fcntl.LOCK_UN)
+        except Exception:
+            pass
+        try:
+            self._fh.close()
+        finally:
+            self._fh = None
+
+    def __enter__(self) -> "_ProfileLock":
+        self.acquire()
+        return self
+
+    def __exit__(self, *exc: Any) -> None:
+        self.release()
 
 
 def _warmup_enabled() -> bool:
@@ -993,10 +1124,20 @@ def _gemini_query_with_recovery(
                 kind = "empty response"
             else:
                 kind = "generation timeout"
-            _log(
-                f"[hermex] {kind} (attempt {attempt}/3) — refreshing chat, waiting {cool:.0f}s"
-            )
-            _recover_browser_session(gemini)
+            if _is_gemini_transient(e):
+                # refresh_page() reloads the SAME conversation — the one that just
+                # produced the error — so attempts 2 and 3 re-sent the identical prompt
+                # into a conversation Gemini had already failed in. Start a real new
+                # chat instead; the backoff below is unchanged.
+                _log(
+                    f"[hermex] {kind} (attempt {attempt}/3) — starting a FRESH chat, waiting {cool:.0f}s"
+                )
+                _start_fresh_gemini_chat(gemini)
+            else:
+                _log(
+                    f"[hermex] {kind} (attempt {attempt}/3) — refreshing chat, waiting {cool:.0f}s"
+                )
+                _recover_browser_session(gemini)
             time.sleep(cool)
     raise last_err if last_err else RuntimeError("Gemini query failed")
 
@@ -1364,11 +1505,13 @@ def _translate_chunks(
                         # remaining chunks would each pay a full oversized round trip for
                         # nothing. Stop the job and let the checkpoint resume it later.
                         raise RuntimeError(
-                            f"Gemini returned its own backend error on {transient_streak} "
-                            "consecutive chunk attempts — aborting this job rather than "
-                            "re-sending for every remaining chunk. Lower "
-                            "HERMEX_MAX_SOURCE_CHARS, or set HERMEX_TRANSIENT_ABORT_AFTER=0 "
-                            "to disable this guard."
+                            f"{TRANSIENT_ABORT_MARKER}: Gemini returned its own backend "
+                            f"error on {transient_streak} consecutive chunk attempts — "
+                            "aborting this job rather than re-sending for every remaining "
+                            "chunk. This is FINAL for this run: relaunching the same "
+                            "subprocess would repeat the same wasted round trips. Retry "
+                            "later (the checkpoint resumes), or set "
+                            "HERMEX_TRANSIENT_ABORT_AFTER=0 to disable this guard."
                         ) from e
                     if attempt < max_retries:
                         wait = chunk_delay_sec * attempt
@@ -1400,6 +1543,12 @@ def _translate_chunks(
 
 
 def run_translate_batch(req: dict[str, Any]) -> dict[str, Any]:
+    """Batch entry point. Takes the same single-flight lock as run_translate()."""
+    with _ProfileLock(_lock_path()):
+        return _run_translate_batch_locked(req)
+
+
+def _run_translate_batch_locked(req: dict[str, Any]) -> dict[str, Any]:
     jobs: list[dict[str, Any]] = list(req.get("jobs") or [])
     if not jobs:
         raise ValueError("jobs must be a non-empty array for batch mode")
@@ -1437,8 +1586,17 @@ def run_translate_batch(req: dict[str, Any]) -> dict[str, Any]:
 
 
 def run_translate(req: dict[str, Any]) -> dict[str, Any]:
+    """Entry point for every caller (CLI, worker, direct subprocess).
+
+    The single-flight lock is taken HERE, before anything opens Chrome, so all three
+    callers are covered by one guard and released in `finally` even on exception."""
+    with _ProfileLock(_lock_path()):
+        return _run_translate_locked(req)
+
+
+def _run_translate_locked(req: dict[str, Any]) -> dict[str, Any]:
     if req.get("jobs"):
-        return run_translate_batch(req)
+        return _run_translate_batch_locked(req)
 
     source_text = (req.get("sourceText") or "").strip()
     if not source_text:

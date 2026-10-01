@@ -25,6 +25,14 @@ import sys
 import time
 from typing import Any
 
+# Labels of buttons that DECLINE a transient Gemini prompt (location access,
+# feature announcements). Matched as exact, case-folded labels — never substrings:
+# a loose match would eventually click the affirmative button sitting next to them
+# ("Use precise location") and silently grant a permission.
+_DISMISS_BUTTON_LABELS = ("dismiss", "no thanks", "not now", "maybe later")
+_ASCII_UPPER = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+_ASCII_LOWER = "abcdefghijklmnopqrstuvwxyz"
+
 
 def _log(msg: str) -> None:
     print(msg, file=sys.stderr, flush=True)
@@ -287,6 +295,35 @@ def _dismiss_gemini_overlays(gemini: Any) -> None:
         )
     except Exception:
         pass
+
+    # Gemini's location prompt ("Use precise location for Gemini?") renders Dismiss
+    # as button TEXT with no aria-label, so the selector pass above walks straight
+    # past it and the card keeps intercepting clicks on rich-textarea. Match on the
+    # accessible name instead, via XPath (CSS cannot select by text). XPath 1.0 has
+    # no lower-case(), hence translate().
+    for label in _DISMISS_BUTTON_LABELS:
+        xpath = (
+            "//*[self::button or @role='button']["
+            f"normalize-space(translate(., '{_ASCII_UPPER}', '{_ASCII_LOWER}'))"
+            f"='{label}' or "
+            f"normalize-space(translate(@aria-label, '{_ASCII_UPPER}',"
+            f" '{_ASCII_LOWER}'))='{label}']"
+        )
+        try:
+            buttons = driver.find_elements(By.XPATH, xpath)
+        except Exception:
+            continue
+        for button in buttons:
+            try:
+                if not button.is_displayed() or not button.is_enabled():
+                    continue
+                button.click()
+                _log(f"[hermex] Dismissed a Gemini prompt via its '{label}' button")
+                time.sleep(0.3)
+            except Exception:
+                # Gone, re-rendered or not interactable — the caller retries its click.
+                continue
+
     try:
         driver.find_element(By.TAG_NAME, "body").send_keys(Keys.ESCAPE)
     except Exception:
@@ -317,7 +354,14 @@ def _gemini_send_message(gemini: Any, message: str, *, paste: bool) -> None:
     try:
         input_p.click()
     except Exception:
-        gemini.driver.execute_script("arguments[0].click();", input_p)
+        # A prompt can land between the scroll above and this click. Clear it and try
+        # the REAL click once more; the JS click below stays the last resort because
+        # it "succeeds" even while an overlay still covers the composer.
+        _dismiss_gemini_overlays(gemini)
+        try:
+            input_p.click()
+        except Exception:
+            gemini.driver.execute_script("arguments[0].click();", input_p)
     if paste:
         gemini._paste_into(message, input_p, fake_typing=False)
     else:

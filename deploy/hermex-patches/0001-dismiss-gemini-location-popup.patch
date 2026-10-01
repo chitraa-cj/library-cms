@@ -1,0 +1,113 @@
+diff --git a/hermex/gemini.py b/hermex/gemini.py
+index abf6aab..6994a86 100644
+--- a/hermex/gemini.py
++++ b/hermex/gemini.py
+@@ -3,7 +3,9 @@ from typing import Self
+ 
+ import pyperclip
+ from selenium.common.exceptions import (
++    ElementClickInterceptedException,
+     NoSuchElementException,
++    StaleElementReferenceException,
+     TimeoutException,
+     WebDriverException,
+ )
+@@ -17,6 +19,9 @@ from hermex.gemini_watermark_remover import remove_gemini_watermark
+ from hermex.models import AssistantMessage, State
+ from hermex.scraper_base import Scraper
+ 
++_ASCII_UPPER = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
++_ASCII_LOWER = "abcdefghijklmnopqrstuvwxyz"
++
+ 
+ class Gemini(Scraper):
+     """
+@@ -32,6 +37,12 @@ class Gemini(Scraper):
+ 
+     SUPPORTED_ATTACHMENTS = { ".png", ".jpg", ".jpeg", ".gif", ".webp", ".pdf", ".csv", ".txt", ".json" }  # fmt: skip
+ 
++    # Buttons that decline a transient Gemini prompt (location access, feature
++    # announcements). Matched as exact, case-folded labels rather than substrings:
++    # a loose match would eventually hit the affirmative button next to them
++    # ("Use precise location") and silently grant a permission.
++    DISMISS_BUTTON_LABELS = ("dismiss", "no thanks", "not now", "maybe later")
++
+     def open_url(self, url: str | None = None, timeout: float = 30) -> Self:
+         url = url or "https://gemini.google.com"
+         if "gemini.google.com" not in url:
+@@ -55,6 +66,58 @@ class Gemini(Scraper):
+         except TimeoutException:
+             self.is_logged_in = True
+ 
++    def _dismiss_popups(self) -> None:
++        """Close any transient prompt covering the composer.
++
++        Gemini intermittently offers things like "Use precise location for
++        Gemini?" in a card that overlaps `rich-textarea`; the next click on the
++        composer then raises `ElementClickInterceptedException`. Clicking the
++        decline button clears it. Does nothing when no such prompt is on screen,
++        and never touches the affirmative button.
++        """
++        for label in self.DISMISS_BUTTON_LABELS:
++            xpath = (
++                "//*[self::button or @role='button']["
++                f"normalize-space(translate(., '{_ASCII_UPPER}', '{_ASCII_LOWER}'))"
++                f"='{label}' or "
++                f"normalize-space(translate(@aria-label, '{_ASCII_UPPER}',"
++                f" '{_ASCII_LOWER}'))='{label}']"
++            )
++            for button in self.driver.find_elements(By.XPATH, xpath):
++                try:
++                    if not button.is_displayed() or not button.is_enabled():
++                        continue
++                    button.click()
++                    self.sleep(0.3)
++                except WebDriverException:
++                    # Already gone, re-rendered, or not interactable: either way the
++                    # overlay is not ours to insist on. The caller retries its click.
++                    continue
++
++    def _click_composer(self, input_box: WebElement) -> WebElement:
++        """Click the composer, surviving a prompt that appears mid-interaction.
++
++        A prompt can render between locating `rich-textarea` and clicking it, so
++        one interception is not a failure yet: decline the prompt, re-locate the
++        composer (the old reference may be stale) and try the real click again.
++        """
++        wait = WebDriverWait(self.driver, 20)
++        for attempt in range(3):
++            try:
++                input_box.click()
++                return input_box
++            except (
++                ElementClickInterceptedException,
++                StaleElementReferenceException,
++            ):
++                if attempt == 2:
++                    raise
++                self._dismiss_popups()
++                input_box = wait.until(
++                    EC.element_to_be_clickable((By.TAG_NAME, "rich-textarea"))
++                )
++        return input_box
++
+     def send_message(
+         self,
+         message: str,
+@@ -65,6 +128,7 @@ class Gemini(Scraper):
+         submit: bool = True,
+     ) -> Self:
+         wait = WebDriverWait(self.driver, 20)
++        self._dismiss_popups()
+         input_box = wait.until(
+             EC.element_to_be_clickable((By.TAG_NAME, "rich-textarea"))
+         )
+@@ -76,7 +140,7 @@ class Gemini(Scraper):
+                 )
+             self._upload_files(attachments)
+ 
+-        input_box.click()
++        input_box = self._click_composer(input_box)
+         self.sleep(0.5)
+         input_p = input_box.find_element(By.TAG_NAME, "p")
+ 

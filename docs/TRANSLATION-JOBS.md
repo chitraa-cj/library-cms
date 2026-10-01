@@ -241,6 +241,41 @@ paths are redacted. Credentials, cookies and browser session data are never logg
 | `TRANSLATION_WORKER_ID` | `worker-<pid>@<host>` | Identifies the lease owner. |
 | `HERMEX_ENABLED` | `true` | `0` parks the worker: it claims nothing and spends no retries. |
 | `HERMEX_CHUNK_SIZE` / `HERMEX_CHUNK_DELAY_MS` / `HERMEX_MAX_RETRIES` | `3` / `8000` / `3` | Passed straight to the existing Hermex runner. |
+| `HERMEX_MAX_SOURCE_CHARS` | `6000` | Largest source text sent to Gemini in ONE turn. A longer source is split at paragraph boundaries and translated part by part, then joined. See **Oversized sources** below. |
+| `HERMEX_TRANSIENT_BACKOFF_SEC` | `60` | Base cool-off after Gemini answers with one of its own error strings. Multiplied by the attempt number. |
+| `HERMEX_TRANSIENT_ABORT_AFTER` | `4` | Consecutive chunk attempts ending in a Gemini error reply that abort the job. `0` disables the breaker. |
+| `TRANSLATION_WORKER_HEADLESS` / `HERMEX_HEADLESS` | unset | Leave unset: with `DISPLAY` set the browser runs **headful** under Xvfb, which is the mode proven on the box. |
+
+## Oversized sources
+
+A long `BhashyamEntry` (~18.5K chars) used to be sent as a single ~19.5K-char prompt asking
+Gemini for a ~13K-char answer. Gemini's backend refuses that: the reply is one of its canned
+error strings —
+
+```
+I'm having a hard time fulfilling your request. Can I help you with something else instead?
+I seem to be encountering an error. Can I try something else for you?
+I encountered an error doing what you asked. Could you try again?
+```
+
+— and retrying is useless because every attempt re-sends the identical prompt.
+`_effective_chunk_size()` could not help: it shrinks the *language* list, which was already 1.
+
+So `translate_cli.py` now splits the **source**:
+
+- `_split_source()` packs whole paragraphs into pieces of at most `HERMEX_MAX_SOURCE_CHARS`,
+  falling back to sentence ends (the Devanagari danda `।`/`॥` counts) and then to a hard slice.
+- Each piece is sent in its own fresh chat, labelled `PART n of m`, with the previous piece's
+  last 400 chars supplied as *do-not-translate* context so terminology stays consistent.
+- The pieces are joined per language with a blank line.
+- **A language that loses any one part is dropped entirely.** Storing a join that is silently
+  missing its middle is worse than a gap, and the caller's single-language retry redoes all of
+  its parts.
+
+Those canned replies are now recognised (`_looks_like_gemini_error_reply`) and raised as
+`GeminiTransientError` instead of surfacing as a parse failure. That gets them a minutes-long
+backoff rather than 8s, and after `HERMEX_TRANSIENT_ABORT_AFTER` consecutive ones the job stops
+instead of paying one oversized round trip per language for every remaining mantra.
 
 ## Tests
 
@@ -251,4 +286,10 @@ npm run test:translation-api     # 46 assertions — 401/403/200 per route, HTTP
                                  # input validation (real middleware, real router)
 ```
 
-Both need `DATABASE_URL`. Neither touches Gemini or spends a request.
+```bash
+npm run test:hermex-split        # 32 assertions — source splitting, part prompts, error-reply
+                                 # detection, and the multi-part join with Gemini stubbed out
+npm run test:hermex-overlay      # 17 assertions — popup dismissal (fake driver)
+```
+
+The first two need `DATABASE_URL`. None of them touch Gemini or spend a request.

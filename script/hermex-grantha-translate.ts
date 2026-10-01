@@ -12,6 +12,7 @@
  */
 import "../server/env";
 import path from "node:path";
+import { hermexHeadless } from "../server/hermex/config";
 import {
   buildJobsForMantra,
   fetchMantraFull,
@@ -94,7 +95,12 @@ async function main() {
   );
 
   const opts: RunOptions = {
-    headless: !headed,
+    // --headed always wins. Otherwise defer to hermexHeadless() so this CLI and the
+    // translation worker give the SAME answer on the same host: under Xvfb on EC2 that
+    // is headful on the virtual display, the mode proven on that box. The old `!headed`
+    // launched headless Chrome even with DISPLAY set, while the run's own
+    // "browser connection" line printed headless=false from hermexHeadless().
+    headless: headed ? false : hermexHeadless(),
     chunkSize: parseInt(process.env.HERMEX_CHUNK_SIZE || "3", 10) || 3,
     chunkDelayMs: parseInt(process.env.HERMEX_CHUNK_DELAY_MS || "8000", 10) || 8000,
     maxRetries: parseInt(process.env.HERMEX_MAX_RETRIES || "3", 10) || 3,

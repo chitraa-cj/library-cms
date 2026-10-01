@@ -229,6 +229,76 @@ def _effective_chunk_size(source_text: str, chunk_size: int) -> int:
     return chunk_size
 
 
+_MAX_SOURCE_CHARS_DEFAULT = 6000
+_SOURCE_CONTEXT_TAIL_CHARS = 400
+_SENTENCE_END = re.compile(r"(?<=[।॥?!])\s+|(?<=[.?!])\s+")
+
+
+def _max_source_chars() -> int:
+    """Largest source text handed to Gemini in ONE turn.
+
+    An ~18.5K-char BhashyamEntry asks Gemini for a ~13K-char answer and its backend
+    simply refuses: every reply is one of its canned error strings ("I seem to be
+    encountering an error") however often the identical prompt is re-sent, and
+    `_effective_chunk_size` has no room left to help because the language count is
+    already 1. So the SOURCE is split instead of the language list. 6000 sits below
+    the ~8.5K that was observed answering reliably on the EC2 box."""
+    raw = (os.environ.get("HERMEX_MAX_SOURCE_CHARS") or "").strip()
+    if raw.isdigit() and int(raw) >= 500:
+        return int(raw)
+    return _MAX_SOURCE_CHARS_DEFAULT
+
+
+def _split_paragraph(para: str, max_chars: int) -> list[str]:
+    """Break one over-long paragraph on sentence ends (danda included), hard-slicing last."""
+    if len(para) <= max_chars:
+        return [para]
+    out: list[str] = []
+    buf = ""
+    for sentence in (s for s in _SENTENCE_END.split(para) if s and s.strip()):
+        candidate = f"{buf} {sentence}".strip() if buf else sentence
+        if len(candidate) <= max_chars:
+            buf = candidate
+            continue
+        if buf:
+            out.append(buf)
+            buf = ""
+        while len(sentence) > max_chars:
+            out.append(sentence[:max_chars])
+            sentence = sentence[max_chars:]
+        buf = sentence
+    if buf:
+        out.append(buf)
+    return out
+
+
+def _split_source(source_text: str, max_chars: int) -> list[str]:
+    """Split a long source into <=max_chars pieces, preferring blank-line boundaries.
+
+    Paragraphs are kept whole wherever they fit, so a piece boundary normally lands
+    where the text already breaks. Returns a single element when the text fits."""
+    text = source_text.strip()
+    if len(text) <= max_chars:
+        return [text]
+    parts: list[str] = []
+    buf = ""
+    for para in re.split(r"\n\s*\n", text):
+        para = para.strip()
+        if not para:
+            continue
+        for piece in _split_paragraph(para, max_chars):
+            candidate = f"{buf}\n\n{piece}" if buf else piece
+            if len(candidate) <= max_chars:
+                buf = candidate
+            else:
+                if buf:
+                    parts.append(buf)
+                buf = piece
+    if buf:
+        parts.append(buf)
+    return parts or [text]
+
+
 def _query_timeout_for_source(source_text: str, base: int) -> int:
     """Scale wait for long inputs + long multilingual outputs (Teeka can exceed 15m)."""
     scaled = 900 + len(source_text) // 4
@@ -248,6 +318,60 @@ def _is_empty_response_error(err: BaseException) -> bool:
 def _is_click_intercepted(err: BaseException) -> bool:
     msg = str(err).lower()
     return "click intercepted" in msg or "not clickable at point" in msg
+
+
+class GeminiTransientError(RuntimeError):
+    """Gemini replied with one of its OWN canned backend-error strings.
+
+    Neither a refusal nor a parse problem: the request never produced an answer, so
+    re-sending the identical prompt immediately is pointless. Kept as its own type so
+    the retry loop can back off in minutes, and so a run can give up instead of
+    grinding the same oversized prompt through every remaining chunk."""
+
+
+_GEMINI_ERROR_REPLIES = (
+    "i'm having a hard time fulfilling your request",
+    "i seem to be encountering an error",
+    "i encountered an error doing what you asked",
+    "i'm having trouble",
+    "something went wrong",
+    "please try again later",
+)
+
+
+def _looks_like_gemini_error_reply(text: str) -> bool:
+    """True for Gemini's short canned error replies (see GeminiTransientError).
+
+    Length-capped on purpose: a real translation never arrives this short, and the cap
+    keeps a legitimate answer that happens to *mention* an error from being discarded."""
+    t = " ".join((text or "").strip().lower().split())
+    if not t or len(t) > 300:
+        return False
+    return any(phrase in t for phrase in _GEMINI_ERROR_REPLIES)
+
+
+def _is_gemini_transient(err: BaseException) -> bool:
+    return isinstance(err, GeminiTransientError)
+
+
+def _transient_backoff_sec() -> int:
+    """Base cool-off after a canned error reply. Seconds, not the 8s used elsewhere —
+    these replies mean Gemini is under pressure, and hammering it keeps it there."""
+    raw = (os.environ.get("HERMEX_TRANSIENT_BACKOFF_SEC") or "").strip()
+    if raw.isdigit() and int(raw) > 0:
+        return int(raw)
+    return 60
+
+
+def _transient_abort_after() -> int:
+    """Consecutive chunk attempts ending in a canned error reply that end the job.
+
+    Without this a Gemini outage or an account limit costs one full oversized round
+    trip per language per mantra for the rest of the run. 0 disables the breaker."""
+    raw = (os.environ.get("HERMEX_TRANSIENT_ABORT_AFTER") or "").strip()
+    if raw.isdigit():
+        return int(raw)
+    return 4
 
 
 def _looks_like_clipboard_or_shell_garbage(text: str) -> bool:
@@ -765,25 +889,39 @@ def _gemini_query_with_recovery(
             _dismiss_gemini_overlays(gemini)
             _gemini_send_message(gemini, prompt, paste=use_paste)
             _wait_idle_or_stall(gemini, effective_timeout)
-            return _gemini_fetch_response(gemini)
+            msg = _gemini_fetch_response(gemini)
+            reply = getattr(msg, "text", "") or ""
+            if _looks_like_gemini_error_reply(reply):
+                # Gemini DID answer — with its own error string. Surfacing it as a parse
+                # failure (the old behaviour) hid the cause and burned the chunk's retry
+                # budget on an identical re-send. See GeminiTransientError.
+                raise GeminiTransientError(reply.strip()[:200])
+            return msg
         except Exception as e:
             last_err = e
             recoverable = (
                 _is_idle_timeout(e)
                 or _is_empty_response_error(e)
                 or _is_click_intercepted(e)
+                or _is_gemini_transient(e)
             )
             if not recoverable or attempt >= 3:
                 raise
-            if _is_click_intercepted(e):
+            cool = 4
+            if _is_gemini_transient(e):
+                kind = "Gemini backend error reply"
+                cool = _transient_backoff_sec() * attempt
+            elif _is_click_intercepted(e):
                 kind = "UI overlay blocked input"
             elif _is_empty_response_error(e):
                 kind = "empty response"
             else:
                 kind = "generation timeout"
-            _log(f"[hermex] {kind} (attempt {attempt}/3) — refreshing chat")
+            _log(
+                f"[hermex] {kind} (attempt {attempt}/3) — refreshing chat, waiting {cool:.0f}s"
+            )
             _recover_browser_session(gemini)
-            time.sleep(4)
+            time.sleep(cool)
     raise last_err if last_err else RuntimeError("Gemini query failed")
 
 
@@ -792,11 +930,33 @@ def _build_prompt(
     source_language: str,
     target_languages: list[str],
     context: str,
+    *,
+    part_info: tuple[int, int] | None = None,
+    preceding: str = "",
 ) -> str:
     langs = ", ".join(target_languages)
     ctx = f"\nContext: {context}" if context else ""
     # JSON arrays break easily for 2+ languages; marker blocks are more reliable.
-    use_marker_format = len(target_languages) > 1 or len(source_text) > 800
+    use_marker_format = (
+        len(target_languages) > 1 or len(source_text) > 800 or part_info is not None
+    )
+    part_note = ""
+    if part_info:
+        idx, total = part_info
+        part_note = (
+            f"\nThis is PART {idx} of {total} of a longer passage being translated in "
+            "sequence. Translate ONLY the source text below. Do not summarise it, do not "
+            "add an introduction or closing remark, and do not repeat earlier parts. Keep "
+            "terminology and transliteration consistent with the preceding context.\n"
+        )
+    prior = ""
+    if preceding.strip():
+        prior = (
+            "\nPreceding context — the source text immediately before this part, given for "
+            'continuity only. Do NOT translate it and do NOT echo it:\n"""\n'
+            + preceding.strip()
+            + '\n"""\n'
+        )
     if use_marker_format:
         format_rules = """Output format (CRITICAL — do NOT use JSON for long text):
 Use exactly this delimiter format for each language (copy language names exactly):
@@ -820,6 +980,7 @@ Example for Tamil and Hindi:
 Source language: {source_language}
 {ctx}
 
+{part_note}{prior}
 Source text:
 \"\"\"
 {source_text.strip()}
@@ -920,6 +1081,35 @@ def _translate_chunks(
             )
         return rows
 
+    def _translate_one_part(
+        gemini: Any,
+        chunk: list[str],
+        label: str,
+        part: str,
+        *,
+        fresh_chat: bool,
+        part_info: tuple[int, int] | None = None,
+        preceding: str = "",
+    ) -> list[dict[str, str]]:
+        if fresh_chat:
+            _start_fresh_gemini_chat(gemini)
+        prompt = _build_prompt(
+            part,
+            source_language,
+            chunk,
+            context,
+            part_info=part_info,
+            preceding=preceding,
+        )
+        msg = _gemini_query_with_recovery(
+            gemini,
+            prompt,
+            source_text=part,
+            timeout=query_timeout,
+        )
+        raw = (msg.text or "").strip()
+        return _parse_chunk_response(raw, chunk, label)
+
     def _translate_language_batch(
         gemini: Any,
         chunk: list[str],
@@ -927,17 +1117,53 @@ def _translate_chunks(
         *,
         fresh_chat: bool,
     ) -> list[dict[str, str]]:
-        if fresh_chat:
-            _start_fresh_gemini_chat(gemini)
-        prompt = _build_prompt(source_text, source_language, chunk, context)
-        msg = _gemini_query_with_recovery(
-            gemini,
-            prompt,
-            source_text=source_text,
-            timeout=query_timeout,
+        """Translate the source for `chunk`, splitting the SOURCE when it is too long.
+
+        A source over `_max_source_chars()` is translated part by part and the parts are
+        joined back per language. A language that loses ANY part is dropped entirely —
+        storing a join that is silently missing its middle would be worse than a gap,
+        and the caller's single-language retry re-does all of its parts."""
+        max_chars = _max_source_chars()
+        parts = _split_source(source_text, max_chars)
+        if len(parts) == 1:
+            return _translate_one_part(
+                gemini, chunk, chunk_label, parts[0], fresh_chat=fresh_chat
+            )
+
+        _log(
+            f"[hermex] Source {len(source_text)} chars > {max_chars} — translating in "
+            f"{len(parts)} part(s) per language"
         )
-        raw = (msg.text or "").strip()
-        return _parse_chunk_response(raw, chunk, chunk_label)
+        collected: dict[str, list[str]] = {lang: [] for lang in chunk}
+        for i, part in enumerate(parts):
+            alive = [lang for lang in chunk if lang in collected]
+            if not alive:
+                return []
+            part_label = f"{chunk_label} | part {i + 1}/{len(parts)}"
+            _log(f"[hermex] {part_label} ({len(part)} chars) | {', '.join(alive)}")
+            rows = _translate_one_part(
+                gemini,
+                alive,
+                part_label,
+                part,
+                fresh_chat=True,
+                part_info=(i + 1, len(parts)),
+                preceding=parts[i - 1][-_SOURCE_CONTEXT_TAIL_CHARS:] if i else "",
+            )
+            by_lang = {r["language"]: r["text"] for r in rows}
+            for lang in alive:
+                text = (by_lang.get(lang) or "").strip()
+                if text:
+                    collected[lang].append(text)
+                else:
+                    _log(f"[hermex] {part_label} | {lang} missing — dropping language")
+                    collected.pop(lang, None)
+
+        return [
+            {"language": lang, "text": "\n\n".join(texts)}
+            for lang, texts in collected.items()
+            if len(texts) == len(parts)
+        ]
 
     def _run_one_chunk(gemini: Any, idx: int, chunk: list[str]) -> None:
         label = context or "translation"
@@ -1023,6 +1249,9 @@ def _translate_chunks(
             _log(f"[hermex] Browser reopen failed (continuing to next chunk): {reopen_err}")
             return False
 
+    transient_streak = 0
+    abort_after = _transient_abort_after()
+
     try:
         _reopen_browser()
         for idx, chunk in enumerate(chunks):
@@ -1043,11 +1272,24 @@ def _translate_chunks(
                 try:
                     _run_one_chunk(gemini, idx, chunk)
                     last_err = None
+                    transient_streak = 0
                     chunks_since_browser_open += 1
                     break
                 except Exception as e:
                     last_err = e
+                    transient_streak = transient_streak + 1 if _is_gemini_transient(e) else 0
                     _log(f"[hermex] FAIL {chunk_label} | attempt {attempt}/{max_retries} | {e}")
+                    if abort_after and transient_streak >= abort_after:
+                        # Every attempt is coming back as Gemini's own error string, so the
+                        # remaining chunks would each pay a full oversized round trip for
+                        # nothing. Stop the job and let the checkpoint resume it later.
+                        raise RuntimeError(
+                            f"Gemini returned its own backend error on {transient_streak} "
+                            "consecutive chunk attempts — aborting this job rather than "
+                            "re-sending for every remaining chunk. Lower "
+                            "HERMEX_MAX_SOURCE_CHARS, or set HERMEX_TRANSIENT_ABORT_AFTER=0 "
+                            "to disable this guard."
+                        ) from e
                     if attempt < max_retries:
                         wait = chunk_delay_sec * attempt
                         if _should_reopen_browser(e):

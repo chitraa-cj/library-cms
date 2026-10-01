@@ -354,18 +354,23 @@ def _is_gemini_transient(err: BaseException) -> bool:
     return isinstance(err, GeminiTransientError)
 
 
-_TRANSIENT_BACKOFF_STEPS = (1, 6, 18)
+_TRANSIENT_BACKOFF_STEPS = (1, 3, 6)
 
 
 def _transient_backoff_sec(attempt: int = 1) -> int:
     """Cool-off after a canned error reply, escalating with the attempt number.
 
-    Measured on the EC2 box: a single error reply almost always clears on the very next
-    send, so attempt 1 waits seconds — a flat 60s there cost ~12 minutes of pure sleep
-    per mantra (roughly half of 4 parts x 6 languages). A *repeat* is the signal that
-    Gemini is genuinely under pressure, and only then is a long pause worth the wall
-    clock. HERMEX_TRANSIENT_BACKOFF_SEC sets the first step; later steps scale from it."""
-    base = 10
+    **The first wait must stay long — do not "optimise" it down.** Measured on the EC2
+    box, same mantra, same part, only this value changed:
+
+        first wait 60s -> attempt 2 SUCCEEDED
+        first wait 10s -> attempt 2 ALSO FAILED (and cost an extra round trip)
+
+    Gemini needs real cool-down after an error reply; retrying promptly just draws the
+    same error. 10s looked like a free 50s saving per failing part and was not — a failed
+    recovery costs a whole chunk, which dwarfs the saving. HERMEX_TRANSIENT_BACKOFF_SEC
+    sets the first step; later steps scale from it (60s / 180s / 360s by default)."""
+    base = 60
     raw = (os.environ.get("HERMEX_TRANSIENT_BACKOFF_SEC") or "").strip()
     if raw.isdigit() and int(raw) > 0:
         base = int(raw)
@@ -673,6 +678,47 @@ def _gemini_kwargs(headless: bool) -> dict[str, Any]:
     return kwargs
 
 
+def _warmup_enabled() -> bool:
+    """HERMEX_WARMUP=0 disables the post-launch warm-up query."""
+    v = (os.environ.get("HERMEX_WARMUP") or "").strip().lower()
+    return v not in ("0", "false", "no")
+
+
+def _warm_up_gemini(gemini: Any) -> bool:
+    """Send one throwaway prompt so the first REAL prompt is not the first one.
+
+    The first message after a browser launch comes back as one of Gemini's canned
+    backend errors on every EC2 run observed (4/4), and a retry of the identical prompt
+    then succeeds — the app mounts `rich-textarea` well before its chat session is
+    actually usable, and waiting for element *presence* is not waiting for readiness.
+    Paying that first failure with a ~30-char prompt costs seconds; paying it with a 6K
+    translation chunk costs a full generation plus a backoff.
+
+    Never fatal: a failed warm-up just means the real request falls back to the normal
+    retry path, which is exactly what happened before this existed. Returns True when
+    Gemini answered with something that is not an error reply."""
+    if not _warmup_enabled():
+        return False
+    try:
+        _gemini_send_message(gemini, "Reply with the single word READY.", paste=False)
+        _wait_idle_or_stall(gemini, 120, stall_secs=45)
+        reply = (getattr(_gemini_fetch_response(gemini), "text", "") or "").strip()
+    except Exception as e:
+        _log(f"[hermex] Warm-up query failed ({type(e).__name__}) — continuing")
+        return False
+    if _looks_like_gemini_error_reply(reply):
+        # Same rule as _transient_backoff_sec: an error reply needs cool-down, not just a
+        # re-send. Paying it ONCE here, on a throwaway prompt, is the whole point — the
+        # first real chunk then starts from a settled session instead of eating this.
+        cool = _transient_backoff_sec(1)
+        _log(f"[hermex] Warm-up drew Gemini's error reply — cooling down {cool}s before real work")
+        _recover_browser_session(gemini)
+        time.sleep(cool)
+        return False
+    _log(f"[hermex] Warm-up OK ({reply[:40]!r})")
+    return True
+
+
 def _open_gemini_browser(headless: bool, *, after_cleanup: bool = False) -> Any:
     from hermex import Gemini
 
@@ -702,6 +748,9 @@ def _open_gemini_browser(headless: bool, *, after_cleanup: bool = False) -> Any:
                     _log("[hermex] WARN: Gemini session not logged in — run: npm run hermex:setup")
                 if mode is False and headless:
                     _log("[hermex] Using visible Chrome — headless launch failed (common on macOS long runs)")
+                # Absorb the reliable first-request failure here, on a trivial prompt,
+                # instead of on the first translation chunk. See _warm_up_gemini.
+                _warm_up_gemini(gemini)
                 return gemini
             except Exception as e:
                 last_err = e

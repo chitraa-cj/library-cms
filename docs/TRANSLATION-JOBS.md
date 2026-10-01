@@ -242,7 +242,8 @@ paths are redacted. Credentials, cookies and browser session data are never logg
 | `HERMEX_ENABLED` | `true` | `0` parks the worker: it claims nothing and spends no retries. |
 | `HERMEX_CHUNK_SIZE` / `HERMEX_CHUNK_DELAY_MS` / `HERMEX_MAX_RETRIES` | `3` / `8000` / `3` | Passed straight to the existing Hermex runner. |
 | `HERMEX_MAX_SOURCE_CHARS` | `6000` | Largest source text sent to Gemini in ONE turn. A longer source is split at paragraph boundaries and translated part by part, then joined. See **Oversized sources** below. |
-| `HERMEX_TRANSIENT_BACKOFF_SEC` | `10` | First cool-off after Gemini answers with one of its own error strings. Escalates ×6 then ×18 (10s → 60s → 180s): a single hiccup clears on the next send, a repeat means real pressure. |
+| `HERMEX_WARMUP` | `1` | Sends one throwaway prompt after each browser launch. The FIRST request after a launch reliably draws a Gemini error reply (4/4 runs observed), so this pays it with a ~30-char prompt instead of a 6K translation chunk. `0` disables. |
+| `HERMEX_TRANSIENT_BACKOFF_SEC` | `60` | First cool-off after Gemini answers with one of its own error strings; escalates to 180s then 360s. **Do not lower it.** Measured on the box, same part, only this changed: 60s → attempt 2 succeeded; 10s → attempt 2 also failed. Gemini needs cool-down, not a prompt re-send. |
 | `HERMEX_TRANSIENT_ABORT_AFTER` | `4` | Consecutive chunk attempts ending in a Gemini error reply that abort the job. `0` disables the breaker. |
 | `TRANSLATION_WORKER_HEADLESS` / `HERMEX_HEADLESS` | unset | Leave unset: with `DISPLAY` set the browser runs **headful** under Xvfb, which is the mode proven on the box. |
 

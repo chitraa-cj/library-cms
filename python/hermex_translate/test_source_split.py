@@ -89,17 +89,43 @@ check(
     ),
 )
 
+print("\n_warm_up_gemini (never fatal)")
+from hermex_translate import translate_cli as _tc_warm  # noqa: E402
+
+
+class _Boom:
+    """Any attribute access explodes — stands in for a half-dead browser."""
+
+    def __getattr__(self, name):
+        raise RuntimeError("driver is gone")
+
+
+_saved_send = _tc_warm._gemini_send_message
+try:
+    os.environ.pop("HERMEX_WARMUP", None)
+    check("a broken browser does not raise", _tc_warm._warm_up_gemini(_Boom()) is False)
+
+    _tc_warm._gemini_send_message = lambda *a, **k: (_ for _ in ()).throw(RuntimeError("send failed"))
+    check("a failed send does not raise", _tc_warm._warm_up_gemini(object()) is False)
+
+    os.environ["HERMEX_WARMUP"] = "0"
+    check("HERMEX_WARMUP=0 skips it entirely", _tc_warm._warm_up_gemini(_Boom()) is False)
+    os.environ.pop("HERMEX_WARMUP", None)
+finally:
+    _tc_warm._gemini_send_message = _saved_send
+
 print("\n_transient_backoff_sec schedule")
 from hermex_translate.translate_cli import _transient_backoff_sec  # noqa: E402
 
 os.environ.pop("HERMEX_TRANSIENT_BACKOFF_SEC", None)
-check("first retry is quick (a single hiccup usually clears)", _transient_backoff_sec(1) == 10)
-check("second retry backs off hard", _transient_backoff_sec(2) == 60)
-check("third retry backs off harder", _transient_backoff_sec(3) == 180)
+# 60s first is MEASURED, not a guess: 60s -> attempt 2 succeeded, 10s -> it failed.
+check("first retry waits a full minute", _transient_backoff_sec(1) == 60)
+check("second retry backs off harder", _transient_backoff_sec(2) == 180)
+check("third retry backs off hardest", _transient_backoff_sec(3) == 360)
 check("escalates monotonically", _transient_backoff_sec(1) < _transient_backoff_sec(2) < _transient_backoff_sec(3))
-check("out-of-range attempts are clamped", _transient_backoff_sec(0) == 10 and _transient_backoff_sec(99) == 180)
-os.environ["HERMEX_TRANSIENT_BACKOFF_SEC"] = "60"
-check("the env override sets the FIRST step", _transient_backoff_sec(1) == 60)
+check("out-of-range attempts are clamped", _transient_backoff_sec(0) == 60 and _transient_backoff_sec(99) == 360)
+os.environ["HERMEX_TRANSIENT_BACKOFF_SEC"] = "15"
+check("the env override sets the FIRST step", _transient_backoff_sec(1) == 15)
 os.environ.pop("HERMEX_TRANSIENT_BACKOFF_SEC", None)
 
 print("\n_build_prompt part framing")

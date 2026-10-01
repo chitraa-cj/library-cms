@@ -128,12 +128,28 @@ os.environ["HERMEX_TRANSIENT_BACKOFF_SEC"] = "15"
 check("the env override sets the FIRST step", _transient_backoff_sec(1) == 15)
 os.environ.pop("HERMEX_TRANSIENT_BACKOFF_SEC", None)
 
+print("\n_part_context_enabled (default OFF — it correlated with the failures)")
+from hermex_translate.translate_cli import _part_context_enabled  # noqa: E402
+
+os.environ.pop("HERMEX_PART_CONTEXT", None)
+check("off by default", _part_context_enabled() is False)
+os.environ["HERMEX_PART_CONTEXT"] = "1"
+check("HERMEX_PART_CONTEXT=1 restores it", _part_context_enabled() is True)
+os.environ.pop("HERMEX_PART_CONTEXT", None)
+
 print("\n_build_prompt part framing")
 p1 = _build_prompt("body text", "Sanskrit", ["Bengali"], "ctx", part_info=(2, 4), preceding="earlier text")
 check("names the part number", "PART 2 of 4" in p1)
 check("forbids re-translating the context", "Do NOT translate it" in p1)
 check("includes the preceding tail", "earlier text" in p1)
 check("uses marker format for parts", "===LANGUAGE:" in p1)
+p_nc = _build_prompt("body text", "Sanskrit", ["Bengali"], "ctx", part_info=(2, 4), preceding="")
+check("no context block when preceding is empty", "Preceding context" not in p_nc)
+check("but the part number survives", "PART 2 of 4" in p_nc)
+check(
+    "a later part's prompt is then the same size as part 1's",
+    len(p_nc) == len(_build_prompt("body text", "Sanskrit", ["Bengali"], "ctx", part_info=(1, 4))),
+)
 p0 = _build_prompt("body text", "Sanskrit", ["Bengali"], "ctx")
 check("single-part prompt has no part note", "PART" not in p0)
 check("single-part prompt has no context block", "Preceding context" not in p0)

@@ -234,6 +234,23 @@ _SOURCE_CONTEXT_TAIL_CHARS = 400
 _SENTENCE_END = re.compile(r"(?<=[।॥?!])\s+|(?<=[.?!])\s+")
 
 
+def _part_context_enabled() -> bool:
+    """Whether a part prompt carries the previous part's tail as do-not-translate context.
+
+    **Default OFF, because it correlates exactly with the failures.** On the EC2 box,
+    translating an 18.5K source in 4 parts: part 1 (the ONLY part without this block)
+    succeeded on every chunk attempt, while part 2 failed all 3 inner attempts on 3
+    consecutive chunk attempts. Prompt overhead above the source was 1309 chars for part 1
+    and 1852 for part 2 — the 543-char difference IS this block. Part 1 also succeeded
+    when it was not the first request in the browser, which rules out "later requests
+    fail" and leaves the block itself.
+
+    It was only ever a nice-to-have for keeping terminology consistent across parts.
+    HERMEX_PART_CONTEXT=1 restores it."""
+    v = (os.environ.get("HERMEX_PART_CONTEXT") or "").strip().lower()
+    return v in ("1", "true", "yes")
+
+
 def _max_source_chars() -> int:
     """Largest source text handed to Gemini in ONE turn.
 
@@ -1207,7 +1224,11 @@ def _translate_chunks(
                 part,
                 fresh_chat=True,
                 part_info=(i + 1, len(parts)),
-                preceding=parts[i - 1][-_SOURCE_CONTEXT_TAIL_CHARS:] if i else "",
+                preceding=(
+                    parts[i - 1][-_SOURCE_CONTEXT_TAIL_CHARS:]
+                    if i and _part_context_enabled()
+                    else ""
+                ),
             )
             by_lang = {r["language"]: r["text"] for r in rows}
             for lang in alive:

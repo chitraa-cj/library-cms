@@ -242,6 +242,7 @@ paths are redacted. Credentials, cookies and browser session data are never logg
 | `HERMEX_ENABLED` | `true` | `0` parks the worker: it claims nothing and spends no retries. |
 | `HERMEX_CHUNK_SIZE` / `HERMEX_CHUNK_DELAY_MS` / `HERMEX_MAX_RETRIES` | `3` / `8000` / `3` | Passed straight to the existing Hermex runner. |
 | `HERMEX_MAX_SOURCE_CHARS` | `6000` | Largest source text sent to Gemini in ONE turn. A longer source is split at paragraph boundaries and translated part by part, then joined. See **Oversized sources** below. |
+| `HERMEX_PART_CONTEXT` | `0` (off) | Carries the previous part's last 400 chars into a part prompt as do-not-translate context, for terminology consistency. **Off by default: it correlated exactly with the failures** — part 1, the only part without it, succeeded while part 2 failed 3/3 attempts on 3 consecutive chunk attempts. `1` restores it. |
 | `HERMEX_WARMUP` | `1` | Sends one throwaway prompt after each browser launch. The FIRST request after a launch reliably draws a Gemini error reply (4/4 runs observed), so this pays it with a ~30-char prompt instead of a 6K translation chunk. `0` disables. |
 | `HERMEX_TRANSIENT_BACKOFF_SEC` | `60` | First cool-off after Gemini answers with one of its own error strings; escalates to 180s then 360s. **Do not lower it.** Measured on the box, same part, only this changed: 60s → attempt 2 succeeded; 10s → attempt 2 also failed. Gemini needs cool-down, not a prompt re-send. |
 | `HERMEX_TRANSIENT_ABORT_AFTER` | `4` | Consecutive chunk attempts ending in a Gemini error reply that abort the job. `0` disables the breaker. |
@@ -266,8 +267,10 @@ So `translate_cli.py` now splits the **source**:
 
 - `_split_source()` packs whole paragraphs into pieces of at most `HERMEX_MAX_SOURCE_CHARS`,
   falling back to sentence ends (the Devanagari danda `।`/`॥` counts) and then to a hard slice.
-- Each piece is sent in its own fresh chat, labelled `PART n of m`, with the previous piece's
-  last 400 chars supplied as *do-not-translate* context so terminology stays consistent.
+- Each piece is sent in its own fresh chat, labelled `PART n of m`. Supplying the previous
+  piece's tail as *do-not-translate* context (for terminology consistency) is available behind
+  `HERMEX_PART_CONTEXT=1` but is **off by default** — see that row in the table, it tracked the
+  failures exactly.
 - The pieces are joined per language with a blank line.
 - **A language that loses any one part is dropped entirely.** Storing a join that is silently
   missing its middle is worse than a gap, and the caller's single-language retry redoes all of

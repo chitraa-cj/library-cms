@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { queryClient, apiRequest, ApiError } from "@/lib/queryClient";
 import { invalidateGranthaCmsCaches, syncGranthaCmsCaches } from "@/lib/strapi-cache-sync";
@@ -20,6 +20,9 @@ export interface PublishProgress {
   };
   summary?: string;
 }
+
+/** What a publish can be started with. See the note on `publishMutation`. */
+type PublishVars = number | { draftId: number; allowRenumber?: boolean; resumeJobId?: string };
 
 export function useDrafts(contentType: string) {
   const { toast } = useToast();
@@ -64,10 +67,23 @@ export function useDrafts(contentType: string) {
   };
 
   const pollPublishJob = async (draftId: number, jobId: string) => {
-    const maxAttempts = 900; // up to 15 minutes, every 1s
+    // Stall-based, not a fixed attempt count. The old 900 x 1s cap gave up after 15
+    // minutes, which a 6,000-verse grantha can exceed on its own, let alone after a retry —
+    // the publish kept running on the server while the UI declared it lost. Now we keep
+    // watching for as long as the job is making progress, and only give up when it stops.
+    const STALL_LIMIT_MS = 20 * 60 * 1000;
     let authFailures = 0;
-    for (let attempt = 0; attempt < maxAttempts; attempt++) {
+    let lastChange = Date.now();
+    let lastSeen = "";
+
+    for (;;) {
       await new Promise((resolve) => setTimeout(resolve, 1000));
+      if (Date.now() - lastChange > STALL_LIMIT_MS) {
+        setPublishProgress(null);
+        throw new Error(
+          "Publish has not reported progress for 20 minutes. Check the publish worker and server logs, then try again.",
+        );
+      }
       try {
         const statusRes = await fetch(
           `/api/drafts/${draftId}/publish-status?jobId=${encodeURIComponent(jobId)}`,
@@ -83,8 +99,20 @@ export function useDrafts(contentType: string) {
           continue;
         }
         authFailures = 0;
+        if (statusRes.status === 404) {
+          // The job is gone (expired, or the draft was discarded). Polling on would just
+          // spin until the stall timeout.
+          setPublishProgress(null);
+          clearPersistedPublishJob();
+          throw new Error("That publish job no longer exists. Publish again to retry.");
+        }
         if (!statusRes.ok) continue;
         const status = await statusRes.json();
+        const fingerprint = `${status.status}:${status.progress?.done ?? ""}:${status.progress?.current ?? ""}`;
+        if (fingerprint !== lastSeen) {
+          lastSeen = fingerprint;
+          lastChange = Date.now();
+        }
         if (status.progress) {
           setPublishProgress({
             done: status.progress.done,
@@ -112,8 +140,6 @@ export function useDrafts(contentType: string) {
         if (pollErr.message && !pollErr.message.includes("fetch")) throw pollErr;
       }
     }
-    setPublishProgress(null);
-    throw new Error("Publish is taking too long. Check the server logs and try again.");
   };
 
   const draftsQuery = useQuery<Draft[]>({
@@ -258,14 +284,26 @@ export function useDrafts(contentType: string) {
     },
   });
 
-  const publishMutation = useMutation({
+  // Named and applied explicitly: the mutation's own onError re-fires `mutate`, and that
+  // self-reference makes inference from `mutationFn` collapse to whichever shape it sees
+  // first.
+  const publishMutation = useMutation<any, Error, PublishVars>({
     // Accepts a bare draftId (the common case) or an object carrying `allowRenumber`,
     // which the onError handler below sets when re-publishing after the editor confirms
-    // an intentional verse renumber (e.g. a deletion shifted the following verses).
-    mutationFn: async (vars: number | { draftId: number; allowRenumber?: boolean }) => {
+    // an intentional verse renumber (e.g. a deletion shifted the following verses), or
+    // `resumeJobId` when re-attaching to a publish that survived a page reload.
+    mutationFn: async (vars: PublishVars) => {
       const draftId = typeof vars === "number" ? vars : vars.draftId;
       const allowRenumber = typeof vars === "number" ? false : !!vars.allowRenumber;
+      const resumeJobId = typeof vars === "number" ? undefined : vars.resumeJobId;
       setPublishProgress(null);
+
+      // Re-attaching to a publish that was already running when the page reloaded. It goes
+      // through the mutation rather than calling the poller directly so `isPending` is set,
+      // which is what drives the progress bar, the editor bar and the nav lock — resuming
+      // outside the mutation used to leave the user staring at an idle-looking UI while a
+      // publish was very much in flight.
+      if (resumeJobId) return pollPublishJob(draftId, resumeJobId);
 
       const idempotencyKey = `publish:${contentType}:${draftId}:${Date.now()}`;
       const res = await withTransientRetries(
@@ -367,37 +405,28 @@ export function useDrafts(contentType: string) {
     },
   });
 
-  // Resume an in-flight publish after page refresh/reload.
+  // Resume an in-flight publish after a page refresh/reload.
+  //
+  // Fires through the mutation so every piece of publish UI (progress bar, editor bar, the
+  // global nav lock) behaves exactly as it does for a publish started in this tab, and the
+  // existing onSuccess/onError handlers cover the outcome — this effect used to duplicate
+  // them and still leave `isPending` false.
+  const resumeAttempted = useRef(false);
   useEffect(() => {
+    if (resumeAttempted.current) return; // StrictMode double-mounts effects in dev
+    resumeAttempted.current = true;
     try {
       const raw = localStorage.getItem(publishJobStorageKey);
       if (!raw) return;
-      const parsed = JSON.parse(raw) as { draftId?: number; jobId?: string };
+      const parsed = JSON.parse(raw) as { draftId?: number; jobId?: string; startedAt?: number };
       if (!parsed?.draftId || !parsed?.jobId) return;
-      void pollPublishJob(parsed.draftId, parsed.jobId)
-        .then((result) => {
-          queryClient.invalidateQueries({ queryKey: ["/api/drafts", contentType] });
-          if (contentType === "granthas") {
-            invalidateGranthaCmsCaches(queryClient);
-          } else if (contentType === "manthras" || contentType === "sections") {
-            syncGranthaCmsCaches(queryClient);
-          } else {
-            void queryClient.invalidateQueries({ queryKey: ["/api/strapi"] });
-          }
-          const allWarnings: Array<{ manthra: string; error: string }> | undefined = result?.warnings;
-          if (allWarnings && allWarnings.length > 0) {
-            toast({
-              variant: "destructive",
-              title: `Published with ${allWarnings.length} warning${allWarnings.length === 1 ? "" : "s"}`,
-              description: "Publish resumed after refresh. Review warnings in the editor.",
-            });
-          } else {
-            toast({ title: "Published", description: "Publish resumed after refresh and completed." });
-          }
-        })
-        .catch((err: any) => {
-          toast({ variant: "destructive", title: "Publish failed", description: err.message || "Publish failed" });
-        });
+      // A stale entry — the tab was closed days ago — would poll a long-dead job until the
+      // stall timeout. Anything older than a day is not worth re-attaching to.
+      if (parsed.startedAt && Date.now() - parsed.startedAt > 24 * 60 * 60 * 1000) {
+        clearPersistedPublishJob();
+        return;
+      }
+      publishMutation.mutate({ draftId: parsed.draftId, resumeJobId: parsed.jobId });
     } catch {
       // ignore resume parse failures
     }
@@ -443,12 +472,23 @@ export function useDrafts(contentType: string) {
     (d) => d.status === "draft"
   );
 
+  // The draft currently publishing, or null. `publishMutation.variables` is sometimes a
+  // bare id and sometimes an object ({allowRenumber} on a renumber re-publish,
+  // {resumeJobId} on a resume), so comparing it to a draft id directly silently fails in
+  // exactly those cases and the progress UI disappears. Normalise once, here.
+  const publishingDraftId: number | null = publishMutation.isPending
+    ? typeof publishMutation.variables === "number"
+      ? publishMutation.variables
+      : (publishMutation.variables?.draftId ?? null)
+    : null;
+
   return {
     drafts: draftsQuery.data || [],
     unpublishedDrafts,
     isLoadingDrafts: draftsQuery.isLoading,
     saveDraft: saveDraftMutation,
     publishDraft: publishMutation,
+    publishingDraftId,
     publishProgress,
     deleteDraft: deleteDraftMutation,
     recoverDraft: recoverDraftMutation,

@@ -45,7 +45,8 @@ export default function CategoriesPage() {
     refetchOnWindowFocus: true,
   });
 
-  const { unpublishedDrafts, isLoadingDrafts, saveDraft, publishDraft, deleteDraft } = useDrafts("categories");
+  const { unpublishedDrafts, isLoadingDrafts, saveDraft, publishDraft,
+    publishingDraftId, deleteDraft } = useDrafts("categories");
 
   const deleteStrapiMutation = useMutation({
     mutationFn: async (documentId: string) => {
@@ -181,7 +182,7 @@ export default function CategoriesPage() {
         onEdit={openEdit}
         onDelete={(item) => setDeleteTarget(item)}
         onPublish={handlePublish}
-        publishingId={publishDraft.isPending ? (publishDraft.variables as number) : null}
+        publishingId={publishingDraftId}
         addLabel="Add Category"
         testIdPrefix="category"
         searchKey="name"

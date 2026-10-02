@@ -1930,6 +1930,7 @@ export default function GranthasPage() {
     isLoadingDrafts,
     saveDraft,
     publishDraft,
+    publishingDraftId,
     publishProgress,
     deleteDraft,
     recoverDraft,
@@ -6736,12 +6737,10 @@ export default function GranthasPage() {
                         : undefined
                     }
                     isPublishing={
-                      publishDraft.isPending &&
-                      (publishDraft.variables as number) === item._draftId
+                      publishingDraftId === item._draftId
                     }
                     publishProgress={
-                      publishDraft.isPending &&
-                      (publishDraft.variables as number) === item._draftId
+                      publishingDraftId === item._draftId
                         ? publishProgress
                         : null
                     }

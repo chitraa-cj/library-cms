@@ -131,7 +131,8 @@ export default function SectionsPage() {
 
   const lockedDocIds = useMemo(() => new Set((locksData ?? []).map((l: any) => l.granthaDocId as string)), [locksData]);
 
-  const { unpublishedDrafts, isLoadingDrafts, saveDraft, publishDraft, deleteDraft } =
+  const { unpublishedDrafts, isLoadingDrafts, saveDraft, publishDraft,
+    publishingDraftId, deleteDraft } =
     useDrafts("sections");
 
   const deleteMutation = useMutation({
@@ -433,7 +434,7 @@ export default function SectionsPage() {
             <tbody>
               {/* Draft rows (flat) */}
               {displayedDrafts.map((draft) => {
-                const isPub = publishDraft.isPending && publishDraft.variables === draft._draftId;
+                const isPub = publishingDraftId === draft._draftId;
                 const grantha = allGranthas.find((g) => g.documentId === draft._grantha);
                 const draftLocked = draft._grantha ? lockedDocIds.has(draft._grantha) : false;
                 return (

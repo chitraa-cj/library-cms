@@ -57,6 +57,23 @@ export const publishJobs = pgTable("cms_publish_jobs", {
   // (forked drafts) without relying on in-process state that disappears on restart.
   granthaDocId: text("grantha_doc_id"),
   status: text("status").notNull().default("queued"), // queued|running|done|failed|cancelled|failed_recoverable
+  /**
+   * `grantha_publish` = a full hierarchy walk, claimed and run by cms-publish-worker.
+   * `manthra_publish` = the single-verse job /api/drafts/:id/publish-manthra writes;
+   * several may run at once on one draft, and the WEB process still owns those.
+   * Everything that leases, reclaims or enforces uniqueness keys off this.
+   */
+  kind: text("kind").notNull().default("grantha_publish").$type<PublishJobKind>(),
+  attempts: integer("attempts").notNull().default(0),
+  maxAttempts: integer("max_attempts").notNull().default(3),
+  leaseOwner: text("lease_owner"),
+  leaseExpiresAt: timestamp("lease_expires_at"),
+  lastHeartbeatAt: timestamp("last_heartbeat_at"),
+  /** Set when a failed attempt is requeued, so a brownout cannot burn the retries instantly. */
+  nextAttemptAt: timestamp("next_attempt_at"),
+  startedAt: timestamp("started_at"),
+  /** Publish flags resolved by the route; the worker runs long after the request is gone. */
+  publishOptions: jsonb("publish_options").$type<PublishJobOptions>(),
   progressDone: integer("progress_done").notNull().default(0),
   progressTotal: integer("progress_total").notNull().default(0),
   progressCurrent: text("progress_current").notNull().default("Starting…"),
@@ -64,6 +81,21 @@ export const publishJobs = pgTable("cms_publish_jobs", {
   error: text("error"),
   createdAt: timestamp("created_at").defaultNow().notNull(),
   updatedAt: timestamp("updated_at").defaultNow().notNull(),
+});
+
+export const publishJobKinds = ["grantha_publish", "manthra_publish"] as const;
+export type PublishJobKind = (typeof publishJobKinds)[number];
+
+export type PublishJobOptions = {
+  allowRenumber?: boolean;
+  republishFresh?: boolean;
+};
+
+/** Heartbeat per worker process kind, so the API can refuse work nothing will drain. */
+export const workerHeartbeats = pgTable("cms_worker_heartbeats", {
+  workerKind: text("worker_kind").primaryKey(),
+  workerId: text("worker_id").notNull(),
+  beatAt: timestamp("beat_at").defaultNow().notNull(),
 });
 
 export const idempotencyKeys = pgTable("cms_idempotency_keys", {

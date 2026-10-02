@@ -233,7 +233,8 @@ export default function ManthrasPage() {
 
   const lockedDocIds = useMemo(() => new Set((locksData ?? []).map((l: any) => l.granthaDocId as string)), [locksData]);
 
-  const { unpublishedDrafts, isLoadingDrafts, saveDraft, publishDraft, deleteDraft } =
+  const { unpublishedDrafts, isLoadingDrafts, saveDraft, publishDraft,
+    publishingDraftId, deleteDraft } =
     useDrafts("manthras");
 
   const { drafts: granthaDrafts, isLoadingDrafts: isLoadingGranthaDrafts } = useDrafts("granthas");
@@ -871,7 +872,7 @@ export default function ManthrasPage() {
               ))}
 
               {displayedDrafts.map((draft) => {
-                const isPub = publishDraft.isPending && publishDraft.variables === draft._draftId;
+                const isPub = publishingDraftId === draft._draftId;
                 const section = allSections.find((s) => s.documentId === draft._section);
                 const granthaName = getGranthaForSection(draft._section || "");
                 const draftGranthaDocId = getGranthaDocIdForSection(draft._section || "");

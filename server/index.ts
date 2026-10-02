@@ -7,9 +7,9 @@ import { serveStatic } from "./static";
 import { createServer } from "http";
 import { inspect } from "node:util";
 import { db } from "./db";
-import { publishJobs, publishJobTasks, users } from "@shared/schema";
+import { publishJobs, users } from "@shared/schema";
 import { storage } from "./storage";
-import { eq, sql } from "drizzle-orm";
+import { and, eq, sql } from "drizzle-orm";
 
 const app = express();
 app.set("trust proxy", 1);
@@ -109,24 +109,30 @@ app.use((req, res, next) => {
     console.error("[startup] Admin seed error:", e);
   }
 
-  // Reconcile orphaned publish jobs from previous crashes/restarts.
+  // Reconcile publish jobs orphaned by a crash or restart of THIS process.
+  //
+  // Scoped to `manthra_publish` on purpose. Grantha publishes are claimed and leased by the
+  // separate cms-publish-worker process, so a web restart says nothing about whether one is
+  // alive — flipping every `running` row here (as this once did, with no age filter) would
+  // kill a publish mid-walk and leave the worker writing to a job the UI calls failed. Those
+  // are reclaimed by their lease, in server/publish/worker.ts.
+  //
+  // The cms_publish_job_tasks requeue that used to live here is gone for the same reason:
+  // those rows belong to a publish's own in-flight drain loop, and flipping them
+  // running -> queued makes it re-publish mantras it is still holding.
   try {
-    await db
+    const reconciled = await db
       .update(publishJobs)
       .set({
         status: "failed_recoverable",
         error: "Server restarted during publish; safe to retry.",
-        updatedAt: new Date(),
+        updatedAt: sql`now()`,
       })
-      .where(eq(publishJobs.status, "running"));
-    await db
-      .update(publishJobTasks)
-      .set({
-        status: "queued",
-        error: "Requeued after server restart.",
-        updatedAt: new Date(),
-      })
-      .where(eq(publishJobTasks.status, "running"));
+      .where(and(eq(publishJobs.status, "running"), eq(publishJobs.kind, "manthra_publish")))
+      .returning({ id: publishJobs.id });
+    if (reconciled.length > 0) {
+      console.log(`[startup] Reconciled ${reconciled.length} orphaned per-mantra publish job(s)`);
+    }
   } catch (e) {
     console.error("[startup] Publish job reconcile error:", e);
   }
@@ -145,10 +151,9 @@ app.use((req, res, next) => {
     });
   }, idempotencyTtlMs).unref?.();
 
-  // Reclaim orphaned publish jobs left "running" by a previous process crash/restart.
-  // The job worker lives in-memory, so any row still marked "running" with no recent
-  // heartbeat after a restart will never complete — clients would poll forever.
-  // 10-minute window covers normal Strapi-syncs without misclassifying live jobs.
+  // Reclaim per-mantra publish jobs left "running" by a crash. Those still run in this
+  // process, so a row with no progress for 10 minutes will never complete and the client
+  // would poll forever. Grantha publishes are excluded — see the note above.
   const stalePublishJobMs = 10 * 60 * 1000;
   try {
     const reclaimed = await storage.markStalePublishJobsAsRecoverable(stalePublishJobMs);

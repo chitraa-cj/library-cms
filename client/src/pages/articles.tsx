@@ -161,7 +161,8 @@ export default function ArticlesPage() {
     refetchInterval: STRAPI_POLL_INTERVAL,
   });
 
-  const { unpublishedDrafts, isLoadingDrafts, saveDraft, publishDraft, deleteDraft } =
+  const { unpublishedDrafts, isLoadingDrafts, saveDraft, publishDraft,
+    publishingDraftId, deleteDraft } =
     useDrafts("articles");
 
   const deleteStrapiMutation = useMutation({
@@ -358,7 +359,7 @@ export default function ArticlesPage() {
         onEdit={openEdit}
         onDelete={(item) => setDeleteTarget(item)}
         onPublish={handlePublish}
-        publishingId={publishDraft.isPending ? (publishDraft.variables as number) : null}
+        publishingId={publishingDraftId}
         addLabel="Add Article"
         testIdPrefix="article"
         searchKey="title"

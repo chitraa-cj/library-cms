@@ -92,6 +92,26 @@ async function buildAll() {
     logLevel: "info",
   });
 
+  // The publish worker is its own process (pm2 app `cms-publish-worker`). It pulls in
+  // server/routes.ts for publishGranthaWithHierarchy — routes.ts has no import-time side
+  // effects, so the express surface it drags along is inert in the worker.
+  console.log("building publish worker...");
+  await esbuild({
+    entryPoints: ["server/publish/worker-main.ts"],
+    platform: "node",
+    bundle: true,
+    format: "cjs",
+    outfile: "dist/publish-worker.cjs",
+    define: {
+      "process.env.NODE_ENV": '"production"',
+    },
+    minifyWhitespace: true,
+    minifySyntax: true,
+    minifyIdentifiers: false,
+    external: externals,
+    logLevel: "info",
+  });
+
   // connect-pg-simple reads its session-table DDL from a non-JS asset at runtime:
   //   fs.readFile(path.resolve(__dirname, './table.sql'))
   // esbuild bundles the JS but not the .sql file, and at runtime __dirname is dist/.

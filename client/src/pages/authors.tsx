@@ -44,7 +44,8 @@ export default function AuthorsPage() {
     refetchOnWindowFocus: true,
   });
 
-  const { unpublishedDrafts, isLoadingDrafts, saveDraft, publishDraft, deleteDraft } = useDrafts("authors");
+  const { unpublishedDrafts, isLoadingDrafts, saveDraft, publishDraft,
+    publishingDraftId, deleteDraft } = useDrafts("authors");
 
   const deleteStrapiMutation = useMutation({
     mutationFn: async (documentId: string) => {
@@ -170,7 +171,7 @@ export default function AuthorsPage() {
         onEdit={openEdit}
         onDelete={(item) => setDeleteTarget(item)}
         onPublish={handlePublish}
-        publishingId={publishDraft.isPending ? (publishDraft.variables as number) : null}
+        publishingId={publishingDraftId}
         addLabel="Add Author"
         testIdPrefix="author"
         searchKey="name"

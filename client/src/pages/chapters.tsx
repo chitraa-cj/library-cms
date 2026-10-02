@@ -412,7 +412,8 @@ export default function ChaptersPage() {
     refetchOnWindowFocus: true,
   });
 
-  const { unpublishedDrafts, isLoadingDrafts, saveDraft, publishDraft, deleteDraft } =
+  const { unpublishedDrafts, isLoadingDrafts, saveDraft, publishDraft,
+    publishingDraftId, deleteDraft } =
     useDrafts("chapters");
 
   const deleteStrapiMutation = useMutation({
@@ -647,7 +648,7 @@ export default function ChaptersPage() {
             </thead>
             <tbody>
               {displayedDrafts.map((draft) => {
-                const isPub = publishDraft.isPending && publishDraft.variables === draft._draftId;
+                const isPub = publishingDraftId === draft._draftId;
                 return (
                   <tr
                     key={`draft-${draft._draftId}`}

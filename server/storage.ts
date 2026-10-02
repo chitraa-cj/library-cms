@@ -12,6 +12,7 @@ import {
   type GranthaLock,
   publishJobs,
   type PublishJobRecord,
+  type InsertPublishJobRecord,
   idempotencyKeys,
   type IdempotencyKeyRecord,
   publishJobTasks,
@@ -38,6 +39,7 @@ export interface IStorage {
   getDraftsSlim(userId: string, contentType?: string): Promise<Draft[]>;
   getStructureConfigForStrapiDoc(strapiDocumentId: string, userId: string): Promise<unknown | null>;
   getDraft(id: number, userId: string): Promise<Draft | undefined>;
+  getDraftById(id: number): Promise<Draft | undefined>;
   getDraftByStrapiDocId(strapiDocumentId: string): Promise<Draft | undefined>;
   createDraft(draft: InsertDraft): Promise<Draft>;
   updateDraft(id: number, userId: string, data: Partial<InsertDraft>): Promise<Draft | undefined>;
@@ -57,10 +59,11 @@ export interface IStorage {
   getGranthaLock(granthaDocId: string): Promise<GranthaLock | null>;
   lockGrantha(granthaDocId: string, granthaName: string | undefined, userId: string, username: string, reason?: string): Promise<GranthaLock>;
   unlockGrantha(granthaDocId: string): Promise<boolean>;
-  createPublishJob(job: Omit<PublishJobRecord, "createdAt" | "updatedAt">): Promise<PublishJobRecord>;
+  createPublishJob(job: InsertPublishJobRecord): Promise<PublishJobRecord>;
   getPublishJob(id: string): Promise<PublishJobRecord | null>;
   getRunningPublishJobForDraft(draftId: number): Promise<PublishJobRecord | null>;
-  getRunningPublishJobForGrantha(granthaDocId: string): Promise<PublishJobRecord | null>;
+  getActivePublishJobForGrantha(granthaDocId: string): Promise<PublishJobRecord | null>;
+  getActivePublishJobForDraft(draftId: number): Promise<PublishJobRecord | null>;
   updatePublishJob(id: string, patch: Partial<PublishJobRecord>): Promise<PublishJobRecord | null>;
   markStalePublishJobsAsRecoverable(olderThanMs: number): Promise<number>;
   // D5: per-job manthra resolution checkpoint
@@ -217,6 +220,16 @@ export class DatabaseStorage implements IStorage {
     `);
     const rows = ((result as any)?.rows ?? []) as { structure_config?: unknown }[];
     return rows[0]?.structure_config ?? null;
+  }
+
+  /**
+   * Unscoped draft read, for the publish worker. It runs long after the request is gone and
+   * has no session; the job row it claimed already carries the authorization decision made
+   * when the publish was enqueued. HTTP handlers must keep using `getDraft`.
+   */
+  async getDraftById(id: number): Promise<Draft | undefined> {
+    const [draft] = await db.select().from(contentDrafts).where(eq(contentDrafts.id, id));
+    return draft;
   }
 
   async getDraft(id: number, userId: string): Promise<Draft | undefined> {
@@ -395,7 +408,7 @@ export class DatabaseStorage implements IStorage {
     return result.length > 0;
   }
 
-  async createPublishJob(job: Omit<PublishJobRecord, "createdAt" | "updatedAt">): Promise<PublishJobRecord> {
+  async createPublishJob(job: InsertPublishJobRecord): Promise<PublishJobRecord> {
     const [created] = await db.insert(publishJobs).values(job).returning();
     return created;
   }
@@ -423,14 +436,39 @@ export class DatabaseStorage implements IStorage {
     return updated ?? null;
   }
 
-  async getRunningPublishJobForGrantha(granthaDocId: string): Promise<PublishJobRecord | null> {
-    // Cross-process / cross-restart guard: even after this process loses its in-memory
-    // map, another draft pointing at the same Strapi grantha can find the in-flight job
-    // here. Filters on the indexed (grantha_doc_id, status) pair.
+  /** The draft's own in-flight grantha publish, if any — covers a first publish, where there is no grantha id yet. */
+  async getActivePublishJobForDraft(draftId: number): Promise<PublishJobRecord | null> {
     const [job] = await db
       .select()
       .from(publishJobs)
-      .where(and(eq(publishJobs.granthaDocId, granthaDocId), eq(publishJobs.status, "running")))
+      .where(
+        and(
+          eq(publishJobs.draftId, draftId),
+          eq(publishJobs.kind, "grantha_publish"),
+          inArray(publishJobs.status, ["queued", "running"]),
+        ),
+      )
+      .orderBy(desc(publishJobs.updatedAt));
+    return job ?? null;
+  }
+
+  /**
+   * Cross-process / cross-restart guard: another draft pointing at the same Strapi
+   * grantha finds the in-flight job here. Covers `queued` as well as `running` — once
+   * the worker owns publishing there is a real window where a job is accepted but not
+   * yet claimed, and a second publish must not slip through it.
+   */
+  async getActivePublishJobForGrantha(granthaDocId: string): Promise<PublishJobRecord | null> {
+    const [job] = await db
+      .select()
+      .from(publishJobs)
+      .where(
+        and(
+          eq(publishJobs.granthaDocId, granthaDocId),
+          eq(publishJobs.kind, "grantha_publish"),
+          inArray(publishJobs.status, ["queued", "running"]),
+        ),
+      )
       .orderBy(desc(publishJobs.updatedAt));
     return job ?? null;
   }
@@ -497,15 +535,28 @@ export class DatabaseStorage implements IStorage {
     // Called on server startup. In-memory worker state is lost across restarts; any
     // publish_jobs row still marked "running" with no recent heartbeat is orphaned and
     // will never complete. Mark them failed_recoverable so the client can re-trigger.
-    const cutoff = new Date(Date.now() - olderThanMs);
+    // Only per-mantra jobs. A grantha publish is owned by cms-publish-worker and is
+    // reclaimed by its lease, not by this process's clock — sweeping it here would kill
+    // a live publish running in another process.
+    //
+    // The cutoff is computed in SQL: `updated_at` is `timestamp` WITHOUT time zone on a
+    // DB whose session is Asia/Kolkata, so comparing it against a JS Date is off by the
+    // offset (the same trap server/translation/store.ts documents).
+    const seconds = Math.round(olderThanMs / 1000);
     const updated = await db
       .update(publishJobs)
       .set({
         status: "failed_recoverable",
         error: "Server restarted while publish was in progress",
-        updatedAt: new Date(),
+        updatedAt: sql`now()`,
       })
-      .where(and(eq(publishJobs.status, "running"), lt(publishJobs.updatedAt, cutoff)))
+      .where(
+        and(
+          eq(publishJobs.status, "running"),
+          eq(publishJobs.kind, "manthra_publish"),
+          sql`${publishJobs.updatedAt} < now() - make_interval(secs => ${seconds})`,
+        ),
+      )
       .returning();
     return updated.length;
   }
@@ -571,6 +622,21 @@ export class DatabaseStorage implements IStorage {
       .where(and(eq(publishJobTasks.id, taskId), eq(publishJobTasks.status, "queued")))
       .returning();
     return claimed ?? null;
+  }
+
+  /**
+   * Clear a job's mantra tasks. Called before every publish attempt: `claimNextPublishJobTask`
+   * is job-wide, not section-scoped, so rows left by a previous attempt would drain during
+   * the next attempt's first leaf section — overshooting the progress total — and the
+   * per-section `listPublishJobTasks(jobId, ["failed"])` sweep would re-count the previous
+   * attempt's failures once per section.
+   */
+  async deletePublishJobTasks(jobId: string): Promise<number> {
+    const removed = await db
+      .delete(publishJobTasks)
+      .where(eq(publishJobTasks.jobId, jobId))
+      .returning({ id: publishJobTasks.id });
+    return removed.length;
   }
 
   async claimNextPublishJobTask(jobId: string): Promise<PublishJobTaskRecord | null> {

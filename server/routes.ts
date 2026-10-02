@@ -75,6 +75,7 @@ import {
   decompressBackupData,
   isCompressedBackupPayload,
 } from "./backup-payload";
+import { isPublishWorkerAlive, writeProgress } from "./publish/store";
 import { readClientBuildId } from "./build-info";
 import { applyHierarchyRepairInPlace } from "./grantha-hierarchy-repair";
 import { syncPendingMantraSlotsFromDraft } from "./grantha-mantra-slot-sync";
@@ -215,7 +216,15 @@ function jsonEqual(a: unknown, b: unknown): boolean {
   return JSON.stringify(a) === JSON.stringify(b);
 }
 
-function isRetryablePublishError(error: any): boolean {
+/** Rollback switch: run grantha publishes in the web process, as before the worker existed. */
+const PUBLISH_WORKER_INLINE = process.env.PUBLISH_WORKER_INLINE === "1";
+/** Kept in step with server/publish/config.ts; the enqueuing side decides the budget. */
+const PUBLISH_MAX_ATTEMPTS = Math.min(
+  Math.max(Number(process.env.PUBLISH_MAX_ATTEMPTS) || 3, 1),
+  5,
+);
+
+export function isRetryablePublishError(error: any): boolean {
   const code = error?.code;
   const status = error?.status;
   if (code === "upstream_timeout" || code === "upstream_server") return true;
@@ -2908,7 +2917,148 @@ async function assertGranthaPublishNotLocked(strapiGranthaDocId: string | null |
   throw err;
 }
 
-async function publishGranthaWithHierarchy(
+/**
+ * Everything that must happen after a grantha publish SUCCEEDS, other than closing out the
+ * job row itself. Exported because both the publish worker and the inline fallback path
+ * have to do exactly this, and a second copy would drift.
+ *
+ * Returns the response body the client eventually reads from `/publish-status`.
+ */
+export async function finalizePublishSuccess(
+  ctx: { draftId: number; userId: string; jobId: string; draft: any },
+  result: any,
+): Promise<Record<string, any>> {
+  const { draftId, userId, jobId, draft } = ctx;
+
+  // Sync Strapi documentIds back; clear pending deletions + publish scope so the next
+  // publish does not re-run the full delete/sync or auto-retry the same work. Exception:
+  // deletes that FAILED (non-404 from Strapi) are preserved on the draft so the next
+  // publish retries them — otherwise a transient error orphans rows in Strapi forever.
+  const existingData = (draft.data as Record<string, any>) ?? {};
+  const {
+    deletedStrapiSectionDocIds: _ds,
+    deletedStrapiManthraDocIds: _dm,
+    deletedStrapiTeekaDocIds: _dt,
+    publishScope: _ps,
+    ...restDraft
+  } = existingData;
+  const retrySections = Array.isArray(result.failedDeletedSectionDocIds)
+    ? result.failedDeletedSectionDocIds
+    : [];
+  const retryManthras = Array.isArray(result.failedDeletedManthraDocIds)
+    ? result.failedDeletedManthraDocIds
+    : [];
+  await storage.updateDraft(draftId, userId, {
+    data: {
+      ...restDraft,
+      ...(result.updatedHierarchy ? { hierarchy: result.updatedHierarchy } : {}),
+      ...(retrySections.length > 0 ? { deletedStrapiSectionDocIds: retrySections } : {}),
+      ...(retryManthras.length > 0 ? { deletedStrapiManthraDocIds: retryManthras } : {}),
+      publishScope: {
+        changedManthraIds: [],
+        requiresFullPublish: false,
+        granthaMetaDirty: false,
+      },
+    },
+  });
+
+  const newDocumentId = result.strapiResult?.data?.documentId || draft.strapiDocumentId;
+  const updated = await storage.markDraftPublished(draftId, userId, newDocumentId);
+  if (updated) {
+    void writeDraftSnapshot({
+      event: "draft.publish.after",
+      draftId: updated.id,
+      userId,
+      title: updated.title,
+      status: updated.status,
+      strapiDocumentId: updated.strapiDocumentId,
+      data: updated.data,
+      metadata: { background: true, contentType: draft.contentType },
+    });
+  }
+
+  const responseBody: Record<string, any> = { draft: updated, strapi: result.strapiResult };
+  const warnings: Array<{ manthra: string; error: string }> = [];
+  if (Array.isArray(result.publishFailures) && result.publishFailures.length > 0) {
+    warnings.push(...result.publishFailures);
+  }
+  for (const sid of result.failedDeletedSectionDocIds ?? []) {
+    warnings.push({ manthra: `[Section ${sid}]`, error: "Strapi delete failed — will retry on next publish" });
+  }
+  for (const mid of result.failedDeletedManthraDocIds ?? []) {
+    warnings.push({ manthra: `[Manthra ${mid}]`, error: "Strapi delete failed — will retry on next publish" });
+  }
+  if (warnings.length > 0) responseBody.warnings = warnings;
+
+  // Drop the manthra checkpoint now that this publish succeeded: the docIds are persisted
+  // back into the draft's hierarchy JSON above, so the table is no longer load-bearing.
+  void storage
+    .deleteManthraResolutions(jobId)
+    .catch((e) => console.warn(`[publish] resolution cleanup failed: ${e?.message || e}`));
+  void storage
+    .deletePublishJobTasks(jobId)
+    .catch((e) => console.warn(`[publish] task cleanup failed: ${e?.message || e}`));
+
+  return responseBody;
+}
+
+/** Structured detail worth storing on a failed job (integrity violations, per-verse failures). */
+/**
+ * Run a grantha publish in THIS process, the way it worked before `cms-publish-worker`
+ * existed. Only reachable behind PUBLISH_WORKER_INLINE=1 — the rollback switch for the
+ * first release. It occupies the event loop for the duration, which is the whole reason
+ * the worker exists.
+ */
+export async function runPublishJobInline(
+  jobId: string,
+  draftId: number,
+  userId: string,
+  draft: any,
+  options: { allowRenumber?: boolean },
+): Promise<void> {
+  try {
+    await storage.updatePublishJob(jobId, { status: "running", progressCurrent: "Starting…" });
+    let lastWrite = 0;
+    const result = await publishGranthaWithHierarchy(
+      draft,
+      jobId,
+      (done, total, current) => {
+        const now = Date.now();
+        if (now - lastWrite < 250) return;
+        lastWrite = now;
+        void writeProgress(jobId, { done, total, current }).catch(() => {});
+      },
+      options,
+    );
+    const responseBody = await finalizePublishSuccess({ draftId, userId, jobId, draft }, result);
+    await storage.updatePublishJob(jobId, { status: "done", result: responseBody, error: null });
+  } catch (err: any) {
+    console.error(`[publish-inline] Job ${jobId} failed:`, err?.message);
+    await storage
+      .updatePublishJob(jobId, {
+        status: isRetryablePublishError(err) ? "failed_recoverable" : "failed",
+        error: err?.message || "Publish failed",
+        result: publishFailureDetails(err),
+      })
+      .catch(() => {});
+  }
+}
+
+export function publishFailureDetails(err: any): Record<string, any> | null {
+  return err?.violations || err?.failures
+    ? { violations: err.violations, failures: err.failures }
+    : null;
+}
+
+/**
+ * Publish a whole grantha: the record, its teekas, the section tree, and every mantra.
+ *
+ * Exported so `server/publish/worker.ts` can run it in its own process — the walk makes
+ * hundreds of Strapi calls and used to occupy the web process's event loop for minutes.
+ * Nothing else about it changed: `routes.ts` has no import-time side effects, so the
+ * worker can import this module directly.
+ */
+export async function publishGranthaWithHierarchy(
   draft: any,
   jobId?: string,
   onProgress?: (
@@ -2920,7 +3070,18 @@ async function publishGranthaWithHierarchy(
       summary?: string;
     },
   ) => void,
-  publishOptions?: { allowRenumber?: boolean; republishFresh?: boolean },
+  publishOptions?: {
+    allowRenumber?: boolean;
+    republishFresh?: boolean;
+    /**
+     * The grantha this job already created or updated on an earlier attempt, read back
+     * from `cms_publish_jobs.grantha_doc_id` by the worker. Without it a retry of a FIRST
+     * publish re-runs the `GranthaName $eqi` dedup below — and that lookup is wrapped in a
+     * swallow-everything catch, so the very timeout that triggered the retry makes attempt
+     * 2 fall through and POST a second grantha that nothing ever points at.
+     */
+    resumeGranthaDocId?: string;
+  },
 ): Promise<any> {
   const allowRenumber = !!publishOptions?.allowRenumber;
   // Fresh rebuild (delete old Strapi grantha + recreate everything from the draft) runs ONLY
@@ -2930,6 +3091,15 @@ async function publishGranthaWithHierarchy(
   let republishFresh =
     !!publishOptions?.republishFresh || (allowRenumber && !!draft.strapiDocumentId);
   let oldGranthaDocIdForCleanup: string | undefined;
+
+  // A fresh republish deliberately creates a new grantha, so resuming onto the previous
+  // attempt's id would defeat it; those jobs are enqueued with max_attempts = 1 instead.
+  if (publishOptions?.resumeGranthaDocId && !republishFresh && !draft.strapiDocumentId) {
+    draft = { ...draft, strapiDocumentId: publishOptions.resumeGranthaDocId };
+    console.log(
+      `[publish] Resuming onto grantha ${publishOptions.resumeGranthaDocId} created by an earlier attempt`,
+    );
+  }
 
   await assertGranthaPublishNotLocked(draft.strapiDocumentId);
   const rawData = draft.data as Record<string, any>;
@@ -3216,6 +3386,17 @@ async function publishGranthaWithHierarchy(
   }
 
   const granthaDocId: string | undefined = strapiResult?.data?.documentId;
+  // Pin it to the job before anything else can fail. This is what makes a retry resume
+  // onto the same grantha instead of creating a second one, and it is also what gives the
+  // per-grantha concurrency guard something to match on during a FIRST publish, where the
+  // job row's grantha_doc_id is still NULL.
+  if (jobId && granthaDocId) {
+    try {
+      await storage.updatePublishJob(jobId, { granthaDocId });
+    } catch (e: any) {
+      console.warn(`[publish] could not pin granthaDocId on job ${jobId}: ${e?.message ?? e}`);
+    }
+  }
   reportProgress("Grantha record", "grantha");
 
   // 2. Publish teekas (best-effort) — create each teeka and link to this grantha.
@@ -5442,6 +5623,7 @@ export async function registerRoutes(
           draftId: id,
           userId: user.id,
           granthaDocId: null,
+          kind: "manthra_publish",
           status: "running",
           progressDone: 0,
           progressTotal: 1,
@@ -5719,193 +5901,113 @@ export async function registerRoutes(
       let publishFailures: Array<{ manthra: string; error: string }> | undefined;
 
         if (draft.contentType === "granthas") {
-        // Granthas publish can take several minutes (hundreds of Strapi API calls).
-        // Run it in a background job so the HTTP request returns immediately and the
-        // Replit proxy doesn't time it out. The client polls /publish-status for progress.
+        // A grantha publish walks the whole hierarchy and makes hundreds of Strapi calls —
+        // minutes of work. It is ENQUEUED here and run by the `cms-publish-worker` process
+        // (server/publish/worker.ts), so it never occupies this process's event loop. The
+        // client polls /publish-status for progress.
+        const targetGranthaDocId = draft.strapiDocumentId || undefined;
+
+        // Fail fast on an editorial lock rather than accepting a job that dies on claim.
+        // The walk re-checks it too — a lock can be taken between enqueue and claim.
+        try {
+          await assertGranthaPublishNotLocked(targetGranthaDocId);
+        } catch (lockErr: any) {
+          res.status(lockErr?.status === 403 ? 403 : 409).json({
+            message: lockErr?.message || "This grantha is locked",
+            code: lockErr?.code ?? "grantha_locked",
+          });
+          return;
+        }
+
+        // Nothing would drain the queue — say so now instead of leaving the client
+        // watching a job that can never start.
+        if (!PUBLISH_WORKER_INLINE && !(await isPublishWorkerAlive())) {
+          res.status(503).json({
+            message:
+              "The publish worker is not running, so this grantha cannot be published right now. Ask an administrator to start cms-publish-worker.",
+            code: "publish_worker_down",
+          });
+          return;
+        }
 
         // Per-grantha guard: two drafts can point at the same published Strapi grantha
-        // (e.g. forked drafts). The lock lives on cms_publish_jobs.grantha_doc_id so it
-        // survives process restart and works across multiple server instances.
-        const targetGranthaDocId = draft.strapiDocumentId || undefined;
+        // (e.g. forked drafts). It lives on cms_publish_jobs so it survives restarts and
+        // works across processes, and it covers `queued` as well as `running` — with a
+        // worker there is now a real window where a job is accepted but not yet claimed.
+        const attachToExisting = async (inflight: { id: string }, why: string) => {
+          const runningResponse = { jobId: inflight.id, async: true, message: why };
+          if (idem && !idem.replay) {
+            await persistIdempotency(idem.key, `/api/drafts/${id}/publish`, idem.hash, user.id, id, 200, runningResponse);
+          }
+          res.json(runningResponse);
+        };
+
         if (targetGranthaDocId) {
-          const inflight = await storage.getRunningPublishJobForGrantha(targetGranthaDocId);
+          const inflight = await storage.getActivePublishJobForGrantha(targetGranthaDocId);
           if (inflight && inflight.draftId !== id) {
-            const runningResponse = {
-              jobId: inflight.id,
-              async: true,
-              message: "Another publish is already running for this grantha",
-            };
-            if (idem && !idem.replay) {
-              await persistIdempotency(idem.key, `/api/drafts/${id}/publish`, idem.hash, user.id, id, 200, runningResponse);
-            }
-            res.json(runningResponse);
+            await attachToExisting(inflight, "Another publish is already running for this grantha");
+            return;
+          }
+        }
+        // Same draft, clicked twice — including a FIRST publish, where there is no grantha
+        // id to match on yet. Hand back the job already in flight rather than queueing a
+        // second one the unique index would reject anyway.
+        {
+          const mine = await storage.getActivePublishJobForDraft(id);
+          if (mine) {
+            await attachToExisting(mine, "A publish is already running for this draft");
             return;
           }
         }
 
         const jobId = Math.random().toString(36).substring(2, 14);
-        const job: PublishJob = {
-          status: "running",
-          progress: { done: 0, total: 0, current: "Starting…" },
-          startedAt: new Date(),
-        };
-        publishJobs.set(jobId, job);
+        // A fresh republish deletes the old Strapi grantha and recreates it, and its create
+        // branch has no dedup — so a second attempt would orphan the first attempt's new
+        // grantha. Those jobs get exactly one shot.
+        const republishFresh = !!allowRenumber && !!draft.strapiDocumentId;
+        try {
         await storage.createPublishJob({
           id: jobId,
           draftId: id,
           userId: user.id,
           granthaDocId: targetGranthaDocId ?? null,
-          status: "running",
+          kind: "grantha_publish",
+          status: "queued",
+          maxAttempts: republishFresh ? 1 : PUBLISH_MAX_ATTEMPTS,
+          publishOptions: { allowRenumber: !!allowRenumber },
           progressDone: 0,
           progressTotal: 0,
-          progressCurrent: "Starting…",
+          progressCurrent: "Waiting for the publish worker…",
           result: null,
           error: null,
         });
-        cleanOldPublishJobs();
+        } catch (insertErr: any) {
+          // 23505 = one of the partial unique indexes. Someone enqueued the same work
+          // between our check above and this insert; attach to theirs.
+          if (insertErr?.code !== "23505") throw insertErr;
+          const existing =
+            (await storage.getActivePublishJobForDraft(id)) ??
+            (targetGranthaDocId ? await storage.getActivePublishJobForGrantha(targetGranthaDocId) : null);
+          if (existing) {
+            await attachToExisting(existing, "A publish is already running for this grantha");
+            return;
+          }
+          throw insertErr;
+        }
 
-        // Respond immediately so the client connection is freed
-        const startedResponse = { jobId, async: true, message: "Publish started in background" };
+        const startedResponse = { jobId, async: true, message: "Publish queued" };
         if (idem && !idem.replay) {
           await persistIdempotency(idem.key, `/api/drafts/${id}/publish`, idem.hash, user.id, id, 200, startedResponse);
         }
         res.json(startedResponse);
 
-        // Background: run the actual publish (don't await here)
-        // Single attempt: retrying re-runs the entire grantha walk (progress resets to 0).
-        withPublishRetries(
-          () =>
-            publishGranthaWithHierarchy(
-              draft,
-              jobId,
-              (done, total, current, meta) => {
-              job.progress = {
-                done,
-                total,
-                current,
-                breakdown: meta?.breakdown ?? job.progress.breakdown,
-                summary: meta?.summary ?? job.progress.summary,
-              };
-              void storage.updatePublishJob(jobId, {
-                status: "running",
-                progressDone: done,
-                progressTotal: total,
-                progressCurrent: current,
-              });
-            },
-              { allowRenumber: !!allowRenumber },
-            ),
-          1,
-        )
-          .then(async (result) => {
-            // Sync Strapi documentIds back; clear pending deletions + publish scope so the
-            // next publish does not re-run full delete/sync or auto-retry the same work.
-            // Exception: deletes that failed (non-404 from Strapi) are preserved on the
-            // draft so the next publish retries them — otherwise transient errors leave
-            // orphan rows in Strapi forever.
-            const existingData = (draft.data as Record<string, any>) ?? {};
-            const {
-              deletedStrapiSectionDocIds: _ds,
-              deletedStrapiManthraDocIds: _dm,
-              deletedStrapiTeekaDocIds: _dt,
-              publishScope: _ps,
-              ...restDraft
-            } = existingData;
-            const retrySections = Array.isArray(result.failedDeletedSectionDocIds)
-              ? result.failedDeletedSectionDocIds
-              : [];
-            const retryManthras = Array.isArray(result.failedDeletedManthraDocIds)
-              ? result.failedDeletedManthraDocIds
-              : [];
-            await storage.updateDraft(id, user.id, {
-              data: {
-                ...restDraft,
-                ...(result.updatedHierarchy ? { hierarchy: result.updatedHierarchy } : {}),
-                ...(retrySections.length > 0
-                  ? { deletedStrapiSectionDocIds: retrySections }
-                  : {}),
-                ...(retryManthras.length > 0
-                  ? { deletedStrapiManthraDocIds: retryManthras }
-                  : {}),
-                publishScope: {
-                  changedManthraIds: [],
-                  requiresFullPublish: false,
-                  granthaMetaDirty: false,
-                },
-              },
-            });
-            const newDocumentId =
-              result.strapiResult?.data?.documentId || draft.strapiDocumentId;
-            const updated = await storage.markDraftPublished(id, user.id, newDocumentId);
-            if (updated) {
-              void writeDraftSnapshot({
-                event: "draft.publish.after",
-                draftId: updated.id,
-                userId: user.id,
-                title: updated.title,
-                status: updated.status,
-                strapiDocumentId: updated.strapiDocumentId,
-                data: updated.data,
-                metadata: { background: true, contentType: draft.contentType },
-              });
-            }
-            const responseBody: Record<string, any> = { draft: updated, strapi: result.strapiResult };
-            const warnings: Array<{ manthra: string; error: string }> = [];
-            if (Array.isArray(result.publishFailures) && result.publishFailures.length > 0) {
-              warnings.push(...result.publishFailures);
-            }
-            for (const sid of result.failedDeletedSectionDocIds ?? []) {
-              warnings.push({
-                manthra: `[Section ${sid}]`,
-                error: "Strapi delete failed — will retry on next publish",
-              });
-            }
-            for (const mid of result.failedDeletedManthraDocIds ?? []) {
-              warnings.push({
-                manthra: `[Manthra ${mid}]`,
-                error: "Strapi delete failed — will retry on next publish",
-              });
-            }
-            if (warnings.length > 0) responseBody.warnings = warnings;
-            job.status = "done";
-            job.result = responseBody;
-            await storage.updatePublishJob(jobId, {
-              status: "done",
-              progressDone: job.progress.done,
-              progressTotal: job.progress.total,
-              progressCurrent: job.progress.current,
-              result: responseBody,
-              error: null,
-            });
-            // Drop the manthra checkpoint table now that this publish succeeded; the docIds
-            // are persisted back into the draft's hierarchy JSON above so the table is no
-            // longer load-bearing for the next attempt.
-            void storage
-              .deleteManthraResolutions(jobId)
-              .catch((e) => console.warn(`[publish] resolution cleanup failed: ${e?.message || e}`));
-          })
-          .catch((err: any) => {
-            console.error(`[publish-bg] Job ${jobId} failed:`, err.message);
-            // Do not mark integrity/preflight failures as recoverable — the client used to
-            // auto-POST /publish on failed_recoverable and restart the full grantha job.
-            const recoverable = isRetryablePublishError(err);
-            job.status = recoverable ? "failed_recoverable" : "failed";
-            job.error = err.message || "Publish failed";
-            void storage.updatePublishJob(jobId, {
-              status: recoverable ? "failed_recoverable" : "failed",
-              progressDone: job.progress.done,
-              progressTotal: job.progress.total,
-              progressCurrent: job.progress.current,
-              error: job.error,
-              result:
-                err?.violations || err?.failures
-                  ? { violations: err.violations, failures: err.failures }
-                  : null,
-            });
-          });
-        // No in-process Map to clear: the grantha-level lock lives on cms_publish_jobs
-        // (status='running' → no longer running once updatePublishJob flips it to
-        // done/failed in the then/catch handlers above).
+        // Escape hatch: one env var reverts to the pre-worker behaviour (run it right here
+        // in a detached promise) without a redeploy. Retire once the worker has had a clean
+        // release. The worker's claim is advisory-locked per grantha, so this is the only
+        // way two publishes could overlap — hence the flag, never the default.
+        if (PUBLISH_WORKER_INLINE) {
+          void runPublishJobInline(jobId, id, user.id, draft, { allowRenumber: !!allowRenumber });
+        }
 
         return; // Response already sent
         } else {
@@ -5998,7 +6100,12 @@ export async function registerRoutes(
     if (!jobId || typeof jobId !== "string") {
       return res.status(400).json({ message: "jobId query param required" });
     }
-    const memJob = publishJobs.get(jobId);
+    const dbJob = await storage.getPublishJob(jobId);
+
+    // The in-memory map only ever holds per-mantra jobs now. A grantha publish runs in
+    // another process, so its live state is the row — reading the map first (as this used
+    // to, unconditionally) would shadow every write the worker makes.
+    const memJob = dbJob?.kind === "grantha_publish" ? undefined : publishJobs.get(jobId);
     if (memJob) {
       return res.json({
         status: memJob.status,
@@ -6007,8 +6114,13 @@ export async function registerRoutes(
         ...(memJob.error ? { error: memJob.error } : {}),
       });
     }
-    const dbJob = await storage.getPublishJob(jobId);
+
     if (!dbJob) return res.status(404).json({ message: "Job not found (may have expired)" });
+    // This route never checked who the job belonged to, and `:id` was never read.
+    const viewer = req.user as User;
+    if (dbJob.userId && viewer?.id && dbJob.userId !== viewer.id && viewer.role !== "admin") {
+      return res.status(403).json({ message: "This publish job belongs to another user" });
+    }
     res.json({
       status: dbJob.status,
       progress: {
@@ -6016,6 +6128,8 @@ export async function registerRoutes(
         total: dbJob.progressTotal ?? 0,
         current: dbJob.progressCurrent ?? "Starting…",
       },
+      attempt: dbJob.attempts,
+      maxAttempts: dbJob.maxAttempts,
       ...(dbJob.result ? { result: dbJob.result } : {}),
       ...(dbJob.error ? { error: dbJob.error } : {}),
     });

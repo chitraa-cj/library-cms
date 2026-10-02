@@ -78,7 +78,8 @@ export default function PrasthanaThraya() {
     refetchOnWindowFocus: true,
   });
 
-  const { unpublishedDrafts, isLoadingDrafts, saveDraft, publishDraft, deleteDraft } = useDrafts("prasthana-thraya-screens");
+  const { unpublishedDrafts, isLoadingDrafts, saveDraft, publishDraft,
+    publishingDraftId, deleteDraft } = useDrafts("prasthana-thraya-screens");
 
   const bhashyamAuthorOptions = (() => {
     const cur = (formData.BhashyamAuthor ?? "").trim();
@@ -256,7 +257,7 @@ export default function PrasthanaThraya() {
         onEdit={openEdit}
         onDelete={(item) => setDeleteTarget(item)}
         onPublish={handlePublish}
-        publishingId={publishDraft.isPending ? (publishDraft.variables as number) : null}
+        publishingId={publishingDraftId}
         addLabel="Add Entry"
         testIdPrefix="prasthana"
         searchKey="GranthaName"

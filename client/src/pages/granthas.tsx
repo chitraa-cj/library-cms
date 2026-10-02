@@ -1781,9 +1781,15 @@ export default function GranthasPage() {
     // The verse's row is fetched strictly by documentId (never label-resolved to a sibling — that
     // is what once grafted a neighbour's bhashyam onto the wrong verse). While loading, the dialog
     // fieldset is disabled (spinner overlay), which also blocks Save / Save & Publish.
+    //
+    // View mode hydrates too. It used to skip the fetch, which left the "read-only preview of
+    // this verse (draft and CMS content)" showing only what the warm-up had — Sanskrit and
+    // English — so a verse with 43 translations in the CMS read "No other language translations
+    // added yet" and Hermex offered to translate all 43 again. The preview claims to show CMS
+    // content, so it has to go and get it. Hydration passes markDirty: false and the fieldset
+    // stays disabled, so nothing here can be saved by accident.
     const docId = ctx.strapiDocumentId || node?.strapiDocumentId;
     const needsHydration =
-      !opts?.viewOnly &&
       !!node &&
       !node._isNewLocal &&
       !node._contentHydrated &&

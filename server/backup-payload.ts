@@ -1,50 +1,45 @@
 /**
- * How a full-library snapshot is packed into the `grantha_backups.data` jsonb column.
+ * How a full-library snapshot is packed into `grantha_backups`.
  *
  * Shared by the portal (server/routes.ts) and the one-off restore/compare scripts in
  * script/, so every reader understands every writer. Keep it that way: a script that
  * re-implements the unwrap by hand silently stops working the next time the format
- * grows a wrapper.
+ * changes.
  *
- * TWO SIZE CEILINGS bound this file, and snapshots have now hit both:
+ * WHY THE PAYLOAD LEFT jsonb. Postgres addresses the elements of a jsonb container
+ * with a 28-bit offset, so the TOTAL content of any one jsonb value is capped at
+ * 268,435,455 bytes (~256 MB):
  *
- *   1. Postgres stores each STRING inside a jsonb value with a 28-bit length, so a
- *      single string may not exceed 2^28-1 bytes (~256 MB) — past that the INSERT
- *      fails with "string too long to represent as jsonb string". One base64 blob
- *      crossed that line in 2026-10 (it was already 230 MB on 2026-09-19, and the
- *      library grew from 30.5k to 41k manthras), which is why the payload is now
- *      split across `chunks` instead of a single `data` string.
- *   2. V8 caps any one string at 0x1fffffe8 units, which `Buffer.toString()` checks
- *      against the buffer's BYTE length — see decodeUtf8Buffer.
+ *   - one oversized string → "string too long to represent as jsonb string"
+ *   - an oversized container → "total size of jsonb array elements exceeds the
+ *     maximum of 268435455 bytes"
  *
- * Both wrapper shapes are readable. Only the chunked one is written.
+ * Splitting the payload across an array does NOT get past this — the cap is on the
+ * container's total, not on each element, and nesting only moves the sum up a level.
+ * Snapshots crossed the line in 2026-10 (230 MB of base64 at 30,521 manthras on
+ * 2026-09-19; 41,014 manthras by 2026-10-02), so the gzip stream now goes to the
+ * `data_gz` bytea column — a plain varlena, 1 GB, and no base64 inflation on the way.
+ *
+ * Every older shape is still READ, so snapshots taken before the move still restore:
+ *   Buffer                                raw gzip in data_gz        (current)
+ *   { _compressed: true, chunks: [...] }  chunked base64 in data     (2026-10, never
+ *                                                                     persisted — the
+ *                                                                     INSERT failed)
+ *   { _compressed: true, data: "<b64>" }  single base64 in data      (backups #1–#27)
+ *   plain object                          uncompressed in data       (oldest)
+ *
+ * The remaining ceiling is V8's, not Postgres's: `JSON.stringify` of the snapshot and
+ * the UTF-8 decode on the way back both have to fit in one string (0x1fffffe8 units).
+ * decodeUtf8Buffer below handles the read side; the write side is still a single
+ * stringify and will need a streaming encoder before the library roughly doubles again.
  */
 import { gzipSync, gunzipSync } from "node:zlib";
 import { StringDecoder } from "node:string_decoder";
 
-/**
- * Bytes of gzip per chunk, encoded independently. A multiple of 3 so each chunk is a
- * whole number of base64 groups and the concatenation of the encoded chunks equals
- * the base64 of the whole buffer. 48 MB of gzip encodes to a 64 MB string — a quarter
- * of the jsonb ceiling, so the format has room before it needs revisiting.
- */
-const CHUNK_BYTES = 48 * 1024 * 1024;
-
-export interface CompressedBackupPayload {
-  _compressed: true;
-  /** Base64 of consecutive gzip slices; concatenating them yields the whole stream. */
-  chunks: string[];
-}
-
-/** Compress a snapshot payload for DB storage (gzip + chunked base64 wrapper). */
-export function compressBackupData(data: any): CompressedBackupPayload {
+/** Compress a snapshot payload for storage in `grantha_backups.data_gz`. */
+export function compressBackupData(data: any): Buffer {
   const jsonStr = JSON.stringify(data);
-  const compressed = gzipSync(Buffer.from(jsonStr, "utf8"), { level: 6 });
-  const chunks: string[] = [];
-  for (let i = 0; i < compressed.length; i += CHUNK_BYTES) {
-    chunks.push(compressed.subarray(i, Math.min(i + CHUNK_BYTES, compressed.length)).toString("base64"));
-  }
-  return { _compressed: true, chunks };
+  return gzipSync(Buffer.from(jsonStr, "utf8"), { level: 6 });
 }
 
 /**
@@ -74,21 +69,23 @@ export function decodeUtf8Buffer(buf: Buffer): string {
   return parts.join("");
 }
 
-/** True for either compressed wrapper shape — chunked (current) or single-string (pre-2026-10). */
+/** True for anything holding a gzipped snapshot — a bytea Buffer or either jsonb wrapper. */
 export function isCompressedBackupPayload(raw: any): boolean {
+  if (Buffer.isBuffer(raw)) return true;
   if (!raw || raw._compressed !== true) return false;
   return Array.isArray(raw.chunks) || typeof raw.data === "string";
 }
 
-/** Gzip bytes out of either wrapper shape. */
+/** Gzip bytes out of any stored shape. */
 function gzipBufferFromPayload(raw: any): Buffer {
+  if (Buffer.isBuffer(raw)) return raw;
   if (Array.isArray(raw.chunks)) {
     return Buffer.concat(raw.chunks.map((c: string) => Buffer.from(c, "base64")));
   }
   return Buffer.from(raw.data, "base64");
 }
 
-/** Decompress a snapshot payload returned from DB — handles chunked, single-string and legacy raw. */
+/** Decompress a stored snapshot payload. Uncompressed legacy rows pass straight through. */
 export function decompressBackupData(raw: any): any {
   if (isCompressedBackupPayload(raw)) {
     return JSON.parse(decodeUtf8Buffer(gunzipSync(gzipBufferFromPayload(raw))));

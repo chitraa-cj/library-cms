@@ -48,7 +48,7 @@ export interface IStorage {
   discardDraftWithDependencies(draftId: number, opts?: { userId?: string; dryRun?: boolean }): Promise<DraftDiscardResult>;
   purgeExpiredIdempotencyKeys(): Promise<number>;
   markDraftPublished(id: number, userId: string, strapiDocumentId?: string): Promise<Draft | undefined>;
-  createBackup(label: string, data: any, granthaCount: number, sectionCount: number, manthraCount: number, summary?: any): Promise<GranthaBackup>;
+  createBackup(label: string, dataGz: Buffer, granthaCount: number, sectionCount: number, manthraCount: number, summary?: any): Promise<GranthaBackup>;
   listBackups(): Promise<GranthaBackupMeta[]>;
   getBackup(id: number): Promise<GranthaBackup | null>;
   getBackupSummaryRow(id: number): Promise<{ id: number; label: string; createdAt: Date; granthaCount: number; sectionCount: number; manthraCount: number; summary: any } | null>;
@@ -314,10 +314,11 @@ export class DatabaseStorage implements IStorage {
     return updated;
   }
 
-  async createBackup(label: string, data: any, granthaCount: number, sectionCount: number, manthraCount: number, summary?: any): Promise<GranthaBackup> {
+  /** `dataGz` is the gzipped snapshot — bytea, not jsonb, which caps out at ~256 MB. */
+  async createBackup(label: string, dataGz: Buffer, granthaCount: number, sectionCount: number, manthraCount: number, summary?: any): Promise<GranthaBackup> {
     const [backup] = await db
       .insert(granthaBackups)
-      .values({ label, data, granthaCount, sectionCount, manthraCount, summary })
+      .values({ label, dataGz, granthaCount, sectionCount, manthraCount, summary })
       .returning();
     return backup;
   }
@@ -357,9 +358,15 @@ export class DatabaseStorage implements IStorage {
     return rows;
   }
 
+  /**
+   * Present the payload on `data` whichever column holds it, so callers (and the
+   * restore scripts) stay unaware of the 2026-10 move from jsonb to bytea — see
+   * server/backup-payload.ts. `decompressBackupData` understands both shapes.
+   */
   async getBackup(id: number): Promise<GranthaBackup | null> {
     const [backup] = await db.select().from(granthaBackups).where(eq(granthaBackups.id, id));
-    return backup ?? null;
+    if (!backup) return null;
+    return { ...backup, data: backup.dataGz ?? backup.data };
   }
 
   async getGranthaLocks(): Promise<GranthaLock[]> {

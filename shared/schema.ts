@@ -1,5 +1,5 @@
 import { sql } from "drizzle-orm";
-import { pgTable, text, varchar, timestamp, serial, jsonb, integer, boolean, primaryKey } from "drizzle-orm/pg-core";
+import { pgTable, text, varchar, timestamp, serial, jsonb, integer, boolean, primaryKey, customType } from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod";
 
@@ -114,6 +114,11 @@ export type IdempotencyKeyRecord = typeof idempotencyKeys.$inferSelect;
 export type PublishJobTaskRecord = typeof publishJobTasks.$inferSelect;
 export type PublishManthraResolutionRecord = typeof publishManthraResolutions.$inferSelect;
 
+/** Raw bytes, for payloads too large for jsonb. Postgres has no first-class drizzle bytea. */
+const bytea = customType<{ data: Buffer; driverData: Buffer }>({
+  dataType: () => "bytea",
+});
+
 export const granthaBackups = pgTable("grantha_backups", {
   id: serial("id").primaryKey(),
   label: text("label").notNull(),
@@ -121,7 +126,14 @@ export const granthaBackups = pgTable("grantha_backups", {
   granthaCount: integer("grantha_count").notNull().default(0),
   sectionCount: integer("section_count").notNull().default(0),
   manthraCount: integer("manthra_count").notNull().default(0),
-  data: jsonb("data").notNull(),
+  /**
+   * Snapshots taken before 2026-10 only. A jsonb value is capped at ~256 MB of
+   * content (28-bit element offsets), which full-library snapshots passed, so new
+   * ones go to `dataGz` instead. Kept, and still read, so old backups restore.
+   */
+  data: jsonb("data"),
+  /** gzip of the snapshot JSON. bytea is a plain varlena — 1 GB, no base64 inflation. */
+  dataGz: bytea("data_gz"),
   // Precomputed lightweight view (grantha records + section tree with per-section
   // manthra counts, no manthra text) so the snapshot detail page can render the
   // grantha boxes instantly instead of decompressing + parsing the full `data`
@@ -130,7 +142,7 @@ export const granthaBackups = pgTable("grantha_backups", {
 });
 
 export type GranthaBackup = typeof granthaBackups.$inferSelect;
-export type GranthaBackupMeta = Omit<GranthaBackup, "data" | "summary">;
+export type GranthaBackupMeta = Omit<GranthaBackup, "data" | "dataGz" | "summary">;
 
 export const granthaLocks = pgTable("grantha_locks", {
   id: serial("id").primaryKey(),

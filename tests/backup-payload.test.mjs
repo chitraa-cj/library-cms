@@ -1,17 +1,17 @@
 /**
  * Snapshot payload format — regression tests.
  * ===========================================
- * `grantha_backups.data` used to hold ONE base64 string, which Postgres refused
- * once it passed its per-string jsonb ceiling (~256 MB): "string too long to
- * represent as jsonb string". Snapshots now write an array of chunks instead.
+ * `grantha_backups.data` was jsonb, and a jsonb value caps out at ~256 MB of content
+ * (28-bit element offsets), which full-library snapshots passed in 2026-10. Chunking
+ * across an array did not help — the cap is on the container's TOTAL — so the gzip
+ * stream moved to the `data_gz` bytea column.
  *
  * What must keep holding:
- *   - a new payload round-trips, multi-byte text included;
- *   - every snapshot taken before 2026-10 (single `data` string) still reads,
- *     and so do the truly uncompressed rows older than that;
- *   - the identity the chunking leans on — base64 of 3-aligned slices,
- *     concatenated, is base64 of the whole buffer — so CHUNK_BYTES can change
- *     without rewriting stored snapshots.
+ *   - a new payload round-trips as raw gzip bytes, multi-byte text included;
+ *   - every older stored shape still reads, so old snapshots restore:
+ *     the single-base64-string wrapper (backups #1–#27), the short-lived chunked
+ *     wrapper, and the uncompressed rows older than either;
+ *   - nothing is written back into a jsonb-bound shape.
  *
  * Run:  npm run test:backup-payload
  */
@@ -20,6 +20,7 @@ import { gzipSync } from "node:zlib";
 import {
   compressBackupData,
   decompressBackupData,
+  decodeUtf8Buffer,
   isCompressedBackupPayload,
 } from "../server/backup-payload.ts";
 
@@ -31,38 +32,38 @@ const payload = {
   manthras: [{ documentId: "m1", text: "ಕನ್ನಡ மொழி বাংলা" }],
 };
 
-// 1. Current format round-trips.
+// 1. Current format: raw gzip bytes, bound for a bytea column.
 const packed = compressBackupData(payload);
-assert.ok(Array.isArray(packed.chunks) && packed.chunks.length >= 1, "writes a chunks array");
-assert.ok(!("data" in packed), "no single-string field is written any more");
-assert.ok(isCompressedBackupPayload(packed), "current wrapper is recognised");
+assert.ok(Buffer.isBuffer(packed), "writes a Buffer, not a jsonb-bound object");
+assert.ok(isCompressedBackupPayload(packed), "a Buffer is recognised as a payload");
 assert.deepStrictEqual(decompressBackupData(packed), payload, "round-trip");
 
-// 2. Snapshots written before the chunking (ids 1–5) must still open.
-const legacyCompressed = {
+// 2. Backups #1–#27: one base64 string in the jsonb `data` column.
+const legacySingle = {
   _compressed: true,
   data: gzipSync(Buffer.from(JSON.stringify(payload), "utf8")).toString("base64"),
 };
-assert.ok(isCompressedBackupPayload(legacyCompressed), "pre-2026-10 wrapper is recognised");
-assert.deepStrictEqual(decompressBackupData(legacyCompressed), payload, "pre-2026-10 round-trip");
+assert.ok(isCompressedBackupPayload(legacySingle), "single-string wrapper recognised");
+assert.deepStrictEqual(decompressBackupData(legacySingle), payload, "single-string round-trip");
 
-// 3. Rows from before compression existed are returned untouched.
-assert.deepStrictEqual(decompressBackupData(payload), payload, "uncompressed row passes through");
-assert.ok(!isCompressedBackupPayload(payload), "uncompressed row is not mistaken for a wrapper");
-assert.ok(!isCompressedBackupPayload(null), "null is not a wrapper");
-
-// 4. Chunk boundaries must stay base64-group aligned.
-const buf = Buffer.from(Array.from({ length: 5000 }, (_, i) => i % 256));
-for (const n of [3, 48, 300, 999]) {
-  const parts = [];
-  for (let i = 0; i < buf.length; i += n) {
-    parts.push(buf.subarray(i, Math.min(i + n, buf.length)).toString("base64"));
-  }
-  assert.strictEqual(parts.join(""), buf.toString("base64"), `slice identity at ${n} bytes`);
-  assert.ok(
-    Buffer.concat(parts.map((p) => Buffer.from(p, "base64"))).equals(buf),
-    `concat-decode at ${n} bytes`,
-  );
+// 3. The short-lived chunked wrapper (shipped 2026-10-02, never persisted — the
+//    INSERT it was meant to fix failed on the container cap instead).
+const gz = gzipSync(Buffer.from(JSON.stringify(payload), "utf8"));
+const chunked = { _compressed: true, chunks: [] };
+for (let i = 0; i < gz.length; i += 9) {
+  chunked.chunks.push(gz.subarray(i, Math.min(i + 9, gz.length)).toString("base64"));
 }
+assert.ok(chunked.chunks.length > 1, "test fixture actually spans several chunks");
+assert.ok(isCompressedBackupPayload(chunked), "chunked wrapper recognised");
+assert.deepStrictEqual(decompressBackupData(chunked), payload, "chunked round-trip");
+
+// 4. Rows from before compression existed are returned untouched.
+assert.deepStrictEqual(decompressBackupData(payload), payload, "uncompressed row passes through");
+assert.ok(!isCompressedBackupPayload(payload), "uncompressed row is not mistaken for a payload");
+assert.ok(!isCompressedBackupPayload(null), "null is not a payload");
+
+// 5. decodeUtf8Buffer agrees with Buffer.toString on the sizes where both work.
+const multibyte = Buffer.from("नाहं देहो ಕನ್ನಡ 日本語 ".repeat(5000), "utf8");
+assert.strictEqual(decodeUtf8Buffer(multibyte), multibyte.toString("utf8"), "utf-8 decode parity");
 
 console.log("backup-payload: all assertions passed");

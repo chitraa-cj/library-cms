@@ -11,7 +11,6 @@
  *   npx tsx script/restore-shloka-ot-from-backup.ts --backup-id 7 --grantha "Chandogya" --min-backup-ot 35 --execute
  */
 import "../server/env";
-import { gunzipSync } from "node:zlib";
 import { storage } from "../server/storage";
 import { strapiRequest } from "../server/strapi";
 import {
@@ -25,14 +24,12 @@ import {
   mergeMissingOtFromBackup,
   normalizeOtRows,
 } from "./lib/restore-other-translations";
+import { decompressBackupData } from "../server/backup-payload";
 
-function decompressBackupData(raw: any): any {
-  if (raw && raw._compressed === true && typeof raw.data === "string") {
-    const buf = Buffer.from(raw.data, "base64");
-    return JSON.parse(gunzipSync(buf).toString("utf8"));
-  }
-  if (raw?.data?.granthas) return raw.data;
-  return raw;
+function unwrapBackupData(raw: any): any {
+  const data = decompressBackupData(raw);
+  if (data?.data?.granthas) return data.data;
+  return data;
 }
 
 function parseArgs() {
@@ -111,7 +108,7 @@ async function main() {
     process.exit(1);
   }
 
-  const bData = decompressBackupData(backup.data);
+  const bData = unwrapBackupData(backup.data);
   const grantha = findGranthaInBackup(bData.granthas ?? [], granthaQuery);
   const gDocId = grantha.documentId as string;
 

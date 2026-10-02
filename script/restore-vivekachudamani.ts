@@ -17,8 +17,8 @@ import { execFile } from "node:child_process";
 import { writeFileSync, appendFileSync, unlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { gunzipSync } from "node:zlib";
 import pg from "pg";
+import { decompressBackupData } from "../server/backup-payload";
 
 const STRAPI_URL  = process.env.STRAPI_URL       || "http://13.53.121.15:1337";
 const STRAPI_TOKEN = process.env.STRAPI_API_TOKEN || "";
@@ -87,11 +87,7 @@ async function pmap<T, R>(items: T[], fn: (item: T, i: number) => Promise<R>, li
 
 function decompressBackup(raw: any): any {
   // pg returns JSONB as a parsed JS object already
-  if (raw && raw._compressed === true && typeof raw.data === "string") {
-    const buf = Buffer.from(raw.data, "base64");
-    return JSON.parse(gunzipSync(buf).toString("utf8"));
-  }
-  return raw; // legacy uncompressed backups
+  return decompressBackupData(raw);
 }
 
 // ── main ─────────────────────────────────────────────────────────────────────

@@ -35,6 +35,7 @@
     "migrate:translation-jobs": "psql \"$DATABASE_URL\" -f script/migrations/20261001_translation_jobs.sql",
     "worker:translation": "tsx server/translation/worker-main.ts",
     "worker:translation:prod": "node --max-old-space-size=1024 dist/translation-worker.cjs",
+    "test:backup-payload": "node --import tsx tests/backup-payload.test.mjs",
     "test:translation-queue": "node --import tsx tests/translation-queue.test.mjs",
     "test:translation-api": "node --import tsx tests/translation-api-auth.test.mjs",
     "test:hermex": "node --import tsx tests/hermex-service.test.mjs",

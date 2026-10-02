@@ -16,9 +16,9 @@
  *   tsx script/export-upanishad-translation-status.ts
  *   tsx script/export-upanishad-translation-status.ts --backup-id 8 --out /tmp/upanishads.xlsx
  */
-import { gunzipSync } from "node:zlib";
 import * as path from "node:path";
 import * as XLSX from "xlsx";
+import { decompressBackupData } from "../server/backup-payload";
 
 function parseArgs() {
   const a = process.argv.slice(2);
@@ -44,8 +44,7 @@ async function loadBackup(id: number) {
   if (!row?.data) throw new Error(`Backup ${id} not found`);
   let raw: any = row.data;
   if (typeof raw === "string") raw = JSON.parse(raw);
-  if (raw?._compressed && typeof raw.data === "string")
-    raw = JSON.parse(gunzipSync(Buffer.from(raw.data, "base64")).toString("utf8"));
+  raw = decompressBackupData(raw);
   if (raw?.data && raw.granthas === undefined && raw.data.granthas) raw = raw.data;
   return {
     label: row.label,

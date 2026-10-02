@@ -26,7 +26,7 @@
  *                   and recreate. Without this flag, existing granthas are SKIPPED (idempotent).
  *   --limit N       stop after N granthas (useful for a cautious first run)
  */
-import { gunzipSync } from "node:zlib";
+import { decompressBackupData } from "../server/backup-payload";
 
 const STRAPI_URL = (process.env.STRAPI_URL || "").replace(/\/$/, "");
 const STRAPI_TOKEN = process.env.STRAPI_API_TOKEN || "";
@@ -117,9 +117,7 @@ async function loadBackup(backupId: number): Promise<{ granthas: any[]; sections
   if (!row?.data) throw new Error(`Backup id ${backupId} not found`);
   let raw: any = row.data;
   if (typeof raw === "string") raw = JSON.parse(raw);
-  if (raw?._compressed && typeof raw.data === "string") {
-    raw = JSON.parse(gunzipSync(Buffer.from(raw.data, "base64")).toString("utf8"));
-  }
+  raw = decompressBackupData(raw);
   if (raw?.data && raw.granthas === undefined && raw.data.granthas) raw = raw.data;
   return {
     granthas: raw.granthas ?? [],

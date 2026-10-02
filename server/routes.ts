@@ -34,8 +34,6 @@ import { portalVocabularyKeys, type PortalVocabularyKey } from "@shared/schema";
 import { readGranthaManthraSkeleton } from "./strapi-sqlite-skeleton";
 import Database from "better-sqlite3";
 import type { User, Draft } from "@shared/schema";
-import { gzipSync, gunzipSync } from "node:zlib";
-import { StringDecoder } from "node:string_decoder";
 import { createHash } from "node:crypto";
 import { z } from "zod";
 import {
@@ -72,6 +70,11 @@ import {
   findDocIdByExactLabelInRows,
   pickDocIdForSuffixInSectionRows,
 } from "@shared/grantha-publish-integrity";
+import {
+  compressBackupData,
+  decompressBackupData,
+  isCompressedBackupPayload,
+} from "./backup-payload";
 import { readClientBuildId } from "./build-info";
 import { applyHierarchyRepairInPlace } from "./grantha-hierarchy-repair";
 import { syncPendingMantraSlotsFromDraft } from "./grantha-mantra-slot-sync";
@@ -87,50 +90,6 @@ import {
 import { validateMantraLabelForCmsCreate } from "@shared/mantra-cms-guard";
 import { buildGranthaPublishProgressPlan } from "@shared/grantha-publish-progress";
 import { collectUnlinkedMantrasFromGranthaDraft } from "../client/src/lib/grantha-strapi-mantra-sync";
-
-/** Compress a snapshot payload for DB storage (gzip + base64 wrapper). */
-function compressBackupData(data: any): any {
-  const jsonStr = JSON.stringify(data);
-  const compressed = gzipSync(Buffer.from(jsonStr, "utf8"), { level: 6 });
-  return { _compressed: true, data: compressed.toString("base64") };
-}
-
-/**
- * Decode a UTF-8 Buffer to a string, chunk by chunk.
- *
- * `Buffer.prototype.toString("utf8")` (and TextDecoder) throw
- * `Cannot create a string longer than 0x1fffffe8 characters` whenever the
- * buffer's BYTE length exceeds V8's max string length — a conservative
- * pre-check that fires even when the DECODED string would fit (multi-byte
- * text such as Devanagari collapses to far fewer UTF-16 code units than
- * bytes). Large snapshots (e.g. a 576 MB buffer that decodes to only ~362 M
- * code units) tripped this and became unreadable. Decoding via a streaming
- * StringDecoder only ever materializes the final (in-limit) string, so it
- * succeeds where a single toString() cannot.
- */
-function decodeUtf8Buffer(buf: Buffer): string {
-  // Fast path: small buffers can't exceed the limit — decode directly.
-  const MAX_SAFE_BYTES = 0x1fffffe8; // V8 kStringMaxLength
-  if (buf.length <= MAX_SAFE_BYTES) return buf.toString("utf8");
-  const decoder = new StringDecoder("utf8");
-  const CHUNK = 64 * 1024 * 1024; // 64 MB
-  const parts: string[] = [];
-  for (let i = 0; i < buf.length; i += CHUNK) {
-    parts.push(decoder.write(buf.subarray(i, Math.min(i + CHUNK, buf.length))));
-  }
-  parts.push(decoder.end());
-  return parts.join("");
-}
-
-/** Decompress a snapshot payload returned from DB — handles both old (raw) and new (compressed) formats. */
-function decompressBackupData(raw: any): any {
-  if (raw && raw._compressed === true && typeof raw.data === "string") {
-    const buf = Buffer.from(raw.data, "base64");
-    const decompressed = gunzipSync(buf);
-    return JSON.parse(decodeUtf8Buffer(decompressed));
-  }
-  return raw; // legacy uncompressed backups
-}
 
 /**
  * Build the lightweight summary (grantha records + section tree with per-section
@@ -184,8 +143,9 @@ async function getParsedBackupCached(id: number): Promise<any | null> {
 function normalizeSnapshotPayload(input: any): any {
   if (!input || typeof input !== "object") return null;
 
-  // Compressed wrapper format: { _compressed: true, data: "<base64-gzip>" }
-  if (input._compressed === true && typeof input.data === "string") {
+  // Compressed wrapper format: { _compressed: true, chunks: [...] } (or the
+  // pre-2026-10 single `data` string) — see server/backup-payload.ts.
+  if (isCompressedBackupPayload(input)) {
     return decompressBackupData(input);
   }
 

@@ -10,7 +10,7 @@ import { execFileSync } from "node:child_process";
 import { writeFileSync, unlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { gunzipSync } from "node:zlib";
+import { decompressBackupData } from "../server/backup-payload";
 
 const STRAPI_URL = process.env.STRAPI_URL || "http://13.53.121.15:1337";
 const STRAPI_TOKEN = process.env.STRAPI_API_TOKEN || "";
@@ -99,10 +99,7 @@ async function loadBackup(backupId: number): Promise<{ granthas: any[]; sections
 
   let raw: any = row.data;
   if (typeof raw === "string") raw = JSON.parse(raw);
-  if (raw?._compressed && typeof raw.data === "string") {
-    const buf = Buffer.from(raw.data, "base64");
-    raw = JSON.parse(gunzipSync(buf).toString("utf8"));
-  }
+  raw = decompressBackupData(raw);
   if (raw?.data && raw.granthas) raw = raw.data;
   return {
     granthas: raw.granthas ?? [],

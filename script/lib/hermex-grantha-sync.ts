@@ -30,6 +30,16 @@ export type TranslateJob = {
   sourceText: string;
   sourceLanguage: "English" | "Sanskrit";
   targetLanguages: string[];
+  /**
+   * Where the answer is written — which is also which pass this job belongs to.
+   *
+   * `"others"` — the normal pass: the field's English text fanned out to the
+   *   `OtherTranslations` rows.
+   * `"english"` — the FIRST pass, for a field that has no English at all: the
+   *   Sanskrit original is translated to English and stored in the field's own
+   *   `EnglishTranslationText`, which is what the `"others"` pass then reads.
+   */
+  produces: "english" | "others";
 };
 
 export type RunOptions = {
@@ -384,46 +394,113 @@ export async function fetchMantraFull(mantraDocId: string): Promise<any> {
   });
 }
 
+/** One translatable text block of a mantra: Shloka, Bhashyam, or one Teeka. */
+export type MantraFieldUnit = {
+  field: FieldKind;
+  teekaIndex?: number;
+  entry: any;
+  /** Suffix used in the job context, e.g. "BhashyamEntry" / "Teeka Anandagiri". */
+  name: string;
+};
+
+/**
+ * The field units a mantra expands into, in the order both passes walk them.
+ *
+ * Shared so pass 1 (Sanskrit → English) and pass 2 (English → everything else)
+ * can never disagree about what a mantra contains.
+ */
+export function mantraFieldUnits(mantra: any): MantraFieldUnit[] {
+  const units: MantraFieldUnit[] = [];
+  for (const field of ["ShlokaManthraEntry", "BhashyamEntry"] as const) {
+    units.push({ field, entry: mantra?.[field], name: field });
+  }
+  const teekas: any[] = mantra?.Teekas ?? [];
+  for (let i = 0; i < teekas.length; i++) {
+    units.push({
+      field: "teeka",
+      teekaIndex: i,
+      entry: teekas[i]?.TeekaEntry,
+      name: `Teeka ${teekas[i]?.teeka?.TeekaName ?? `Teeka ${i + 1}`}`,
+    });
+  }
+  return units;
+}
+
+/**
+ * PASS 2 — the normal pass: English source → every OtherTranslations language
+ * still missing. A field with no English is skipped here; `buildEnglishJobsForMantra`
+ * is what gives it one first.
+ */
 export function buildJobsForMantra(mantra: any, mantraLabel: string, granthaName: string): TranslateJob[] {
   const jobs: TranslateJob[] = [];
   const base = `${granthaName} — ${mantraLabel}`;
 
-  for (const field of ["ShlokaManthraEntry", "BhashyamEntry"] as const) {
-    const entry = mantra[field];
-    const missing = missingLangs(entry);
-    const english = blocksToText(entry?.EnglishTranslationText);
+  for (const unit of mantraFieldUnits(mantra)) {
+    const missing = missingLangs(unit.entry);
+    const english = blocksToText(unit.entry?.EnglishTranslationText);
     if (missing.length === 0 || !english) continue;
     jobs.push({
       mantraDocId: mantra.documentId,
       mantraLabel,
-      context: `${base} — ${field}`,
-      field,
+      context: `${base} — ${unit.name}`,
+      field: unit.field,
+      teekaIndex: unit.teekaIndex,
       sourceText: english,
       sourceLanguage: "English",
       targetLanguages: missing,
-    });
-  }
-
-  for (let i = 0; i < (mantra.Teekas ?? []).length; i++) {
-    const t = mantra.Teekas[i];
-    const entry = t.TeekaEntry;
-    const missing = missingLangs(entry);
-    const english = blocksToText(entry?.EnglishTranslationText);
-    const name = t.teeka?.TeekaName ?? `Teeka ${i + 1}`;
-    if (missing.length === 0 || !english) continue;
-    jobs.push({
-      mantraDocId: mantra.documentId,
-      mantraLabel,
-      context: `${base} — Teeka ${name}`,
-      field: "teeka",
-      teekaIndex: i,
-      sourceText: english,
-      sourceLanguage: "English",
-      targetLanguages: missing,
+      produces: "others",
     });
   }
 
   return jobs;
+}
+
+/**
+ * PASS 1 — fields that have no English translation at all.
+ *
+ * Gemini is asked for the English of the Sanskrit original and the result is
+ * written to the field's own `EnglishTranslationText`. Pass 2 then reads that
+ * English and fans it out, so a mantra that arrived with only Sanskrit still ends
+ * up fully translated — *through* English, never Sanskrit → 42 languages directly,
+ * which is the one path this whole pipeline (chunking, source splitting, prompt
+ * shape) is tuned for.
+ *
+ * A field with neither English nor Sanskrit is skipped: there is nothing to
+ * translate from, and that is a data-entry gap, not a translation failure.
+ */
+export function buildEnglishJobsForMantra(
+  mantra: any,
+  mantraLabel: string,
+  granthaName: string,
+): TranslateJob[] {
+  const jobs: TranslateJob[] = [];
+  const base = `${granthaName} — ${mantraLabel}`;
+
+  for (const unit of mantraFieldUnits(mantra)) {
+    if (blocksToText(unit.entry?.EnglishTranslationText)) continue;
+    const sanskrit = blocksToText(unit.entry?.SanskritTextEntry);
+    if (!sanskrit) continue;
+    jobs.push({
+      mantraDocId: mantra.documentId,
+      mantraLabel,
+      context: `${base} — ${unit.name} → English`,
+      field: unit.field,
+      teekaIndex: unit.teekaIndex,
+      sourceText: sanskrit,
+      sourceLanguage: "Sanskrit",
+      targetLanguages: ["English"],
+      produces: "english",
+    });
+  }
+
+  return jobs;
+}
+
+/** Keep only the languages a caller asked for (an empty list means "all missing"). */
+export function narrowToRequestedLanguages(job: TranslateJob, requested: string[]): TranslateJob {
+  if (!requested.length) return job;
+  const wanted = new Set(requested);
+  return { ...job, targetLanguages: job.targetLanguages.filter((l) => wanted.has(l)) };
 }
 
 /**
@@ -440,13 +517,25 @@ export function pruneFailedChunksForMantra(mantra: any, checkpoint: CheckpointFi
   for (const key of Object.keys(checkpoint.failedChunks)) {
     const [docId, field, teeka, langCsv] = key.split("|");
     if (docId !== mantra.documentId) continue;
+    const langs = (langCsv ?? "").split(",").filter(Boolean);
+    // "English" is never an OtherTranslations language, so a key with it alone can
+    // only be a pass-1 chunk — and it is satisfied by the field's own English text.
+    const produces: TranslateJob["produces"] =
+      langs.length === 1 && langs[0] === "English" ? "english" : "others";
     const job = {
       field: field as FieldKind,
       teekaIndex: field === "teeka" ? parseInt(teeka, 10) : undefined,
+      produces,
     } as TranslateJob;
     const entry = getTextEntryForJob(mantra, job);
+    if (produces === "english") {
+      if (blocksToText(entry?.EnglishTranslationText)) {
+        delete checkpoint.failedChunks[key];
+        removed++;
+      }
+      continue;
+    }
     const have = filledLangs(entry);
-    const langs = (langCsv ?? "").split(",").filter(Boolean);
     if (langs.length > 0 && langs.every((l) => have.has(l))) {
       delete checkpoint.failedChunks[key];
       removed++;
@@ -523,8 +612,21 @@ export async function filterLangsStillMissing(job: TranslateJob, langs: string[]
   const mantra = await fetchMantraFull(job.mantraDocId);
   if (!mantra) return langs;
   const entry = getTextEntryForJob(mantra, job);
+  if (job.produces === "english") {
+    // Pass 1 has exactly one target, and it lives in the field's own English text
+    // — an "English" row in OtherTranslations says nothing about it.
+    return blocksToText(entry?.EnglishTranslationText) ? [] : langs;
+  }
   const have = filledLangs(entry);
   return langs.filter((l) => !have.has(l));
+}
+
+/** Pass-1 write-back: the field's own English text, from the single English row. */
+function englishPatchFromRows(rows: HermexTranslationRow[]): Record<string, any> | null {
+  const row = rows.find((r) => r.language === "English") ?? rows[0];
+  const text = (row?.text ?? "").trim();
+  if (!text) return null;
+  return { EnglishTranslationText: textToBlocks(text) };
 }
 
 export async function syncJobToStrapi(job: TranslateJob, newRows: HermexTranslationRow[]): Promise<void> {
@@ -534,12 +636,17 @@ export async function syncJobToStrapi(job: TranslateJob, newRows: HermexTranslat
     const fresh = await fetchMantraFull(job.mantraDocId);
     if (!fresh) throw new Error(`Mantra ${job.mantraDocId} not found during sync`);
 
-    const newOT = hermexRowsToOtherTranslations(newRows);
+    // Pass 1 fills the field's English text; pass 2 adds OtherTranslations rows.
+    const patch =
+      job.produces === "english"
+        ? englishPatchFromRows(newRows)
+        : { OtherTranslations: hermexRowsToOtherTranslations(newRows) };
+    if (!patch) throw new Error(`Gemini returned empty English for ${job.context}`);
 
     if (job.field === "teeka" && job.teekaIndex != null) {
       const teekasOut = [...(fresh.Teekas ?? [])];
       const t = teekasOut[job.teekaIndex];
-      const merged = mergeTeekaEntry(t.TeekaEntry, { OtherTranslations: newOT });
+      const merged = mergeTeekaEntry(t.TeekaEntry, patch);
       teekasOut[job.teekaIndex] = { ...t, TeekaEntry: merged };
       await putTeekas(job.mantraDocId, teekasOut);
     } else {
@@ -547,7 +654,7 @@ export async function syncJobToStrapi(job: TranslateJob, newRows: HermexTranslat
       // but TypeScript cannot narrow a FieldKind through the conjunction above.
       const field = job.field as Exclude<FieldKind, "teeka">;
       const strapiEntry = fresh[field] ?? {};
-      const merged = mergeTeekaEntry(strapiEntry, { OtherTranslations: newOT });
+      const merged = mergeTeekaEntry(strapiEntry, patch);
       await putManthraField(job.mantraDocId, field, merged);
     }
   });
@@ -818,6 +925,133 @@ export async function translateJobIncremental(
   }
 
   return { ok, fail };
+}
+
+// ───────────────────────────────────────────────────────── the two-pass driver
+export type MantraPassOptions = {
+  /** Restrict pass 2 to these languages; empty/omitted = every one still missing. */
+  requestedLanguages?: string[];
+  /**
+   * Pass 1 (Sanskrit → English) on/off. Off reproduces the old behaviour exactly:
+   * a field with no English is simply skipped.
+   */
+  englishFirstPass?: boolean;
+  /** Checked between field units; a unit already in flight is allowed to finish. */
+  signal?: { aborted: boolean };
+  /** Re-read the mantra between the passes. Injectable for tests. */
+  refetch?: (mantraDocId: string) => Promise<any>;
+};
+
+export type MantraPassResult = {
+  /** Language-writes that landed (English counts as one). */
+  ok: number;
+  fail: number;
+  /** Field units each pass actually had work for. */
+  englishUnits: number;
+  otherUnits: number;
+  /** One line per field unit — what the queue stores on the item. */
+  lines: string[];
+  aborted: boolean;
+};
+
+/**
+ * Translate ONE mantra in the two passes the pipeline is built around:
+ *
+ *   pass 1  Sanskrit original → English, for fields with no English yet
+ *           (written to the field's own EnglishTranslationText)
+ *   re-read the mantra
+ *   pass 2  English → every other language still missing
+ *
+ * Pass 1 only ever touches fields that have **no** English; a hand-written or
+ * previously generated English translation is never overwritten. Pass 2 is the
+ * unchanged old path, and it reads the English that pass 1 just wrote, which is
+ * why the re-read between them is mandatory rather than an optimisation.
+ *
+ * Shared by the translation worker and the `hermex:grantha` CLI so the two can
+ * never drift apart.
+ */
+export async function translateMantraPasses(
+  mantra: any,
+  mantraLabel: string,
+  granthaName: string,
+  opts: RunOptions,
+  checkpoint: CheckpointFile,
+  passOpts: MantraPassOptions = {},
+): Promise<MantraPassResult> {
+  const refetch = passOpts.refetch ?? fetchMantraFull;
+  const lines: string[] = [];
+  let ok = 0;
+  let fail = 0;
+  let aborted = false;
+
+  /** Run one unit, tally it, and report whether the caller should keep going. */
+  const runUnit = async (unit: TranslateJob): Promise<boolean> => {
+    if (passOpts.signal?.aborted) {
+      aborted = true;
+      lines.push(`${unit.context}: skipped (worker shutting down)`);
+      return false;
+    }
+    const result = await translateJobIncremental(unit, opts, checkpoint);
+    ok += result.ok;
+    fail += result.fail;
+    const what =
+      unit.produces === "english"
+        ? `English ${result.ok > 0 ? "written" : "not written"}`
+        : `${result.ok} language(s) written`;
+    lines.push(`${unit.context}: ${what}${result.fail ? `, ${result.fail} failed` : ""}`);
+    saveCheckpoint(opts.checkpointPath, checkpoint);
+    return true;
+  };
+
+  const englishUnits =
+    passOpts.englishFirstPass === false
+      ? []
+      : buildEnglishJobsForMantra(mantra, mantraLabel, granthaName);
+
+  let pass2Source = mantra;
+
+  if (englishUnits.length > 0) {
+    console.log(
+      `\n[pass 1] ${mantraLabel}: ${englishUnits.length} field(s) have no English — translating the Sanskrit original first`,
+    );
+    let wrote = 0;
+    for (const unit of englishUnits) {
+      const before = ok;
+      if (!(await runUnit(unit))) break;
+      if (ok > before) wrote++;
+    }
+    if (wrote > 0) {
+      try {
+        const fresh = await refetch(mantra.documentId);
+        if (fresh) pass2Source = fresh;
+      } catch (e: unknown) {
+        // Pass 2 cannot run on a stale copy: it would see no English and skip the
+        // very fields pass 1 just filled, completing the mantra with a silent gap.
+        // Count it as a failure so the queue retries (pass 1 is then a no-op).
+        fail += 1;
+        const msg = e instanceof Error ? e.message.slice(0, 120) : String(e);
+        lines.push(
+          `${mantraLabel}: English written but re-reading the mantra failed (${msg}) — the other languages were not attempted.`,
+        );
+        console.warn(`[pass 1] could not re-read ${mantraLabel} after the English pass: ${msg}`);
+        return { ok, fail, englishUnits: englishUnits.length, otherUnits: 0, lines, aborted };
+      }
+    }
+  }
+
+  if (aborted) {
+    return { ok, fail, englishUnits: englishUnits.length, otherUnits: 0, lines, aborted };
+  }
+
+  const otherUnits = buildJobsForMantra(pass2Source, mantraLabel, granthaName)
+    .map((unit) => narrowToRequestedLanguages(unit, passOpts.requestedLanguages ?? []))
+    .filter((unit) => unit.targetLanguages.length > 0);
+
+  for (const unit of otherUnits) {
+    if (!(await runUnit(unit))) break;
+  }
+
+  return { ok, fail, englishUnits: englishUnits.length, otherUnits: otherUnits.length, lines, aborted };
 }
 
 export function printMantraSummary(mantra: any, label: string): void {

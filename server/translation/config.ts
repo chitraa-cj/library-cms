@@ -71,6 +71,22 @@ export const translationConfig = {
     return hermexHeadless();
   })(),
 
+  /**
+   * Pass 1 — translate the Sanskrit original to English for any field that has
+   * no English yet, before fanning English out to the other languages.
+   *
+   * On by default: without it a mantra that was entered with only its Sanskrit
+   * is silently skipped forever, because every other language is translated
+   * *from* English. Set TRANSLATION_ENGLISH_FIRST_PASS=0 to go back to
+   * English-source-only (useful if the generated English must be reviewed by a
+   * human before it becomes the source for 42 languages).
+   */
+  englishFirstPass: (() => {
+    const raw = process.env.TRANSLATION_ENGLISH_FIRST_PASS?.trim().toLowerCase();
+    if (raw === "false" || raw === "0" || raw === "no") return false;
+    return true;
+  })(),
+
   /** Identifies this worker in item leases and logs. */
   workerId:
     process.env.TRANSLATION_WORKER_ID?.trim() ||

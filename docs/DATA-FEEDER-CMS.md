@@ -1107,12 +1107,11 @@ Use reconnect banner **Retry now**. Work in tab is preserved; session cookie may
 
 | Document | Topic |
 |----------|-------|
-| [LIBRARY.md](./LIBRARY.md) | General library overview and editor/admin checklists |
-| [GO-LIVE-BACKLOG.md](./GO-LIVE-BACKLOG.md) | One backlog for going live |
-| [PROJECT_OVERVIEW.md](./PROJECT_OVERVIEW.md) | Developer onboarding (shorter) |
-| [HERMEX.md](./HERMEX.md) | AI translation setup |
-| [orphan-manthras-investigation.md](./orphan-manthras-investigation.md) | Orphan mantra debugging |
-| [../replit.md](../replit.md) | Deep architecture + merge behavior reference |
+| [HERMEX.md](./HERMEX.md) | Gemini-through-Chrome translation: setup, failure modes, recovery |
+| [TRANSLATION-JOBS.md](./TRANSLATION-JOBS.md) | The server-side translation queue and its worker |
+| [OCR.md](./OCR.md) | Scanned-page transcription pipeline |
+| [../strapi/README.md](../strapi/README.md) | The Strapi instance's own notes |
+| [../deploy/hermex-patches/README.md](../deploy/hermex-patches/README.md) | Local fixes carried by the box's hermex checkout |
 
 ---
 

@@ -312,7 +312,9 @@ export default function AdminTranslationsPage() {
           <CardTitle className="text-base">Start a translation</CardTitle>
           <CardDescription>
             One job per grantha. Every mantra becomes its own queue row, so progress is kept per verse
-            and a failure never costs the verses that already succeeded.
+            and a failure never costs the verses that already succeeded. A field with no English
+            translation yet gets one first, from its Sanskrit original — every other language is
+            translated from the English.
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-3">

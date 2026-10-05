@@ -9,11 +9,18 @@
  *   npm run hermex:grantha -- "Chandogya Upanishad" --reset-checkpoint
  *   npm run hermex:grantha -- "Chandogya Upanishad" --headed
  *   npm run hermex:grantha -- "Chandogya Upanishad" --prune-failed   # re-validate failedChunks vs Strapi, drop stale ones, exit
+ *   npm run hermex:grantha -- "Chandogya" --no-english-pass          # skip pass 1 (fields without English stay untranslated)
+ *
+ * Two passes per mantra: a field with no English translation first has its Sanskrit
+ * original translated to English (written to EnglishTranslationText), then that
+ * English is fanned out to the other languages. --no-english-pass (or
+ * TRANSLATION_ENGLISH_FIRST_PASS=0) restores the old English-source-only behaviour.
  */
 import "../server/env";
 import path from "node:path";
 import { hermexHeadless } from "../server/hermex/config";
 import {
+  buildEnglishJobsForMantra,
   buildJobsForMantra,
   fetchMantraFull,
   listMantrasForGrantha,
@@ -23,7 +30,7 @@ import {
   resolveGranthaByName,
   saveCheckpoint,
   slugify,
-  translateJobIncremental,
+  translateMantraPasses,
   type CheckpointFile,
   type RunOptions,
 } from "./lib/hermex-grantha-sync";
@@ -35,6 +42,7 @@ function parseArgs(argv: string[]): {
   headed: boolean;
   resetCheckpoint: boolean;
   pruneFailed: boolean;
+  englishFirstPass: boolean;
 } {
   // Parse the RAW argv — do not pre-strip "--" tokens, or the named flags below can never
   // match. Boolean flags go in `flags`; everything else that isn't a value of --grantha/
@@ -80,11 +88,19 @@ function parseArgs(argv: string[]): {
     headed: flags.has("--headed"),
     resetCheckpoint: flags.has("--reset-checkpoint"),
     pruneFailed: flags.has("--prune-failed"),
+    // The flag wins; otherwise the same env var the translation worker reads, so
+    // one host answers this question the same way in both drivers.
+    englishFirstPass:
+      !flags.has("--no-english-pass") &&
+      !["0", "false", "no"].includes(
+        (process.env.TRANSLATION_ENGLISH_FIRST_PASS ?? "").trim().toLowerCase(),
+      ),
   };
 }
 
 async function main() {
-  const { granthaName, mantraFilter, dryRun, headed, resetCheckpoint, pruneFailed } = parseArgs(process.argv.slice(2));
+  const { granthaName, mantraFilter, dryRun, headed, resetCheckpoint, pruneFailed, englishFirstPass } =
+    parseArgs(process.argv.slice(2));
 
   const grantha = await resolveGranthaByName(granthaName);
   const checkpointPath = path.join(
@@ -131,7 +147,10 @@ async function main() {
   console.log(`\n=== Hermex grantha translate → Strapi ===`);
   console.log(`Grantha: ${grantha.GranthaName} (${grantha.documentId})`);
   console.log(`Checkpoint: ${checkpointPath}`);
-  console.log(`headless=${opts.headless} chunk=${opts.chunkSize} delay=${opts.chunkDelayMs}ms retries=${opts.maxRetries}\n`);
+  console.log(`headless=${opts.headless} chunk=${opts.chunkSize} delay=${opts.chunkDelayMs}ms retries=${opts.maxRetries}`);
+  console.log(
+    `English first pass (Sanskrit → English for fields with no English): ${englishFirstPass ? "ON" : "off"}\n`,
+  );
 
   if (pruneFailed) {
     const beforeKeys = Object.keys(checkpoint.failedChunks);
@@ -184,9 +203,17 @@ async function main() {
     let totalJobs = 0;
     for (const m of mantras.slice(0, 5)) {
       const full = await fetchMantraFull(m.documentId);
+      // Pass 1 is counted from the CURRENT state: a field it would fill is a field
+      // pass 2 cannot see yet, so the two counts are "now", not "after pass 1".
+      const englishJobs = englishFirstPass
+        ? buildEnglishJobsForMantra(full, m.label, grantha.GranthaName)
+        : [];
       const jobs = buildJobsForMantra(full, m.label, grantha.GranthaName);
-      totalJobs += jobs.length;
-      console.log(`[dry-run] ${m.label}: ${jobs.length} job(s)`);
+      totalJobs += englishJobs.length + jobs.length;
+      console.log(
+        `[dry-run] ${m.label}: ${englishJobs.length} English pass + ${jobs.length} other-language job(s)`,
+      );
+      for (const j of englishJobs) console.log(`[dry-run]   Sanskrit → English: ${j.context}`);
     }
     if (mantras.length > 5) {
       console.log(`[dry-run] ... and ${mantras.length - 5} more mantras`);
@@ -202,6 +229,7 @@ async function main() {
   let runOk = 0;
   let runFail = 0;
   let runMantras = 0;
+  let runEnglish = 0;
 
   for (let mi = 0; mi < mantras.length; mi++) {
     const m = mantras[mi];
@@ -223,25 +251,29 @@ async function main() {
       saveCheckpoint(checkpointPath, checkpoint);
     }
 
-    const jobs = buildJobsForMantra(mantra, m.label, grantha.GranthaName);
-    if (!jobs.length) {
-      console.log(`[skip] No missing translations (or no English source)`);
+    // Two passes per mantra: a field with no English gets its Sanskrit original
+    // translated to English first, then English fans out to the other languages.
+    const passes = await translateMantraPasses(
+      mantra,
+      m.label,
+      grantha.GranthaName,
+      opts,
+      checkpoint,
+      { englishFirstPass },
+    );
+    if (passes.englishUnits + passes.otherUnits === 0) {
+      console.log(`[skip] No missing translations (and nothing to translate from)`);
       checkpoint.stats.mantrasDone++;
       runMantras++;
       saveCheckpoint(checkpointPath, checkpoint);
       continue;
     }
-
-    console.log(`[plan] ${jobs.length} translation job(s) for this mantra`);
-
-    for (const job of jobs) {
-      const { ok, fail } = await translateJobIncremental(job, opts, checkpoint);
-      checkpoint.stats.ok += ok;
-      checkpoint.stats.fail += fail;
-      runOk += ok;
-      runFail += fail;
-      saveCheckpoint(checkpointPath, checkpoint);
-    }
+    checkpoint.stats.ok += passes.ok;
+    checkpoint.stats.fail += passes.fail;
+    runOk += passes.ok;
+    runFail += passes.fail;
+    runEnglish += passes.englishUnits;
+    saveCheckpoint(checkpointPath, checkpoint);
 
     try {
       const verify = await fetchMantraFull(m.documentId);
@@ -255,7 +287,10 @@ async function main() {
   }
 
   console.log("\n=== Grantha complete ===");
-  console.log(`This run — mantras: ${runMantras}/${mantras.length}, translations OK: ${runOk}, failed: ${runFail}`);
+  console.log(
+    `This run — mantras: ${runMantras}/${mantras.length}, translations OK: ${runOk}, failed: ${runFail}` +
+      (runEnglish ? `, English first-pass fields: ${runEnglish}` : ""),
+  );
   console.log(
     `Lifetime checkpoint — chunks done: ${checkpoint.completedChunks.length} (cumulative OK ${checkpoint.stats.ok} / fail ${checkpoint.stats.fail} across all runs)`,
   );

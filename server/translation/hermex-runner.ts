@@ -16,14 +16,12 @@
 import fs from "node:fs";
 import path from "node:path";
 import {
-  buildJobsForMantra,
   fetchMantraFull,
   loadCheckpoint,
   saveCheckpoint,
-  translateJobIncremental,
+  translateMantraPasses,
   type CheckpointFile,
   type RunOptions,
-  type TranslateJob,
 } from "../../script/lib/hermex-grantha-sync";
 import { hermexEnabled } from "../hermex-translate";
 import { translationConfig } from "./config";
@@ -46,7 +44,7 @@ export interface TranslateMantraResult {
   failed: number;
   /** One line per field unit, stored on the item for the admin UI. */
   summary: string;
-  /** Field units the mantra was expanded into (Shloka / Bhashyam / each Teeka). */
+  /** Field units translated across both passes (Shloka / Bhashyam / each Teeka). */
   units: number;
 }
 
@@ -83,13 +81,6 @@ function loadJobCheckpoint(jobId: string, granthaDocId: string, granthaName: str
   };
 }
 
-/** Keep only the languages this job asked for (empty request = all missing). */
-function narrowToRequested(job: TranslateJob, requested: string[]): TranslateJob {
-  if (!requested.length) return job;
-  const wanted = new Set(requested);
-  return { ...job, targetLanguages: job.targetLanguages.filter((l) => wanted.has(l)) };
-}
-
 export class TranslationDisabledError extends Error {
   constructor() {
     super("Hermex is disabled on this server (HERMEX_ENABLED=0).");
@@ -101,10 +92,16 @@ export class TranslationDisabledError extends Error {
  * Translate ONE mantra: every field (Shloka, Bhashyam, each Teeka) that still has
  * languages missing, written straight back to Strapi as each one lands.
  *
+ * Two passes, both inside this one item (see `translateMantraPasses`): a field
+ * with no English first gets its Sanskrit original translated to English, and
+ * only then is that English fanned out to the other languages. A field with
+ * neither English nor Sanskrit has no source and is skipped.
+ *
  * Idempotent by construction. `translateJobIncremental` re-reads Strapi before
  * every language group (`filterLangsStillMissing`), so a mantra that was half
  * finished when the worker died resumes at the first language that is genuinely
- * absent — a re-run after a crash costs nothing for work already done.
+ * absent — a re-run after a crash costs nothing for work already done, and the
+ * English pass becomes a no-op as soon as its English is in the CMS.
  */
 export async function translateMantra(input: TranslateMantraInput): Promise<TranslateMantraResult> {
   if (!hermexEnabled()) throw new TranslationDisabledError();
@@ -114,45 +111,37 @@ export async function translateMantra(input: TranslateMantraInput): Promise<Tran
     throw new Error(`Mantra ${input.mantraDocId} was not found in the CMS.`);
   }
 
-  const units = buildJobsForMantra(mantra, input.mantraLabel, input.granthaName)
-    .map((unit) => narrowToRequested(unit, input.targetLanguages))
-    .filter((unit) => unit.targetLanguages.length > 0);
-
-  if (units.length === 0) {
-    return { ok: 0, failed: 0, units: 0, summary: "Nothing missing — every requested language was already present." };
-  }
-
   const opts = runOptionsForJob(input.jobId);
   const checkpoint = loadJobCheckpoint(input.jobId, mantra.documentId ?? "", input.granthaName);
 
-  let ok = 0;
-  let failed = 0;
-  const lines: string[] = [];
+  const result = await translateMantraPasses(
+    mantra,
+    input.mantraLabel,
+    input.granthaName,
+    opts,
+    checkpoint,
+    {
+      requestedLanguages: input.targetLanguages,
+      englishFirstPass: translationConfig.englishFirstPass,
+      signal: input.signal,
+    },
+  );
+  saveCheckpoint(opts.checkpointPath, checkpoint);
 
-  for (const unit of units) {
-    if (input.signal?.aborted) {
-      lines.push(`${unit.context}: skipped (worker shutting down)`);
-      break;
-    }
-    const result = await translateJobIncremental(unit, opts, checkpoint);
-    ok += result.ok;
-    failed += result.fail;
-    lines.push(
-      `${unit.context}: ${result.ok} language(s) written` +
-        (result.fail ? `, ${result.fail} failed` : ""),
-    );
-    saveCheckpoint(opts.checkpointPath, checkpoint);
+  const units = result.englishUnits + result.otherUnits;
+  if (units === 0) {
+    return { ok: 0, failed: 0, units: 0, summary: "Nothing missing — every requested language was already present." };
   }
 
-  if (failed > 0) {
+  if (result.fail > 0) {
     // Surfaces to the worker as a retryable failure; the languages that DID land
     // are already in Strapi and will be skipped on the next attempt.
     const err: any = new Error(
-      `${failed} language(s) failed for ${input.mantraLabel}. ${lines.join(" | ")}`,
+      `${result.fail} language(s) failed for ${input.mantraLabel}. ${result.lines.join(" | ")}`,
     );
-    err.partial = { ok, failed, units: units.length, summary: lines.join("\n") };
+    err.partial = { ok: result.ok, failed: result.fail, units, summary: result.lines.join("\n") };
     throw err;
   }
 
-  return { ok, failed, units: units.length, summary: lines.join("\n") };
+  return { ok: result.ok, failed: result.fail, units, summary: result.lines.join("\n") };
 }

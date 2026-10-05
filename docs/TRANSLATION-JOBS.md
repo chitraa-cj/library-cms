@@ -39,11 +39,54 @@ it is already safe for more workers the day a second Gemini profile exists.
 ## Unit of work
 
 One **item = one mantra**. The worker expands it into field units (Shloka, Bhashyam,
-each Teeka) at claim time using the existing `buildJobsForMantra`, so a job's size is
-"number of mantras", which is what the admin thinks in.
+each Teeka) at claim time, so a job's size is "number of mantras", which is what the
+admin thinks in.
 
 Creating a job only needs the grantha's *mantra list* (a few paginated Strapi calls,
 ids only). The heavy per-mantra read happens in the worker, never in a request.
+
+## Two passes per mantra — English is always the bridge
+
+Every target language is translated **from English**, never from Sanskrit directly:
+that is the one prompt shape the pipeline is tuned for (chunking, source splitting,
+the delimiter contract). So a field entered with only its Sanskrit original used to be
+skipped forever — `buildJobsForMantra` requires English source and silently dropped it.
+
+Each item therefore runs two passes, both inside the same queue row
+(`translateMantraPasses` in `script/lib/hermex-grantha-sync.ts`):
+
+```
+item = one mantra
+ ├─ pass 1   buildEnglishJobsForMantra
+ │             fields with NO EnglishTranslationText but WITH SanskritTextEntry
+ │             Sanskrit → English, written to the field's own EnglishTranslationText
+ ├─ re-read the mantra from Strapi          ← mandatory, not an optimisation
+ └─ pass 2   buildJobsForMantra
+               English → every OtherTranslations language still missing
+```
+
+Rules that matter:
+
+- **Pass 1 never overwrites.** It only touches a field whose English is *empty*, so a
+  hand-written or previously generated English translation is always the source of
+  record.
+- **A field with neither English nor Sanskrit is skipped**, in both passes. That is a
+  data-entry gap, not a translation failure, and it does not fail the item.
+- **Pass 1 ignores the job's language list.** Asking for "Tamil only" still generates
+  the missing English, because the Tamil is translated from it.
+- **The re-read between the passes is load-bearing.** Pass 2 reads
+  `EnglishTranslationText`; on a stale copy it would skip the very fields pass 1 just
+  filled and the item would "complete" with a silent gap. If the re-read fails, the
+  item is marked failed so it retries (pass 1 is then a no-op).
+- **The passes cannot collide in the checkpoint.** Chunk keys are
+  `mantra|field|teeka|langs`, and "English" is never an `OtherTranslations` language,
+  so a pass-1 key (`…|English`) is never a pass-2 key.
+- `TRANSLATION_ENGLISH_FIRST_PASS=0` turns pass 1 off and restores the old
+  English-source-only behaviour — use it if the generated English must be reviewed by a
+  human before it becomes the source for 42 languages.
+
+The CLI runs the identical two passes (`npm run hermex:grantha`, `--no-english-pass`
+to skip pass 1), because both drivers call the same function.
 
 ## Idempotency — the important guarantee
 
@@ -51,7 +94,8 @@ A completed item is never translated again, and even an *interrupted* item costs
 almost nothing to resume: `translateJobIncremental` re-reads Strapi before every
 language group (`filterLangsStillMissing`), so a mantra that was half-finished when
 Chrome died resumes at the first language genuinely absent. Gemini is never asked for
-text that is already in the CMS.
+text that is already in the CMS. The same check covers pass 1: once a field's English
+is in Strapi, the English pass for it is a no-op.
 
 ## Crash recovery
 
@@ -257,6 +301,7 @@ paths are redacted. Credentials, cookies and browser session data are never logg
 | `TRANSLATION_INSERT_BATCH` | `500` | Rows per INSERT when creating a job. |
 | `TRANSLATION_WORKER_HEADLESS` | unset | Unset = follow the host: headful when `DISPLAY` is set (the EC2/Xvfb mode), headless otherwise. |
 | `TRANSLATION_WORKER_ID` | `worker-<pid>@<host>` | Identifies the lease owner. |
+| `TRANSLATION_ENGLISH_FIRST_PASS` | `1` | Pass 1: generate the missing English from the Sanskrit original before fanning out. `0` skips it, and fields with no English stay untranslated. |
 | `HERMEX_ENABLED` | `true` | `0` parks the worker: it claims nothing and spends no retries. |
 | `HERMEX_CHUNK_SIZE` / `HERMEX_CHUNK_DELAY_MS` / `HERMEX_MAX_RETRIES` | `3` / `8000` / `3` | Passed straight to the existing Hermex runner. |
 | `HERMEX_MAX_SOURCE_CHARS` | `6000` | Largest source text sent to Gemini in ONE turn. A longer source is split at paragraph boundaries and translated part by part, then joined. See **Oversized sources** below. |
@@ -309,6 +354,8 @@ npm run test:translation-api     # 46 assertions — 401/403/200 per route, HTTP
 ```
 
 ```bash
+npm run test:hermex-two-pass     # 26 assertions — which pass claims which field, where the
+                                 # answer is written, and that the two cannot collide
 npm run test:hermex-split        # 32 assertions — source splitting, part prompts, error-reply
                                  # detection, and the multi-part join with Gemini stubbed out
 npm run test:hermex-overlay      # 17 assertions — popup dismissal (fake driver)

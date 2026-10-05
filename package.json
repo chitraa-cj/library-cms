@@ -47,6 +47,7 @@
     "test:hermex-overlay": "python3 python/hermex_translate/test_overlay_dismissal.py",
     "test:hermex-resilience": "python3 python/hermex_translate/test_hermex_resilience.py",
     "test:hermex-retry": "node --import tsx tests/hermex-retry-classification.test.mjs",
+    "test:hermex-two-pass": "node --import tsx tests/hermex-two-pass.test.mjs",
     "test:hermex-split": "python3 python/hermex_translate/test_source_split.py",
     "hermex:smoke": "tsx script/hermex-smoke-test.ts",
     "hermex:check": "tsx script/hermex-smoke-test.ts --check",

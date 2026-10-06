@@ -39,6 +39,8 @@
     "worker:publish": "tsx server/publish/worker-main.ts",
     "worker:publish:prod": "node --max-old-space-size=3072 dist/publish-worker.cjs",
     "worker:translation:prod": "node --max-old-space-size=1024 dist/translation-worker.cjs",
+    "test:acharya-payload": "node --import tsx tests/acharya-payload.test.mjs",
+    "test:acharya-route": "node --import tsx tests/acharya-create-route.test.mjs",
     "test:backup-payload": "node --import tsx tests/backup-payload.test.mjs",
     "test:publish-queue": "node --import tsx tests/publish-queue.test.mjs",
     "test:translation-queue": "node --import tsx tests/translation-queue.test.mjs",

@@ -19,43 +19,13 @@ import {
   DialogFooter,
 } from "@/components/ui/dialog";
 import { BookOpen, Loader2, Plus, Search, Upload, X } from "lucide-react";
-import type {
-  AcharyaBioSection,
-  AcharyaGranthaOption,
-  AcharyaWithTexts,
-} from "@shared/schema";
-
-/** One biography section while it is being typed: a heading plus free prose where a
- *  blank line starts a new paragraph. */
-interface BioDraft {
-  key: string;
-  heading: string;
-  body: string;
-}
-
-let bioKeySeq = 0;
-const nextBioKey = () => `bio-${Date.now().toString(36)}-${bioKeySeq++}`;
-
-export function bioSectionsToDrafts(sections: AcharyaBioSection[] | undefined): BioDraft[] {
-  if (!sections?.length) return [];
-  return sections.map((s) => ({
-    key: nextBioKey(),
-    heading: s.heading ?? "",
-    body: (s.paragraphs ?? []).join("\n\n"),
-  }));
-}
-
-export function draftsToBioSections(drafts: BioDraft[]): AcharyaBioSection[] {
-  return drafts
-    .map((d) => ({
-      heading: d.heading.trim() || null,
-      paragraphs: d.body
-        .split(/\n\s*\n/)
-        .map((p) => p.trim())
-        .filter(Boolean),
-    }))
-    .filter((s) => s.heading || s.paragraphs.length > 0);
-}
+import type { AcharyaGranthaOption, AcharyaWithTexts } from "@shared/schema";
+import {
+  type BioDraft,
+  bioSectionsToDrafts,
+  buildAcharyaPayload,
+  nextBioKey,
+} from "@shared/acharya-payload";
 
 function initials(name: string): string {
   const parts = name.trim().split(/\s+/);
@@ -164,26 +134,16 @@ export default function AcharyaEditorDialog({
 
   const save = useMutation({
     mutationFn: async () => {
-      const payload = {
-        nameDevanagari: nameDevanagari.trim() || name.trim(),
-        nameIast: nameIast.trim() ? nameIast.trim() : null,
-        dates: dates.trim() ? dates.trim() : null,
-        avatarUrl: avatarUrl.trim() ? avatarUrl.trim() : null,
-        aliases: aliases
-          .split(",")
-          .map((s) => s.trim())
-          .filter(Boolean),
-        biography: draftsToBioSections(bio),
-        linkedGranthaDocIds: selectedDocIds,
-      };
+      const form = { name, nameDevanagari, nameIast, dates, aliases, avatarUrl, bio, selectedDocIds };
       if (isEdit) {
-        const res = await apiRequest("PATCH", `/api/acharyas/${acharya!.slug}`, {
-          ...payload,
-          nameDisplay: name.trim(),
-        });
+        const res = await apiRequest(
+          "PATCH",
+          `/api/acharyas/${acharya!.slug}`,
+          buildAcharyaPayload(form, "edit"),
+        );
         return res.json();
       }
-      const res = await apiRequest("POST", "/api/acharyas", { ...payload, name: name.trim() });
+      const res = await apiRequest("POST", "/api/acharyas", buildAcharyaPayload(form, "create"));
       return res.json();
     },
     onSuccess: (saved: { slug: string }) => {

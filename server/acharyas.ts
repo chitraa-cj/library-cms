@@ -11,7 +11,7 @@
  *    today can be given their texts explicitly, while the existing author-name
  *    links keep working for everything already in the CMS.
  */
-import { Router } from "express";
+import { Router, type Response } from "express";
 import { readFileSync } from "fs";
 import { join } from "path";
 import { eq } from "drizzle-orm";
@@ -284,6 +284,27 @@ export async function linkedTextsFor(
   return { granthas, teekas };
 }
 
+/**
+ * Reject a malformed body. "Invalid payload" on its own is undebuggable from the
+ * toast and leaves no trace in the pm2 log, so name the offending fields in both.
+ * Values are never logged — acharya prose is content, and the field path is what
+ * actually identifies the fault.
+ */
+function rejectInvalidPayload(
+  res: Response,
+  route: string,
+  body: unknown,
+  issues: { path: (string | number)[]; message: string }[],
+): Response {
+  const parts = issues.slice(0, 3).map((i) => `${i.path.join(".") || "payload"}: ${i.message}`);
+  const more = issues.length > parts.length ? ` (+${issues.length - parts.length} more)` : "";
+  const message = `Invalid payload — ${parts.join("; ")}${more}`;
+  console.warn(
+    `[acharyas] ${route} 400 ${message} | fields sent: ${Object.keys((body as object) ?? {}).join(", ")}`,
+  );
+  return res.status(400).json({ message, issues });
+}
+
 // ----------------------------------------------------------------------- router
 export function createAcharyaRouter(): Router {
   const router = Router();
@@ -313,7 +334,7 @@ export function createAcharyaRouter(): Router {
     try {
       const parsed = createAcharyaSchema.safeParse(req.body);
       if (!parsed.success) {
-        return res.status(400).json({ message: "Invalid payload", issues: parsed.error.issues });
+        return rejectInvalidPayload(res, "POST /", req.body, parsed.error.issues);
       }
       const user = req.user as User;
       const input = parsed.data;
@@ -362,7 +383,7 @@ export function createAcharyaRouter(): Router {
     try {
       const parsed = updateAcharyaSchema.safeParse(req.body);
       if (!parsed.success) {
-        return res.status(400).json({ message: "Invalid payload", issues: parsed.error.issues });
+        return rejectInvalidPayload(res, `PATCH /${req.params.slug}`, req.body, parsed.error.issues);
       }
       const user = req.user as User;
       const patch = parsed.data;

@@ -506,8 +506,10 @@ export type UpdateAcharya = z.infer<typeof updateAcharyaSchema>;
 export const createAcharyaSchema = z.object({
   /** The name as it should read on the profile; also seeds the slug. */
   name: z.string().trim().min(1),
-  nameDevanagari: z.string().trim().optional(),
-  nameIast: z.string().trim().optional(),
+  // A blank optional box in the editor is sent as `null`, not omitted — so every
+  // optional field here accepts null as well (and the column behind it is nullable).
+  nameDevanagari: z.string().trim().nullable().optional(),
+  nameIast: z.string().trim().nullable().optional(),
   dates: z.string().trim().nullable().optional(),
   avatarUrl: z.string().trim().nullable().optional(),
   aliases: z.array(z.string().trim().min(1)).optional(),

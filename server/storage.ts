@@ -64,6 +64,11 @@ export interface IStorage {
   getRunningPublishJobForDraft(draftId: number): Promise<PublishJobRecord | null>;
   getActivePublishJobForGrantha(granthaDocId: string): Promise<PublishJobRecord | null>;
   getActivePublishJobForDraft(draftId: number): Promise<PublishJobRecord | null>;
+  getRunningManthraPublishJob(
+    draftId: number,
+    manthraId: string,
+    maxAgeMs?: number,
+  ): Promise<PublishJobRecord | null>;
   updatePublishJob(id: string, patch: Partial<PublishJobRecord>): Promise<PublishJobRecord | null>;
   markStalePublishJobsAsRecoverable(olderThanMs: number): Promise<number>;
   // D5: per-job manthra resolution checkpoint
@@ -85,6 +90,14 @@ export interface IStorage {
   addPortalVocabularyEntry(key: PortalVocabularyKey, value: string, userId: string): Promise<PortalVocabularyCustom>;
   removePortalVocabularyEntry(key: PortalVocabularyKey, value: string, userId: string): Promise<PortalVocabularyCustom>;
 }
+
+/**
+ * How long a per-mantra publish row may sit `running` before it is treated as abandoned.
+ *
+ * Used by BOTH the startup reclaim and the "is this verse already publishing?" lookup, so
+ * a job can never be simultaneously too stale to finish and fresh enough to block a retry.
+ */
+export const STALE_PUBLISH_JOB_MS = 10 * 60 * 1000;
 
 export class DatabaseStorage implements IStorage {
   async getUser(id: string): Promise<User | undefined> {
@@ -453,6 +466,40 @@ export class DatabaseStorage implements IStorage {
   }
 
   /**
+   * The verse's own in-flight per-mantra publish, if any.
+   *
+   * An editor whose publish ended in "it may still be running on the server" has no way to
+   * tell, so they press Publish again — and before this check that started a SECOND Strapi
+   * write for the same verse while the first was mid-flight. The target lives in
+   * `publish_options`, written by POST /publish-manthra.
+   */
+  async getRunningManthraPublishJob(
+    draftId: number,
+    manthraId: string,
+    maxAgeMs = STALE_PUBLISH_JOB_MS,
+  ): Promise<PublishJobRecord | null> {
+    const seconds = Math.round(maxAgeMs / 1000);
+    const [job] = await db
+      .select()
+      .from(publishJobs)
+      .where(
+        and(
+          eq(publishJobs.draftId, draftId),
+          eq(publishJobs.kind, "manthra_publish"),
+          eq(publishJobs.status, "running"),
+          // A row left `running` by a hang (or by a crash between restarts) must NOT
+          // capture every later attempt, or the verse becomes unpublishable. Same cutoff
+          // the startup reclaim uses, and computed in SQL for the Asia/Kolkata reason
+          // documented on markStalePublishJobsAsRecoverable.
+          sql`${publishJobs.updatedAt} > now() - make_interval(secs => ${seconds})`,
+          sql`${publishJobs.publishOptions} -> 'target' ->> 'manthraId' = ${manthraId}`,
+        ),
+      )
+      .orderBy(desc(publishJobs.updatedAt));
+    return job ?? null;
+  }
+
+  /**
    * Cross-process / cross-restart guard: another draft pointing at the same Strapi
    * grantha finds the in-flight job here. Covers `queued` as well as `running` — once
    * the worker owns publishing there is a real window where a job is accepted but not
@@ -531,7 +578,7 @@ export class DatabaseStorage implements IStorage {
     return removed.length;
   }
 
-  async markStalePublishJobsAsRecoverable(olderThanMs: number): Promise<number> {
+  async markStalePublishJobsAsRecoverable(olderThanMs = STALE_PUBLISH_JOB_MS): Promise<number> {
     // Called on server startup. In-memory worker state is lost across restarts; any
     // publish_jobs row still marked "running" with no recent heartbeat is orphaned and
     // will never complete. Mark them failed_recoverable so the client can re-trigger.

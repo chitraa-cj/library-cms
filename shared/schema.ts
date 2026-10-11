@@ -89,6 +89,19 @@ export type PublishJobKind = (typeof publishJobKinds)[number];
 export type PublishJobOptions = {
   allowRenumber?: boolean;
   republishFresh?: boolean;
+  /**
+   * Which verse a `manthra_publish` job is for.
+   *
+   * Lives in the existing `publish_options` jsonb rather than in new columns: it is only
+   * ever read back whole, and the per-mantra route needs it to answer "is this exact
+   * verse already publishing?" when an editor retries after a lost/uncertain result.
+   */
+  target?: {
+    adhyayaId: string;
+    khandaId: string;
+    padaId?: string;
+    manthraId: string;
+  };
 };
 
 /** Heartbeat per worker process kind, so the API can refuse work nothing will drain. */

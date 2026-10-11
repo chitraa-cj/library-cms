@@ -9,6 +9,7 @@
  */
 import "../env"; // must be first: ./config reads process.env at module load
 import { pool } from "../db";
+import { logSchemaPreflight } from "../schema-guard";
 import { publishConfig } from "./config";
 import { releaseInFlight, runWorker, workerLog } from "./worker";
 
@@ -52,6 +53,16 @@ setTimeout(() => {
 
 async function main(): Promise<void> {
   workerLog("WORKER START", `publish worker booting as ${publishConfig.workerId}`);
+  // The worker's claim query reads the queue columns directly, so an un-migrated box
+  // would otherwise crash-loop on SQL errors with no explanation in the pm2 log.
+  const schema = await logSchemaPreflight("publish-worker").catch(() => null);
+  if (schema && !schema.ok) {
+    workerLog(
+      "WORKER ERROR",
+      `database is missing ${schema.missing.join(", ")} — run \`npm run migrate\`. ` +
+        "Claiming is skipped until it is applied; the loop re-checks as it polls.",
+    );
+  }
   try {
     await runWorker({ signal: controller.signal });
   } finally {

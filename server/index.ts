@@ -9,6 +9,7 @@ import { inspect } from "node:util";
 import { db } from "./db";
 import { publishJobs, users } from "@shared/schema";
 import { storage } from "./storage";
+import { logSchemaPreflight } from "./schema-guard";
 import { and, eq, sql } from "drizzle-orm";
 
 const app = express();
@@ -92,6 +93,12 @@ app.use((req, res, next) => {
 });
 
 (async () => {
+  // Does this database have the shape this build expects? Runs before anything else
+  // touches the publish tables: a box deployed without its migrations used to look
+  // perfectly healthy at boot and only fail — with Postgres's own wording — when an
+  // editor pressed Publish.
+  await logSchemaPreflight("web").catch(() => {});
+
   // Ensure at least one admin exists; if none, promote designated admin usernames
   const ADMIN_USERNAMES = ["admin", "chitra.jain"];
   try {
@@ -154,9 +161,8 @@ app.use((req, res, next) => {
   // Reclaim per-mantra publish jobs left "running" by a crash. Those still run in this
   // process, so a row with no progress for 10 minutes will never complete and the client
   // would poll forever. Grantha publishes are excluded — see the note above.
-  const stalePublishJobMs = 10 * 60 * 1000;
   try {
-    const reclaimed = await storage.markStalePublishJobsAsRecoverable(stalePublishJobMs);
+    const reclaimed = await storage.markStalePublishJobsAsRecoverable();
     if (reclaimed > 0) {
       console.log(`[publish-jobs] marked ${reclaimed} orphaned running job(s) as failed_recoverable`);
     }

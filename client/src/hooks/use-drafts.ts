@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { queryClient, apiRequest, ApiError } from "@/lib/queryClient";
+import { decidePollResponse, timedOutMessage } from "@/lib/publish-poll";
 import { invalidateGranthaCmsCaches, syncGranthaCmsCaches } from "@/lib/strapi-cache-sync";
 import { useToast } from "@/hooks/use-toast";
 import type { Draft } from "@shared/schema";
@@ -73,6 +74,7 @@ export function useDrafts(contentType: string) {
     // watching for as long as the job is making progress, and only give up when it stops.
     const STALL_LIMIT_MS = 20 * 60 * 1000;
     let authFailures = 0;
+    let statusErrors = 0;
     let lastChange = Date.now();
     let lastSeen = "";
 
@@ -80,16 +82,23 @@ export function useDrafts(contentType: string) {
       await new Promise((resolve) => setTimeout(resolve, 1000));
       if (Date.now() - lastChange > STALL_LIMIT_MS) {
         setPublishProgress(null);
-        throw new Error(
-          "Publish has not reported progress for 20 minutes. Check the publish worker and server logs, then try again.",
-        );
+        throw new Error(timedOutMessage("Publish"));
       }
       try {
         const statusRes = await fetch(
           `/api/drafts/${draftId}/publish-status?jobId=${encodeURIComponent(jobId)}`,
           { credentials: "include", cache: "no-store" },
         );
-        if (statusRes.status === 401) {
+        // 401 has its own counter (`authFailures`) — a session blip must not also eat
+        // into the budget for "the status endpoint is broken".
+        if (statusRes.ok || statusRes.status === 401) statusErrors = 0;
+        else statusErrors += 1;
+        const decision = decidePollResponse({
+          httpStatus: statusRes.status,
+          body: statusRes.ok ? null : await statusRes.json().catch(() => null),
+          consecutiveErrors: statusErrors,
+        });
+        if (decision.kind === "auth") {
           authFailures += 1;
           if (authFailures >= 8) {
             throw new Error(
@@ -99,14 +108,15 @@ export function useDrafts(contentType: string) {
           continue;
         }
         authFailures = 0;
-        if (statusRes.status === 404) {
-          // The job is gone (expired, or the draft was discarded). Polling on would just
-          // spin until the stall timeout.
+        if (decision.kind === "fail") {
           setPublishProgress(null);
-          clearPersistedPublishJob();
-          throw new Error("That publish job no longer exists. Publish again to retry.");
+          // A job that is certainly gone or certainly refused must not be resumed on the
+          // next page load; one whose outcome is UNKNOWN is deliberately kept, so the
+          // editor reopens onto it instead of starting a second publish.
+          if (decision.certain || statusRes.status === 404) clearPersistedPublishJob();
+          throw new Error(decision.message);
         }
-        if (!statusRes.ok) continue;
+        if (decision.kind === "wait") continue;
         const status = await statusRes.json();
         const fingerprint = `${status.status}:${status.progress?.done ?? ""}:${status.progress?.current ?? ""}`;
         if (fingerprint !== lastSeen) {

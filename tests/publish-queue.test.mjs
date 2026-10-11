@@ -31,6 +31,7 @@ const { db, pool } = await import("../server/db.ts");
 const { contentDrafts, publishJobs, publishJobTasks, publishManthraResolutions, users } =
   await import("../shared/schema.ts");
 const store = await import("../server/publish/store.ts");
+const { storage } = await import("../server/storage.ts");
 const { and, eq, sql } = await import("drizzle-orm");
 
 let PASS = 0;
@@ -406,6 +407,74 @@ console.log("\npublish queue");
   check(
     "the mantra checkpoint survives — it is what makes a retry cheap",
     resolutions.length === 1 || (await jobRow(job.id)).status === "done",
+  );
+}
+
+{
+  // An editor whose publish ended in "it may still be running on the server" presses
+  // Publish again. POST /publish-manthra looks the verse up here; before it did, that
+  // second press started a second Strapi write against a verse already being written.
+  console.log("\n• a retry of an uncertain per-mantra publish attaches instead of duplicating");
+  await purgeJobs();
+  const draftId = await newDraft();
+  const target = { adhyayaId: "a1", khandaId: "k1", manthraId: "m-17" };
+  const running = await makeJob({
+    draftId,
+    kind: "manthra_publish",
+    status: "running",
+    publishOptions: { target },
+  });
+
+  const found = await storage.getRunningManthraPublishJob(draftId, "m-17");
+  eq_("the in-flight job for that verse is found", found?.id, running.id);
+  check(
+    "a DIFFERENT verse on the same draft is not confused with it",
+    (await storage.getRunningManthraPublishJob(draftId, "m-18")) === null,
+  );
+  check(
+    "another draft's verse is not confused with it either",
+    (await storage.getRunningManthraPublishJob(draftId + 100000, "m-17")) === null,
+  );
+
+  // A row left `running` by a hang must not capture every later attempt, or the verse
+  // becomes permanently unpublishable.
+  await db.execute(
+    sql`update cms_publish_jobs set updated_at = now() - interval '11 minutes' where id = ${running.id}`,
+  );
+  check(
+    "a job stale past the reclaim cutoff is not attachable",
+    (await storage.getRunningManthraPublishJob(draftId, "m-17")) === null,
+  );
+  await db.execute(sql`update cms_publish_jobs set updated_at = now() where id = ${running.id}`);
+  check(
+    "a fresh one still is",
+    (await storage.getRunningManthraPublishJob(draftId, "m-17"))?.id === running.id,
+  );
+
+  // Once it finishes, the next Publish must start a real job rather than attaching to a
+  // dead one — otherwise the editor would watch a completed job forever.
+  await storage.updatePublishJob(running.id, { status: "done" });
+  check(
+    "a finished job is no longer attachable",
+    (await storage.getRunningManthraPublishJob(draftId, "m-17")) === null,
+  );
+
+  // A grantha publish on the same draft must never be mistaken for a verse publish.
+  await storage.updatePublishJob(running.id, { status: "running", kind: "grantha_publish" });
+  check(
+    "a grantha publish is not treated as this verse's job",
+    (await storage.getRunningManthraPublishJob(draftId, "m-17")) === null,
+  );
+}
+
+{
+  console.log("\n• the schema guard sees the real database");
+  const { checkPublishSchema } = await import("../server/schema-guard.ts");
+  const result = await checkPublishSchema(true);
+  check(
+    "every relation the publish path needs is present",
+    result.ok === true,
+    `missing: ${result.missing.join(", ")} — run \`npm run migrate\``,
   );
 }
 

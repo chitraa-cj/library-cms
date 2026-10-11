@@ -25,6 +25,7 @@ import {
   publishGranthaWithHierarchy,
 } from "../routes";
 import type { PublishJobRecord } from "@shared/schema";
+import { checkPublishSchema } from "../schema-guard";
 import { PUBLISH_WORKER_KIND, publishConfig, sanitizePublishError } from "./config";
 import {
   beatWorkerHeartbeat,
@@ -210,6 +211,7 @@ export async function runWorker(opts: PublishWorkerOptions = {}): Promise<void> 
   let processed = 0;
   let lastReap = 0;
   let lastBeat = 0;
+  let lastSchemaWarning = 0;
 
   while (!opts.signal?.aborted) {
     try {
@@ -224,6 +226,24 @@ export async function runWorker(opts: PublishWorkerOptions = {}): Promise<void> 
         lastReap = Date.now();
         const reaped = await requeueExpiredLeases();
         if (reaped) workerLog("WORKER RESTART", `reaped ${reaped} expired lease(s)`);
+      }
+
+      // Un-migrated database: every claim would throw the same SQL error once per poll
+      // with no hint at the cause. Say it once a minute, in words, and wait — the check is
+      // cached and re-runs on its own, so the worker picks up where it left off the moment
+      // `npm run migrate` lands, with no restart.
+      const schema = await checkPublishSchema();
+      if (!schema.ok) {
+        if (Date.now() - lastSchemaWarning > 60_000) {
+          lastSchemaWarning = Date.now();
+          workerLog(
+            "WORKER ERROR",
+            `database is missing ${schema.missing.join(", ")} — run \`npm run migrate\`. Not claiming jobs until then.`,
+          );
+        }
+        if (opts.exitWhenIdle) return;
+        await sleep(publishConfig.pollIntervalMs, opts.signal);
+        continue;
       }
 
       const outcome = await processOnePublishJob({ ...opts, workerId });

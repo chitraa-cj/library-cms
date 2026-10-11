@@ -309,16 +309,39 @@ npm run start    # NODE_ENV=production node dist/index.cjs
 
 ### Database migrations
 
-SQL migrations live in `script/migrations/`. Apply with npm scripts:
+SQL migrations live in `script/migrations/`, applied in filename order and recorded in
+`cms_schema_migrations`:
 
 ```bash
-npm run migrate:draft-fk-cascade
-npm run migrate:portal-vocabulary
-npm run migrate:acharyas
-npm run migrate:acharya-granthas
+npm run migrate          # apply everything pending
+npm run migrate:check    # list pending migrations, exit 1 if any (read-only)
+npm run schema:check     # ask the DATABASE whether publishing can work (read-only)
 ```
 
-Schema changes also sync via `npm run db:push` (Drizzle).
+The deploy workflow runs `migrate`, then both checks, and aborts before restarting pm2 if
+either fails. Every migration file must be **re-runnable** (`IF NOT EXISTS`, `DROP
+CONSTRAINT IF EXISTS` before `ADD`) — `npm run test:migration-files` enforces this, and it
+is what makes the ledger safe to adopt on a database that was migrated by hand.
+
+Repair paths:
+
+```bash
+npm run migrate -- --only 20261003_publish_job_queue.sql   # one file
+npm run migrate -- --all        # re-apply everything, ignoring the ledger
+npm run migrate -- --baseline   # record files as applied WITHOUT running them
+```
+
+`migrate:check` and `schema:check` answer different questions. The first compares files
+against the ledger; the second reads `information_schema` through the same guard the
+server uses. A ledger can be right while the schema is not — a restored dump, a column
+dropped by hand — and only `schema:check` catches that.
+
+Schema changes also sync via `npm run db:push` (Drizzle), which is advisory in CI: it is
+interactive by design, so a failure there warns instead of aborting the deploy.
+
+**If publishing fails with `column "..." does not exist`:** the box is running code ahead
+of its schema. Run `npm run migrate` (or `-- --all`) on the server, then `npm run
+schema:check`. No redeploy or restart is needed — the server re-checks within seconds.
 
 ---
 

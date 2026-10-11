@@ -2,6 +2,7 @@ import { useState, useEffect, useRef } from "react";
 import { track } from "@/lib/posthog";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { queryClient, apiRequest, ApiError, CMS_FETCH_INIT } from "@/lib/queryClient";
+import { decidePollResponse, timedOutMessage } from "@/lib/publish-poll";
 import { useToast } from "@/hooks/use-toast";
 import { useDrafts } from "@/hooks/use-drafts";
 import { useDraftBackups, type DraftBackup } from "@/hooks/use-draft-backups";
@@ -2189,6 +2190,7 @@ export default function GranthasPage() {
   ) => {
     const maxAttempts = 1200; // up to ~20 minutes for large OT/teeka payloads
     let authFailures = 0;
+    let statusErrors = 0;
     for (let attempt = 0; attempt < maxAttempts; attempt++) {
       const delayMs = attempt < 40 ? 500 : 1000;
       await new Promise((resolve) => setTimeout(resolve, delayMs));
@@ -2197,7 +2199,16 @@ export default function GranthasPage() {
           `/api/drafts/${draftId}/publish-status?jobId=${encodeURIComponent(jobId)}`,
           { credentials: "include", cache: "no-store" },
         );
-        if (statusRes.status === 401) {
+        // 401 has its own counter (`authFailures`) — a session blip must not also eat
+        // into the budget for "the status endpoint is broken".
+        if (statusRes.ok || statusRes.status === 401) statusErrors = 0;
+        else statusErrors += 1;
+        const decision = decidePollResponse({
+          httpStatus: statusRes.status,
+          body: statusRes.ok ? null : await statusRes.json().catch(() => null),
+          consecutiveErrors: statusErrors,
+        });
+        if (decision.kind === "auth") {
           authFailures += 1;
           if (authFailures >= 8) {
             throw new Error(
@@ -2207,7 +2218,8 @@ export default function GranthasPage() {
           continue;
         }
         authFailures = 0;
-        if (!statusRes.ok) continue;
+        if (decision.kind === "fail") throw new Error(decision.message);
+        if (decision.kind === "wait") continue;
         const status = await statusRes.json();
         const current =
           typeof status.progress?.current === "string" ? status.progress.current : undefined;
@@ -2221,9 +2233,7 @@ export default function GranthasPage() {
         if (msg && !msg.includes("fetch")) throw pollErr;
       }
     }
-    throw new Error(
-      "Mantra publish is taking longer than expected. It may still complete on the server — refresh and check Strapi before republishing.",
-    );
+    throw new Error(timedOutMessage("Mantra"));
   };
 
   const publishMantraMutation = useMutation({

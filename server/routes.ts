@@ -76,6 +76,9 @@ import {
   isCompressedBackupPayload,
 } from "./backup-payload";
 import { isPublishWorkerAlive, writeProgress } from "./publish/store";
+import { assertPublishSchemaReady } from "./schema-guard";
+import { classifyDbError, toApiError } from "./db-errors";
+import { publishLog } from "./publish/log";
 import { readClientBuildId } from "./build-info";
 import { applyHierarchyRepairInPlace } from "./grantha-hierarchy-repair";
 import { syncPendingMantraSlotsFromDraft } from "./grantha-mantra-slot-sync";
@@ -5610,28 +5613,67 @@ export async function registerRoutes(
         return res.status(400).json({ message: "adhyayaId, khandaId, and manthraId are required" });
       }
 
+      // Same reason as POST /publish: the job row this route writes — and the row the
+      // client then polls for — live in columns a migration adds.
+      await assertPublishSchemaReady();
+
+      // An editor who saw "it may still be running on the server" will press Publish
+      // again. Hand back the job already in flight for this exact verse instead of
+      // starting a second Strapi write against it.
+      const inflight = await storage.getRunningManthraPublishJob(id, manthraId);
+      if (inflight) {
+        publishLog("manthra.attached", {
+          draft: id,
+          job: inflight.id,
+          manthra: manthraId,
+          user: user.id,
+        });
+        return res.json({
+          async: true,
+          jobId: inflight.id,
+          message: "This verse is already publishing — watching the job already in flight.",
+        });
+      }
+
       const jobId = Math.random().toString(36).substring(2, 14);
       const job: PublishJob = {
         status: "running",
         progress: { done: 0, total: 1, current: "Publishing mantra to Strapi…" },
         startedAt: new Date(),
       };
-      publishJobs.set(jobId, job);
-      void storage
-        .createPublishJob({
+
+      // Awaited, and BEFORE the response. This used to be fire-and-forget with a
+      // `.catch(console.warn)`: when the insert failed the client still got
+      // `{async:true, jobId}` and polled a job that did not exist — /publish-status
+      // answered 404/500 and the poller treated both as "keep waiting", so a hard
+      // failure surfaced twenty minutes later as "taking longer than expected".
+      try {
+        await storage.createPublishJob({
           id: jobId,
           draftId: id,
           userId: user.id,
           granthaDocId: null,
           kind: "manthra_publish",
           status: "running",
+          publishOptions: { target: { adhyayaId, khandaId, padaId, manthraId } },
           progressDone: 0,
           progressTotal: 1,
           progressCurrent: job.progress.current,
           result: null,
           error: null,
-        })
-        .catch((e) => console.warn("[publish-manthra] Could not persist job row:", e?.message));
+        });
+      } catch (createErr: any) {
+        const { status, body } = toApiError(createErr, "Could not start the mantra publish");
+        publishLog(
+          "manthra.enqueue_failed",
+          { draft: id, job: jobId, manthra: manthraId, code: body.code, error: createErr?.message },
+          "error",
+        );
+        return res.status(status).json(body);
+      }
+
+      publishJobs.set(jobId, job);
+      publishLog("manthra.accepted", { draft: id, job: jobId, manthra: manthraId, user: user.id });
 
       res.json({
         async: true,
@@ -5639,6 +5681,7 @@ export async function registerRoutes(
         message: "Mantra publish started. Verse with many teekas may take a minute or two.",
       });
 
+      const jobStartedAt = Date.now();
       void (async () => {
         try {
           job.progress.current = "Syncing verse, teekas, and translations to Strapi…";
@@ -5659,6 +5702,18 @@ export async function registerRoutes(
           if (errors.length > 0) {
             job.status = "failed";
             job.error = errors[0].error;
+            publishLog(
+              "manthra.failed",
+              {
+                draft: id,
+                job: jobId,
+                manthra: manthraId,
+                ms: Date.now() - jobStartedAt,
+                failures: result.publishFailures.length,
+                error: job.error,
+              },
+              "error",
+            );
             await storage.updatePublishJob(jobId, {
               status: "failed",
               progressDone: 0,
@@ -5677,6 +5732,14 @@ export async function registerRoutes(
           job.status = "done";
           job.progress = { done: 1, total: 1, current: "Done" };
           job.result = responseBody;
+          publishLog("manthra.done", {
+            draft: id,
+            job: jobId,
+            manthra: manthraId,
+            ms: Date.now() - jobStartedAt,
+            docId: result.returnedDocId,
+            warnings: responseBody.warnings.length,
+          });
           await storage.updatePublishJob(jobId, {
             status: "done",
             progressDone: 1,
@@ -5686,9 +5749,23 @@ export async function registerRoutes(
             error: null,
           });
         } catch (error: any) {
-          console.error("[publish-manthra]", error);
+          const classified = classifyDbError(error);
+          publishLog(
+            "manthra.failed",
+            {
+              draft: id,
+              job: jobId,
+              manthra: manthraId,
+              ms: Date.now() - jobStartedAt,
+              code: classified?.code,
+              error: error?.message,
+            },
+            "error",
+          );
           job.status = "failed";
-          job.error = error.message || "Failed to publish mantra";
+          // The job row is what the client reads, so it gets the actionable wording for a
+          // database failure rather than the driver's.
+          job.error = classified?.message || error.message || "Failed to publish mantra";
           void storage.updatePublishJob(jobId, {
             status: "failed",
             progressDone: 0,
@@ -5699,9 +5776,13 @@ export async function registerRoutes(
         }
       })();
     } catch (error: any) {
-      console.error("[publish-manthra]", error);
-      const status = error?.status ?? 500;
-      res.status(status).json({ message: error.message || "Failed to publish mantra" });
+      const { status, body } = toApiError(error, "Failed to publish mantra");
+      publishLog(
+        "manthra.rejected",
+        { draft: req.params.id, status, code: body.code, error: error?.message },
+        "error",
+      );
+      res.status(status).json(body);
     }
   });
 
@@ -5818,10 +5899,17 @@ export async function registerRoutes(
   });
 
   app.post("/api/drafts/:id/publish", requireAuth, async (req, res) => {
+    const startedAt = Date.now();
     try {
       const user = req.user as User;
       const id = parseInt(req.params.id);
       if (isNaN(id)) return res.status(400).json({ message: "Invalid draft ID" });
+      // Every statement below — the idempotency replay lookup, the in-flight-job check —
+      // reads columns added by script/migrations. On a box whose migrations have not been
+      // applied the first of them threw `column "kind" does not exist`, which the catch at
+      // the bottom handed to the editor verbatim. Ask the catalogue first and fail with a
+      // sentence that names the fix.
+      await assertPublishSchemaReady();
       // Editor opt-in: after an intentional verse deletion the following verses shift
       // number, which the suffix-stability guard would otherwise block. The client sets
       // this only after the user confirms the renumber.
@@ -5995,6 +6083,14 @@ export async function registerRoutes(
           throw insertErr;
         }
 
+        publishLog("grantha.queued", {
+          draft: id,
+          job: jobId,
+          user: user.id,
+          granthaDocId: targetGranthaDocId,
+          republishFresh,
+        });
+
         const startedResponse = { jobId, async: true, message: "Publish queued" };
         if (idem && !idem.replay) {
           await persistIdempotency(idem.key, `/api/drafts/${id}/publish`, idem.hash, user.id, id, 200, startedResponse);
@@ -6087,8 +6183,21 @@ export async function registerRoutes(
         res.json(responseBody);
       });
     } catch (error: any) {
-      if ((error as any)?.status) return res.status((error as any).status).json({ message: (error as any).message });
-      res.status(500).json({ message: error.message || "Failed to publish draft" });
+      const { status, body } = toApiError(error, "Failed to publish draft");
+      publishLog(
+        "publish.failed",
+        {
+          draft: req.params.id,
+          user: (req.user as User | undefined)?.id,
+          ms: Date.now() - startedAt,
+          status,
+          code: body.code,
+          // The raw driver/Strapi text stays in the log; `body` is what the browser sees.
+          error: error?.message,
+        },
+        "error",
+      );
+      res.status(status).json(body);
     }
   });
 
@@ -6100,12 +6209,35 @@ export async function registerRoutes(
     if (!jobId || typeof jobId !== "string") {
       return res.status(400).json({ message: "jobId query param required" });
     }
-    const dbJob = await storage.getPublishJob(jobId);
+    // This route had no error handling at all, and the editor's poller treats any non-OK
+    // response as "not ready yet". So when `select … from cms_publish_jobs` threw on a
+    // missing column, the browser quietly re-asked once a second for twenty minutes and
+    // then reported "Mantra publish is taking longer than expected" — a schema error
+    // wearing a timeout's clothes. Read defensively, and say what actually happened.
+    let dbJob: Awaited<ReturnType<typeof storage.getPublishJob>> = null;
+    let readError: unknown = null;
+    try {
+      dbJob = await storage.getPublishJob(jobId);
+    } catch (err) {
+      readError = err;
+    }
 
     // The in-memory map only ever holds per-mantra jobs now. A grantha publish runs in
     // another process, so its live state is the row — reading the map first (as this used
     // to, unconditionally) would shadow every write the worker makes.
     const memJob = dbJob?.kind === "grantha_publish" ? undefined : publishJobs.get(jobId);
+
+    // A per-mantra publish runs in THIS process, so when the row cannot be read its live
+    // state is still right here: serve it rather than failing a job that is working.
+    if (readError && !memJob) {
+      const { status, body } = toApiError(readError, "Could not read the publish job");
+      publishLog(
+        "status.unavailable",
+        { job: jobId, draft: req.params.id, status, code: body.code, error: (readError as any)?.message },
+        "error",
+      );
+      return res.status(status).json({ ...body, status: "unknown" });
+    }
     if (memJob) {
       return res.json({
         status: memJob.status,
@@ -6115,7 +6247,11 @@ export async function registerRoutes(
       });
     }
 
-    if (!dbJob) return res.status(404).json({ message: "Job not found (may have expired)" });
+    if (!dbJob) {
+      return res
+        .status(404)
+        .json({ message: "Job not found (may have expired)", code: "job_not_found" });
+    }
     // This route never checked who the job belonged to, and `:id` was never read.
     const viewer = req.user as User;
     if (dbJob.userId && viewer?.id && dbJob.userId !== viewer.id && viewer.role !== "admin") {

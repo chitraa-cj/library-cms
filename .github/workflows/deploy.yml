@@ -17,6 +17,12 @@ jobs:
           username: ${{ secrets.EC2_USER }}
           key: ${{ secrets.EC2_SSH_KEY }}
           script: |
+            # Without this the script ran on past every failure. A `db:push` that errored
+            # (or a build that did) was followed by a pm2 restart anyway, which is how the
+            # box ended up serving code that reads `cms_publish_jobs.kind` against a
+            # database that has no such column. A broken step must stop the deploy.
+            set -e
+
             cd ~/library/library-cms
 
             echo "Fetching latest code..."
@@ -32,13 +38,34 @@ jobs:
             echo "Building project..."
             npm run build
 
+            # Hand-written SQL in script/migrations/ — the things drizzle push does not
+            # express (partial unique indexes, backfills, constraint swaps). Tracked in
+            # cms_schema_migrations, re-runnable, and fatal on failure: shipping code
+            # ahead of its schema is what produced `column "kind" does not exist`.
+            echo "Applying SQL migrations..."
+            NODE_TLS_REJECT_UNAUTHORIZED=0 npm run migrate
+
+            # drizzle push stays ADVISORY. It is interactive by design and auto-accepting
+            # its statements on a production database is exactly the destructive thing we
+            # do not want in CI, so a failure here warns rather than aborts — the SQL above
+            # is what the publish path actually depends on, and the check below is what
+            # decides whether this deploy may proceed.
             echo "Running DB push..."
-            NODE_TLS_REJECT_UNAUTHORIZED=0 npm run db:push
+            NODE_TLS_REJECT_UNAUTHORIZED=0 npm run db:push || echo "WARNING: drizzle db:push did not complete — see script/migrations for the authoritative DDL."
+
+            # Two different questions, both asked before pm2 is pointed at the new build:
+            #   migrate:check — is every migration file recorded as applied?
+            #   schema:check  — does the DATABASE actually have the columns the publish
+            #                   path reads? (a ledger can be right while the schema is not)
+            # The second is the one that would have caught `column "kind" does not exist`.
+            echo "Verifying schema..."
+            NODE_TLS_REJECT_UNAUTHORIZED=0 npm run migrate:check
+            NODE_TLS_REJECT_UNAUTHORIZED=0 npm run schema:check
 
             echo "Restarting PM2..."
             # The API process is named `cmslibrary` on this box (verified with
             # `pm2 list`), not `cms-library`. `pm2 restart <unknown>` only prints an
-            # error and this script has no `set -e`, so the old wording silently did
+            # error, and before `set -e` was added above the old wording silently did
             # NOTHING on every deploy: pm2 kept serving the previous bundle while the
             # new client assets were live, which is exactly the "feature works
             # locally, dead on the box, /api/* returns SPA HTML" symptom.
@@ -70,6 +97,19 @@ jobs:
               pm2 restart cms-translation-worker --update-env
             else
               echo "Translation worker not registered with pm2 — skipping (start it once by hand)."
+            fi
+
+            # The publish worker is what actually drains the grantha publish queue
+            # (server/publish/worker.ts). It was never restarted here, so every deploy
+            # left it running the PREVIOUS bundle against the new queue schema — and if it
+            # is not running at all, POST /publish refuses with "the publish worker is not
+            # running" and no grantha can be published.
+            if pm2 describe cms-publish-worker > /dev/null 2>&1; then
+              echo "Restarting publish worker..."
+              pm2 restart cms-publish-worker --update-env
+            else
+              echo "WARNING: publish worker not registered with pm2 — grantha publishing will be refused."
+              echo "Start it once by hand: pm2 start ecosystem.config.cjs --only cms-publish-worker && pm2 save"
             fi
 
             pm2 save

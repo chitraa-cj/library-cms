@@ -6,6 +6,9 @@ import path from "path";
 // server deps to bundle to reduce openat(2) syscalls
 // which helps cold start times
 const allowlist = [
+  // Bundled so an OCR → Grantha deploy works even if the box has not re-run
+  // npm install (same reason as pdf-lib below).
+  "@anthropic-ai/sdk",
   "@google/generative-ai",
   "axios",
   "connect-pg-simple",

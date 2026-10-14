@@ -161,7 +161,15 @@ import NodeVideos, {
   nodeVideosQueryKey,
   type NodeVideoDraft,
 } from "@/components/node-videos";
-import GranthaCsvImportDialog from "@/components/grantha-csv-import-dialog";
+import GranthaCsvImportDialog, { type CsvPreload } from "@/components/grantha-csv-import-dialog";
+import {
+  clearStructureHandoff,
+  fetchStructureCsv,
+  fetchStructureMapping,
+  readStructureHandoff,
+  reportStructureImport,
+  type StructureHandoff,
+} from "@/lib/ocr-structure-client";
 import type {
   GranthaCsvImportPayload,
   GranthaCsvNewVerse,
@@ -1551,6 +1559,13 @@ export default function GranthasPage() {
   const [adhyayas, setAdhyayas] = useState<AdhyayaNode[]>([]);
   // CSV bulk-import dialog (Step 3 toolbar).
   const [csvImportOpen, setCsvImportOpen] = useState(false);
+  // OCR → Grantha handoff: a finished structure analysis waiting to be mapped into this
+  // grantha. The CSV itself is fetched from the server once the editor is open, so what
+  // crossed the navigation was only an id (see lib/ocr-structure-client).
+  const [structureHandoff, setStructureHandoff] = useState<StructureHandoff | null>(null);
+  const [csvPreload, setCsvPreload] = useState<CsvPreload | null>(null);
+  const handoffPickedUpRef = useRef(false);
+  const handoffLoadedRef = useRef(false);
   // Tracks Strapi section documentIds that were explicitly removed by the user.
   // Used to prevent the supplement logic from re-adding them and to delete them on publish.
   const [deletedStrapiSectionDocIds, setDeletedStrapiSectionDocIds] = useState<string[]>([]);
@@ -6678,6 +6693,126 @@ export default function GranthasPage() {
       }),
   ];
 
+  // ── OCR → Grantha: pick up the handoff and open the usual import dialog ──
+  //
+  // Two steps on purpose. First the destination grantha is opened through the SAME
+  // openEdit the list uses, so the editor holds its real hierarchy, teekas and
+  // structureConfig. Only then is the CSV fetched and the mapping proposed against
+  // that live structure — proposing it earlier would be guessing.
+  useEffect(() => {
+    if (handoffPickedUpRef.current) return;
+    if (isLoading || isLoadingDrafts) return;
+    const pending = readStructureHandoff();
+    if (!pending) return;
+    handoffPickedUpRef.current = true;
+    setStructureHandoff(pending);
+
+    const target = pending.target;
+    if (target.kind === "new") {
+      openAdd();
+      return;
+    }
+    const item = mergedData.find((candidate: any) =>
+      target.kind === "draft"
+        ? candidate._draftId === target.draftId
+        : candidate.documentId === target.documentId || candidate._strapiDocId === target.documentId,
+    );
+    // A locked grantha opens read-only, and an import into a read-only editor could
+    // never be saved — say so instead of opening a dialog that cannot finish.
+    const lockedDocId = target.kind === "grantha" ? target.documentId : item?._strapiDocId;
+    if (item && lockedDocId && lockedDocIds.has(lockedDocId)) {
+      clearStructureHandoff();
+      setStructureHandoff(null);
+      toast({
+        variant: "destructive",
+        title: "That grantha is locked",
+        description: `"${target.name}" is locked for editing, so the CSV cannot be imported into it. Unlock it (or download the CSV from OCR Docs) and try again.`,
+      });
+      return;
+    }
+    if (!item) {
+      clearStructureHandoff();
+      setStructureHandoff(null);
+      toast({
+        variant: "destructive",
+        title: "Destination grantha not found",
+        description: `"${target.name}" is no longer in the list. Download the CSV from OCR Docs and import it by hand.`,
+      });
+      return;
+    }
+    void openEdit(item);
+    // mergedData is rebuilt every render; the ref guard is what makes this run once.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isLoading, isLoadingDrafts, mergedData.length]);
+
+  useEffect(() => {
+    if (!structureHandoff || handoffLoadedRef.current) return;
+    if (view !== "form") return;
+    handoffLoadedRef.current = true;
+    const jobId = structureHandoff.structureJobId;
+
+    void (async () => {
+      try {
+        const [csv, mapping] = await Promise.all([
+          fetchStructureCsv(jobId),
+          fetchStructureMapping(jobId, {
+            levelOneEnabled: structureConfig.levelOneEnabled,
+            levelOneName: structureConfig.levelOneName,
+            levelTwoEnabled: structureConfig.levelTwoEnabled,
+            levelTwoName: structureConfig.levelTwoName,
+            levelThreeEnabled: structureConfig.levelThreeEnabled,
+            levelThreeName: structureConfig.levelThreeName,
+            leafName: structureConfig.leafName,
+            teekas: teekas.map((t) => ({
+              id: t.id,
+              TeekaName: t.TeekaName,
+              TeekaAuthor: t.TeekaAuthor,
+            })),
+          }),
+        ]);
+
+        // Idempotency: the same analysis must not be imported twice by accident.
+        if (mapping.alreadyImported) {
+          const when = mapping.alreadyImported.at
+            ? new Date(mapping.alreadyImported.at).toLocaleString()
+            : "earlier";
+          const ok = window.confirm(
+            `This OCR analysis was already imported${
+              mapping.alreadyImported.granthaDocId ? ` into ${mapping.alreadyImported.granthaDocId}` : ""
+            } on ${when}.\n\nImport it again? Verses that already exist will be updated, and any that do not will be created again.`,
+          );
+          if (!ok) {
+            clearStructureHandoff();
+            setStructureHandoff(null);
+            return;
+          }
+        }
+
+        setCsvPreload({
+          fileName: csv.fileName,
+          csv: csv.csv,
+          columns: csv.columns,
+          sectionLevels: csv.sectionLevels,
+          sourceLevelNames: csv.config.levelNames,
+          mapping: mapping.mapping,
+          teekaMapping: mapping.teekas,
+          note: structureHandoff.summary.fileName,
+        });
+        setCsvImportOpen(true);
+      } catch (err: any) {
+        toast({
+          variant: "destructive",
+          title: "Could not load the generated CSV",
+          description: err?.message ?? "Open OCR Docs and download it instead.",
+        });
+      } finally {
+        // Consumed either way: a stale handoff must not re-open this dialog later.
+        clearStructureHandoff();
+      }
+    })();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [structureHandoff, view]);
+
   // ---------- Render: List ----------
 
   if (view === "list") {
@@ -8663,11 +8798,30 @@ export default function GranthasPage() {
       {/* CSV bulk-import dialog */}
       <GranthaCsvImportDialog
         open={csvImportOpen}
-        onOpenChange={setCsvImportOpen}
+        onOpenChange={(open) => {
+          setCsvImportOpen(open);
+          if (!open) setCsvPreload(null);
+        }}
         adhyayas={adhyayas}
         teekas={teekas}
         structureConfig={structureConfig}
         onApply={handleCsvImport}
+        preload={csvPreload}
+        onPreloadApplied={(summary) => {
+          const jobId = structureHandoff?.structureJobId;
+          setCsvPreload(null);
+          if (!jobId) return;
+          // Recorded only after the rows are actually in the draft. The CMS write is
+          // still the editor's own Save / Save & Publish.
+          void reportStructureImport(jobId, {
+            status: "done",
+            granthaDocId: editingGranthaStrapiDocumentId() ?? null,
+            summary: { ...summary, grantha: formData.GranthaName },
+            force: true,
+          }).catch(() => {
+            /* the import already happened in the draft; the record is best-effort */
+          });
+        }}
       />
 
       {/* Manthra content dialog */}

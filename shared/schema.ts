@@ -698,6 +698,112 @@ export interface OcrPage {
 
 export const ocrJobStatusTerminal: readonly OcrJobStatus[] = ["done", "partial", "failed", "cancelled"];
 
+// ---------- OCR → Grantha structure analysis (admin-only, Claude) ----------
+// One structure job per attempt at organising ONE finished OCR job into a grantha
+// hierarchy. It owns an ordered list of page-range chunks exactly like the OCR job it
+// hangs off (server/structure/jobs.ts), so a failed range costs only itself and a
+// restart resumes without re-asking Claude for ranges that already answered.
+//
+// The model's answer is the only thing stored per chunk (`items`). Everything derived
+// from it — sections, verses, the CSV — is recomputed from `items` + `overrides` by
+// shared/ocr-structure.ts on every read, so a user correction never needs a new model
+// call and the stored payload can never drift from what the UI shows.
+
+export const structureJobStatuses = [
+  "queued",
+  "running",
+  "done",
+  "partial",
+  "failed",
+  "cancelled",
+] as const;
+export type StructureJobStatus = (typeof structureJobStatuses)[number];
+
+export const structureJobStatusTerminal: readonly StructureJobStatus[] = [
+  "done",
+  "partial",
+  "failed",
+  "cancelled",
+];
+
+export const structureChunkStatuses = ["queued", "running", "done", "failed", "skipped"] as const;
+export type StructureChunkStatus = (typeof structureChunkStatuses)[number];
+
+/** Where the generated CSV got to. `applied` is set by the editor, once, per job. */
+export const structureImportStatuses = ["none", "running", "done", "failed"] as const;
+export type StructureImportStatus = (typeof structureImportStatuses)[number];
+
+export const structureJobs = pgTable("cms_structure_jobs", {
+  id: varchar("id").primaryKey(),
+  ocrJobId: varchar("ocr_job_id")
+    .notNull()
+    .references(() => ocrJobs.id, { onDelete: "cascade" }),
+  userId: varchar("user_id").references(() => users.id, { onDelete: "set null" }),
+  /** Hierarchy depth INCLUDING the leaf level (1…4). */
+  depth: integer("depth").notNull().default(2),
+  /** Semantic name per level, length === depth; the last entry names the leaf. */
+  levelNames: jsonb("level_names").$type<string[]>().notNull().default([]),
+  /** The editor's structuring instructions (typed and/or dictated, already merged). */
+  instructions: text("instructions"),
+  /** True when any part of `instructions` arrived as speech — provenance, not behaviour. */
+  voiceUsed: boolean("voice_used").notNull().default(false),
+  model: text("model").notNull(),
+  status: text("status").$type<StructureJobStatus>().notNull().default("queued"),
+  chunksTotal: integer("chunks_total").notNull().default(0),
+  chunksDone: integer("chunks_done").notNull().default(0),
+  chunksFailed: integer("chunks_failed").notNull().default(0),
+  requestCount: integer("request_count").notNull().default(0),
+  inputTokens: integer("input_tokens").notNull().default(0),
+  outputTokens: integer("output_tokens").notNull().default(0),
+  cachedInputTokens: integer("cached_input_tokens").notNull().default(0),
+  /** Review edits and answered questions, applied in order on every read. */
+  overrides: jsonb("overrides").$type<unknown[]>().notNull().default([]),
+  /** Set when the editor confirms the review; gates CSV export / import. */
+  reviewedAt: timestamp("reviewed_at"),
+  importStatus: text("import_status").$type<StructureImportStatus>().notNull().default("none"),
+  /** Grantha the CSV was handed to, and the summary the editor reported back. */
+  importGranthaDocId: text("import_grantha_doc_id"),
+  importSummary: jsonb("import_summary").$type<Record<string, unknown> | null>(),
+  importedAt: timestamp("imported_at"),
+  error: text("error"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+  startedAt: timestamp("started_at"),
+  finishedAt: timestamp("finished_at"),
+});
+
+export const structureJobChunks = pgTable("cms_structure_job_chunks", {
+  id: serial("id").primaryKey(),
+  jobId: varchar("job_id")
+    .notNull()
+    .references(() => structureJobs.id, { onDelete: "cascade" }),
+  chunkIndex: integer("chunk_index").notNull(),
+  /** 1-based, inclusive OCR page range this chunk covers. */
+  startPage: integer("start_page").notNull(),
+  endPage: integer("end_page").notNull(),
+  status: text("status").$type<StructureChunkStatus>().notNull().default("queued"),
+  attempts: integer("attempts").notNull().default(0),
+  model: text("model"),
+  /** The validated StructureItem[] for this range — the only persisted model output. */
+  items: jsonb("items").$type<unknown[]>(),
+  warnings: jsonb("warnings").$type<string[]>(),
+  /** Section path still open at the end of the range; seeds the next range's prompt. */
+  openPath: jsonb("open_path").$type<unknown[]>(),
+  /** Items the schema check rejected — reported so a range can be re-run deliberately. */
+  rejectedItems: integer("rejected_items").notNull().default(0),
+  inputTokens: integer("input_tokens").notNull().default(0),
+  outputTokens: integer("output_tokens").notNull().default(0),
+  cachedInputTokens: integer("cached_input_tokens").notNull().default(0),
+  durationMs: integer("duration_ms").notNull().default(0),
+  error: text("error"),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+});
+
+export type StructureJob = typeof structureJobs.$inferSelect;
+export type InsertStructureJob = typeof structureJobs.$inferInsert;
+export type StructureJobChunk = typeof structureJobChunks.$inferSelect;
+export type InsertStructureJobChunk = typeof structureJobChunks.$inferInsert;
+
 /** An acharya plus the texts derived as "under" them from Strapi. */
 export type AcharyaLinkedText = {
   documentId: string;

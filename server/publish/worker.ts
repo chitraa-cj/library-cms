@@ -202,11 +202,22 @@ export async function releaseInFlight(reason: string): Promise<void> {
 /** The long-running loop. Returns when the signal aborts (or per PublishWorkerOptions). */
 export async function runWorker(opts: PublishWorkerOptions = {}): Promise<void> {
   const workerId = opts.workerId ?? publishConfig.workerId;
-  await reconcileOnBoot(workerId);
-  workerLog(
-    "WORKER START",
-    `${workerId} ready (poll ${publishConfig.pollIntervalMs}ms, lease ${publishConfig.leaseMs}ms, max attempts ${publishConfig.maxAttempts})`,
-  );
+
+  /**
+   * Boot reconciliation is retried INSIDE the loop, not awaited before it.
+   *
+   * It is the first statement that touches Postgres, and it used to sit outside the
+   * try/catch. When the database was unreachable at boot (`connect ECONNREFUSED` from the
+   * RDS address, 08:30 on 2026-10-14) the rejection escaped `runWorker`, `main()`'s
+   * `finally` closed the pool, and the process-level `unhandledRejection` handler kept the
+   * process alive: pm2 reported `online` while nothing claimed, heartbeat or reaped, and
+   * every Save & Publish got "the publish worker is not running" until a human restarted
+   * it. One transient blip, publishing down until someone noticed.
+   *
+   * In the loop, the existing catch backs off and tries again, so the worker heals itself
+   * the moment the database answers — and it still reconciles before claiming anything.
+   */
+  let bootReconciled = false;
 
   let processed = 0;
   let lastReap = 0;
@@ -215,6 +226,15 @@ export async function runWorker(opts: PublishWorkerOptions = {}): Promise<void> 
 
   while (!opts.signal?.aborted) {
     try {
+      if (!bootReconciled) {
+        await reconcileOnBoot(workerId);
+        bootReconciled = true;
+        workerLog(
+          "WORKER START",
+          `${workerId} ready (poll ${publishConfig.pollIntervalMs}ms, lease ${publishConfig.leaseMs}ms, max attempts ${publishConfig.maxAttempts})`,
+        );
+      }
+
       // Liveness, so POST /publish can refuse work nothing would drain.
       if (Date.now() - lastBeat > 15_000) {
         lastBeat = Date.now();

@@ -166,3 +166,16 @@ markers, the range is kept as one block rather than losing text.
 The viewer renders that Markdown with a small escape-first renderer
 (`client/src/lib/ocr-markdown.ts`): transcribed text is HTML-escaped before any
 markup is produced, so a scan can never inject markup into the portal.
+
+## Turning a transcription into a grantha
+
+A finished transcription can be organised into a grantha hierarchy and published
+through the existing CSV import, without copying text anywhere: **Create Grantha
+from OCR** on the document, then hierarchy → instructions → Claude analysis →
+review → CSV or direct upload. The Gemini OCR described above is unchanged and is
+still the only thing that reads the pages.
+
+See **[docs/OCR-TO-GRANTHA.md](OCR-TO-GRANTHA.md)** for that workflow: what Claude
+is and is not asked to do, the hierarchy and number contract the CSV importer
+already expects, which ambiguities become questions, the review overlay, the
+validation gates, and the limits and env vars (`ANTHROPIC_API_KEY`, `STRUCTURE_*`).

@@ -6,6 +6,8 @@ import { invalidateGranthaBulkCache, invalidateAllBulkCache } from "./grantha-bu
 import { createAcharyaRouter, seedAcharyasIfEmpty } from "./acharyas";
 import ocrRouter from "./ocr/routes";
 import { reconcileOcrJobsOnBoot } from "./ocr/jobs";
+import structureRouter from "./structure/routes";
+import { reconcileStructureJobsOnBoot } from "./structure/jobs";
 import translationJobsRouter from "./translation/routes";
 import { ensureTranslationSchema } from "./translation/store";
 import { createMigrateRouter } from "./migrate-vivekachudamani";
@@ -4604,8 +4606,12 @@ export async function registerRoutes(
 
   // OCR Docs (admin-only) — Gemini transcription of uploaded PDFs/scans.
   // Admin gate lives here so every route in the sub-router inherits it.
+  // The OCR → Grantha structure workflow lives under the same admin gate. Mounted
+  // BEFORE the OCR router so `/structure/...` is not swallowed by `/jobs/:id`.
+  app.use("/api/admin/ocr/structure", requireAuth, requireAdmin, structureRouter);
   app.use("/api/admin/ocr", requireAuth, requireAdmin, ocrRouter);
   void reconcileOcrJobsOnBoot();
+  void reconcileStructureJobsOnBoot();
 
   // Translation queue (admin-only). The API only ever writes queue rows; the
   // translating itself happens in the separate worker process

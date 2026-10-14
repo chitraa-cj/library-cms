@@ -38,12 +38,15 @@ import {
   Printer,
   RefreshCw,
   Search,
+  Sparkles,
   Trash2,
   Upload,
   X,
 } from "lucide-react";
 import { highlightHtml, renderOcrMarkdown } from "@/lib/ocr-markdown";
-import type { OcrJob, OcrJobStatus, OcrPage } from "@shared/schema";
+import OcrStructureWizard from "@/components/ocr-structure-wizard";
+import { fetchStructureJobsForOcr } from "@/lib/ocr-structure-client";
+import type { Draft, OcrJob, OcrJobStatus, OcrPage, StrapiGrantha, StrapiResponse, StructureJob } from "@shared/schema";
 
 const JOBS_KEY = "/api/admin/ocr/jobs";
 const TERMINAL: OcrJobStatus[] = ["done", "partial", "failed", "cancelled"];
@@ -247,6 +250,8 @@ export default function AdminOcrPage() {
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const isAdmin = user?.role === "admin";
+  // "Create Grantha from OCR" — the structure workflow hangs off the selected document.
+  const [wizardOpen, setWizardOpen] = useState(false);
 
   const configQuery = useQuery<OcrConfig>({
     queryKey: ["/api/admin/ocr/config"],
@@ -294,6 +299,62 @@ export default function AdminOcrPage() {
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [job?.status, job?.id]);
+
+  // Analyses already run for the selected document, so the button can say "continue"
+  // instead of silently starting a second (billable) run.
+  const structureJobsQuery = useQuery<{ jobs: StructureJob[] }>({
+    queryKey: ["structure-for-ocr", activeJobId],
+    queryFn: () => fetchStructureJobsForOcr(activeJobId!),
+    enabled: Boolean(isAdmin && activeJobId),
+    staleTime: 30_000,
+  });
+  const latestStructureJob = structureJobsQuery.data?.jobs?.[0] ?? null;
+
+  // Destinations for "Upload to Grantha": published granthas and in-progress portal
+  // drafts, from the same lists the granthas page uses (both are lite/slim payloads).
+  const granthaListQuery = useQuery<StrapiResponse<StrapiGrantha>>({
+    queryKey: ["/api/strapi", "granthas", "lite"],
+    enabled: Boolean(isAdmin && wizardOpen),
+    staleTime: 60_000,
+  });
+  const granthaDraftsQuery = useQuery<Draft[]>({
+    queryKey: ["/api/drafts", "granthas"],
+    queryFn: async () => {
+      const res = await fetch("/api/drafts?contentType=granthas", {
+        credentials: "include",
+        cache: "no-store",
+      });
+      if (!res.ok) throw new Error("Failed to fetch drafts");
+      return res.json();
+    },
+    enabled: Boolean(isAdmin && wizardOpen),
+    staleTime: 60_000,
+  });
+
+  const granthaOptions = useMemo(() => {
+    const options: Array<{ key: string; label: string; documentId?: string; draftId?: number }> = [];
+    for (const draft of granthaDraftsQuery.data ?? []) {
+      // A draft linked to a published grantha is the same grantha; prefer the draft so the
+      // editor opens the work in progress rather than forking it.
+      options.push({
+        key: `draft:${draft.id}`,
+        label: `${draft.title || "(untitled draft)"} — draft`,
+        ...(draft.strapiDocumentId ? { documentId: draft.strapiDocumentId } : { draftId: draft.id }),
+      });
+    }
+    const draftedDocIds = new Set(
+      (granthaDraftsQuery.data ?? []).map((d) => d.strapiDocumentId).filter(Boolean) as string[],
+    );
+    for (const grantha of granthaListQuery.data?.data ?? []) {
+      if (draftedDocIds.has(grantha.documentId)) continue;
+      options.push({
+        key: `grantha:${grantha.documentId}`,
+        label: grantha.GranthaName || grantha.documentId,
+        documentId: grantha.documentId,
+      });
+    }
+    return options;
+  }, [granthaDraftsQuery.data, granthaListQuery.data]);
 
   const uploadMutation = useMutation({
     mutationFn: async () => {
@@ -665,6 +726,23 @@ export default function AdminOcrPage() {
                       {formatBytes(job.fileSize)}
                     </span>
                     <div className="ml-auto flex items-center gap-2">
+                      {/* The OCR → Grantha entry point. Available as soon as any page
+                          range has been transcribed, so a long book can be structured
+                          while its tail is still being read. */}
+                      <Button
+                        size="sm"
+                        disabled={job.chunksDone === 0}
+                        title={
+                          job.chunksDone === 0
+                            ? "Wait for the first page range to be transcribed"
+                            : "Organise this transcription into a grantha hierarchy"
+                        }
+                        onClick={() => setWizardOpen(true)}
+                        data-testid="ocr-create-grantha"
+                      >
+                        <Sparkles className="mr-1.5 h-3.5 w-3.5" />
+                        {latestStructureJob ? "Continue Grantha" : "Create Grantha from OCR"}
+                      </Button>
                       {running && (
                         <Button
                           variant="outline"
@@ -928,6 +1006,15 @@ export default function AdminOcrPage() {
           )}
         </div>
       </div>
+
+      {job && (
+        <OcrStructureWizard
+          open={wizardOpen}
+          onOpenChange={setWizardOpen}
+          ocrJob={job}
+          granthaOptions={granthaOptions}
+        />
+      )}
     </div>
   );
 }

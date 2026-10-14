@@ -210,14 +210,24 @@ export async function reconcileOnBoot(workerId = translationConfig.workerId): Pr
 /** The long-running loop. Returns when the signal aborts (or per WorkerOptions). */
 export async function runWorker(opts: WorkerOptions = {}): Promise<void> {
   const workerId = opts.workerId ?? translationConfig.workerId;
-  await reconcileOnBoot(workerId);
-  workerLog("JOB START", `worker ${workerId} ready (poll ${translationConfig.pollIntervalMs}ms, lease ${translationConfig.leaseMs}ms, max retries ${translationConfig.maxRetries})`);
+
+  // Retried inside the loop, not awaited before it: it is the first statement that
+  // touches Postgres, and a database that is unreachable at boot used to throw straight
+  // out of runWorker, leaving a process pm2 called `online` with no loop running at all.
+  // See the same note in server/publish/worker.ts, where that cost a morning of publishes.
+  let bootReconciled = false;
 
   let processed = 0;
   let lastReap = 0;
 
   while (!opts.signal?.aborted) {
     try {
+      if (!bootReconciled) {
+        await reconcileOnBoot(workerId);
+        bootReconciled = true;
+        workerLog("JOB START", `worker ${workerId} ready (poll ${translationConfig.pollIntervalMs}ms, lease ${translationConfig.leaseMs}ms, max retries ${translationConfig.maxRetries})`);
+      }
+
       // Cheap periodic reaper so a worker that is up but idle still rescues
       // items a sibling process abandoned.
       if (Date.now() - lastReap > translationConfig.leaseMs) {

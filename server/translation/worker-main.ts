@@ -54,4 +54,14 @@ async function main() {
   }
 }
 
-void main();
+/**
+ * If anything still escapes `main()`, exit non-zero so pm2 restarts the app on its own
+ * backoff. Previously this rejection was swallowed by the `unhandledRejection` handler
+ * above and the process stayed up forever with no loop running — `online` in pm2, dead in
+ * fact. A crash that restarts is strictly better than a zombie that does not.
+ */
+void main().catch(async (err: any) => {
+  workerLog("WORKER ERROR", `worker exited: ${err?.message ?? err}`);
+  await pool.end().catch(() => {});
+  process.exit(1);
+});

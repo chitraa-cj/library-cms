@@ -10,7 +10,9 @@
  */
 import { sql } from "drizzle-orm";
 import { db } from "../db";
-import { structureConfig } from "./config";
+import { formatUsd, structureCostUsd } from "@shared/ocr-structure";
+import { structureConfig, structureRates } from "./config";
+import { tokensSpentSince } from "./store";
 
 type Waiter = { resolve: () => void; reject: (err: Error) => void; signal?: AbortSignal };
 
@@ -24,9 +26,96 @@ let drainTimer: NodeJS.Timeout | null = null;
 
 export class StructureBudgetError extends Error {
   status = 429;
-  constructor(message: string) {
+  /** Which gate stopped it, so the UI can say whether waiting helps. */
+  readonly gate: "requests-per-day" | "spend-per-day" | "spend-per-month";
+  constructor(message: string, gate: StructureBudgetError["gate"] = "requests-per-day") {
     super(message);
     this.name = "StructureBudgetError";
+    this.gate = gate;
+  }
+}
+
+// ───────────────────────────────────────────────────────────────── spend gates
+/**
+ * Money, as opposed to request count.
+ *
+ * A request cap bounds the burst, not the bill: one request can carry 60k input and 32k
+ * output tokens, so 800 requests/day is a four-figure day at Opus prices. These gates are
+ * computed from the token counters the API itself returned, summed in Postgres, so they
+ * survive a restart and count every process.
+ *
+ * Cached for a few seconds because they are consulted before every range and on every
+ * poll of the config endpoint; a few seconds of staleness cannot overshoot by more than
+ * one range, which the per-job cap bounds anyway.
+ */
+interface SpendSnapshot {
+  dayUsd: number;
+  monthUsd: number;
+  at: number;
+}
+let spendCache: SpendSnapshot | null = null;
+const SPEND_CACHE_MS = 5_000;
+
+function startOfUtcDay(): Date {
+  const now = new Date();
+  return new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()));
+}
+
+function startOfUtcMonth(): Date {
+  const now = new Date();
+  return new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1));
+}
+
+export async function structureSpend(force = false): Promise<{ dayUsd: number; monthUsd: number }> {
+  if (!force && spendCache && Date.now() - spendCache.at < SPEND_CACHE_MS) {
+    return { dayUsd: spendCache.dayUsd, monthUsd: spendCache.monthUsd };
+  }
+  const rates = structureRates();
+  try {
+    const [day, month] = await Promise.all([
+      tokensSpentSince(startOfUtcDay()),
+      tokensSpentSince(startOfUtcMonth()),
+    ]);
+    spendCache = {
+      dayUsd: structureCostUsd(day, rates),
+      monthUsd: structureCostUsd(month, rates),
+      at: Date.now(),
+    };
+  } catch {
+    // The table may not exist yet on a first boot. Report zero rather than blocking the
+    // feature on a query that has not been able to run yet.
+    spendCache = { dayUsd: 0, monthUsd: 0, at: Date.now() };
+  }
+  return { dayUsd: spendCache.dayUsd, monthUsd: spendCache.monthUsd };
+}
+
+/** Forget the cached figures — call after a job has spent anything. */
+export function invalidateStructureSpend(): void {
+  spendCache = null;
+}
+
+/**
+ * Throw unless there is room for `estimatedUsd` more spend. Called before a job is
+ * created (with the whole estimate) and before each range (with that range's share), so
+ * a long job stops at the budget instead of sailing past it.
+ */
+export async function assertSpendBudget(estimatedUsd = 0): Promise<void> {
+  const { dayUsd, monthUsd } = await structureSpend();
+  if (structureConfig.maxSpendPerDayUsd > 0 && dayUsd + estimatedUsd > structureConfig.maxSpendPerDayUsd) {
+    throw new StructureBudgetError(
+      `Daily Claude budget reached: ${formatUsd(dayUsd)} of ${formatUsd(structureConfig.maxSpendPerDayUsd)} spent today` +
+        (estimatedUsd > 0 ? `, and this would add about ${formatUsd(estimatedUsd)}` : "") +
+        ". It resets at 00:00 UTC, or raise STRUCTURE_MAX_SPEND_PER_DAY_USD.",
+      "spend-per-day",
+    );
+  }
+  if (structureConfig.maxSpendPerMonthUsd > 0 && monthUsd + estimatedUsd > structureConfig.maxSpendPerMonthUsd) {
+    throw new StructureBudgetError(
+      `Monthly Claude budget reached: ${formatUsd(monthUsd)} of ${formatUsd(structureConfig.maxSpendPerMonthUsd)} spent this month` +
+        (estimatedUsd > 0 ? `, and this would add about ${formatUsd(estimatedUsd)}` : "") +
+        ". Raise STRUCTURE_MAX_SPEND_PER_MONTH_USD to continue.",
+      "spend-per-month",
+    );
   }
 }
 
@@ -103,6 +192,9 @@ function drain() {
  * (use try/finally).
  */
 export async function acquireStructureSlot(signal?: AbortSignal): Promise<() => void> {
+  // Money first: a spent budget should stop the next request even when the request
+  // counter still has room.
+  await assertSpendBudget();
   await ensureDaySeeded();
   if (utcDayKey() !== dayKey) {
     dayKey = utcDayKey();
@@ -110,7 +202,8 @@ export async function acquireStructureSlot(signal?: AbortSignal): Promise<() => 
   }
   if (dayCount >= structureConfig.requestsPerDay) {
     throw new StructureBudgetError(
-      `Daily Claude analysis budget reached (${structureConfig.requestsPerDay} requests). It resets at 00:00 UTC.`,
+      `Daily Claude request cap reached (${structureConfig.requestsPerDay} requests). It resets at 00:00 UTC.`,
+      "requests-per-day",
     );
   }
   dayCount += 1;
@@ -154,7 +247,13 @@ export function recordExtraStructureRequest(): void {
 
 export function structureUsageSnapshot() {
   pruneWindow(Date.now());
+  const spend = spendCache ?? { dayUsd: 0, monthUsd: 0 };
   return {
+    spentTodayUsd: spend.dayUsd,
+    spentThisMonthUsd: spend.monthUsd,
+    maxSpendPerDayUsd: structureConfig.maxSpendPerDayUsd,
+    maxSpendPerMonthUsd: structureConfig.maxSpendPerMonthUsd,
+    maxSpendPerJobUsd: structureConfig.maxSpendPerJobUsd,
     inFlight,
     queued: waiters.length,
     lastMinute: recentStarts.length,

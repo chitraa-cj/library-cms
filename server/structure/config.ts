@@ -9,11 +9,20 @@
  * day can cost.
  */
 
+import type { StructureCostRates } from "@shared/ocr-structure";
+
 function num(name: string, fallback: number, min: number, max: number): number {
   const raw = process.env[name];
   const parsed = raw == null || raw.trim() === "" ? NaN : Number(raw);
   if (!Number.isFinite(parsed)) return fallback;
   return Math.min(max, Math.max(min, Math.floor(parsed)));
+}
+
+function money(name: string, fallback: number, min: number, max: number): number {
+  const raw = process.env[name];
+  const parsed = raw == null || raw.trim() === "" ? NaN : Number(raw);
+  if (!Number.isFinite(parsed)) return fallback;
+  return Math.min(max, Math.max(min, parsed));
 }
 
 function bool(name: string, fallback: boolean): boolean {
@@ -62,9 +71,56 @@ export const structureConfig = {
   /** Jobs actually being worked on at once; the rest wait in `queued`. */
   maxActiveJobs: num("STRUCTURE_MAX_ACTIVE_JOBS", 1, 1, 4),
 
-  /** Sliding-window and hard daily caps on requests. */
+  /**
+   * Sliding-window and hard daily caps on REQUESTS. These bound the burst rate; they do
+   * not bound cost, because one request can carry 60k input and 32k output tokens. The
+   * spend caps below are what bound the bill.
+   */
   requestsPerMinute: num("STRUCTURE_REQUESTS_PER_MINUTE", 20, 1, 200),
   requestsPerDay: num("STRUCTURE_REQUESTS_PER_DAY", 800, 10, 20_000),
+
+  /**
+   * Prices per million tokens, used for BOTH the pre-flight estimate and the spend caps.
+   * They are env vars rather than constants so that pointing STRUCTURE_MODEL at a
+   * different model cannot leave the portal quoting a stale price: change the model,
+   * change these. Defaults are Claude Opus 5 list prices (input $5, output $25, cache
+   * reads 0.1x, cache writes 1.25x).
+   */
+  inputPricePer1M: money("STRUCTURE_PRICE_INPUT_PER_1M", 5, 0, 1_000),
+  outputPricePer1M: money("STRUCTURE_PRICE_OUTPUT_PER_1M", 25, 0, 1_000),
+  cacheReadPricePer1M: money("STRUCTURE_PRICE_CACHE_READ_PER_1M", 0.5, 0, 1_000),
+  cacheWritePricePer1M: money("STRUCTURE_PRICE_CACHE_WRITE_PER_1M", 6.25, 0, 1_000),
+
+  /** Estimator assumptions — pessimistic on purpose (see estimateStructureCost). */
+  charsPerToken: money("STRUCTURE_CHARS_PER_TOKEN", 2.5, 0.5, 10),
+  promptOverheadTokens: num("STRUCTURE_PROMPT_OVERHEAD_TOKENS", 1_800, 200, 20_000),
+  outputRatio: money("STRUCTURE_OUTPUT_RATIO", 1.35, 0.2, 5),
+
+  /**
+   * The money gates. Spend is measured from the token counters the API itself returns,
+   * summed over `cms_structure_jobs`, so a restart cannot hand out a fresh budget and a
+   * runaway job cannot hide behind a request count.
+   *
+   * The defaults are sized against real books at Opus 5 list prices, measured with the
+   * estimator rather than guessed:
+   *
+   *   100 pages ≈ 10 requests ≈ $6     300 pages ≈ 30 requests ≈ $23
+   *   800 pages ≈ 80 requests ≈ $62
+   *
+   * So: one large grantha per job, two per day, and a month that cannot quietly become
+   * four figures. Set any of them to 0 to disable that gate entirely (not recommended).
+   *
+   * The cheapest real lever is not these caps but STRUCTURE_EFFORT (low/medium on
+   * cleanly printed, regularly numbered books) and STRUCTURE_MODEL — Claude Sonnet 5 is
+   * roughly 2.5x cheaper per token than Opus. Change the model and change the prices
+   * above with it.
+   */
+  maxSpendPerDayUsd: money("STRUCTURE_MAX_SPEND_PER_DAY_USD", 60, 0, 10_000),
+  maxSpendPerMonthUsd: money("STRUCTURE_MAX_SPEND_PER_MONTH_USD", 400, 0, 100_000),
+  /** One document may never cost more than this, however the day budget looks. */
+  maxSpendPerJobUsd: money("STRUCTURE_MAX_SPEND_PER_JOB_USD", 30, 0, 5_000),
+  /** Belt to the spend braces: a hard request ceiling for one document. */
+  maxRequestsPerJob: num("STRUCTURE_MAX_REQUESTS_PER_JOB", 200, 1, 5_000),
 
   /** Per-chunk retry policy — bounded, never a loop. */
   maxAttempts: num("STRUCTURE_MAX_ATTEMPTS", 3, 1, 6),
@@ -92,6 +148,19 @@ export const structureConfig = {
 
 export function isStructureConfigured(): boolean {
   return structureConfig.apiKey.length > 0;
+}
+
+/** The configured prices and estimator assumptions, in the shape the estimator takes. */
+export function structureRates(): StructureCostRates {
+  return {
+    inputPer1M: structureConfig.inputPricePer1M,
+    outputPer1M: structureConfig.outputPricePer1M,
+    cacheReadPer1M: structureConfig.cacheReadPricePer1M,
+    cacheWritePer1M: structureConfig.cacheWritePricePer1M,
+    charsPerToken: structureConfig.charsPerToken,
+    promptOverheadTokens: structureConfig.promptOverheadTokens,
+    outputRatio: structureConfig.outputRatio,
+  };
 }
 
 /** Max characters of a provider error we persist — keeps rows small and logs clean. */

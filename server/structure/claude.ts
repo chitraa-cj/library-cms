@@ -100,7 +100,10 @@ export interface StructureChunkResult {
   openPath: Array<{ level: number; number: string; title: string }> | undefined;
   inputTokens: number;
   outputTokens: number;
+  /** Tokens served from the prompt cache (billed at ~0.1x). */
   cachedInputTokens: number;
+  /** Tokens written to the prompt cache (billed at ~1.25x). */
+  cacheWriteTokens: number;
   attempts: number;
   model: string;
 }
@@ -362,6 +365,7 @@ export async function analyseChunkWithClaude(req: StructureChunkRequest): Promis
         inputTokens: Number(usage?.input_tokens ?? 0) || 0,
         outputTokens: Number(usage?.output_tokens ?? 0) || 0,
         cachedInputTokens: Number(usage?.cache_read_input_tokens ?? 0) || 0,
+        cacheWriteTokens: Number(usage?.cache_creation_input_tokens ?? 0) || 0,
         attempts: attempt,
         model: message.model || structureConfig.model,
       };

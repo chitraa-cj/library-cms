@@ -36,6 +36,7 @@ export function ensureStructureSchema(): Promise<void> {
           input_tokens integer not null default 0,
           output_tokens integer not null default 0,
           cached_input_tokens integer not null default 0,
+          cache_write_tokens integer not null default 0,
           overrides jsonb not null default '[]'::jsonb,
           reviewed_at timestamp,
           import_status text not null default 'none',
@@ -65,10 +66,18 @@ export function ensureStructureSchema(): Promise<void> {
           input_tokens integer not null default 0,
           output_tokens integer not null default 0,
           cached_input_tokens integer not null default 0,
+          cache_write_tokens integer not null default 0,
           duration_ms integer not null default 0,
           error text,
           updated_at timestamp not null default now()
         )`);
+      // Added after the first release; keeps existing installs in step (see the migration).
+      await db.execute(
+        sql`alter table cms_structure_jobs add column if not exists cache_write_tokens integer not null default 0`,
+      );
+      await db.execute(
+        sql`alter table cms_structure_job_chunks add column if not exists cache_write_tokens integer not null default 0`,
+      );
       await db.execute(
         sql`create unique index if not exists cms_structure_job_chunks_job_idx
             on cms_structure_job_chunks (job_id, chunk_index)`,
@@ -175,17 +184,27 @@ export async function addStructureChunkResultToJob(
     inputTokens: number;
     outputTokens: number;
     cachedInputTokens: number;
+    cacheWriteTokens?: number;
   },
 ): Promise<void> {
+  // Every counter is coerced before it reaches the statement. An `undefined` here does
+  // not come back as a type error from a JS caller — it renders as an EMPTY placeholder
+  // and Postgres answers `syntax error at or near ","`, which is a confusing way to lose
+  // a finished range's accounting.
+  const n = (value: number | undefined | null) => {
+    const parsed = Number(value ?? 0);
+    return Number.isFinite(parsed) ? Math.trunc(parsed) : 0;
+  };
   await db
     .update(structureJobs)
     .set({
-      chunksDone: sql`${structureJobs.chunksDone} + ${delta.done}`,
-      chunksFailed: sql`${structureJobs.chunksFailed} + ${delta.failed}`,
-      requestCount: sql`${structureJobs.requestCount} + ${delta.requests}`,
-      inputTokens: sql`${structureJobs.inputTokens} + ${delta.inputTokens}`,
-      outputTokens: sql`${structureJobs.outputTokens} + ${delta.outputTokens}`,
-      cachedInputTokens: sql`${structureJobs.cachedInputTokens} + ${delta.cachedInputTokens}`,
+      chunksDone: sql`${structureJobs.chunksDone} + ${n(delta.done)}`,
+      chunksFailed: sql`${structureJobs.chunksFailed} + ${n(delta.failed)}`,
+      requestCount: sql`${structureJobs.requestCount} + ${n(delta.requests)}`,
+      inputTokens: sql`${structureJobs.inputTokens} + ${n(delta.inputTokens)}`,
+      outputTokens: sql`${structureJobs.outputTokens} + ${n(delta.outputTokens)}`,
+      cachedInputTokens: sql`${structureJobs.cachedInputTokens} + ${n(delta.cachedInputTokens)}`,
+      cacheWriteTokens: sql`${structureJobs.cacheWriteTokens} + ${n(delta.cacheWriteTokens)}`,
       updatedAt: new Date(),
     })
     .where(eq(structureJobs.id, jobId));
@@ -248,6 +267,41 @@ export async function previousDoneChunk(
     .orderBy(desc(structureJobChunks.chunkIndex))
     .limit(1);
   return row;
+}
+
+/**
+ * Tokens spent since `since`, across every analysis. The spend caps are enforced from
+ * this, not from an in-memory tally: a restart, a second web process or a job someone
+ * else started must all count against the same budget.
+ */
+export async function tokensSpentSince(since: Date): Promise<{
+  inputTokens: number;
+  outputTokens: number;
+  cachedInputTokens: number;
+  cacheWriteTokens: number;
+  requests: number;
+}> {
+  const rows = await db.execute(sql`
+    select
+      coalesce(sum(input_tokens), 0)::bigint        as input_tokens,
+      coalesce(sum(output_tokens), 0)::bigint       as output_tokens,
+      coalesce(sum(cached_input_tokens), 0)::bigint as cached_input_tokens,
+      coalesce(sum(cache_write_tokens), 0)::bigint  as cache_write_tokens,
+      coalesce(sum(request_count), 0)::bigint       as requests
+    from cms_structure_jobs
+    where updated_at >= ${since}`);
+  const row = (rows as any)?.rows?.[0] ?? {};
+  const toNum = (value: unknown) => {
+    const parsed = Number(value ?? 0);
+    return Number.isFinite(parsed) ? parsed : 0;
+  };
+  return {
+    inputTokens: toNum(row.input_tokens),
+    outputTokens: toNum(row.output_tokens),
+    cachedInputTokens: toNum(row.cached_input_tokens),
+    cacheWriteTokens: toNum(row.cache_write_tokens),
+    requests: toNum(row.requests),
+  };
 }
 
 export async function requeueFailedStructureChunks(jobId: string): Promise<number> {

@@ -51,6 +51,7 @@ import {
   Loader2,
   Mic,
   MicOff,
+  Wallet,
   RefreshCw,
   Sparkles,
   Upload,
@@ -62,6 +63,7 @@ import {
   cancelStructureJob,
   confirmStructureReview,
   fetchStructureConfig,
+  fetchStructureEstimate,
   fetchStructureJob,
   fetchStructureJobsForOcr,
   fetchStructureResult,
@@ -75,6 +77,7 @@ import {
 import {
   STRUCTURE_MAX_DEPTH,
   STRUCTURE_WORKFLOW_LABELS,
+  formatUsd,
   leafLevelName,
   sectionLevelCount,
   type StructureOverride,
@@ -145,6 +148,16 @@ export default function OcrStructureWizard({ open, onOpenChange, ocrJob, grantha
     overridesRef.current = ((latest.overrides ?? []) as StructureOverride[]) ?? [];
     setStep(TERMINAL.includes(latest.status) ? "review" : "analysis");
   }, [open, jobId, existingQuery.data]);
+
+  // What this would cost, fetched for the step where the decision is made. Not polled:
+  // it only changes when the budget moves, and the config call reports that too.
+  const estimateQuery = useQuery({
+    queryKey: ["structure-estimate", ocrJob.id],
+    queryFn: () => fetchStructureEstimate(ocrJob.id),
+    enabled: Boolean(open && !jobId && step === "instructions"),
+    staleTime: 30_000,
+  });
+  const estimate = estimateQuery.data;
 
   const detailQuery = useQuery({
     queryKey: ["structure-job", jobId],
@@ -624,6 +637,62 @@ export default function OcrStructureWizard({ open, onOpenChange, ocrJob, grantha
               </AlertDescription>
             </Alert>
 
+            {/* The bill, before the button that spends it. */}
+            {!jobId && (
+              <div
+                className={`space-y-2 rounded-md border p-3 ${
+                  estimate && !estimate.withinBudget ? "border-destructive/50 bg-destructive/5" : "border-border bg-muted/30"
+                }`}
+                data-testid="structure-estimate"
+              >
+                <p className="flex items-center gap-1.5 text-sm font-medium">
+                  <Wallet className="h-4 w-4" />
+                  Estimated cost
+                  {estimateQuery.isLoading && <Loader2 className="h-3 w-3 animate-spin" />}
+                </p>
+                {estimate ? (
+                  <>
+                    <p className="text-sm">
+                      <strong>{formatUsd(estimate.estimate.costUsd)}</strong> for {estimate.pages} page(s) in{" "}
+                      {estimate.estimate.requests} request(s) — about{" "}
+                      {Math.round(estimate.estimate.inputTokens / 1000)}k in /{" "}
+                      {Math.round(estimate.estimate.outputTokens / 1000)}k out on {estimate.model}.
+                    </p>
+                    <p className="text-xs text-muted-foreground">
+                      Budget left: {formatUsd(estimate.budget.remainingTodayUsd)} today ·{" "}
+                      {formatUsd(estimate.budget.remainingThisMonthUsd)} this month · per-document cap{" "}
+                      {formatUsd(estimate.budget.maxSpendPerJobUsd ?? 0)}.
+                    </p>
+                    <p className="text-[11px] text-muted-foreground">
+                      An estimate, deliberately on the high side ({estimate.estimate.basis}). The real figure
+                      is counted from the API as each range finishes and is shown while it runs.
+                    </p>
+                    {!estimate.withinBudget && (
+                      <Alert variant="destructive" className="mt-1">
+                        <AlertCircle className="h-4 w-4" />
+                        <AlertTitle>Over budget — not started</AlertTitle>
+                        <AlertDescription className="text-xs">
+                          <ul className="list-disc space-y-0.5 pl-4">
+                            {estimate.blockers.map((blocker, i) => (
+                              <li key={i}>{blocker}</li>
+                            ))}
+                          </ul>
+                          Analyse fewer pages at a time, wait for the budget to reset, or raise the
+                          matching STRUCTURE_MAX_SPEND_* limit on the server.
+                        </AlertDescription>
+                      </Alert>
+                    )}
+                  </>
+                ) : (
+                  <p className="text-xs text-muted-foreground">
+                    {estimateQuery.error
+                      ? (estimateQuery.error as Error).message
+                      : "Working out what this document would cost…"}
+                  </p>
+                )}
+              </div>
+            )}
+
             <DialogFooter className="gap-2">
               <Button variant="outline" onClick={() => setStep("hierarchy")}>
                 Back
@@ -634,7 +703,15 @@ export default function OcrStructureWizard({ open, onOpenChange, ocrJob, grantha
                 <Button
                   onClick={() => startMutation.mutate()}
                   disabled={
-                    !hierarchyReady || startMutation.isPending || configQuery.data?.configured === false
+                    !hierarchyReady ||
+                    startMutation.isPending ||
+                    configQuery.data?.configured === false ||
+                    estimate?.withinBudget === false
+                  }
+                  title={
+                    estimate?.withinBudget === false
+                      ? "This document is over the configured Claude budget"
+                      : undefined
                   }
                   data-testid="structure-start"
                 >
@@ -667,6 +744,9 @@ export default function OcrStructureWizard({ open, onOpenChange, ocrJob, grantha
                 {job.model} · {((job.inputTokens + job.outputTokens) / 1000).toFixed(1)}k tokens
                 {job.cachedInputTokens > 0
                   ? ` · ${(job.cachedInputTokens / 1000).toFixed(1)}k served from cache`
+                  : ""}
+                {detailQuery.data
+                  ? ` · ${formatUsd(detailQuery.data.spentUsd)} of ${formatUsd(detailQuery.data.maxSpendPerJobUsd)} for this document`
                   : ""}
               </span>
               <div className="ml-auto flex items-center gap-2">

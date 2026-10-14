@@ -157,24 +157,75 @@ keeps a chapter heading on page 40 governing page 41.
 
 ## Cost and limits
 
+### What it costs
+
+Measured with the estimator at Claude Opus 5 list prices ($5/MTok in, $25/MTok out):
+
+| Document | Requests | Tokens (in / out) | Cost |
+| --- | --- | --- | --- |
+| 100 pages | 10 | 165k / 216k | **~$6** |
+| 300 pages | 30 | 617k / 810k | **~$23** |
+| 800 pages | 80 | 1.6M / 2.2M | **~$62** |
+
+Output dominates, because every item carries the source text back verbatim — that is the
+price of never letting the model paraphrase. The two levers that actually move the figure
+are `STRUCTURE_EFFORT` (try `low`/`medium` on cleanly printed, regularly numbered books)
+and `STRUCTURE_MODEL` (Sonnet 5 is ~2.5x cheaper per token than Opus). **If you change the
+model, change `STRUCTURE_PRICE_*` with it**, or the portal will quote a stale number.
+
+### The gates
+
 | Gate | Default | Env |
 | --- | --- | --- |
+| **Spend per document** | **$30** | `STRUCTURE_MAX_SPEND_PER_JOB_USD` |
+| **Spend per UTC day** | **$60** | `STRUCTURE_MAX_SPEND_PER_DAY_USD` |
+| **Spend per UTC month** | **$400** | `STRUCTURE_MAX_SPEND_PER_MONTH_USD` |
+| Requests per document | 200 | `STRUCTURE_MAX_REQUESTS_PER_JOB` |
+| Requests per rolling minute / UTC day | 20 / 800 | `STRUCTURE_REQUESTS_PER_MINUTE`, `STRUCTURE_REQUESTS_PER_DAY` |
 | Model | `claude-opus-5` | `STRUCTURE_MODEL` |
 | Thinking depth | `high` | `STRUCTURE_EFFORT` |
 | OCR pages per request | 10 (or 60k characters) | `STRUCTURE_PAGES_PER_CHUNK`, `STRUCTURE_MAX_CHARS_PER_CHUNK` |
 | Requests in flight (whole server) | 2 | `STRUCTURE_CONCURRENCY` |
 | Documents analysed at once | 1 | `STRUCTURE_MAX_ACTIVE_JOBS` |
-| Requests per rolling minute / UTC day | 20 / 800 | `STRUCTURE_REQUESTS_PER_MINUTE`, `STRUCTURE_REQUESTS_PER_DAY` |
 | Attempts per range | 3 | `STRUCTURE_MAX_ATTEMPTS` |
 | Uncertainty threshold | 0.7 | `STRUCTURE_CONFIDENCE_THRESHOLD` |
+
+Any spend gate set to `0` is disabled. The request caps bound the burst rate; **the spend
+caps are what bound the bill**, because one request can carry 60k input and 32k output
+tokens.
+
+### Where each gate bites
+
+1. **Before the button.** The instructions step shows the estimate for this document, the
+   budget left today and this month, and the per-document cap. Over any of them, the
+   Analyse button is disabled and says which one and by how much.
+2. **At creation.** `POST /jobs` re-checks server-side and refuses with 429 and the gate
+   name, so a stale page or a direct API call cannot slip past the UI.
+3. **Before every range.** The per-document spend and request caps are re-checked against
+   what has *actually* been billed. A document denser than the estimate assumed stops at
+   its cap: the job finishes `partial`, the ranges it did analyse are reviewable, and the
+   error names the env var to raise and tells you to press **Retry failed ranges**.
+4. **Before every request.** The day and month gates sit in `acquireStructureSlot`, so a
+   budget that runs out mid-job stops the next request rather than the next job.
+
+Spend is computed from the token counters the API itself returned, summed over
+`cms_structure_jobs` in Postgres — so it survives a restart, counts every process, and
+cannot be reset by redeploying. Cache reads are billed at 0.1x and cache writes at 1.25x,
+and the two are counted separately (`cached_input_tokens`, `cache_write_tokens`) rather
+than lumped together, which would under-bill the budget.
+
+The estimate itself is deliberately pessimistic — 2.5 chars/token (Devanagari and IAST
+tokenize far worse than English), every range paying the full prompt overhead, output at
+1.35x the page text. It is labelled as an estimate everywhere it appears; the real figure
+lands on the job row as each range finishes and is shown while the analysis runs.
 
 The rules, the hierarchy and the editor's instructions are one cached prefix
 (`cache_control: ephemeral`), so a 300-page book pays for them once instead of thirty
 times; `cachedInputTokens` on the job row is the evidence, and the wizard shows it.
 
-A per-day budget is seeded from the database on boot, so a restart does not hand out a
-fresh one. When it runs out, remaining ranges are marked `skipped` and the job finishes
-`partial` — press **Retry failed ranges** after 00:00 UTC.
+A per-day request counter is also seeded from the database on boot. When it runs out,
+remaining ranges are marked `skipped` and the job finishes `partial` — press **Retry
+failed ranges** after 00:00 UTC.
 
 ## Accuracy
 

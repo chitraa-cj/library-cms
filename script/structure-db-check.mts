@@ -22,7 +22,10 @@ import { sql } from "drizzle-orm";
 import { db, pool } from "../server/db";
 import { ensureOcrSchema, insertJob, insertChunks, updateChunk } from "../server/ocr/store";
 import * as store from "../server/structure/store";
-import { buildStructureResult } from "../server/structure/jobs";
+import { buildStructureResult, estimateStructureCostForPages } from "../server/structure/jobs";
+import { structureConfig, structureRates } from "../server/structure/config";
+import { assertSpendBudget, invalidateStructureSpend, structureSpend } from "../server/structure/limiter";
+import { structureCostUsd } from "../shared/ocr-structure";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 
@@ -78,6 +81,9 @@ for (const col of [
 ]) check(`column ${col}`, names.has(col));
 
 console.log("\na job through the store");
+// Re-runnable: a previous run that failed part way must not block the next one. The
+// structure rows go with the OCR rows by cascade.
+await pool.query("delete from cms_ocr_jobs where id = any($1)", [["ocr-1", "ocr-budget"]]);
 const ocr = await insertJob({
   id: "ocr-1", userId: null, fileName: "book.pdf", mimeType: "application/pdf",
   fileSize: 10, fileHash: "x", pageCount: 2, chunkSize: 8, quality: "fast",
@@ -121,6 +127,7 @@ await store.updateStructureChunk(job.id, 1, {
 });
 await store.addStructureChunkResultToJob(job.id, {
   done: 2, failed: 0, requests: 2, inputTokens: 100, outputTokens: 50, cachedInputTokens: 80,
+  cacheWriteTokens: 1_800,
 });
 await store.updateStructureJob(job.id, { status: "done" });
 
@@ -152,6 +159,90 @@ const edited = await buildStructureResult((await store.getStructureJob(job.id))!
 check("an override moves the text to the bhashyam field",
   Boolean(edited.structure.verses[0]?.bhashyam.sanskrit) && edited.structure.verses[0]?.teekas.length === 0);
 
+
+
+console.log("\nspend budget, measured from the token counters");
+{
+  invalidateStructureSpend();
+  const before = await structureSpend(true);
+  check("spend starts from what is actually in the table", before.dayUsd >= 0);
+
+  // Nothing spent yet, so a modest estimate must be allowed through.
+  let blocked = null;
+  try {
+    await assertSpendBudget(0);
+  } catch (err: any) {
+    blocked = err;
+  }
+  check("an empty budget lets work start", blocked === null, blocked?.message);
+
+  // Park a job whose counters exceed the daily cap, the way a real run would.
+  const rates = structureRates();
+  const outputTokensOverCap =
+    rates.outputPer1M > 0
+      ? Math.ceil(((structureConfig.maxSpendPerDayUsd * 2) / rates.outputPer1M) * 1_000_000)
+      : 0;
+  const ocr2 = await insertJob({
+    id: "ocr-budget", userId: null, fileName: "spent.pdf", mimeType: "application/pdf",
+    fileSize: 10, fileHash: "y", pageCount: 1, chunkSize: 8, quality: "fast",
+    model: "gemini-3.8-flash", status: "done", chunksTotal: 1,
+  });
+  const spender = await store.insertStructureJob({
+    id: "str-budget", ocrJobId: ocr2.id, userId: null, depth: 2,
+    levelNames: ["Adhyaya", "Mantra"], model: "claude-opus-5", status: "done", chunksTotal: 1,
+  });
+  await store.addStructureChunkResultToJob(spender.id, {
+    done: 1, failed: 0, requests: 1,
+    inputTokens: 0, outputTokens: outputTokensOverCap, cachedInputTokens: 0, cacheWriteTokens: 0,
+  });
+  invalidateStructureSpend();
+
+  const after = await structureSpend(true);
+  check(
+    "the day figure reflects the tokens that were recorded",
+    after.dayUsd > structureConfig.maxSpendPerDayUsd,
+    `${after.dayUsd} vs cap ${structureConfig.maxSpendPerDayUsd}`,
+  );
+
+  blocked = null;
+  try {
+    await assertSpendBudget(0);
+  } catch (err: any) {
+    blocked = err;
+  }
+  check("a spent daily budget blocks the next request", blocked !== null);
+  check("and names the gate, so the UI can explain it", blocked?.gate === "spend-per-day", blocked?.gate);
+  check("and says how to proceed", /STRUCTURE_MAX_SPEND_PER_DAY_USD/.test(blocked?.message ?? ""));
+
+  // The same gate must stop a NEW job being created, not just the next request.
+  const { createStructureJob } = await import("../server/structure/jobs");
+  let refused = null;
+  try {
+    await createStructureJob({
+      ocrJob: await (await import("../server/ocr/store")).getJob(ocr2.id) as any,
+      userId: null,
+      config: { depth: 2, levelNames: ["Adhyaya", "Mantra"] },
+    });
+  } catch (err: any) {
+    refused = err;
+  }
+  check("a spent budget refuses to start a new analysis", refused !== null, "job was created anyway");
+
+  // The estimate is the figure the gate compares against, so it must be non-zero.
+  const { pages: budgetPages } = await (await import("../server/ocr/jobs")).buildOcrDocument(ocr.id);
+  const estimate = estimateStructureCostForPages(budgetPages);
+  check("the pre-flight estimate is a real number", estimate.costUsd > 0 && estimate.requests > 0,
+    JSON.stringify(estimate));
+  check(
+    "and it agrees with the cost function",
+    Math.abs(estimate.costUsd - structureCostUsd(estimate, rates)) < 1e-9,
+  );
+
+  await pool.query("delete from cms_ocr_jobs where id = $1", [ocr2.id]);
+  invalidateStructureSpend();
+}
+
+console.log("\ncascade deletes");
 // Cascades: deleting the OCR job must take the analysis with it.
 await pool.query("delete from cms_ocr_jobs where id = $1", [ocr.id]);
 const left = await pool.query("select count(*)::int as n from cms_structure_jobs");

@@ -125,6 +125,138 @@ export function planStructureChunks(
   return ranges;
 }
 
+// ────────────────────────────────────────────────────────── cost estimation
+
+/**
+ * Per-million-token prices and the two conversion factors the estimate needs.
+ *
+ * Prices live in config (env-overridable) rather than being hard-coded here, because a
+ * figure that silently goes stale when the model changes is worse than no figure at all.
+ */
+export interface StructureCostRates {
+  inputPer1M: number;
+  outputPer1M: number;
+  /** Cache reads bill at ~0.1x input, cache writes at ~1.25x. */
+  cacheReadPer1M: number;
+  cacheWritePer1M: number;
+  /**
+   * Characters per token. Deliberately pessimistic: Devanagari and IAST tokenize far
+   * worse than English prose (English is ~4 chars/token), and an estimate that
+   * under-states cost is the one that gets someone in trouble.
+   */
+  charsPerToken: number;
+  /** Rules + hierarchy + instructions, the cacheable prefix, per request. */
+  promptOverheadTokens: number;
+  /**
+   * Output tokens as a multiple of the page tokens. The items carry the source text
+   * verbatim, so the answer is roughly the input text again plus JSON scaffolding.
+   */
+  outputRatio: number;
+}
+
+export const STRUCTURE_DEFAULT_RATES: StructureCostRates = {
+  inputPer1M: 5,
+  outputPer1M: 25,
+  cacheReadPer1M: 0.5,
+  cacheWritePer1M: 6.25,
+  charsPerToken: 2.5,
+  promptOverheadTokens: 1_800,
+  outputRatio: 1.35,
+};
+
+export interface StructureCostEstimate {
+  requests: number;
+  inputTokens: number;
+  cachedInputTokens: number;
+  cacheWriteTokens: number;
+  outputTokens: number;
+  costUsd: number;
+  /** What the figure assumed, so the UI can say it rather than present it as a fact. */
+  basis: string;
+}
+
+/** Dollars for a set of token counters, at the given rates. */
+export function structureCostUsd(
+  tokens: {
+    inputTokens?: number | null;
+    outputTokens?: number | null;
+    cachedInputTokens?: number | null;
+    cacheWriteTokens?: number | null;
+  },
+  rates: StructureCostRates,
+): number {
+  const input = Math.max(0, Number(tokens.inputTokens ?? 0));
+  const output = Math.max(0, Number(tokens.outputTokens ?? 0));
+  const cacheRead = Math.max(0, Number(tokens.cachedInputTokens ?? 0));
+  const cacheWrite = Math.max(0, Number(tokens.cacheWriteTokens ?? 0));
+  return (
+    (input * rates.inputPer1M +
+      output * rates.outputPer1M +
+      cacheRead * rates.cacheReadPer1M +
+      cacheWrite * rates.cacheWritePer1M) /
+    1_000_000
+  );
+}
+
+/**
+ * What analysing these pages should cost, before a single request is made.
+ *
+ * This is what the wizard shows the editor and what the server checks the remaining
+ * budget against. It is an ESTIMATE — the real figure lands on the job row as the ranges
+ * finish — so it is built to err high: pessimistic tokenization, every range paying the
+ * full prompt overhead, and no credit for thinking being cheap.
+ */
+export function estimateStructureCost(
+  pages: readonly { page: number; markdown: string }[],
+  ranges: readonly StructureChunkRange[],
+  rates: StructureCostRates = STRUCTURE_DEFAULT_RATES,
+  opts: { carryOverChars?: number; promptCaching?: boolean } = {},
+): StructureCostEstimate {
+  const charsByPage = new Map(pages.map((p) => [p.page, p.markdown.length]));
+  const carryOverTokens = Math.ceil((opts.carryOverChars ?? 0) / rates.charsPerToken);
+
+  let pageTokens = 0;
+  for (const range of ranges) {
+    for (let page = range.startPage; page <= range.endPage; page++) {
+      pageTokens += Math.ceil((charsByPage.get(page) ?? 0) / rates.charsPerToken);
+    }
+  }
+
+  const requests = ranges.length;
+  const caching = opts.promptCaching !== false && requests > 1;
+
+  // With caching the prefix is written once and read by the rest; without it, every
+  // request pays for it in full.
+  const cacheWriteTokens = caching ? rates.promptOverheadTokens : 0;
+  const cachedInputTokens = caching ? rates.promptOverheadTokens * Math.max(0, requests - 1) : 0;
+  const uncachedOverhead = caching ? 0 : rates.promptOverheadTokens * requests;
+
+  const inputTokens = pageTokens + uncachedOverhead + carryOverTokens * Math.max(0, requests - 1);
+  const outputTokens = Math.ceil(pageTokens * rates.outputRatio);
+
+  const costUsd = structureCostUsd(
+    { inputTokens, outputTokens, cachedInputTokens, cacheWriteTokens },
+    rates,
+  );
+
+  return {
+    requests,
+    inputTokens,
+    cachedInputTokens,
+    cacheWriteTokens,
+    outputTokens,
+    costUsd,
+    basis: `${requests} request(s), ~${rates.charsPerToken} chars/token, output ~${rates.outputRatio}x the page text${caching ? ", prompt prefix cached" : ""}`,
+  };
+}
+
+/** Two decimals, or more for sums small enough that two would read as zero. */
+export function formatUsd(amount: number): string {
+  if (!Number.isFinite(amount)) return "$0.00";
+  if (amount > 0 && amount < 0.01) return "<$0.01";
+  return `$${amount.toFixed(2)}`;
+}
+
 // ─────────────────────────────────────────────────────────── the model's answer
 
 /**

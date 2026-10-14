@@ -35,7 +35,10 @@ import {
   applyStructureOverrides,
   assembleStructure,
   buildStructureCsv,
+  estimateStructureCost,
+  formatUsd,
   planStructureChunks,
+  structureCostUsd,
   normalizeHierarchyConfig,
   structureWorkflowState,
   validateStructure,
@@ -45,14 +48,21 @@ import {
   type StructureItem,
   type StructureOverride,
   type StructureValidation,
+  type StructureCostEstimate,
   type StructureWorkflowState,
 } from "@shared/ocr-structure";
 export type { StructureChunkRange } from "@shared/ocr-structure";
 export { planStructureChunks } from "@shared/ocr-structure";
 import { buildOcrDocument } from "../ocr/jobs";
 import { analyseChunkWithClaude, StructureClaudeError } from "./claude";
-import { isStructureConfigured, sanitizeStructureError, structureConfig } from "./config";
-import { acquireStructureSlot, recordExtraStructureRequest, StructureBudgetError } from "./limiter";
+import { isStructureConfigured, sanitizeStructureError, structureConfig, structureRates } from "./config";
+import {
+  acquireStructureSlot,
+  assertSpendBudget,
+  invalidateStructureSpend,
+  recordExtraStructureRequest,
+  StructureBudgetError,
+} from "./limiter";
 import {
   addStructureChunkResultToJob,
   claimableStructureChunks,
@@ -117,6 +127,56 @@ export function liveStructureChunk(jobId: string): StructureChunkLive | null {
   return live.get(jobId) ?? null;
 }
 
+// ──────────────────────────────────────────────────────────── cost and budget
+
+/** The configured estimate for a planned set of ranges. */
+export function estimateStructureCostFor(
+  pages: readonly OcrPage[],
+  ranges: readonly { startPage: number; endPage: number }[],
+): StructureCostEstimate {
+  return estimateStructureCost(pages, ranges, structureRates(), {
+    carryOverChars: structureConfig.carryOverChars,
+    promptCaching: structureConfig.promptCaching,
+  });
+}
+
+/** What analysing a whole OCR document would cost, before any job exists. */
+export function estimateStructureCostForPages(pages: readonly OcrPage[]): StructureCostEstimate {
+  return estimateStructureCostFor(
+    pages,
+    planStructureChunks(pages, {
+      pagesPerChunk: structureConfig.pagesPerChunk,
+      maxChars: structureConfig.maxCharsPerChunk,
+    }),
+  );
+}
+
+/** What this job has actually cost so far, from the counters the API returned. */
+export function structureJobSpendUsd(job: StructureJob): number {
+  return structureCostUsd(job, structureRates());
+}
+
+/**
+ * The per-document ceiling, checked before each range rather than only at creation.
+ *
+ * The creation estimate is pessimistic, so this should almost never fire — but "almost
+ * never" is not "never", and a document whose pages are far denser than the estimate
+ * assumed must stop at its cap rather than quietly spend the day's budget.
+ */
+function jobBudgetStop(job: StructureJob): string | null {
+  if (
+    structureConfig.maxRequestsPerJob > 0 &&
+    job.requestCount >= structureConfig.maxRequestsPerJob
+  ) {
+    return `Stopped at the per-document request cap (${structureConfig.maxRequestsPerJob}). Raise STRUCTURE_MAX_REQUESTS_PER_JOB and press Retry failed ranges to continue.`;
+  }
+  const spent = structureJobSpendUsd(job);
+  if (structureConfig.maxSpendPerJobUsd > 0 && spent >= structureConfig.maxSpendPerJobUsd) {
+    return `Stopped at the per-document budget: ${formatUsd(spent)} of ${formatUsd(structureConfig.maxSpendPerJobUsd)}. Raise STRUCTURE_MAX_SPEND_PER_JOB_USD and press Retry failed ranges to continue.`;
+  }
+  return null;
+}
+
 // ────────────────────────────────────────────────────────────────── creation
 
 export interface CreateStructureJobInput {
@@ -152,6 +212,27 @@ export async function createStructureJob(input: CreateStructureJobInput): Promis
     maxChars: structureConfig.maxCharsPerChunk,
   });
 
+  // Nothing is sent to Claude until the bill has been looked at. The estimate is
+  // deliberately pessimistic (see estimateStructureCost), so a job that passes here is
+  // very unlikely to be stopped mid-run by the per-job cap.
+  const estimate = estimateStructureCostFor(pages, ranges);
+  if (ranges.length > structureConfig.maxRequestsPerJob) {
+    const err: any = new Error(
+      `This document needs ${ranges.length} Claude requests; the per-document cap is ${structureConfig.maxRequestsPerJob}. Analyse it in parts, raise STRUCTURE_PAGES_PER_CHUNK, or raise STRUCTURE_MAX_REQUESTS_PER_JOB.`,
+    );
+    err.status = 400;
+    throw err;
+  }
+  if (structureConfig.maxSpendPerJobUsd > 0 && estimate.costUsd > structureConfig.maxSpendPerJobUsd) {
+    const err: any = new Error(
+      `Analysing this document would cost about ${formatUsd(estimate.costUsd)}; the per-document cap is ${formatUsd(structureConfig.maxSpendPerJobUsd)}. Analyse it in parts, or raise STRUCTURE_MAX_SPEND_PER_JOB_USD.`,
+    );
+    err.status = 400;
+    throw err;
+  }
+  // Day and month budgets, counting what this job is expected to add.
+  await assertSpendBudget(estimate.costUsd);
+
   const id = randomUUID();
   const job = await insertStructureJob({
     id,
@@ -177,7 +258,7 @@ export async function createStructureJob(input: CreateStructureJobInput): Promis
   );
 
   log(
-    `job ${id} created for ocr ${input.ocrJob.id} — ${pages.length}p, ${ranges.length} range(s), depth ${cfg.depth} (${cfg.levelNames.join(" › ")}), ${structureConfig.model}`,
+    `job ${id} created for ocr ${input.ocrJob.id} — ${pages.length}p, ${ranges.length} range(s), depth ${cfg.depth} (${cfg.levelNames.join(" › ")}), ${structureConfig.model}, estimated ${formatUsd(estimate.costUsd)}`,
   );
   pump();
   return job;
@@ -279,8 +360,20 @@ async function runJob(jobId: string, signal: AbortSignal): Promise<void> {
 
   const started = Date.now();
   // Ranges run in order so each one inherits the hierarchy the previous one left open.
+  let budgetStop: string | null = null;
   for (const chunk of pending) {
     if (signal.aborted) break;
+
+    // Re-read the counters rather than trusting the row we booted with: they grow as
+    // ranges finish, and the cap has to be checked against what has actually been spent.
+    const current = await getStructureJob(jobId);
+    if (!current) break;
+    budgetStop = jobBudgetStop(current);
+    if (budgetStop) {
+      log(`job ${jobId} ${budgetStop}`);
+      break;
+    }
+
     const carry = await carryOverFor(jobId, chunk.chunkIndex, pageByNumber);
     await runChunk(job, cfg, chunk, pageByNumber, carry, signal);
   }
@@ -295,8 +388,12 @@ async function runJob(jobId: string, signal: AbortSignal): Promise<void> {
     return;
   }
 
-  await finalizeJob(jobId);
-  log(`job ${jobId} finished in ${((Date.now() - started) / 1000).toFixed(1)}s`);
+  await finalizeJob(jobId, budgetStop);
+  const finished = await getStructureJob(jobId);
+  log(
+    `job ${jobId} finished in ${((Date.now() - started) / 1000).toFixed(1)}s` +
+      (finished ? ` — spent ${formatUsd(structureJobSpendUsd(finished))} over ${finished.requestCount} request(s)` : ""),
+  );
 }
 
 /**
@@ -423,6 +520,7 @@ async function runChunk(
       inputTokens: result.inputTokens,
       outputTokens: result.outputTokens,
       cachedInputTokens: result.cachedInputTokens,
+      cacheWriteTokens: result.cacheWriteTokens,
       durationMs: Date.now() - startedAt,
       error: null,
     });
@@ -433,7 +531,10 @@ async function runChunk(
       inputTokens: result.inputTokens,
       outputTokens: result.outputTokens,
       cachedInputTokens: result.cachedInputTokens,
+      cacheWriteTokens: result.cacheWriteTokens,
     });
+    // The day/month figures just changed; the next gate check must see the new ones.
+    invalidateStructureSpend();
     if (result.rejected > 0) {
       log(
         `job ${job.id} range ${chunk.chunkIndex} (p${chunk.startPage}-${chunk.endPage}): ${result.rejected} item(s) failed the schema check and were dropped`,
@@ -454,6 +555,7 @@ async function runChunk(
           inputTokens: 0,
           outputTokens: 0,
           cachedInputTokens: 0,
+          cacheWriteTokens: 0,
         });
       }
       return;
@@ -473,6 +575,7 @@ async function runChunk(
       inputTokens: 0,
       outputTokens: 0,
       cachedInputTokens: 0,
+      cacheWriteTokens: 0,
     });
     log(
       `job ${job.id} range ${chunk.chunkIndex} (p${chunk.startPage}-${chunk.endPage}) failed: ${sanitizeStructureError(err)}`,
@@ -483,19 +586,36 @@ async function runChunk(
   }
 }
 
-async function finalizeJob(jobId: string): Promise<void> {
+async function finalizeJob(jobId: string, budgetStop: string | null = null): Promise<void> {
   const chunks = await listStructureChunkStatuses(jobId);
   const done = chunks.filter((c) => c.status === "done").length;
   const failed = chunks.filter((c) => c.status === "failed" || c.status === "skipped").length;
-  const status = failed === 0 ? "done" : done === 0 ? "failed" : "partial";
+  const unanalysed = chunks.length - done - failed;
+
+  // A budget stop leaves ranges untouched rather than failed: the job is `partial`, the
+  // pages it did analyse are reviewable, and the message names the knob to raise.
+  const status = budgetStop
+    ? done === 0
+      ? "failed"
+      : "partial"
+    : failed === 0
+      ? "done"
+      : done === 0
+        ? "failed"
+        : "partial";
   const firstError = chunks.find((c) => c.error)?.error ?? null;
+  const error = budgetStop
+    ? `${budgetStop}${unanalysed > 0 ? ` ${unanalysed} page range(s) were not analysed.` : ""}`
+    : status === "done"
+      ? null
+      : firstError;
 
   await updateStructureJob(jobId, {
     status,
     chunksDone: done,
     chunksFailed: failed,
     finishedAt: new Date(),
-    error: status === "done" ? null : firstError,
+    error,
   });
 }
 

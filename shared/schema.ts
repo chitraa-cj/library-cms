@@ -756,6 +756,8 @@ export const structureJobs = pgTable("cms_structure_jobs", {
   inputTokens: integer("input_tokens").notNull().default(0),
   outputTokens: integer("output_tokens").notNull().default(0),
   cachedInputTokens: integer("cached_input_tokens").notNull().default(0),
+  /** Cache WRITES bill at 1.25x, so they are counted separately from reads. */
+  cacheWriteTokens: integer("cache_write_tokens").notNull().default(0),
   /** Review edits and answered questions, applied in order on every read. */
   overrides: jsonb("overrides").$type<unknown[]>().notNull().default([]),
   /** Set when the editor confirms the review; gates CSV export / import. */
@@ -794,6 +796,7 @@ export const structureJobChunks = pgTable("cms_structure_job_chunks", {
   inputTokens: integer("input_tokens").notNull().default(0),
   outputTokens: integer("output_tokens").notNull().default(0),
   cachedInputTokens: integer("cached_input_tokens").notNull().default(0),
+  cacheWriteTokens: integer("cache_write_tokens").notNull().default(0),
   durationMs: integer("duration_ms").notNull().default(0),
   error: text("error"),
   updatedAt: timestamp("updated_at").defaultNow().notNull(),

@@ -18,14 +18,18 @@ import {
   proposeHierarchyMapping,
   sectionLevelCount,
   STRUCTURE_MAX_DEPTH,
+  formatUsd,
   type StructureHierarchyConfig,
   type StructureOverride,
 } from "@shared/ocr-structure";
+import { buildOcrDocument } from "../ocr/jobs";
 import { getJob as getOcrJob } from "../ocr/store";
 import { isStructureConfigured, sanitizeStructureError, structureConfig } from "./config";
-import { structureUsageSnapshot } from "./limiter";
+import { structureSpend, structureUsageSnapshot } from "./limiter";
 import {
   buildStructureResult,
+  estimateStructureCostForPages,
+  structureJobSpendUsd,
   cancelStructureJob,
   createStructureJob,
   isStructureJobActive,
@@ -134,7 +138,10 @@ function parseOverrides(input: unknown): StructureOverride[] | { error: string }
 
 // ─────────────────────────────────────────────────────────────────────── config
 
-router.get("/config", (_req, res) => {
+router.get("/config", async (_req, res) => {
+  // Force a fresh read: this is what the wizard shows next to the estimate, and a stale
+  // "remaining budget" is worse than a slightly slower config call.
+  const spend = await structureSpend(true).catch(() => ({ dayUsd: 0, monthUsd: 0 }));
   res.json({
     configured: isStructureConfigured(),
     model: structureConfig.model,
@@ -145,8 +152,77 @@ router.get("/config", (_req, res) => {
       pagesPerChunk: structureConfig.pagesPerChunk,
       maxInstructionChars: structureConfig.maxInstructionChars,
       confidenceThreshold: structureConfig.confidenceThreshold,
+      maxRequestsPerJob: structureConfig.maxRequestsPerJob,
+      maxSpendPerJobUsd: structureConfig.maxSpendPerJobUsd,
+      maxSpendPerDayUsd: structureConfig.maxSpendPerDayUsd,
+      maxSpendPerMonthUsd: structureConfig.maxSpendPerMonthUsd,
+    },
+    budget: {
+      spentTodayUsd: spend.dayUsd,
+      spentThisMonthUsd: spend.monthUsd,
+      remainingTodayUsd: Math.max(0, structureConfig.maxSpendPerDayUsd - spend.dayUsd),
+      remainingThisMonthUsd: Math.max(0, structureConfig.maxSpendPerMonthUsd - spend.monthUsd),
     },
     usage: structureUsageSnapshot(),
+  });
+});
+
+/**
+ * What analysing this OCR document would cost, before anything is started.
+ *
+ * The wizard shows this on the step before the Analyse button, with the remaining budget
+ * beside it, so the decision to spend is made with the number in view rather than
+ * discovered on an invoice.
+ */
+router.get("/estimate/:ocrJobId", async (req, res) => {
+  const ocrJob = await getOcrJob(req.params.ocrJobId);
+  if (!ocrJob) return fail(res, 404, "OCR job not found.");
+
+  const { pages } = await buildOcrDocument(ocrJob.id);
+  if (pages.length === 0) {
+    return fail(res, 409, "This document has no transcribed pages yet.");
+  }
+
+  const estimate = estimateStructureCostForPages(pages);
+  const spend = await structureSpend(true).catch(() => ({ dayUsd: 0, monthUsd: 0 }));
+  const remainingToday = Math.max(0, structureConfig.maxSpendPerDayUsd - spend.dayUsd);
+  const remainingMonth = Math.max(0, structureConfig.maxSpendPerMonthUsd - spend.monthUsd);
+
+  const blockers: string[] = [];
+  if (estimate.requests > structureConfig.maxRequestsPerJob) {
+    blockers.push(
+      `${estimate.requests} requests needed, over the per-document cap of ${structureConfig.maxRequestsPerJob}.`,
+    );
+  }
+  if (structureConfig.maxSpendPerJobUsd > 0 && estimate.costUsd > structureConfig.maxSpendPerJobUsd) {
+    blockers.push(
+      `about ${formatUsd(estimate.costUsd)}, over the per-document cap of ${formatUsd(structureConfig.maxSpendPerJobUsd)}.`,
+    );
+  }
+  if (structureConfig.maxSpendPerDayUsd > 0 && estimate.costUsd > remainingToday) {
+    blockers.push(
+      `about ${formatUsd(estimate.costUsd)}, over the ${formatUsd(remainingToday)} left in today's budget.`,
+    );
+  }
+  if (structureConfig.maxSpendPerMonthUsd > 0 && estimate.costUsd > remainingMonth) {
+    blockers.push(
+      `about ${formatUsd(estimate.costUsd)}, over the ${formatUsd(remainingMonth)} left this month.`,
+    );
+  }
+
+  res.json({
+    pages: pages.length,
+    estimate,
+    model: structureConfig.model,
+    budget: {
+      spentTodayUsd: spend.dayUsd,
+      spentThisMonthUsd: spend.monthUsd,
+      remainingTodayUsd: remainingToday,
+      remainingThisMonthUsd: remainingMonth,
+      maxSpendPerJobUsd: structureConfig.maxSpendPerJobUsd,
+    },
+    withinBudget: blockers.length === 0,
+    blockers,
   });
 });
 
@@ -195,7 +271,15 @@ router.post("/jobs", async (req: any, res) => {
     });
     res.status(201).json({ job });
   } catch (err: any) {
-    fail(res, err?.status || 500, sanitizeStructureError(err) || "Could not start the analysis.");
+    // A budget refusal is a 429 with the gate named, so the UI can say whether waiting
+    // until tomorrow helps or an env var has to be raised.
+    const status = err?.status || (err?.name === "StructureBudgetError" ? 429 : 500);
+    res
+      .status(status)
+      .json({
+        message: sanitizeStructureError(err) || "Could not start the analysis.",
+        ...(err?.gate ? { code: err.gate } : {}),
+      });
   }
 });
 
@@ -210,6 +294,8 @@ router.get("/jobs/:id", async (req, res) => {
     chunks,
     active: isStructureJobActive(job.id),
     live: liveStructureChunk(job.id),
+    spentUsd: structureJobSpendUsd(job),
+    maxSpendPerJobUsd: structureConfig.maxSpendPerJobUsd,
     usage: structureUsageSnapshot(),
     serverNow: Date.now(),
   });

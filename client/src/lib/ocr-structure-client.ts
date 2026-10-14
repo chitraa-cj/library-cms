@@ -11,6 +11,7 @@
 import { apiRequest, CMS_FETCH_INIT } from "./queryClient";
 import type {
   AssembledSection,
+  StructureCostEstimate,
   AssembledVerse,
   HierarchyMappingProposal,
   StructureCsvColumn,
@@ -24,6 +25,14 @@ import type { StructureJob } from "@shared/schema";
 
 export const STRUCTURE_BASE = "/api/admin/ocr/structure";
 
+export interface StructureBudget {
+  spentTodayUsd: number;
+  spentThisMonthUsd: number;
+  remainingTodayUsd: number;
+  remainingThisMonthUsd: number;
+  maxSpendPerJobUsd?: number;
+}
+
 export interface StructureConfigInfo {
   configured: boolean;
   model: string;
@@ -34,8 +43,24 @@ export interface StructureConfigInfo {
     pagesPerChunk: number;
     maxInstructionChars: number;
     confidenceThreshold: number;
+    maxRequestsPerJob: number;
+    maxSpendPerJobUsd: number;
+    maxSpendPerDayUsd: number;
+    maxSpendPerMonthUsd: number;
   };
+  budget: StructureBudget;
   usage: StructureUsage;
+}
+
+/** What one document would cost, with the budget it has to fit inside. */
+export interface StructureEstimateInfo {
+  pages: number;
+  estimate: StructureCostEstimate;
+  model: string;
+  budget: StructureBudget;
+  withinBudget: boolean;
+  /** Why it cannot be started, in words the editor can act on. */
+  blockers: string[];
 }
 
 export interface StructureUsage {
@@ -64,6 +89,9 @@ export interface StructureJobDetail {
   job: StructureJob;
   chunks: StructureChunkStatus[];
   active: boolean;
+  /** What this analysis has cost so far, and the ceiling it stops at. */
+  spentUsd: number;
+  maxSpendPerJobUsd: number;
   live: {
     chunkIndex: number;
     attempt: number;
@@ -161,6 +189,10 @@ export function fetchStructureJobsForOcr(ocrJobId: string): Promise<{ jobs: Stru
 
 export function fetchStructureJob(jobId: string): Promise<StructureJobDetail> {
   return getJson(`${STRUCTURE_BASE}/jobs/${jobId}`);
+}
+
+export function fetchStructureEstimate(ocrJobId: string): Promise<StructureEstimateInfo> {
+  return getJson(`${STRUCTURE_BASE}/estimate/${ocrJobId}`);
 }
 
 /**

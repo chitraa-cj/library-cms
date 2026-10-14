@@ -65,3 +65,9 @@ create index if not exists cms_structure_jobs_ocr_idx
   on cms_structure_jobs (ocr_job_id, created_at desc);
 create index if not exists cms_structure_jobs_created_idx
   on cms_structure_jobs (created_at desc);
+
+-- Cache WRITES bill at 1.25x and cache reads at 0.1x, so the two are counted separately:
+-- the spend caps are computed from these counters, and folding writes into reads would
+-- under-bill the budget.
+alter table cms_structure_jobs add column if not exists cache_write_tokens integer not null default 0;
+alter table cms_structure_job_chunks add column if not exists cache_write_tokens integer not null default 0;

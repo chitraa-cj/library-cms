@@ -83,6 +83,77 @@ export function duplicateLevelNames(cfg: StructureHierarchyConfig): string[] {
   return [...seen.entries()].filter(([, n]) => n > 1).map(([k]) => k);
 }
 
+// ──────────────────────────────────────────────────────────────── page window
+
+/** A page window the editor asked for; either bound may be left open. */
+export interface StructurePageWindow {
+  from?: number | null;
+  to?: number | null;
+}
+
+export interface ResolvedStructurePageWindow {
+  /** The pages inside the window, in order. */
+  pages: Array<{ page: number; markdown: string }>;
+  /** The window actually applied, clamped to the pages that exist. Null = everything. */
+  window: { from: number; to: number } | null;
+  /** First and last transcribed page of the whole document, for the UI's bounds. */
+  availableFrom: number;
+  availableTo: number;
+  /** Transcribed pages in the whole document. */
+  availableCount: number;
+}
+
+/**
+ * Cut the transcription down to the pages the editor chose.
+ *
+ * A window is a scope decision, not a filter applied later: only these pages are planned
+ * into ranges, only they are sent to Claude, and only they are billed — which is what
+ * makes "analyse pages 40–90 of this 900-page scan" cost what those fifty pages cost.
+ * Bounds are inclusive, either may be omitted, they are accepted in either order, and
+ * they are clamped to the pages that actually have a transcription (so "1–100" on a
+ * document whose OCR stopped at page 60 analyses 60 pages rather than failing).
+ *
+ * Pure, and here with the rest of the pure logic, so the server, the estimate and the
+ * tests all resolve a window the same way.
+ */
+export function selectPageWindow(
+  pages: readonly { page: number; markdown: string }[],
+  requested?: StructurePageWindow | null,
+): ResolvedStructurePageWindow {
+  const ordered = [...pages].sort((a, b) => a.page - b.page);
+  const availableFrom = ordered[0]?.page ?? 0;
+  const availableTo = ordered[ordered.length - 1]?.page ?? 0;
+  const base = {
+    availableFrom,
+    availableTo,
+    availableCount: ordered.length,
+  };
+
+  const asPage = (value: unknown): number | null => {
+    const parsed = Number(value);
+    return Number.isFinite(parsed) && parsed >= 1 ? Math.floor(parsed) : null;
+  };
+  let from = asPage(requested?.from);
+  let to = asPage(requested?.to);
+  if (from != null && to != null && from > to) [from, to] = [to, from];
+  if (from == null && to == null) return { ...base, pages: ordered, window: null };
+
+  const lower = from ?? availableFrom;
+  const upper = to ?? availableTo;
+  const selected = ordered.filter((p) => p.page >= lower && p.page <= upper);
+  // A window that happens to cover the whole document is not a window: recording it as
+  // one would make the review claim a scope the editor never chose.
+  const coversEverything =
+    selected.length === ordered.length && lower <= availableFrom && upper >= availableTo;
+  return {
+    ...base,
+    pages: selected,
+    window: coversEverything
+      ? null
+      : { from: selected[0]?.page ?? lower, to: selected[selected.length - 1]?.page ?? upper },
+  };
+}
+
 // ────────────────────────────────────────────────────────────── chunk planning
 
 export interface StructureChunkRange {
@@ -326,6 +397,19 @@ export interface StructureChunkAnswer {
  * step with `parseStructureChunkAnswer`, which re-validates regardless: a constrained
  * format is not a reason to trust a payload that reaches the database.
  */
+/**
+ * The answer schema sent as `output_config.format.schema`.
+ *
+ * NOTE: no `minimum` / `maximum` anywhere. Structured outputs reject numeric bounds —
+ * `output_config.format.schema: For 'integer' type, properties maximum, minimum are not
+ * supported` — and the request fails with a 400 before a model sees it, which looks like
+ * a broken feature rather than a schema quibble. The bound belongs in `description`, and
+ * it is `parseStructureChunkAnswer` that actually enforces it: `page` is clamped to the
+ * requested range, `confidence` to 0–1, and an out-of-range `level` is rejected. The
+ * parser was always the authority here; these keywords were only a hint.
+ */
+const LEVEL_DESCRIPTION = `section depth, 1 (outermost) to ${STRUCTURE_MAX_SECTION_LEVELS}`;
+
 export const STRUCTURE_CHUNK_JSON_SCHEMA = {
   type: "object",
   additionalProperties: false,
@@ -339,7 +423,7 @@ export const STRUCTURE_CHUNK_JSON_SCHEMA = {
         required: ["kind", "page", "confidence"],
         properties: {
           kind: { type: "string", enum: [...STRUCTURE_ITEM_KINDS] },
-          level: { type: "integer", minimum: 1, maximum: STRUCTURE_MAX_SECTION_LEVELS },
+          level: { type: "integer", description: LEVEL_DESCRIPTION },
           number: { type: "string" },
           title: { type: "string" },
           text: { type: "string" },
@@ -347,8 +431,8 @@ export const STRUCTURE_CHUNK_JSON_SCHEMA = {
           teekaName: { type: "string" },
           language: { type: "string" },
           attachTo: { type: "string", enum: [...STRUCTURE_ATTACHMENTS] },
-          page: { type: "integer", minimum: 1 },
-          confidence: { type: "number", minimum: 0, maximum: 1 },
+          page: { type: "integer", description: "1-based page number, inside the supplied range" },
+          confidence: { type: "number", description: "0 to 1" },
           note: { type: "string" },
         },
       },
@@ -361,7 +445,7 @@ export const STRUCTURE_CHUNK_JSON_SCHEMA = {
         additionalProperties: false,
         required: ["level", "number", "title"],
         properties: {
-          level: { type: "integer", minimum: 1, maximum: STRUCTURE_MAX_SECTION_LEVELS },
+          level: { type: "integer", description: LEVEL_DESCRIPTION },
           number: { type: "string" },
           title: { type: "string" },
         },

@@ -103,6 +103,7 @@ const port = server.address().port;
 // Env must be set before the module under test reads it at import time.
 process.env.ANTHROPIC_API_KEY = "sk-ant-test-not-a-real-key-0000000000";
 process.env.ANTHROPIC_BASE_URL = `http://127.0.0.1:${port}`;
+process.env.ANTHROPIC_WORKSPACE_ID = "wrkspc_01TESTWORKSPACE";
 process.env.STRUCTURE_MODEL = "claude-opus-5";
 process.env.STRUCTURE_EFFORT = "high";
 process.env.STRUCTURE_MAX_ATTEMPTS = "3";
@@ -160,6 +161,12 @@ console.log("\nthe request");
     "constrains the answer with a JSON schema at the source");
   check("the schema forbids unknown properties",
     sent.body.output_config.format.schema.additionalProperties === false);
+  // Structured outputs reject numeric bounds — "For 'integer' type, properties maximum,
+  // minimum are not supported" — and the 400 lands before any model sees the request.
+  // The stand-in server below would accept them happily, which is how they shipped once;
+  // `parseStructureChunkAnswer` is what enforces the ranges anyway.
+  check("the schema carries no minimum/maximum (the real API rejects them)",
+    !/"(minimum|maximum)":/.test(JSON.stringify(sent.body.output_config.format.schema)));
   check("no sampling parameters are sent (removed on this model family)",
     sent.body.temperature === undefined && sent.body.top_p === undefined);
   check("no budget_tokens is sent (removed on this model family)",
@@ -190,6 +197,9 @@ console.log("\nthe request");
   check("the API key is sent as a header, never in the body",
     sent.headers["x-api-key"] === process.env.ANTHROPIC_API_KEY &&
       !JSON.stringify(sent.body).includes("sk-ant"));
+  // An org-level key carries no workspace and the API rejects it outright without this.
+  eq(sent.headers["anthropic-workspace-id"], "wrkspc_01TESTWORKSPACE",
+    "the configured workspace is sent as a header");
 
   // ── and the answer ──
   eq(result.items.length, 3, "the validated items come back");
@@ -258,6 +268,89 @@ console.log("\nretries");
   }
   eq(requests.length, 3, "a persistently overloaded API stops at maxAttempts, never loops");
   check("the range is left failed rather than hanging", caught?.name === "StructureClaudeError");
+}
+
+// ── 2b. a failure about the credentials, not about the pages ────────────────
+console.log("\ncredential failures");
+{
+  // The 400 an organisation-level key gets: it repeats identically for every range, so
+  // it must be reported as something to fix and must stop the job (`fatal`).
+  reset();
+  for (let i = 0; i < 4; i++) {
+    handlers.push((_req, res) => {
+      res.writeHead(400, { "content-type": "application/json" });
+      res.end(
+        JSON.stringify({
+          type: "error",
+          error: {
+            type: "invalid_request_error",
+            message:
+              "This API key is not scoped to a workspace, so this request must include the anthropic-workspace-id header with the ID of the workspace to use. Add the header, or use an API key that is scoped to a workspace.",
+          },
+        }),
+      );
+    });
+  }
+  let caught = null;
+  try {
+    await analyseChunkWithClaude(REQUEST);
+  } catch (err) {
+    caught = err;
+  }
+  eq(requests.length, 1, "an unscoped-key 400 is not retried");
+  check("it names the env var an administrator has to set",
+    /ANTHROPIC_WORKSPACE_ID/.test(caught?.message ?? ""), caught?.message);
+  check("it does not quote the raw header-level wording at the editor",
+    !/must include the anthropic-workspace-id header/i.test(caught?.message ?? ""));
+  check("it is fatal, so the runner stops the job instead of failing every range",
+    caught?.fatal === true);
+
+  reset();
+  handlers.push((_req, res) => {
+    res.writeHead(401, { "content-type": "application/json" });
+    res.end(
+      JSON.stringify({ type: "error", error: { type: "authentication_error", message: "invalid x-api-key" } }),
+    );
+  });
+  caught = null;
+  try {
+    await analyseChunkWithClaude(REQUEST);
+  } catch (err) {
+    caught = err;
+  }
+  eq(requests.length, 1, "a rejected key is not retried either");
+  check("and it names ANTHROPIC_API_KEY", /ANTHROPIC_API_KEY/.test(caught?.message ?? ""));
+  check("also fatal", caught?.fatal === true);
+
+  reset();
+  handlers.push((_req, res) => {
+    res.writeHead(500, { "content-type": "application/json" });
+    res.end(JSON.stringify({ type: "error", error: { type: "api_error", message: "boom" } }));
+  });
+  handlers.push((_req, res) => sse(res, answerStream(GOOD_ANSWER)));
+  const transient = await analyseChunkWithClaude(REQUEST);
+  check("an ordinary transient failure is NOT fatal", transient.items.length === 3);
+}
+
+// ── 2c. a page window is stated to the model ────────────────────────────────
+console.log("\npage window");
+{
+  reset();
+  handlers.push((_req, res) => sse(res, answerStream(GOOD_ANSWER)));
+  await analyseChunkWithClaude({ ...REQUEST, analysisWindow: { from: 1, to: 40 } });
+  const text = requests[0].body.messages[0].content;
+  check("the window the editor chose is stated in the user message",
+    /pages 1–40 of the document only/.test(text));
+  check("and a passage cut by the window edge is not to be read as damage",
+    /window boundary, not damage/.test(text));
+  check("the window is NOT in the cached prefix (it is per-analysis, not per-document)",
+    !requests[0].body.system.some((b) => /of the document only/.test(b.text)));
+
+  reset();
+  handlers.push((_req, res) => sse(res, answerStream(GOOD_ANSWER)));
+  await analyseChunkWithClaude(REQUEST);
+  check("a whole-document analysis says nothing about a window",
+    !/of the document only/.test(requests[0].body.messages[0].content));
 }
 
 // ── 3. malformed, truncated and refused answers ─────────────────────────────

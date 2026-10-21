@@ -17,6 +17,7 @@ import {
   duplicateLevelNames,
   proposeHierarchyMapping,
   sectionLevelCount,
+  selectPageWindow,
   STRUCTURE_MAX_DEPTH,
   formatUsd,
   type StructureHierarchyConfig,
@@ -58,6 +59,30 @@ function cleanInstructions(input: unknown): string | null {
   if (typeof input !== "string") return null;
   const trimmed = input.trim();
   return trimmed ? trimmed.slice(0, structureConfig.maxInstructionChars) : null;
+}
+
+/**
+ * The page window the editor chose: `?from=&to=` on the estimate, `pageFrom`/`pageTo` on
+ * the job. Either bound may be left out ("from page 40 to the end"); both out means the
+ * whole transcription, which is what every analysis did before this existed.
+ */
+function parsePageWindow(
+  from: unknown,
+  to: unknown,
+): { from: number | null; to: number | null } | { error: string } {
+  const read = (value: unknown, label: string): number | null => {
+    if (value == null || value === "") return null;
+    const parsed = Number(value);
+    if (!Number.isFinite(parsed) || parsed < 1) {
+      throw new Error(`The ${label} page must be a page number, 1 or more.`);
+    }
+    return Math.floor(parsed);
+  };
+  try {
+    return { from: read(from, "first"), to: read(to, "last") };
+  } catch (err: any) {
+    return { error: err?.message ?? "That page range is not valid." };
+  }
 }
 
 function parseConfig(body: any): { config: StructureHierarchyConfig } | { error: string } {
@@ -178,10 +203,25 @@ router.get("/estimate/:ocrJobId", async (req, res) => {
   const ocrJob = await getOcrJob(req.params.ocrJobId);
   if (!ocrJob) return fail(res, 404, "OCR job not found.");
 
-  const { pages } = await buildOcrDocument(ocrJob.id);
-  if (pages.length === 0) {
+  const requested = parsePageWindow(req.query.from, req.query.to);
+  if ("error" in requested) return fail(res, 400, requested.error);
+
+  const { pages: transcribed } = await buildOcrDocument(ocrJob.id);
+  if (transcribed.length === 0) {
     return fail(res, 409, "This document has no transcribed pages yet.");
   }
+
+  // The estimate is for the pages that would actually be sent, so a window is priced as
+  // that window rather than as the book it came from.
+  const selection = selectPageWindow(transcribed, requested);
+  if (selection.pages.length === 0) {
+    return fail(
+      res,
+      400,
+      `No transcribed pages in ${requested.from ?? selection.availableFrom}–${requested.to ?? selection.availableTo}. This document has transcribed pages ${selection.availableFrom}–${selection.availableTo}.`,
+    );
+  }
+  const pages = selection.pages;
 
   const estimate = estimateStructureCostForPages(pages);
   const spend = await structureSpend(true).catch(() => ({ dayUsd: 0, monthUsd: 0 }));
@@ -189,6 +229,11 @@ router.get("/estimate/:ocrJobId", async (req, res) => {
   const remainingMonth = Math.max(0, structureConfig.maxSpendPerMonthUsd - spend.monthUsd);
 
   const blockers: string[] = [];
+  if (pages.length > structureConfig.maxPages) {
+    blockers.push(
+      `${pages.length} pages selected, over the per-analysis limit of ${structureConfig.maxPages}. Choose a narrower page range.`,
+    );
+  }
   if (estimate.requests > structureConfig.maxRequestsPerJob) {
     blockers.push(
       `${estimate.requests} requests needed, over the per-document cap of ${structureConfig.maxRequestsPerJob}.`,
@@ -212,6 +257,11 @@ router.get("/estimate/:ocrJobId", async (req, res) => {
 
   res.json({
     pages: pages.length,
+    /** The window applied, clamped to the pages that exist; null = the whole document. */
+    window: selection.window,
+    availableFrom: selection.availableFrom,
+    availableTo: selection.availableTo,
+    availablePages: selection.availableCount,
     estimate,
     model: structureConfig.model,
     budget: {
@@ -261,6 +311,9 @@ router.post("/jobs", async (req: any, res) => {
   const parsed = parseConfig(req.body);
   if ("error" in parsed) return fail(res, 400, parsed.error);
 
+  const window = parsePageWindow(req.body?.pageFrom, req.body?.pageTo);
+  if ("error" in window) return fail(res, 400, window.error);
+
   try {
     const job = await createStructureJob({
       ocrJob,
@@ -268,6 +321,8 @@ router.post("/jobs", async (req: any, res) => {
       config: parsed.config,
       instructions: cleanInstructions(req.body?.instructions),
       voiceUsed: Boolean(req.body?.voiceUsed),
+      pageFrom: window.from,
+      pageTo: window.to,
     });
     res.status(201).json({ job });
   } catch (err: any) {

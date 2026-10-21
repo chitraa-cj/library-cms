@@ -25,6 +25,8 @@ export function ensureStructureSchema(): Promise<void> {
           user_id varchar references users(id) on delete set null,
           depth integer not null default 2,
           level_names jsonb not null default '[]'::jsonb,
+          page_from integer,
+          page_to integer,
           instructions text,
           voice_used boolean not null default false,
           model text not null,
@@ -78,6 +80,10 @@ export function ensureStructureSchema(): Promise<void> {
       await db.execute(
         sql`alter table cms_structure_job_chunks add column if not exists cache_write_tokens integer not null default 0`,
       );
+      // The page window (see the 20261016 migration): null on every pre-existing row,
+      // which is exactly "the whole document".
+      await db.execute(sql`alter table cms_structure_jobs add column if not exists page_from integer`);
+      await db.execute(sql`alter table cms_structure_jobs add column if not exists page_to integer`);
       await db.execute(
         sql`create unique index if not exists cms_structure_job_chunks_job_idx
             on cms_structure_job_chunks (job_id, chunk_index)`,

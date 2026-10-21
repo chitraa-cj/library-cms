@@ -40,6 +40,11 @@ function getClient(): Anthropic {
     client = new Anthropic({
       apiKey: structureConfig.apiKey,
       ...(structureConfig.baseUrl ? { baseURL: structureConfig.baseUrl } : {}),
+      // An org-level key is not scoped to a workspace and the API rejects it outright
+      // until this header names one. A scoped key sends nothing extra.
+      ...(structureConfig.workspaceId
+        ? { defaultHeaders: { "anthropic-workspace-id": structureConfig.workspaceId } }
+        : {}),
       // Timeout is in milliseconds in the TypeScript SDK. Retries are ours, not the
       // SDK's: the chunk row is where an attempt is recorded, and the per-minute budget
       // has to see every request, including retries.
@@ -58,12 +63,22 @@ export function resetStructureClient(): void {
 export class StructureClaudeError extends Error {
   readonly retryable: boolean;
   readonly status?: number;
+  /**
+   * The failure is about the server's configuration, not about these pages: every other
+   * range would fail the same way, so the runner stops the job instead of spending the
+   * whole document discovering it once per range.
+   */
+  readonly fatal: boolean;
   attempts = 1;
-  constructor(message: string, opts: { retryable: boolean; status?: number; attempts?: number }) {
+  constructor(
+    message: string,
+    opts: { retryable: boolean; status?: number; attempts?: number; fatal?: boolean },
+  ) {
     super(message);
     this.name = "StructureClaudeError";
     this.retryable = opts.retryable;
     this.status = opts.status;
+    this.fatal = Boolean(opts.fatal);
     if (opts.attempts) this.attempts = opts.attempts;
   }
 }
@@ -82,6 +97,11 @@ export interface StructureChunkRequest {
   config: StructureHierarchyConfig;
   /** The editor's structuring instructions (typed and/or dictated). */
   instructions?: string | null;
+  /**
+   * The page window this whole analysis covers, when the editor chose one. Told to the
+   * model so a range that opens mid-sentence is understood as a window, not as damage.
+   */
+  analysisWindow?: { from: number; to: number } | null;
   /** Tail of the previous range, as read-only context. */
   carryOverText?: string | null;
   /** Section path still open when the previous range ended. */
@@ -210,6 +230,13 @@ function documentBlock(req: StructureChunkRequest): string {
     req.startPage === req.endPage
       ? `page ${req.startPage}`
       : `pages ${req.startPage}–${req.endPage}`;
+  const window = req.analysisWindow;
+  if (window) {
+    parts.push(
+      `This analysis covers pages ${window.from}–${window.to} of the document only; the pages outside that window are not supplied and are not yours to account for. A passage that begins or ends mid-sentence at the edge of the window is a window boundary, not damage — classify what is printed and say so in \`warnings\`.`,
+      "",
+    );
+  }
   parts.push(
     `Classify ${range} of a ${req.totalPages}-page document. Every item's \`page\` must be between ${req.startPage} and ${req.endPage}.`,
     "",
@@ -242,6 +269,35 @@ function retryDelayMs(attempt: number, retryAfterHeader?: string | null): number
   return Math.min(base, 60_000) + Math.floor(Math.random() * 500);
 }
 
+/**
+ * Rewrite the failures that are really about this server's credentials into the sentence
+ * an administrator can act on, and return null for everything else.
+ *
+ * The raw wording is accurate but unhelpful on a portal screen ("This API key is not
+ * scoped to a workspace, so this request must include the anthropic-workspace-id
+ * header" reads as a bug in the application, which it is not), and the same 400 repeats
+ * for every page range — so these are also the errors that stop the job.
+ */
+function credentialAdvice(status: number | undefined, message: string): string | null {
+  if (/not scoped to a workspace|anthropic-workspace-id/i.test(message)) {
+    return (
+      "This Claude API key belongs to the organisation rather than to one workspace, so the API will not accept it on its own. " +
+      "Set ANTHROPIC_WORKSPACE_ID on the server to the workspace that should be billed (Claude Console → Settings → Workspaces → the workspace's ID), " +
+      "or replace ANTHROPIC_API_KEY with a workspace-scoped key, then restart the portal."
+    );
+  }
+  if (/credit balance is too low|insufficient[_ ]credit/i.test(message)) {
+    return "The Claude account has no credit left. Top it up in the Claude Console, then press Retry failed ranges.";
+  }
+  if (status === 401) {
+    return "Claude rejected the API key (401). Check ANTHROPIC_API_KEY on the server and restart the portal.";
+  }
+  if (status === 403) {
+    return `Claude refused this key (403). ${message} Check the key's workspace and permissions in the Claude Console.`;
+  }
+  return null;
+}
+
 /** Turn an SDK error into our own classified error. */
 function classify(err: any, attempt: number): StructureClaudeError {
   if (err instanceof Anthropic.APIUserAbortError) {
@@ -268,10 +324,21 @@ function classify(err: any, attempt: number): StructureClaudeError {
   }
   if (err instanceof Anthropic.APIError) {
     const status = typeof err.status === "number" ? err.status : undefined;
-    return new StructureClaudeError(
-      `Claude ${status ?? "error"}: ${sanitizeStructureError(err.message)}`,
-      { retryable: status != null && status >= 500, status, attempts: attempt },
-    );
+    const message = sanitizeStructureError(err.message);
+    const advice = credentialAdvice(status, message);
+    if (advice) {
+      return new StructureClaudeError(advice, {
+        retryable: false,
+        fatal: true,
+        status,
+        attempts: attempt,
+      });
+    }
+    return new StructureClaudeError(`Claude ${status ?? "error"}: ${message}`, {
+      retryable: status != null && status >= 500,
+      status,
+      attempts: attempt,
+    });
   }
   return new StructureClaudeError(sanitizeStructureError(err), { retryable: false, attempts: attempt });
 }
@@ -292,7 +359,10 @@ function retryAfterOf(err: any): string | null {
  */
 export async function analyseChunkWithClaude(req: StructureChunkRequest): Promise<StructureChunkResult> {
   if (!structureConfig.apiKey) {
-    throw new StructureClaudeError("ANTHROPIC_API_KEY is not set on the server.", { retryable: false });
+    throw new StructureClaudeError("ANTHROPIC_API_KEY is not set on the server.", {
+      retryable: false,
+      fatal: true,
+    });
   }
   if (req.pages.length === 0) {
     throw new StructureClaudeError("The page range has no transcribed text.", { retryable: false });

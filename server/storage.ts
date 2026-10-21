@@ -19,6 +19,8 @@ import {
   type PublishJobTaskRecord,
   publishManthraResolutions,
   cmsPortalVocabulary,
+  addPortalVocabularyName,
+  removePortalVocabularyName,
   type PortalVocabularyCustom,
   type PortalVocabularyKey,
 } from "@shared/schema";
@@ -790,12 +792,10 @@ export class DatabaseStorage implements IStorage {
     value: string,
     userId: string,
   ): Promise<PortalVocabularyCustom> {
-    return this.mutatePortalVocabulary(userId, (current) => {
-      const list = [...(current[key] ?? [])];
-      const exists = list.some((v) => v.toLowerCase() === value.toLowerCase());
-      if (!exists) list.push(value);
-      return { ...current, [key]: list };
-    });
+    // Same identity rule as publish-time matching (trim + NFC + case), so a repeat
+    // add — or the same name typed with decomposed diacritics — never creates a
+    // second record that differs only in form.
+    return this.mutatePortalVocabulary(userId, (current) => addPortalVocabularyName(current, key, value));
   }
 
   async removePortalVocabularyEntry(
@@ -803,10 +803,7 @@ export class DatabaseStorage implements IStorage {
     value: string,
     userId: string,
   ): Promise<PortalVocabularyCustom> {
-    return this.mutatePortalVocabulary(userId, (current) => {
-      const list = (current[key] ?? []).filter((v) => v.toLowerCase() !== value.toLowerCase());
-      return { ...current, [key]: list };
-    });
+    return this.mutatePortalVocabulary(userId, (current) => removePortalVocabularyName(current, key, value));
   }
 }
 

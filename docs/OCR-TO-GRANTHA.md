@@ -53,6 +53,38 @@ The verse number in the generated CSV is the section path plus the entry number 
 `client/src/lib/grantha-csv-placement.ts` reads to place a row, so no new import contract
 exists. A number the page printed as `2.108` keeps one prefix, not two.
 
+## Which pages (the page window)
+
+The instructions step asks **Which pages?** — two boxes, `from` and `to`, 1-based and
+inclusive. Leave them empty for the whole transcription; fill them to analyse a slice.
+
+The window is a *scope* decision, applied before anything else happens: only those pages
+are planned into ranges, only they are sent to Claude, and only they are billed. So a
+900-page scan can be done a hundred pages at a time, each part reviewed and imported on
+its own, and re-running one part costs that part. The estimate beside the boxes re-prices
+itself as they change (debounced, because the estimate assembles the transcription
+server-side), and it states the resolved window in words before the Analyse button.
+
+Tolerances, all in `selectPageWindow` (`shared/ocr-structure.ts`, unit-tested):
+
+- either bound may be omitted — "from 41" means 41 to the end;
+- bounds the wrong way round are read as a range, not as nothing;
+- a window is **clamped to the pages that actually have a transcription**, so `1–100` on a
+  document whose OCR reached page 60 analyses 60 pages instead of failing;
+- a window that happens to cover everything is recorded as no window at all, so the review
+  never claims a scope the editor did not choose;
+- a window with no transcribed pages in it is refused at creation, with the document's
+  real page span in the message.
+
+The applied window is stored on the job (`cms_structure_jobs.page_from` / `page_to`, null =
+the whole document) and shown on the analysis, review and export steps — the CSV covers
+those pages only, and the export step says so, because the rest of the book is a separate
+analysis and a separate import.
+
+Each range is also *told* the window, so a passage cut off at its edge is understood as a
+boundary rather than as page damage. That sentence sits in the per-request user message,
+never in the cached prefix.
+
 ## Instructions, typed or dictated
 
 The instruction box takes plain sentences, not rules: which printed markers start each
@@ -189,6 +221,7 @@ model, change `STRUCTURE_PRICE_*` with it**, or the portal will quote a stale nu
 | Documents analysed at once | 1 | `STRUCTURE_MAX_ACTIVE_JOBS` |
 | Attempts per range | 3 | `STRUCTURE_MAX_ATTEMPTS` |
 | Uncertainty threshold | 0.7 | `STRUCTURE_CONFIDENCE_THRESHOLD` |
+| Pages per analysis | 1500 | `STRUCTURE_MAX_PAGES` (narrow the page window instead of raising it) |
 
 Any spend gate set to `0` is disabled. The request caps bound the burst rate; **the spend
 caps are what bound the bill**, because one request can carry 60k input and 32k output
@@ -196,9 +229,10 @@ tokens.
 
 ### Where each gate bites
 
-1. **Before the button.** The instructions step shows the estimate for this document, the
-   budget left today and this month, and the per-document cap. Over any of them, the
-   Analyse button is disabled and says which one and by how much.
+1. **Before the button.** The instructions step shows the estimate for the pages that
+   would actually be sent (the page window, if one is set), the budget left today and this
+   month, and the per-document cap. Over any of them, the Analyse button is disabled and
+   says which one and by how much — and a narrower page window is usually the answer.
 2. **At creation.** `POST /jobs` re-checks server-side and refuses with 429 and the gate
    name, so a stale page or a direct API call cannot slip past the UI.
 3. **Before every range.** The per-document spend and request caps are re-checked against
@@ -244,12 +278,28 @@ flagged for a human.
 
 ```
 ANTHROPIC_API_KEY=sk-ant-...
+ANTHROPIC_WORKSPACE_ID=        # only for an organisation-level (unscoped) key
 ```
 
-Then `npm run migrate` (or `npm run migrate:ocr-structure`). The server also installs the
-two tables itself on first use, the same way the OCR tables do, so a pull + pm2 restart is
-enough. Without the key the wizard reports "not configured" and refuses to start; the
-existing Gemini OCR is untouched and keeps working.
+`ANTHROPIC_WORKSPACE_ID` is needed only when the key is not itself scoped to a workspace.
+An unscoped key is refused by the API on every request:
+
+> Claude 400: This API key is not scoped to a workspace, so this request must include the
+> `anthropic-workspace-id` header with the ID of the workspace to use.
+
+Set the workspace to bill (Claude Console → Settings → Workspaces) or issue a
+workspace-scoped key, then restart the portal. The portal rewrites that 400 into the
+sentence naming the fix, and — because the failure is about the credentials and not about
+the pages — **stops the job** instead of marking every page range failed with the same
+message. The ranges stay queued, so **Retry failed ranges** resumes once the env is right.
+The same holds for a rejected key (401), a forbidden one (403) and an empty account
+balance.
+
+Then `npm run migrate` (or `npm run migrate:ocr-structure` plus
+`psql -f script/migrations/20261016_ocr_structure_page_range.sql`). The server also
+installs and upgrades the two tables itself on first use, the same way the OCR tables do,
+so a pull + pm2 restart is enough. Without the key the wizard reports "not configured" and
+refuses to start; the existing Gemini OCR is untouched and keeps working.
 
 ## Tests
 

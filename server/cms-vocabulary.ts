@@ -6,6 +6,8 @@ import {
   defaultStructureLevelTwoNames,
   defaultStructureLevelThreeNames,
   defaultStructureLeafNames,
+  normalizePortalVocabularyName,
+  portalVocabularyNameKey,
   type PortalVocabulary,
   type PortalVocabularyCustom,
   type PortalVocabularyKey,
@@ -16,9 +18,9 @@ function mergeLists(defaults: readonly string[], custom: string[] | undefined): 
   const seen = new Set<string>();
   const out: string[] = [];
   for (const raw of [...defaults, ...(custom ?? [])]) {
-    const v = String(raw ?? "").trim();
+    const v = normalizePortalVocabularyName(raw);
     if (!v) continue;
-    const key = v.toLowerCase();
+    const key = portalVocabularyNameKey(v);
     if (seen.has(key)) continue;
     seen.add(key);
     out.push(v);
@@ -46,17 +48,23 @@ function buildMerged(custom: PortalVocabularyCustom): PortalVocabulary {
   };
 }
 
-let cached: PortalVocabulary | null = null;
-
-export function invalidatePortalVocabularyCache(): void {
-  cached = null;
-}
-
+/**
+ * The merged Shared-list vocabulary (built-in defaults + admin-added custom names).
+ *
+ * Deliberately NOT cached in process memory. It used to be, with the cache dropped
+ * whenever an admin added or removed a name — but that invalidation only ever reached
+ * the process that served the admin request. Grantha publishing now runs in its own
+ * pm2 process (`cms-publish-worker`), which built its copy on its first publish and
+ * never saw another add: the Shared-lists page (web process, fresh) showed a name that
+ * publishing (worker process, stale) rejected as "not in the shared vocabulary", until
+ * the worker happened to restart. The vocabulary is one small JSONB row read a handful
+ * of times per publish and once per editor page load, so reading it from Postgres on
+ * every call costs nothing measurable and makes every process see the same list the
+ * moment an add or remove commits.
+ */
 export async function getPortalVocabulary(): Promise<PortalVocabulary> {
-  if (cached) return cached;
   const custom = await storage.getPortalVocabularyCustom();
-  cached = buildMerged(custom);
-  return cached;
+  return buildMerged(custom);
 }
 
 export async function getTeekaAuthorsAllowlist(): Promise<Set<string>> {
@@ -64,19 +72,28 @@ export async function getTeekaAuthorsAllowlist(): Promise<Set<string>> {
   return new Set(vocab.teekaAuthors);
 }
 
+/**
+ * Match `author` against an allowlist by vocabulary identity (trim, NFC, case) and
+ * return the allowlist's own spelling, so what is published is always the shared
+ * list's canonical form.
+ */
+function resolveAllowedName(author: unknown, allow: Set<string>): string | undefined {
+  const normalized = normalizePortalVocabularyName(author);
+  if (!normalized) return undefined;
+  if (allow.has(normalized)) return normalized;
+  const key = portalVocabularyNameKey(normalized);
+  for (const entry of allow) {
+    if (portalVocabularyNameKey(entry) === key) return entry;
+  }
+  return undefined;
+}
+
 /** Map draft author to the canonical allowlist spelling (case-insensitive). */
 export function resolveAllowedTeekaAuthor(
   author: string | undefined | null,
   allow: Set<string>,
 ): string | undefined {
-  const trimmed = String(author ?? "").trim();
-  if (!trimmed) return undefined;
-  if (allow.has(trimmed)) return trimmed;
-  const lower = trimmed.toLowerCase();
-  for (const entry of allow) {
-    if (entry.toLowerCase() === lower) return entry;
-  }
-  return undefined;
+  return resolveAllowedName(author, allow);
 }
 
 export async function isAllowedTeekaAuthor(name: string | undefined | null): Promise<boolean> {
@@ -84,7 +101,7 @@ export async function isAllowedTeekaAuthor(name: string | undefined | null): Pro
   return resolveAllowedTeekaAuthor(name, allow) !== undefined;
 }
 
-/** Known prasthana-spelling → grantha-spelling equivalents (lower-cased keys). */
+/** Known prasthana-spelling → grantha-spelling equivalents (vocabulary-key keyed). */
 const bhashyamAuthorAliases: Record<string, string> = {
   "sri shankaracharya": "Sri Shankarayacharya",
   "sri upanishad brahmendra": "Upanishad Brahmendra",
@@ -113,14 +130,45 @@ export function resolveAllowedBhashyamAuthor(
   author: string | undefined | null,
   allow: Set<string>,
 ): string | undefined {
-  const trimmed = String(author ?? "").trim();
-  if (!trimmed) return undefined;
-  const lower = trimmed.toLowerCase();
-  const alias = bhashyamAuthorAliases[lower];
+  const normalized = normalizePortalVocabularyName(author);
+  if (!normalized) return undefined;
+  const alias = bhashyamAuthorAliases[portalVocabularyNameKey(normalized)];
   if (alias) return alias;
-  if (allow.has(trimmed)) return trimmed;
-  for (const entry of allow) {
-    if (entry.toLowerCase() === lower) return entry;
+  return resolveAllowedName(normalized, allow);
+}
+
+export function bhashyamAuthorNotInVocabularyMessage(author: string): string {
+  return (
+    `Cannot publish: Bhashyam author "${author}" is not in the shared vocabulary. ` +
+    `Add it under Shared lists → Bhashyam authors, then republish.`
+  );
+}
+
+/**
+ * The ONE rule for a grantha's `BhashyamAuthor` at publish time, shared by the enqueue
+ * route (web process, so the editor gets an immediate 400 instead of a failed job) and
+ * the publish walk (worker process, the authoritative check):
+ *
+ *   - empty / missing      → `undefined`: omit the field, granthas without a bhashyam publish
+ *   - in the vocabulary    → the vocabulary's canonical spelling
+ *   - anything else        → throws a 400 whose message names where to add the name
+ *
+ * A non-empty author that cannot be resolved must fail loudly rather than be dropped:
+ * a dropped field makes Strapi keep the previous author, which the editor sees as the
+ * author "reverting" to the old value.
+ */
+export function resolveBhashyamAuthorForPublish(
+  author: unknown,
+  allow: Set<string>,
+): string | undefined {
+  const raw = normalizePortalVocabularyName(author);
+  const resolved = resolveAllowedBhashyamAuthor(raw, allow);
+  if (resolved) return resolved;
+  if (raw) {
+    throw Object.assign(new Error(bhashyamAuthorNotInVocabularyMessage(raw)), {
+      status: 400,
+      code: "bhashyam_author_not_in_vocabulary",
+    });
   }
   return undefined;
 }
@@ -130,12 +178,11 @@ export async function addPortalVocabularyEntry(
   value: string,
   userId: string,
 ): Promise<PortalVocabulary> {
-  const trimmed = value.trim();
+  const trimmed = normalizePortalVocabularyName(value);
   if (!trimmed) {
     throw Object.assign(new Error("Name cannot be empty"), { status: 400 });
   }
   const custom = await storage.addPortalVocabularyEntry(key, trimmed, userId);
-  invalidatePortalVocabularyCache();
   return buildMerged(custom);
 }
 
@@ -144,12 +191,11 @@ export async function removePortalVocabularyEntry(
   value: string,
   userId: string,
 ): Promise<PortalVocabulary> {
-  const trimmed = value.trim();
+  const trimmed = normalizePortalVocabularyName(value);
   if (!trimmed) {
     throw Object.assign(new Error("Name cannot be empty"), { status: 400 });
   }
   const custom = await storage.removePortalVocabularyEntry(key, trimmed, userId);
-  invalidatePortalVocabularyCache();
   return buildMerged(custom);
 }
 

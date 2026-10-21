@@ -29,8 +29,8 @@ import {
   getTeekaAuthorsAllowlist,
   removePortalVocabularyEntry,
   resolveAllowedTeekaAuthor,
-  resolveAllowedBhashyamAuthor,
   getBhashyamAuthorsAllowlist,
+  resolveBhashyamAuthorForPublish,
 } from "./cms-vocabulary";
 import { portalVocabularyKeys, type PortalVocabularyKey } from "@shared/schema";
 import { readGranthaManthraSkeleton } from "./strapi-sqlite-skeleton";
@@ -3207,27 +3207,22 @@ export async function publishGranthaWithHierarchy(
 
   const granthaPayload = cleanPayloadForStrapi(stripPortalMetaFromGranthaPayload(granthaDataRaw));
 
-  // BhashyamAuthor is a Strapi enum that only accepts the two canonical grantha
-  // author spellings. Drafts can carry prasthana spellings (normalized via
-  // aliases) or admin-added custom values that Strapi's grantha enum does not
-  // accept. Resolve to an allowed value; if the author is empty just drop the
-  // field so granthas without a bhashyam still publish. But if the user picked a
-  // NON-EMPTY author that can't be mapped, fail loudly instead of silently
-  // dropping it — a dropped field makes Strapi keep the previous author, which
-  // looks like the author "reverted back to Sri Shankarayacharya".
-  const rawBhashyamAuthor = String(granthaPayload.BhashyamAuthor ?? "").trim();
-  const bhashyamAuthorAllow = await getBhashyamAuthorsAllowlist();
-  const resolvedBhashyamAuthor = resolveAllowedBhashyamAuthor(granthaPayload.BhashyamAuthor, bhashyamAuthorAllow);
+  // BhashyamAuthor must be a name from the shared vocabulary (built-in defaults +
+  // Shared-lists custom names). Drafts can carry prasthana spellings (normalized via
+  // aliases) or admin-added custom values. Resolve to the vocabulary's canonical
+  // spelling; if the author is empty just drop the field so granthas without a
+  // bhashyam still publish. A NON-EMPTY author that can't be mapped fails loudly
+  // (400) instead of being silently dropped — a dropped field makes Strapi keep the
+  // previous author, which looks like the author "reverted back to Sri
+  // Shankarayacharya". The allowlist is read fresh from Postgres here, in whichever
+  // process runs the walk: this is what the /publish route already checked at
+  // enqueue, re-run because a name can be removed between enqueue and claim.
+  const resolvedBhashyamAuthor = resolveBhashyamAuthorForPublish(
+    granthaPayload.BhashyamAuthor,
+    await getBhashyamAuthorsAllowlist(),
+  );
   if (resolvedBhashyamAuthor) {
     granthaPayload.BhashyamAuthor = resolvedBhashyamAuthor;
-  } else if (rawBhashyamAuthor) {
-    throw Object.assign(
-      new Error(
-        `Cannot publish: Bhashyam author "${rawBhashyamAuthor}" is not in the shared vocabulary. ` +
-          `Add it under Shared lists → Bhashyam authors, then republish.`,
-      ),
-      { status: 400 },
-    );
   } else if ("BhashyamAuthor" in granthaPayload) {
     delete granthaPayload.BhashyamAuthor;
   }
@@ -6009,6 +6004,24 @@ export async function registerRoutes(
           res.status(lockErr?.status === 403 ? 403 : 409).json({
             message: lockErr?.message || "This grantha is locked",
             code: lockErr?.code ?? "grantha_locked",
+          });
+          return;
+        }
+
+        // Validate the Bhashyam author NOW, against the vocabulary as it is in Postgres
+        // this instant, with the same rule the walk applies. The editor gets an immediate,
+        // actionable 400 instead of a queued job that fails minutes later, and no attempt
+        // is spent on a draft that can never publish until a name is added.
+        try {
+          resolveBhashyamAuthorForPublish(
+            (draft.data as Record<string, any> | null)?.BhashyamAuthor,
+            await getBhashyamAuthorsAllowlist(),
+          );
+        } catch (authorErr: any) {
+          if (authorErr?.status !== 400) throw authorErr;
+          res.status(400).json({
+            message: authorErr.message,
+            code: authorErr.code ?? "bhashyam_author_not_in_vocabulary",
           });
           return;
         }

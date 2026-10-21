@@ -19,6 +19,7 @@ import {
   defaultStructureLevelTwoNames,
   defaultStructureLevelThreeNames,
   defaultStructureLeafNames,
+  portalVocabularyNameKey,
 } from "@shared/schema";
 
 const SECTIONS: {
@@ -121,7 +122,9 @@ function VocabularySection({
 
         <div className="flex flex-wrap gap-1.5">
           {values.map((name) => {
-            const isCustom = customOnly.some((c) => c.toLowerCase() === name.toLowerCase());
+            const isCustom = customOnly.some(
+              (c) => portalVocabularyNameKey(c) === portalVocabularyNameKey(name),
+            );
             return (
               <Badge
                 key={name}
@@ -160,10 +163,12 @@ export default function AdminVocabularyPage() {
   const [activeKey, setActiveKey] = useState<PortalVocabularyKey | null>(null);
 
   const customByKey = (key: PortalVocabularyKey): string[] => {
+    // Same identity rule as the server (trim + NFC + case), so a custom name is
+    // highlighted and removable regardless of how its diacritics were typed.
     const defaults = new Set(
-      (SECTIONS.find((s) => s.key === key)?.defaults ?? []).map((d) => d.toLowerCase()),
+      (SECTIONS.find((s) => s.key === key)?.defaults ?? []).map((d) => portalVocabularyNameKey(d)),
     );
-    return (vocabulary[key] ?? []).filter((v) => !defaults.has(v.toLowerCase()));
+    return (vocabulary[key] ?? []).filter((v) => !defaults.has(portalVocabularyNameKey(v)));
   };
 
   const mutation = useMutation({

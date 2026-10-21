@@ -39,6 +39,16 @@ export const structureConfig = {
   baseUrl: process.env.ANTHROPIC_BASE_URL?.trim() || "",
 
   /**
+   * Workspace for an API key that is not itself scoped to one.
+   *
+   * An organisation-level key carries no workspace, and the Messages API then refuses
+   * every request with a 400: "This API key is not scoped to a workspace, so this request
+   * must include the anthropic-workspace-id header". Setting this sends that header; a
+   * workspace-scoped key needs nothing here and should leave it empty.
+   */
+  workspaceId: (process.env.ANTHROPIC_WORKSPACE_ID || "").trim(),
+
+  /**
    * One place for the model name. Claude Opus 5 is the default because the work is
    * exactly what it is good at — reading a page of Sanskrit and deciding what each
    * passage *is* — and a wrong classification costs an editor far more than the token

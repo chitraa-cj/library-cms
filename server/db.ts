@@ -11,15 +11,27 @@ if (!process.env.DATABASE_URL) {
  *
  * Production (RDS) needs TLS; a local `localhost` Postgres refuses it with
  * "The server does not support SSL connections". Precedence:
- *   1. DATABASE_SSL=true|false (explicit override)
+ *   1. DATABASE_SSL — a boolean, or an sslmode word (explicit override)
  *   2. sslmode=disable / sslmode=require in the connection string
  *   3. off for localhost / 127.0.0.1 / ::1, on for everything else
+ *
+ * Note for (2): do NOT put `sslmode=require` in DATABASE_URL to reach RDS. pg 8.16
+ * parses it itself and verifies the certificate chain regardless of the `ssl` object
+ * below, which RDS's chain fails with "self-signed certificate in certificate chain".
+ * Use DATABASE_SSL instead — that is what this function is for.
  */
 function resolveSsl(connectionString: string): false | { rejectUnauthorized: false } {
   const override = process.env.DATABASE_SSL?.trim().toLowerCase();
-  if (override === "false" || override === "0" || override === "off") return false;
-  if (override === "true" || override === "1" || override === "on") {
-    return { rejectUnauthorized: false };
+  if (override) {
+    // Anything but an explicit "off" means TLS. A value we did not recognise used to
+    // fall through to the host rule, which on a localhost host (an SSH tunnel to RDS)
+    // silently dropped TLS — and RDS, with rds.force_ssl=1, then refuses the connection
+    // with the thoroughly unhelpful `no pg_hba.conf entry for host … no encryption`.
+    // `require` and `no-verify` are TLS without CA verification, which is exactly what
+    // this pool does; `verify-ca`/`verify-full` cannot be honoured here (no CA bundle is
+    // configured) and are treated as plain TLS rather than as a refusal to start.
+    const off = ["false", "0", "off", "no", "none", "disable", "disabled"];
+    return off.includes(override) ? false : { rejectUnauthorized: false };
   }
 
   let host = "";

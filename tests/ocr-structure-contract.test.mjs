@@ -31,6 +31,7 @@ import {
   planStructureChunks,
   proposeHierarchyMapping,
   sectionLevelCount,
+  selectPageWindow,
   structureWorkflowState,
   validateStructure,
 } from "../shared/ocr-structure.ts";
@@ -110,6 +111,59 @@ console.log("\npage-range planning");
   );
   eq(holey, [{ startPage: 1, endPage: 2 }, { startPage: 7, endPage: 7 }],
     "a gap in transcribed pages starts a new range");
+}
+
+// ── 2b. the page window ──────────────────────────────────────────────────────
+console.log("\npage window");
+{
+  const pages = Array.from({ length: 100 }, (_, i) => ({ page: i + 1, markdown: `p${i + 1}` }));
+
+  const all = selectPageWindow(pages, null);
+  eq(all.pages.length, 100, "no window means every transcribed page");
+  eq(all.window, null, "and no window is recorded");
+  check("the document's bounds are reported for the UI",
+    all.availableFrom === 1 && all.availableTo === 100 && all.availableCount === 100);
+
+  const slice = selectPageWindow(pages, { from: 41, to: 60 });
+  eq(slice.pages.length, 20, "a window selects exactly its pages");
+  eq(slice.window, { from: 41, to: 60 }, "and records what was applied");
+  eq(slice.pages[0].page, 41, "starting at the first page of the window");
+  eq(slice.pages[19].page, 60, "and ending at its last");
+
+  eq(selectPageWindow(pages, { from: 95 }).pages.map((p) => p.page),
+    [95, 96, 97, 98, 99, 100], "an open upper bound runs to the end");
+  eq(selectPageWindow(pages, { to: 3 }).pages.map((p) => p.page),
+    [1, 2, 3], "an open lower bound starts at the first page");
+  eq(selectPageWindow(pages, { from: 60, to: 41 }).window, { from: 41, to: 60 },
+    "bounds given the wrong way round are read as a range, not as nothing");
+
+  // A window wider than the document is the document; recording it as a window would
+  // make the review claim a scope the editor never chose.
+  eq(selectPageWindow(pages, { from: 1, to: 500 }).window, null,
+    "a window that covers everything is not recorded as a window");
+  eq(selectPageWindow(pages, { from: 1, to: 500 }).pages.length, 100, "and selects everything");
+
+  // Pages 2801–2900 of a book, OCR'd as its own document: the window is clamped to the
+  // pages that exist rather than failing, and it is still only those pages.
+  const sparse = [{ page: 5, markdown: "a" }, { page: 6, markdown: "b" }, { page: 40, markdown: "c" }];
+  const clamped = selectPageWindow(sparse, { from: 1, to: 10 });
+  eq(clamped.pages.map((p) => p.page), [5, 6], "a window is clamped to the pages that have text");
+  eq(clamped.window, { from: 5, to: 6 }, "and the window recorded is the one actually analysed");
+  eq(selectPageWindow(sparse, { from: 100, to: 200 }).pages, [],
+    "a window with no transcribed pages selects nothing (the caller refuses it)");
+
+  eq(selectPageWindow(pages, { from: 0, to: -4 }).window, null,
+    "nonsense bounds fall back to the whole document rather than selecting nothing");
+  eq(selectPageWindow(pages, { from: "41", to: "42.7" }).window, { from: 41, to: 42 },
+    "numeric strings from a query string are accepted and floored");
+
+  // Chunk planning on the window must not see the pages outside it.
+  const windowRanges = planStructureChunks(selectPageWindow(pages, { from: 41, to: 60 }).pages, {
+    pagesPerChunk: 10,
+    maxChars: 1_000_000,
+  });
+  eq(windowRanges, [{ startPage: 41, endPage: 50 }, { startPage: 51, endPage: 60 }],
+    "only the window is planned into ranges");
 }
 
 // ── 3. the model answer ──────────────────────────────────────────────────────

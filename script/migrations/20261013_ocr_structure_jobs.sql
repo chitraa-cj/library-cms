@@ -14,6 +14,8 @@ create table if not exists cms_structure_jobs (
   user_id varchar references users(id) on delete set null,
   depth integer not null default 2,
   level_names jsonb not null default '[]'::jsonb,
+  page_from integer,
+  page_to integer,
   instructions text,
   voice_used boolean not null default false,
   model text not null,

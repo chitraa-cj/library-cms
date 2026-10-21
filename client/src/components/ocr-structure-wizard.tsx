@@ -51,6 +51,7 @@ import {
   Loader2,
   Mic,
   MicOff,
+  Pencil,
   Wallet,
   RefreshCw,
   Sparkles,
@@ -62,6 +63,7 @@ import OcrStructureReview from "@/components/ocr-structure-review";
 import {
   cancelStructureJob,
   confirmStructureReview,
+  deleteStructureJob,
   fetchStructureConfig,
   fetchStructureEstimate,
   fetchStructureJob,
@@ -96,6 +98,14 @@ interface Props {
   granthaOptions: Array<{ key: string; label: string; documentId?: string; draftId?: number }>;
 }
 
+/** One page box: a page number, or null for "no bound". */
+function parsePageInput(raw: string): number | null {
+  const trimmed = raw.trim();
+  if (!trimmed) return null;
+  const parsed = Number(trimmed);
+  return Number.isFinite(parsed) && parsed >= 1 ? Math.floor(parsed) : null;
+}
+
 /** Browser speech-to-text, when the browser has it. Nothing leaves the user's machine. */
 function speechRecognitionCtor(): any | null {
   const w = window as any;
@@ -111,6 +121,13 @@ export default function OcrStructureWizard({ open, onOpenChange, ocrJob, grantha
   const [depth, setDepth] = useState(2);
   const [levelNames, setLevelNames] = useState<string[]>(["Adhyaya", "Mantra", "Pada", "Mantra"]);
   const [instructions, setInstructions] = useState("");
+  // The page window, as typed. Empty means "no bound": both empty = the whole document.
+  const [pageFromInput, setPageFromInput] = useState("");
+  const [pageToInput, setPageToInput] = useState("");
+  const [appliedRange, setAppliedRange] = useState<{ from: number | null; to: number | null }>({
+    from: null,
+    to: null,
+  });
   const [voiceUsed, setVoiceUsed] = useState(false);
   const [listening, setListening] = useState(false);
   const [destination, setDestination] = useState("");
@@ -131,8 +148,15 @@ export default function OcrStructureWizard({ open, onOpenChange, ocrJob, grantha
     enabled: open,
   });
 
+  /**
+   * Set when the user deliberately discards an analysis to change its settings. Without
+   * it, the resume effect below would re-adopt the job from the still-cached list and
+   * drop them straight back into the locked, read-only wizard they just left.
+   */
+  const skipResumeRef = useRef(false);
+
   useEffect(() => {
-    if (!open || jobId) return;
+    if (!open || jobId || skipResumeRef.current) return;
     const latest = existingQuery.data?.jobs?.[0];
     if (!latest) return;
     setJobId(latest.id);
@@ -145,15 +169,32 @@ export default function OcrStructureWizard({ open, onOpenChange, ocrJob, grantha
       return next;
     });
     setInstructions(latest.instructions ?? "");
+    setPageFromInput(latest.pageFrom != null ? String(latest.pageFrom) : "");
+    setPageToInput(latest.pageTo != null ? String(latest.pageTo) : "");
     overridesRef.current = ((latest.overrides ?? []) as StructureOverride[]) ?? [];
     setStep(TERMINAL.includes(latest.status) ? "review" : "analysis");
   }, [open, jobId, existingQuery.data]);
 
+  /**
+   * Typing in the page boxes must not fire one estimate per keystroke: the estimate
+   * assembles the whole transcription server-side, which is the heaviest read this API
+   * does. Settle for half a second, then ask.
+   */
+  const typedRange = useMemo(
+    () => ({ from: parsePageInput(pageFromInput), to: parsePageInput(pageToInput) }),
+    [pageFromInput, pageToInput],
+  );
+  useEffect(() => {
+    const timer = setTimeout(() => setAppliedRange(typedRange), 500);
+    return () => clearTimeout(timer);
+  }, [typedRange.from, typedRange.to]);
+
   // What this would cost, fetched for the step where the decision is made. Not polled:
-  // it only changes when the budget moves, and the config call reports that too.
+  // it only changes when the budget or the chosen page window moves, and both of those
+  // are in this component.
   const estimateQuery = useQuery({
-    queryKey: ["structure-estimate", ocrJob.id],
-    queryFn: () => fetchStructureEstimate(ocrJob.id),
+    queryKey: ["structure-estimate", ocrJob.id, appliedRange.from, appliedRange.to],
+    queryFn: () => fetchStructureEstimate(ocrJob.id, appliedRange),
     enabled: Boolean(open && !jobId && step === "instructions"),
     staleTime: 30_000,
   });
@@ -208,6 +249,10 @@ export default function OcrStructureWizard({ open, onOpenChange, ocrJob, grantha
         levelNames: levelNames.slice(0, depth),
         instructions,
         voiceUsed,
+        // What is typed, not the debounced copy the estimate used: clicking Analyse
+        // within the debounce window must not start a different range than the boxes show.
+        pageFrom: typedRange.from,
+        pageTo: typedRange.to,
       }),
     onSuccess: ({ job: created }) => {
       setJobId(created.id);
@@ -247,6 +292,54 @@ export default function OcrStructureWizard({ open, onOpenChange, ocrJob, grantha
         description: err?.message ?? "Fix the blocking errors first.",
       }),
   });
+
+  /**
+   * "Cancel & edit settings": throw this attempt away and go back to step 1 with the
+   * hierarchy, the instructions and the page range editable again.
+   *
+   * It deletes the job rather than leaving it beside the next one, because the resume
+   * logic always adopts the newest analysis for this document — a discarded attempt left
+   * in the list is a trap, not a record. Ranges that were already analysed are real money,
+   * so losing them is confirmed first; a run that analysed nothing (the usual case, a
+   * misconfigured hierarchy or a failed first range) goes straight back.
+   */
+  const discardMutation = useMutation({
+    mutationFn: async () => {
+      if (!jobId) return;
+      if (running) await cancelStructureJob(jobId);
+      await deleteStructureJob(jobId);
+    },
+    onSuccess: () => {
+      skipResumeRef.current = true;
+      setJobId(null);
+      overridesRef.current = [];
+      setStep("hierarchy");
+      queryClient.removeQueries({ queryKey: ["structure-job"] });
+      queryClient.removeQueries({ queryKey: ["structure-result"] });
+      void queryClient.invalidateQueries({ queryKey: ["structure-for-ocr", ocrJob.id] });
+      void queryClient.invalidateQueries({ queryKey: ["structure-estimate", ocrJob.id] });
+      toast({
+        title: "Analysis discarded",
+        description: "Change the hierarchy, the instructions or the page range, then analyse again.",
+      });
+    },
+    onError: (err: Error) =>
+      toast({ variant: "destructive", title: "Could not discard the analysis", description: err.message }),
+  });
+
+  function discardAndEdit() {
+    const analysed = job?.chunksDone ?? 0;
+    const spent = detailQuery.data?.spentUsd ?? 0;
+    if (analysed > 0) {
+      const ok = window.confirm(
+        `This throws away ${analysed} page range(s) that have already been analysed` +
+          (spent > 0 ? ` (${formatUsd(spent)} spent)` : "") +
+          `. Analysing them again will cost the same again.\n\nDiscard this analysis and edit the settings?`,
+      );
+      if (!ok) return;
+    }
+    discardMutation.mutate();
+  }
 
   const actionMutation = useMutation({
     mutationFn: async (action: "cancel" | "retry") => {
@@ -324,6 +417,10 @@ export default function OcrStructureWizard({ open, onOpenChange, ocrJob, grantha
     recognition.start();
     setListening(true);
   }
+
+  useEffect(() => {
+    if (!open) skipResumeRef.current = false;
+  }, [open]);
 
   useEffect(() => {
     if (!open && recognitionRef.current) {
@@ -569,8 +666,9 @@ export default function OcrStructureWizard({ open, onOpenChange, ocrJob, grantha
 
             {jobId && (
               <p className="text-xs text-muted-foreground">
-                This analysis already ran with the hierarchy above. To change it, start a new
-                analysis from the OCR page.
+                This analysis already ran with the hierarchy above, so it is read-only here. To
+                change it, use <strong>Cancel &amp; edit settings</strong> on the Analysis step —
+                that discards this attempt and unlocks these fields.
               </p>
             )}
 
@@ -627,13 +725,70 @@ export default function OcrStructureWizard({ open, onOpenChange, ocrJob, grantha
               </p>
             </div>
 
+            {/* Scope, next to the cost it decides. */}
+            {!jobId && (
+              <div className="space-y-2 rounded-md border border-border p-3" data-testid="structure-page-range">
+                <Label className="text-sm">Which pages?</Label>
+                <p className="text-xs text-muted-foreground">
+                  Leave both boxes empty for the whole transcription. A range analyses — and bills —
+                  those pages only, so a long scan can be done a hundred pages at a time and each part
+                  reviewed on its own.
+                </p>
+                <div className="flex flex-wrap items-center gap-2">
+                  <span className="text-xs text-muted-foreground">Pages</span>
+                  <Input
+                    type="number"
+                    min={1}
+                    inputMode="numeric"
+                    className="w-24"
+                    value={pageFromInput}
+                    placeholder={String(estimate?.availableFrom ?? 1)}
+                    onChange={(e) => setPageFromInput(e.target.value)}
+                    data-testid="structure-page-from"
+                  />
+                  <span className="text-xs text-muted-foreground">to</span>
+                  <Input
+                    type="number"
+                    min={1}
+                    inputMode="numeric"
+                    className="w-24"
+                    value={pageToInput}
+                    placeholder={String(estimate?.availableTo ?? ocrJob.pageCount)}
+                    onChange={(e) => setPageToInput(e.target.value)}
+                    data-testid="structure-page-to"
+                  />
+                  {(pageFromInput.trim() || pageToInput.trim()) && (
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="sm"
+                      onClick={() => {
+                        setPageFromInput("");
+                        setPageToInput("");
+                      }}
+                    >
+                      Whole document
+                    </Button>
+                  )}
+                </div>
+                {estimate && (
+                  <p className="text-xs text-muted-foreground" data-testid="structure-page-range-summary">
+                    {estimate.window
+                      ? `Pages ${estimate.window.from}–${estimate.window.to} will be analysed — ${estimate.pages} transcribed page(s) of the document's ${estimate.availablePages}. Nothing outside the range is sent.`
+                      : `The whole transcription will be analysed — ${estimate.pages} page(s) (p${estimate.availableFrom}–${estimate.availableTo}).`}
+                  </p>
+                )}
+              </div>
+            )}
+
             <Alert>
               <HelpCircle className="h-4 w-4" />
               <AlertTitle>What happens next</AlertTitle>
               <AlertDescription className="text-xs">
-                The {ocrJob.pageCount}-page transcription is sent to {configQuery.data?.model ?? "Claude"} in
-                page ranges of {configQuery.data?.limits.pagesPerChunk ?? 10}, in order, so a heading on one
-                page still governs the next. Nothing is written to the CMS during the analysis.
+                {estimate ? `${estimate.pages} page(s) of the transcription are` : "The transcription is"}{" "}
+                sent to {configQuery.data?.model ?? "Claude"} in page ranges of{" "}
+                {configQuery.data?.limits.pagesPerChunk ?? 10}, in order, so a heading on one page still
+                governs the next. Nothing is written to the CMS during the analysis.
               </AlertDescription>
             </Alert>
 
@@ -737,6 +892,11 @@ export default function OcrStructureWizard({ open, onOpenChange, ocrJob, grantha
               <span className="font-medium">
                 {job.chunksDone}/{job.chunksTotal} page ranges analysed
               </span>
+              {job.pageFrom != null && job.pageTo != null && (
+                <Badge variant="outline" data-testid="structure-job-window">
+                  pages {job.pageFrom}–{job.pageTo} only
+                </Badge>
+              )}
               {job.chunksFailed > 0 && (
                 <span className="text-destructive">{job.chunksFailed} failed</span>
               )}
@@ -820,7 +980,25 @@ export default function OcrStructureWizard({ open, onOpenChange, ocrJob, grantha
               </p>
             )}
 
-            <DialogFooter className="gap-2">
+            <DialogFooter className="gap-2 sm:justify-between">
+              <Button
+                variant="outline"
+                onClick={discardAndEdit}
+                disabled={discardMutation.isPending}
+                className="text-destructive hover:text-destructive"
+                data-testid="structure-discard"
+              >
+                {discardMutation.isPending ? (
+                  <>
+                    <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" /> Discarding…
+                  </>
+                ) : (
+                  <>
+                    <Pencil className="mr-1.5 h-3.5 w-3.5" /> Cancel &amp; edit settings
+                  </>
+                )}
+              </Button>
+              <div className="flex flex-wrap gap-2">
               <Button variant="outline" onClick={() => onOpenChange(false)}>
                 Close — it keeps running
               </Button>
@@ -830,6 +1008,7 @@ export default function OcrStructureWizard({ open, onOpenChange, ocrJob, grantha
               >
                 {(result?.ambiguities.length ?? 0) > 0 ? "Answer the questions" : "Review the structure"}
               </Button>
+              </div>
             </DialogFooter>
           </section>
         )}
@@ -898,6 +1077,11 @@ export default function OcrStructureWizard({ open, onOpenChange, ocrJob, grantha
                 <strong>{result.stats.lowConfidence}</strong> uncertain ·{" "}
                 <strong>{result.stats.edited}</strong> edited by hand
               </span>
+              {job?.pageFrom != null && job?.pageTo != null && (
+                <span className="text-muted-foreground">
+                  from pages {job.pageFrom}–{job.pageTo} only
+                </span>
+              )}
               {result.teekaNames.length > 0 && (
                 <span className="text-muted-foreground">Teekas: {result.teekaNames.join(", ")}</span>
               )}
@@ -995,6 +1179,9 @@ export default function OcrStructureWizard({ open, onOpenChange, ocrJob, grantha
                 The number column encodes {result.csv.sectionLevels} section level(s), which is what the
                 grantha importer reads to place each entry. Columns:{" "}
                 {result.csv.columns.map((c) => c.header).join(", ")}
+                {job?.pageFrom != null && job?.pageTo != null
+                  ? ` — from pages ${job.pageFrom}–${job.pageTo} of the document only, so the rest of the book has to be analysed separately.`
+                  : ""}
               </AlertDescription>
             </Alert>
 

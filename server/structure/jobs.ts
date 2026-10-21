@@ -38,6 +38,7 @@ import {
   estimateStructureCost,
   formatUsd,
   planStructureChunks,
+  selectPageWindow,
   structureCostUsd,
   normalizeHierarchyConfig,
   structureWorkflowState,
@@ -52,7 +53,7 @@ import {
   type StructureWorkflowState,
 } from "@shared/ocr-structure";
 export type { StructureChunkRange } from "@shared/ocr-structure";
-export { planStructureChunks } from "@shared/ocr-structure";
+export { planStructureChunks, selectPageWindow } from "@shared/ocr-structure";
 import { buildOcrDocument } from "../ocr/jobs";
 import { analyseChunkWithClaude, StructureClaudeError } from "./claude";
 import { isStructureConfigured, sanitizeStructureError, structureConfig, structureRates } from "./config";
@@ -185,22 +186,37 @@ export interface CreateStructureJobInput {
   config: StructureHierarchyConfig;
   instructions?: string | null;
   voiceUsed?: boolean;
+  /** 1-based, inclusive page window; omit either bound for "to the end" / "from 1". */
+  pageFrom?: number | null;
+  pageTo?: number | null;
 }
 
 export async function createStructureJob(input: CreateStructureJobInput): Promise<StructureJob> {
   await ensureStructureSchema();
 
-  const { pages } = await buildOcrDocument(input.ocrJob.id);
-  if (pages.length === 0) {
+  const { pages: transcribed } = await buildOcrDocument(input.ocrJob.id);
+  if (transcribed.length === 0) {
     const err: any = new Error(
       "This document has no transcribed pages yet. Finish (or retry) the OCR run first.",
     );
     err.status = 400;
     throw err;
   }
+
+  // The page window is applied HERE, before anything is planned, estimated or billed:
+  // the ranges, the cost and the result are all about the chosen pages only.
+  const selection = selectPageWindow(transcribed, { from: input.pageFrom, to: input.pageTo });
+  const pages = selection.pages;
+  if (pages.length === 0) {
+    const err: any = new Error(
+      `No transcribed pages in ${input.pageFrom ?? selection.availableFrom}–${input.pageTo ?? selection.availableTo}. This document has transcribed pages ${selection.availableFrom}–${selection.availableTo}.`,
+    );
+    err.status = 400;
+    throw err;
+  }
   if (pages.length > structureConfig.maxPages) {
     const err: any = new Error(
-      `This document has ${pages.length} transcribed pages; the per-analysis limit is ${structureConfig.maxPages}.`,
+      `That is ${pages.length} transcribed pages; the per-analysis limit is ${structureConfig.maxPages}. Choose a narrower page range.`,
     );
     err.status = 400;
     throw err;
@@ -240,6 +256,8 @@ export async function createStructureJob(input: CreateStructureJobInput): Promis
     userId: input.userId,
     depth: cfg.depth,
     levelNames: cfg.levelNames,
+    pageFrom: selection.window?.from ?? null,
+    pageTo: selection.window?.to ?? null,
     instructions: input.instructions?.trim()?.slice(0, structureConfig.maxInstructionChars) || null,
     voiceUsed: Boolean(input.voiceUsed),
     model: structureConfig.model,
@@ -258,7 +276,9 @@ export async function createStructureJob(input: CreateStructureJobInput): Promis
   );
 
   log(
-    `job ${id} created for ocr ${input.ocrJob.id} — ${pages.length}p, ${ranges.length} range(s), depth ${cfg.depth} (${cfg.levelNames.join(" › ")}), ${structureConfig.model}, estimated ${formatUsd(estimate.costUsd)}`,
+    `job ${id} created for ocr ${input.ocrJob.id} — ${pages.length}p` +
+      (selection.window ? ` (p${selection.window.from}-${selection.window.to} of ${selection.availableCount})` : "") +
+      `, ${ranges.length} range(s), depth ${cfg.depth} (${cfg.levelNames.join(" › ")}), ${structureConfig.model}, estimated ${formatUsd(estimate.costUsd)}`,
   );
   pump();
   return job;
@@ -358,9 +378,12 @@ async function runJob(jobId: string, signal: AbortSignal): Promise<void> {
     levelNames: job.levelNames,
   });
 
+  const analysisWindow =
+    job.pageFrom != null && job.pageTo != null ? { from: job.pageFrom, to: job.pageTo } : null;
+
   const started = Date.now();
   // Ranges run in order so each one inherits the hierarchy the previous one left open.
-  let budgetStop: string | null = null;
+  let stopReason: string | null = null;
   for (const chunk of pending) {
     if (signal.aborted) break;
 
@@ -368,14 +391,22 @@ async function runJob(jobId: string, signal: AbortSignal): Promise<void> {
     // ranges finish, and the cap has to be checked against what has actually been spent.
     const current = await getStructureJob(jobId);
     if (!current) break;
-    budgetStop = jobBudgetStop(current);
-    if (budgetStop) {
-      log(`job ${jobId} ${budgetStop}`);
+    stopReason = jobBudgetStop(current);
+    if (stopReason) {
+      log(`job ${jobId} ${stopReason}`);
       break;
     }
 
     const carry = await carryOverFor(jobId, chunk.chunkIndex, pageByNumber);
-    await runChunk(job, cfg, chunk, pageByNumber, carry, signal);
+    // A failure about the server's credentials, not about these pages: it would repeat
+    // identically on every remaining range, so the job stops with the fix named instead
+    // of marking thirty ranges failed with the same message.
+    const fatal = await runChunk(job, cfg, chunk, pageByNumber, carry, analysisWindow, signal);
+    if (fatal) {
+      stopReason = fatal;
+      log(`job ${jobId} stopped: ${fatal}`);
+      break;
+    }
   }
 
   if (signal.aborted) {
@@ -388,7 +419,7 @@ async function runJob(jobId: string, signal: AbortSignal): Promise<void> {
     return;
   }
 
-  await finalizeJob(jobId, budgetStop);
+  await finalizeJob(jobId, stopReason);
   const finished = await getStructureJob(jobId);
   log(
     `job ${jobId} finished in ${((Date.now() - started) / 1000).toFixed(1)}s` +
@@ -444,14 +475,19 @@ async function carryOverFor(
   };
 }
 
+/**
+ * One page range, end to end. Returns null normally, or the message a configuration
+ * failure should stop the whole job with.
+ */
 async function runChunk(
   job: StructureJob,
   cfg: StructureHierarchyConfig,
   chunk: { chunkIndex: number; startPage: number; endPage: number; attempts: number },
   pageByNumber: Map<number, OcrPage>,
   carry: Awaited<ReturnType<typeof carryOverFor>>,
+  analysisWindow: { from: number; to: number } | null,
   signal: AbortSignal,
-): Promise<void> {
+): Promise<string | null> {
   const startedAt = Date.now();
   await updateStructureChunk(job.id, chunk.chunkIndex, { status: "running", error: null });
   setLive(job.id, { chunkIndex: chunk.chunkIndex, phase: "slot", attempt: 0, nextAttemptAt: null });
@@ -484,6 +520,7 @@ async function runChunk(
       chunkIndex: chunk.chunkIndex,
       config: cfg,
       instructions: job.instructions,
+      analysisWindow,
       carryOverText: carry.carryOverText,
       openPath: carry.openPath,
       knownTeekaNames: carry.knownTeekaNames,
@@ -540,6 +577,7 @@ async function runChunk(
         `job ${job.id} range ${chunk.chunkIndex} (p${chunk.startPage}-${chunk.endPage}): ${result.rejected} item(s) failed the schema check and were dropped`,
       );
     }
+    return null;
   } catch (err: any) {
     const cancelled = signal.aborted || err?.message === "cancelled" || err?.message === "Cancelled.";
     if (cancelled) {
@@ -558,7 +596,7 @@ async function runChunk(
           cacheWriteTokens: 0,
         });
       }
-      return;
+      return null;
     }
     const budget = err instanceof StructureBudgetError;
     const attempts = err instanceof StructureClaudeError ? err.attempts : 1;
@@ -580,21 +618,23 @@ async function runChunk(
     log(
       `job ${job.id} range ${chunk.chunkIndex} (p${chunk.startPage}-${chunk.endPage}) failed: ${sanitizeStructureError(err)}`,
     );
+    return err instanceof StructureClaudeError && err.fatal ? err.message : null;
   } finally {
     release?.();
     live.delete(job.id);
   }
 }
 
-async function finalizeJob(jobId: string, budgetStop: string | null = null): Promise<void> {
+async function finalizeJob(jobId: string, stopReason: string | null = null): Promise<void> {
   const chunks = await listStructureChunkStatuses(jobId);
   const done = chunks.filter((c) => c.status === "done").length;
   const failed = chunks.filter((c) => c.status === "failed" || c.status === "skipped").length;
   const unanalysed = chunks.length - done - failed;
 
-  // A budget stop leaves ranges untouched rather than failed: the job is `partial`, the
-  // pages it did analyse are reviewable, and the message names the knob to raise.
-  const status = budgetStop
+  // A stop (budget or configuration) leaves the remaining ranges untouched rather than
+  // failed: the job is `partial`, the pages it did analyse are reviewable, and the
+  // message names what to change before pressing Retry failed ranges.
+  const status = stopReason
     ? done === 0
       ? "failed"
       : "partial"
@@ -604,8 +644,8 @@ async function finalizeJob(jobId: string, budgetStop: string | null = null): Pro
         ? "failed"
         : "partial";
   const firstError = chunks.find((c) => c.error)?.error ?? null;
-  const error = budgetStop
-    ? `${budgetStop}${unanalysed > 0 ? ` ${unanalysed} page range(s) were not analysed.` : ""}`
+  const error = stopReason
+    ? `${stopReason}${unanalysed > 0 ? ` ${unanalysed} page range(s) were not analysed.` : ""}`
     : status === "done"
       ? null
       : firstError;

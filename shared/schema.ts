@@ -422,6 +422,59 @@ export type PortalVocabulary = Record<PortalVocabularyKey, string[]>;
 
 export type PortalVocabularyCustom = Partial<Record<PortalVocabularyKey, string[]>>;
 
+/**
+ * Canonical spelling of a vocabulary name as it is STORED and PUBLISHED: trimmed and
+ * Unicode-NFC composed. macOS keyboards and some copy sources emit decomposed
+ * diacritics (NFD — "Mādhavācārya" as `a` + U+0304), which look identical on screen
+ * but are a different string. Composing once here means the dropdown, the Shared-lists
+ * page, the stored row and the publish validator never disagree about one name.
+ */
+export function normalizePortalVocabularyName(raw: unknown): string {
+  return String(raw ?? "").trim().normalize("NFC");
+}
+
+/**
+ * Case-insensitive identity of a vocabulary name. Every comparison between a draft
+ * value and the shared vocabulary — dedupe on add, match on remove, highlight as
+ * custom in the UI, accept at publish — MUST go through this one function, so a name
+ * that passes one check passes them all. Only case and NFC form are folded; nothing
+ * else (punctuation, spacing inside the name) is touched, so genuinely different
+ * authors never merge.
+ */
+export function portalVocabularyNameKey(raw: unknown): string {
+  return normalizePortalVocabularyName(raw).toLowerCase();
+}
+
+/**
+ * Pure list edits behind the Shared-lists add/remove. Kept out of the storage layer
+ * so the dedupe rule is testable without Postgres and is the SAME rule the publish
+ * validator matches by: a repeat add, a case variant, or an NFD/NFC variant of an
+ * existing name never creates a second record; a remove matches by that identity too.
+ */
+export function addPortalVocabularyName(
+  current: PortalVocabularyCustom,
+  key: PortalVocabularyKey,
+  value: string,
+): PortalVocabularyCustom {
+  const list = [...(current[key] ?? [])];
+  const wanted = portalVocabularyNameKey(value);
+  if (!wanted) return current;
+  if (!list.some((v) => portalVocabularyNameKey(v) === wanted)) {
+    list.push(normalizePortalVocabularyName(value));
+  }
+  return { ...current, [key]: list };
+}
+
+export function removePortalVocabularyName(
+  current: PortalVocabularyCustom,
+  key: PortalVocabularyKey,
+  value: string,
+): PortalVocabularyCustom {
+  const wanted = portalVocabularyNameKey(value);
+  const list = (current[key] ?? []).filter((v) => portalVocabularyNameKey(v) !== wanted);
+  return { ...current, [key]: list };
+}
+
 export const cmsPortalVocabulary = pgTable("cms_portal_vocabulary", {
   id: integer("id").primaryKey().default(1),
   custom: jsonb("custom").$type<PortalVocabularyCustom>().notNull().default({}),
@@ -743,6 +796,12 @@ export const structureJobs = pgTable("cms_structure_jobs", {
   depth: integer("depth").notNull().default(2),
   /** Semantic name per level, length === depth; the last entry names the leaf. */
   levelNames: jsonb("level_names").$type<string[]>().notNull().default([]),
+  /**
+   * The page window the editor chose, 1-based inclusive. Null means the whole
+   * transcription; a window means only those pages were planned, sent and billed.
+   */
+  pageFrom: integer("page_from"),
+  pageTo: integer("page_to"),
   /** The editor's structuring instructions (typed and/or dictated, already merged). */
   instructions: text("instructions"),
   /** True when any part of `instructions` arrived as speech — provenance, not behaviour. */

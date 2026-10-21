@@ -52,15 +52,28 @@ export interface StructureConfigInfo {
   usage: StructureUsage;
 }
 
-/** What one document would cost, with the budget it has to fit inside. */
+/** What one document (or the chosen page window of it) would cost. */
 export interface StructureEstimateInfo {
+  /** Transcribed pages that would actually be sent. */
   pages: number;
+  /** The window applied, clamped to the pages that exist; null = the whole document. */
+  window: { from: number; to: number } | null;
+  /** First/last transcribed page of the document, and how many it has. */
+  availableFrom: number;
+  availableTo: number;
+  availablePages: number;
   estimate: StructureCostEstimate;
   model: string;
   budget: StructureBudget;
   withinBudget: boolean;
   /** Why it cannot be started, in words the editor can act on. */
   blockers: string[];
+}
+
+/** A page window the editor chose; either bound may be left open. */
+export interface StructurePageRange {
+  from?: number | null;
+  to?: number | null;
 }
 
 export interface StructureUsage {
@@ -191,8 +204,15 @@ export function fetchStructureJob(jobId: string): Promise<StructureJobDetail> {
   return getJson(`${STRUCTURE_BASE}/jobs/${jobId}`);
 }
 
-export function fetchStructureEstimate(ocrJobId: string): Promise<StructureEstimateInfo> {
-  return getJson(`${STRUCTURE_BASE}/estimate/${ocrJobId}`);
+export function fetchStructureEstimate(
+  ocrJobId: string,
+  range?: StructurePageRange | null,
+): Promise<StructureEstimateInfo> {
+  const query = new URLSearchParams();
+  if (range?.from != null) query.set("from", String(range.from));
+  if (range?.to != null) query.set("to", String(range.to));
+  const suffix = query.toString();
+  return getJson(`${STRUCTURE_BASE}/estimate/${ocrJobId}${suffix ? `?${suffix}` : ""}`);
 }
 
 /**
@@ -222,6 +242,9 @@ export async function startStructureJob(input: {
   levelNames: string[];
   instructions: string;
   voiceUsed: boolean;
+  /** 1-based inclusive page window; null for "the whole transcription". */
+  pageFrom?: number | null;
+  pageTo?: number | null;
 }): Promise<{ job: StructureJob }> {
   const res = await apiRequest("POST", `${STRUCTURE_BASE}/jobs`, input);
   return res.json();

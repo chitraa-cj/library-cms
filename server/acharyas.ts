@@ -14,7 +14,7 @@
 import { Router, type Response } from "express";
 import { readFileSync } from "fs";
 import { join } from "path";
-import { eq } from "drizzle-orm";
+import { eq, sql } from "drizzle-orm";
 import { db } from "./db";
 import { requireAuth, requireAdmin } from "./auth";
 import { strapiRequest, absolutizeMediaUrl } from "./strapi";
@@ -155,14 +155,20 @@ export async function seedAcharyas(): Promise<number> {
 }
 
 /** Seed only if the table is empty (called on boot). */
+// The caller fires this with `void`, so the emptiness check must sit inside the
+// try too — a DB that is down at boot would otherwise be an unhandled rejection
+// that takes the whole server down.
 export async function seedAcharyasIfEmpty(): Promise<void> {
-  const [row] = await db.select({ id: acharyaProfiles.id }).from(acharyaProfiles).limit(1);
-  if (row) return;
   try {
+    const [row] = await db.select({ id: acharyaProfiles.id }).from(acharyaProfiles).limit(1);
+    if (row) return;
     const n = await seedAcharyas();
     console.log(`[acharyas] seeded ${n} profiles from ${SEED_PATH}`);
   } catch (err: any) {
-    console.error("[acharyas] seed failed:", err?.message ?? err);
+    // pg's connection-refused AggregateError has an EMPTY message — the code is the
+    // useful part. Neither carries credentials (the driver never echoes the URL).
+    const why = [err?.code, err?.message].filter(Boolean).join(" ") || String(err);
+    console.error(`[acharyas] boot seed check skipped, database not usable: ${why}`);
   }
 }
 
@@ -309,6 +315,17 @@ function rejectInvalidPayload(
 export function createAcharyaRouter(): Router {
   const router = Router();
   router.use(requireAuth);
+
+  // Just the number, for the dashboard card — the list carries every biography.
+  // Registered before "/:slug" so "count" is never read as a slug.
+  router.get("/count", async (_req, res) => {
+    try {
+      const [{ count }] = await db.select({ count: sql<number>`count(*)::int` }).from(acharyaProfiles);
+      res.json({ count });
+    } catch (error: any) {
+      res.status(500).json({ message: error?.message || "Failed to count acharyas" });
+    }
+  });
 
   // List all acharyas (lightweight — no linked texts).
   router.get("/", async (_req, res) => {

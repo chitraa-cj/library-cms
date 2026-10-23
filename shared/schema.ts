@@ -171,6 +171,8 @@ export const granthaBackups = pgTable("grantha_backups", {
   granthaCount: integer("grantha_count").notNull().default(0),
   sectionCount: integer("section_count").notNull().default(0),
   manthraCount: integer("manthra_count").notNull().default(0),
+  // Acharya profiles in the snapshot; 0 for snapshots taken before they were included.
+  acharyaCount: integer("acharya_count").notNull().default(0),
   /**
    * Snapshots taken before 2026-10 only. A jsonb value is capped at ~256 MB of
    * content (28-bit element offsets), which full-library snapshots passed, so new

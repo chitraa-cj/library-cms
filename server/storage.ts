@@ -52,7 +52,7 @@ export interface IStorage {
   discardDraftWithDependencies(draftId: number, opts?: { userId?: string; dryRun?: boolean }): Promise<DraftDiscardResult>;
   purgeExpiredIdempotencyKeys(): Promise<number>;
   markDraftPublished(id: number, userId: string, strapiDocumentId?: string): Promise<Draft | undefined>;
-  createBackup(label: string, dataGz: Buffer, granthaCount: number, sectionCount: number, manthraCount: number, summary?: any): Promise<GranthaBackup>;
+  createBackup(label: string, dataGz: Buffer, granthaCount: number, sectionCount: number, manthraCount: number, summary?: any, acharyaCount?: number): Promise<GranthaBackup>;
   listBackups(): Promise<GranthaBackupMeta[]>;
   getBackup(id: number): Promise<GranthaBackup | null>;
   getBackupSummaryRow(id: number): Promise<{ id: number; label: string; createdAt: Date; granthaCount: number; sectionCount: number; manthraCount: number; summary: any } | null>;
@@ -343,10 +343,10 @@ export class DatabaseStorage implements IStorage {
   }
 
   /** `dataGz` is the gzipped snapshot — bytea, not jsonb, which caps out at ~256 MB. */
-  async createBackup(label: string, dataGz: Buffer, granthaCount: number, sectionCount: number, manthraCount: number, summary?: any): Promise<GranthaBackup> {
+  async createBackup(label: string, dataGz: Buffer, granthaCount: number, sectionCount: number, manthraCount: number, summary?: any, acharyaCount = 0): Promise<GranthaBackup> {
     const [backup] = await db
       .insert(granthaBackups)
-      .values({ label, dataGz, granthaCount, sectionCount, manthraCount, summary })
+      .values({ label, dataGz, granthaCount, sectionCount, manthraCount, acharyaCount, summary })
       .returning();
     return backup;
   }
@@ -380,6 +380,7 @@ export class DatabaseStorage implements IStorage {
         granthaCount: granthaBackups.granthaCount,
         sectionCount: granthaBackups.sectionCount,
         manthraCount: granthaBackups.manthraCount,
+        acharyaCount: granthaBackups.acharyaCount,
       })
       .from(granthaBackups)
       .orderBy(desc(granthaBackups.createdAt));

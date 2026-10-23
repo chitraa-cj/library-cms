@@ -3,12 +3,24 @@ import { STRAPI_POLL_INTERVAL } from "@/hooks/use-strapi-sync";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
-import { BookOpen, FileText, Users, Tag, ScrollText, Hash, Library, ArrowRight } from "lucide-react";
+import { BookOpen, FileText, Users, Tag, ScrollText, Hash, Library, ArrowRight, GraduationCap } from "lucide-react";
 import { Link } from "wouter";
 import { useAuth } from "@/hooks/use-auth";
 import type { Draft } from "@shared/schema";
 
-const contentSections = [
+type ContentSection = {
+  key: string;
+  label: string;
+  description: string;
+  icon: typeof BookOpen;
+  path: string;
+  color: string;
+  bgColor: string;
+  /** Where the count comes from when it is not a Strapi collection. */
+  count?: { url: string; read: (body: any) => number; unit: string };
+};
+
+const contentSections: ContentSection[] = [
   {
     key: "granthas",
     label: "Granthas",
@@ -72,24 +84,36 @@ const contentSections = [
     color: "text-pink-500",
     bgColor: "bg-pink-500/10",
   },
+  {
+    // Portal-only (Postgres), not Strapi — so it has its own count endpoint.
+    key: "acharyas",
+    label: "Acharyas",
+    description: "Guru-parampara profiles",
+    icon: GraduationCap,
+    path: "/acharyas",
+    color: "text-orange-500",
+    bgColor: "bg-orange-500/10",
+    count: { url: "/api/acharyas/count", read: (body) => body?.count ?? 0, unit: "profiles" },
+  },
 ];
 
 function StatCard({
   section,
   draftCount,
 }: {
-  section: (typeof contentSections)[number];
+  section: ContentSection;
   draftCount: number;
 }) {
-  const { data, isLoading, error } = useQuery<any>({
-    queryKey: ["/api/strapi", section.key, "count"],
+  const { data, isLoading, error } = useQuery<number>({
+    queryKey: [section.count?.url ?? "/api/strapi", section.key, "count"],
     queryFn: async () => {
       const res = await fetch(
-        `/api/strapi/${section.key}?pagination[pageSize]=1&fields[0]=id`,
+        section.count?.url ?? `/api/strapi/${section.key}?pagination[pageSize]=1&fields[0]=id`,
         { credentials: "include" }
       );
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      return res.json();
+      const body = await res.json();
+      return section.count ? section.count.read(body) : (body?.meta?.pagination?.total ?? 0);
     },
     refetchInterval: STRAPI_POLL_INTERVAL,
     refetchOnWindowFocus: true,
@@ -133,11 +157,11 @@ function StatCard({
                 className="text-2xl font-bold"
                 data-testid={`text-count-${section.key}`}
               >
-                {data?.meta?.pagination?.total ?? 0}
+                {data ?? 0}
               </span>
             )}
             <span className="text-xs text-muted-foreground ml-1.5">
-              published
+              {section.count?.unit ?? "published"}
             </span>
           </div>
         </CardContent>

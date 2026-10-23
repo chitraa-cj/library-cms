@@ -3,7 +3,7 @@ import { type Server } from "http";
 import { setupAuth, requireAuth, requireAdmin, hashPassword } from "./auth";
 import { createStrapiRouter, strapiRequest, strapiRequestLarge, withSectionLock } from "./strapi";
 import { invalidateGranthaBulkCache, invalidateAllBulkCache } from "./grantha-bulk-cache";
-import { createAcharyaRouter, seedAcharyasIfEmpty } from "./acharyas";
+import { createAcharyaRouter, listAcharyas, seedAcharyasIfEmpty } from "./acharyas";
 import ocrRouter from "./ocr/routes";
 import { reconcileOcrJobsOnBoot } from "./ocr/jobs";
 import structureRouter from "./structure/routes";
@@ -73,6 +73,7 @@ import {
   pickDocIdForSuffixInSectionRows,
 } from "@shared/grantha-publish-integrity";
 import {
+  buildBackupSummaryPayload,
   compressBackupData,
   decompressBackupData,
   isCompressedBackupPayload,
@@ -96,32 +97,6 @@ import {
 import { validateMantraLabelForCmsCreate } from "@shared/mantra-cms-guard";
 import { buildGranthaPublishProgressPlan } from "@shared/grantha-publish-progress";
 import { collectUnlinkedMantrasFromGranthaDraft } from "../client/src/lib/grantha-strapi-mantra-sync";
-
-/**
- * Build the lightweight summary (grantha records + section tree with per-section
- * manthra counts, no manthra text) from a fully-parsed snapshot. Stored in the
- * `summary` column so the detail page renders without touching the big blob.
- */
-function buildBackupSummaryPayload(d: any): { granthas: any[]; sections: any[] } {
-  const manthraCountBySection: Record<number, number> = {};
-  for (const m of (d?.manthras ?? [])) {
-    const sid = m?.Section?.id;
-    if (sid != null) manthraCountBySection[sid] = (manthraCountBySection[sid] ?? 0) + 1;
-  }
-  return {
-    granthas: d?.granthas ?? [],
-    sections: (d?.sections ?? []).map((s: any) => ({
-      id: s.id,
-      documentId: s.documentId,
-      title: s.title,
-      type: s.type,
-      order: s.order,
-      grantha: s.grantha,
-      parent: s.parent,
-      manthraCount: manthraCountBySection[s.id] ?? 0,
-    })),
-  };
-}
 
 /**
  * In-memory cache of ONE fully-parsed backup. Backups are immutable, so once a
@@ -6499,7 +6474,7 @@ export async function registerRoutes(
       const row = await storage.getBackupSummaryRow(id);
       if (!row) return res.status(404).json({ message: "Backup not found" });
 
-      let summary = row.summary as { granthas: any[]; sections: any[] } | null;
+      let summary = row.summary as { granthas: any[]; sections: any[]; acharyas?: any[] } | null;
       if (!summary) {
         // Old backup with no precomputed summary — build it once from the full
         // blob and persist so every later open is instant.
@@ -6520,6 +6495,7 @@ export async function registerRoutes(
         manthraCount: row.manthraCount,
         granthas: summary.granthas ?? [],
         sections: summary.sections ?? [],
+        acharyas: summary.acharyas ?? [],
       });
     } catch (e: any) {
       res.status(500).json({ message: e.message || "Failed to load backup summary" });
@@ -6602,6 +6578,7 @@ export async function registerRoutes(
         effectiveSectionCount,
         effectiveManthraCount,
         buildBackupSummaryPayload(normalized),
+        Array.isArray(normalized.acharyas) ? normalized.acharyas.length : 0,
       );
       res.status(201).json({ id: backup.id, label: backup.label });
     } catch (e: any) {
@@ -7378,13 +7355,16 @@ export async function registerRoutes(
           "&populate[Section][populate][grantha][fields][0]=documentId" +
           "&populate[Section][populate][grantha][fields][1]=GranthaName";
 
-        const [granthas, sections, manthras] = await Promise.all([
+        // Acharya profiles live only in the portal's Postgres, not Strapi, so a
+        // snapshot is their only copy outside the live table.
+        const [granthas, sections, manthras, acharyas] = await Promise.all([
           fetchAllStrapiPages(granthaFields),
           fetchAllStrapiPages(sectionFields),
           fetchAllStrapiPagesLarge(manthraFields),
+          listAcharyas(),
         ]);
 
-        console.log(`[backup] Fetched: ${granthas.length} granthas, ${sections.length} sections, ${manthras.length} manthras`);
+        console.log(`[backup] Fetched: ${granthas.length} granthas, ${sections.length} sections, ${manthras.length} manthras, ${acharyas.length} acharyas`);
 
         const label = new Date().toISOString().slice(0, 19).replace("T", " ");
         const snapshotData = {
@@ -7392,9 +7372,11 @@ export async function registerRoutes(
           granthaCount: granthas.length,
           sectionCount: sections.length,
           manthraCount: manthras.length,
+          acharyaCount: acharyas.length,
           granthas,
           sections,
           manthras,
+          acharyas,
         };
 
         console.log(`[backup] Compressing snapshot data...`);
@@ -7409,7 +7391,8 @@ export async function registerRoutes(
           granthas.length,
           sections.length,
           manthras.length,
-          summaryPayload
+          summaryPayload,
+          acharyas.length,
         );
 
         console.log(`[backup] Saved as backup #${backup.id}`);

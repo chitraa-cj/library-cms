@@ -36,6 +36,34 @@
 import { gzipSync, gunzipSync } from "node:zlib";
 import { StringDecoder } from "node:string_decoder";
 
+/**
+ * Build the lightweight summary (grantha records + section tree with per-section
+ * manthra counts, no manthra text, plus the acharya profiles) from a fully-parsed
+ * snapshot. Stored in the `summary` column so the detail page renders without
+ * touching the big blob. Snapshots taken before acharyas were included have none.
+ */
+export function buildBackupSummaryPayload(d: any): { granthas: any[]; sections: any[]; acharyas: any[] } {
+  const manthraCountBySection: Record<number, number> = {};
+  for (const m of (d?.manthras ?? [])) {
+    const sid = m?.Section?.id;
+    if (sid != null) manthraCountBySection[sid] = (manthraCountBySection[sid] ?? 0) + 1;
+  }
+  return {
+    granthas: d?.granthas ?? [],
+    sections: (d?.sections ?? []).map((s: any) => ({
+      id: s.id,
+      documentId: s.documentId,
+      title: s.title,
+      type: s.type,
+      order: s.order,
+      grantha: s.grantha,
+      parent: s.parent,
+      manthraCount: manthraCountBySection[s.id] ?? 0,
+    })),
+    acharyas: d?.acharyas ?? [],
+  };
+}
+
 /** Compress a snapshot payload for storage in `grantha_backups.data_gz`. */
 export function compressBackupData(data: any): Buffer {
   const jsonStr = JSON.stringify(data);

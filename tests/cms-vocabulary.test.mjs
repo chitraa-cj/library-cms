@@ -59,6 +59,7 @@ const {
 // `row.custom` is what Postgres holds. Writing to it directly (not through the module
 // add/remove) is how a write by a DIFFERENT process looks to this one.
 const row = { custom: {} };
+const realGetPortalVocabularyCustom = storage.getPortalVocabularyCustom.bind(storage);
 storage.getPortalVocabularyCustom = async () => structuredClone(row.custom);
 storage.addPortalVocabularyEntry = async (key, value) => {
   row.custom = addPortalVocabularyName(row.custom, key, value);
@@ -251,6 +252,65 @@ console.log("\nPublishing integration");
   const p5 = await applyToPayload({ GranthaName: "W", BhashyamAuthor: "Sri Shankaracharya" });
   check("16c. the prasthana alias still maps to the canonical grantha spelling", p5.BhashyamAuthor === "Sri Shankarayacharya");
   check("16d. teeka authors go through the same identity rule", vocab.resolveAllowedTeekaAuthor("  anandagiri ", new Set(["Anandagiri"])) === "Anandagiri");
+}
+
+// ── 17. the vocabulary cannot be read ─────────────────────────────────────────────────
+// A failed lookup must never look like "empty vocabulary" (which would wrongly reject
+// a listed author as "not in the shared vocabulary") nor like "allowed" (which would let
+// any author through). It must surface as a database error the routes map to a 503.
+console.log("\nVocabulary lookup failure");
+{
+  const { toApiError } = await import("../server/db-errors.ts");
+  row.custom = {};
+  await vocab.addPortalVocabularyEntry("bhashyamAuthors", CUSTOM, "admin");
+
+  /** Mirror of the enqueue route's author block: only a 400 becomes an author error. */
+  async function enqueueCheck(author) {
+    try {
+      vocab.resolveBhashyamAuthorForPublish(author, await vocab.getBhashyamAuthorsAllowlist());
+      return { accepted: true };
+    } catch (err) {
+      if (err?.status === 400) return { authorError: err };
+      return { dbError: err, api: toApiError(err, "Failed to publish draft") };
+    }
+  }
+
+  const failures = [];
+  // (a) The real storage method + real pg driver against an unreachable server: the
+  // exact error from the 2026-10-23 outage (AggregateError, code ECONNREFUSED, empty
+  // message). Only when the dummy URL is in use — never against a real database.
+  if (/:59999\/nothing$/.test(process.env.DATABASE_URL)) {
+    failures.push(["real driver, server unreachable", realGetPortalVocabularyCustom]);
+  } else {
+    console.log("  skip 17a (DATABASE_URL is not the unreachable dummy)");
+  }
+  // (b) A connection dropped mid-query (SQLSTATE 08006).
+  failures.push([
+    "connection dropped (08006)",
+    async () => {
+      throw Object.assign(new Error("terminating connection due to administrator command"), { code: "08006" });
+    },
+  ]);
+
+  const prevEnv = process.env.NODE_ENV;
+  process.env.NODE_ENV = "production";
+  for (const [label, impl] of failures) {
+    storage.getPortalVocabularyCustom = impl;
+    for (const author of [CUSTOM, "Nobody Known", BUILT_IN]) {
+      const r = await enqueueCheck(author);
+      check(`17. ${label}: "${author}" is neither accepted nor reported as an author problem`, !r.accepted && !r.authorError && !!r.dbError, JSON.stringify(r));
+    }
+    const r = await enqueueCheck(CUSTOM);
+    check(`17. ${label}: the API answers 503 db_unavailable`, r.api?.status === 503 && r.api?.body?.code === "db_unavailable", JSON.stringify(r.api));
+    check(`17. ${label}: the message says nothing was published`, /Nothing was published/.test(r.api?.body?.message ?? ""), r.api?.body?.message);
+    check(`17. ${label}: no driver text, host or port reaches the browser`, !/ECONNREFUSED|59999|127\.0\.0\.1|postgres|08006|administrator command/i.test(r.api?.body?.message ?? ""), r.api?.body?.message);
+    const walk = await throwsWith(() => publishAuthor(CUSTOM), (e) => e?.status !== 400);
+    check(`17. ${label}: the publish walk's lookup throws too (fails closed before any Strapi write)`, walk.threw && walk.ok);
+  }
+  process.env.NODE_ENV = prevEnv;
+
+  storage.getPortalVocabularyCustom = async () => structuredClone(row.custom);
+  check("17. once the database is back, the listed author publishes again", (await publishAuthor(CUSTOM)) === CUSTOM);
 }
 
 console.log(`\n${PASS} passed, ${FAILURES.length} failed`);

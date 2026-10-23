@@ -323,6 +323,27 @@ try {
   const stillPublished = await api("GET", `/api/drafts/${jmv.id}`);
   check("…without touching the already-published content", stillPublished.body?.strapiDocumentId === jmvRec?.documentId && (await mockRecords("granthas")).find((g) => g.GranthaName === jmv.title)?.BhashyamAuthor === CUSTOM);
 
+  // ---- the vocabulary cannot be read: fail closed, with a database error, not an author one
+  console.log("\nShared vocabulary unreadable (table renamed away on the scratch DB)");
+  await api("POST", "/api/admin/cms/vocabulary", { key: "bhashyamAuthors", value: CUSTOM });
+  const granthasBefore = (await mockRecords("granthas")).length;
+  const outageDraft = await createDraft(`E2E Outage ${RUN}`, CUSTOM);
+  let outage, outageBuiltIn;
+  await sql.query(`alter table cms_portal_vocabulary rename to cms_portal_vocabulary_e2e_hidden`);
+  try {
+    outage = await publish(outageDraft.id);
+    outageBuiltIn = await publish(primeDraft.id);
+  } finally {
+    await sql.query(`alter table cms_portal_vocabulary_e2e_hidden rename to cms_portal_vocabulary`);
+  }
+  check("a listed author is refused with a 503 while the vocabulary is unreadable", outage.enqueue.status === 503, JSON.stringify(outage.enqueue.body));
+  check("…as a database error, never as 'not in the shared vocabulary'", outage.enqueue.body?.code !== "bhashyam_author_not_in_vocabulary" && !/not in the shared vocabulary/.test(outage.enqueue.body?.message ?? ""), JSON.stringify(outage.enqueue.body));
+  check("even a built-in author is refused (no fail-open to the defaults)", outageBuiltIn.enqueue.status === 503, JSON.stringify(outageBuiltIn.enqueue.body));
+  check("…and nothing reached Strapi during the outage", (await mockRecords("granthas")).length === granthasBefore);
+  const recovered = await publish(outageDraft.id);
+  const recoveredRec = (await mockRecords("granthas")).find((g) => g.GranthaName === outageDraft.title);
+  check("once readable again, the same draft publishes with its author", recovered.final?.status === "done" && recoveredRec?.BhashyamAuthor === CUSTOM, JSON.stringify(recovered.final?.error ?? recovered.enqueue.body));
+
   // Worker log sanity: the worker never logged the vocabulary rejection for the JMV grantha
   const workerRejected = worker.lines.filter((l) => /not in the shared vocabulary/.test(l));
   check("the worker process never rejected an author the UI listed", workerRejected.length === 0, workerRejected.join(" | ").slice(0, 300));

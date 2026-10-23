@@ -85,6 +85,17 @@ type BackupSummary = {
   granthaCount: number; sectionCount: number; manthraCount: number;
   granthas: GranthaInfo[];
   sections: SectionInfo[];
+  // acharya_profiles rows as they stood when the snapshot was taken (none before 2026-10-23).
+  acharyas?: AcharyaInfo[];
+};
+
+type AcharyaInfo = {
+  id: number; slug: string; nameDevanagari: string; nameIast?: string | null;
+  nameDisplay?: string | null; dates?: string | null; category?: string | null;
+  guruDevanagari?: string | null; bioStatus?: string | null; sourceUrl?: string | null;
+  biography?: { heading?: string | null; paragraphs: string[] }[];
+  worksList?: { title: string }[];
+  linkedGranthaDocIds?: string[];
 };
 
 // ── Helpers ────────────────────────────────────────────────────────
@@ -448,6 +459,52 @@ type MantraRestoreResult = {
   message?: string;
 };
 
+function SnapshotAcharyaRow({ acharya }: { acharya: AcharyaInfo }) {
+  const [open, setOpen] = useState(false);
+  const works = acharya.worksList ?? [];
+  const paragraphs = (acharya.biography ?? []).flatMap((b) => b.paragraphs ?? []);
+  return (
+    <Card data-testid={`card-snapshot-acharya-${acharya.slug}`}>
+      <button onClick={() => setOpen((v) => !v)} className="w-full text-left">
+        <CardContent className="py-2.5 px-4">
+          <div className="flex items-center justify-between gap-3">
+            <div className="min-w-0">
+              <span className="font-medium text-sm">{acharya.nameDevanagari}</span>
+              {acharya.nameDisplay && (
+                <span className="text-xs text-muted-foreground ml-2">{acharya.nameDisplay}</span>
+              )}
+            </div>
+            <div className="flex items-center gap-2 text-xs text-muted-foreground flex-shrink-0">
+              {acharya.dates && <span>{acharya.dates}</span>}
+              {acharya.category && <Badge variant="outline" className="text-xs">{acharya.category}</Badge>}
+              {open ? <ChevronUp className="w-3.5 h-3.5" /> : <ChevronDown className="w-3.5 h-3.5" />}
+            </div>
+          </div>
+        </CardContent>
+      </button>
+      {open && (
+        <CardContent className="px-4 pt-0 pb-3 space-y-2 text-sm">
+          <p className="text-xs text-muted-foreground">
+            slug {acharya.slug}
+            {acharya.guruDevanagari && <> &middot; guru {acharya.guruDevanagari}</>}
+            {acharya.bioStatus && <> &middot; bio {acharya.bioStatus}</>}
+            {acharya.linkedGranthaDocIds?.length ? <> &middot; {acharya.linkedGranthaDocIds.length} linked granthas</> : null}
+          </p>
+          {paragraphs.map((p, i) => <p key={i} className="leading-relaxed">{p}</p>)}
+          {works.length > 0 && (
+            <div>
+              <SectionLabel label={`Works (${works.length})`} />
+              <ul className="list-disc pl-5 text-sm">
+                {works.map((w, i) => <li key={i}>{w.title}</li>)}
+              </ul>
+            </div>
+          )}
+        </CardContent>
+      )}
+    </Card>
+  );
+}
+
 export default function BackupDetailPage() {
   const params = useParams<{ id: string }>();
   const id = params.id;
@@ -457,6 +514,7 @@ export default function BackupDetailPage() {
 
   const [selectedGranthaId, setSelectedGranthaId] = useState<number | null>(null);
   const [selectedSectionId, setSelectedSectionId] = useState<number | null>(null);
+  const [acharyasOpen, setAcharyasOpen] = useState(false);
 
   // Grantha-wide restore state
   const [restoreOpen, setRestoreOpen] = useState(false);
@@ -652,6 +710,7 @@ export default function BackupDetailPage() {
     },
     staleTime: 10 * 60 * 1000,
   });
+  const acharyaList = summary?.acharyas ?? [];
 
   // ── Load manthras for the selected section only ──
   const { data: manthras = [], isLoading: manthrasLoading } = useQuery<ManthraEntry[]>({
@@ -777,7 +836,9 @@ export default function BackupDetailPage() {
             <h1 className="font-semibold" data-testid="page-title-backup-detail">Snapshot #{summary.id}</h1>
             <p className="text-xs text-muted-foreground">
               {new Date(summary.createdAt).toLocaleString()} &middot; {summary.granthaCount} granthas &middot; {summary.sectionCount} sections &middot; {summary.manthraCount} manthras
+              {acharyaList.length > 0 && <> &middot; {acharyaList.length} acharyas</>}
             </p>
+            {summary.label && <p className="text-xs text-muted-foreground">{summary.label}</p>}
           </div>
           <Button variant="outline" size="sm" onClick={() => window.open(`/api/admin/backups/${id}/download`, "_blank")} data-testid="button-download-snapshot">
             <Download className="w-4 h-4 mr-1.5" /> Download
@@ -821,6 +882,23 @@ export default function BackupDetailPage() {
         {!selectedGrantha && (
           <ScrollArea className="flex-1">
             <div className="p-6 max-w-2xl mx-auto space-y-2">
+              {acharyaList.length > 0 && (
+                <div className="space-y-2 pb-4" data-testid="snapshot-acharyas">
+                  <button
+                    onClick={() => setAcharyasOpen((v) => !v)}
+                    className="flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-widest text-muted-foreground hover:text-foreground"
+                  >
+                    {acharyasOpen ? <ChevronUp className="w-3 h-3" /> : <ChevronDown className="w-3 h-3" />}
+                    Acharyas ({acharyaList.length})
+                  </button>
+                  {acharyasOpen && acharyaList.map((a) => <SnapshotAcharyaRow key={a.id} acharya={a} />)}
+                  {granthaList.length > 0 && (
+                    <p className="pt-2 text-[10px] font-semibold uppercase tracking-widest text-muted-foreground">
+                      Granthas ({granthaList.length})
+                    </p>
+                  )}
+                </div>
+              )}
               {granthaList.map((g) => {
                 const sects = sectionsByGrantha.get(g.id) ?? [];
                 const mCount = sects.reduce((sum, s) => sum + (s.manthraCount ?? 0), 0);

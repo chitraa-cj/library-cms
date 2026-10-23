@@ -8,7 +8,7 @@ import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/com
 import { Skeleton } from "@/components/ui/skeleton";
 import { useToast } from "@/hooks/use-toast";
 import { useAuth } from "@/hooks/use-auth";
-import { Download, DatabaseBackup, BookOpen, ScrollText, Hash, Loader2, ShieldCheck, Eye, Upload, Database } from "lucide-react";
+import { Download, DatabaseBackup, BookOpen, ScrollText, Hash, Loader2, ShieldCheck, Eye, Upload, Database, Users } from "lucide-react";
 import type { GranthaBackupMeta } from "@shared/schema";
 
 export default function BackupsPage() {
@@ -52,7 +52,7 @@ export default function BackupsPage() {
       toast({
         title: "Snapshot created",
         description: newest
-          ? `Backed up ${newest.granthaCount} granthas, ${newest.sectionCount} sections, ${newest.manthraCount} manthras.`
+          ? `Backed up ${newest.granthaCount} granthas, ${newest.sectionCount} sections, ${newest.manthraCount} manthras, ${newest.acharyaCount} acharyas.`
           : "Snapshot saved successfully.",
       });
     } else if (serverDone && !listGrew && (statusData as any)?.lastError) {
@@ -340,6 +340,13 @@ export default function BackupsPage() {
                     <Hash className="w-3.5 h-3.5" />
                     {backup.manthraCount} manthras
                   </span>
+                  {/* 0 = taken before snapshots included acharyas, not "no acharyas". */}
+                  {backup.acharyaCount > 0 && (
+                    <span className="flex items-center gap-1.5" data-testid={`text-backup-acharyas-${backup.id}`}>
+                      <Users className="w-3.5 h-3.5" />
+                      {backup.acharyaCount} acharyas
+                    </span>
+                  )}
                 </div>
               </CardContent>
             </Card>

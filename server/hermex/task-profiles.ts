@@ -22,13 +22,15 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { hermexChromeProfile, hermexDir, hermexDisplay, hermexHeadless, hermexPython, repoRoot } from "./config";
+import { hermexChromeProfile, hermexDir, hermexHeadless, hermexPython, hermexStructureDisplay, isValidXDisplay, repoRoot } from "./config";
 
 export interface HermexTaskProfile {
   task: "structure";
   profileDir: string;
   lockFile: string;
   headless: boolean;
+  /** X display for its headful browser (HERMEX_STRUCTURE_DISPLAY, else the shared one). */
+  display: string | undefined;
 }
 
 export type TaskProfileResult = { ok: true; profile: HermexTaskProfile } | { ok: false; problems: string[] };
@@ -117,12 +119,26 @@ export function structureProfile(): TaskProfileResult {
     problems.push("HERMEX_STRUCTURE_LOCK_FILE must not live inside the Chrome profile directory.");
   }
 
+  // An explicit structure display that is malformed is reported, never swapped for
+  // translation's display.
+  const explicitDisplay = trimmed("HERMEX_STRUCTURE_DISPLAY");
+  if (explicitDisplay && !isValidXDisplay(explicitDisplay)) {
+    problems.push(`HERMEX_STRUCTURE_DISPLAY "${explicitDisplay}" is not an X display (expected something like :98).`);
+  }
+
   if (problems.length > 0) return { ok: false, problems };
 
+  const display = hermexStructureDisplay();
   const headlessRaw = trimmed("HERMEX_STRUCTURE_HEADLESS")?.toLowerCase();
   const headless =
-    headlessRaw === "1" || headlessRaw === "true" ? true : headlessRaw === "0" || headlessRaw === "false" ? false : hermexHeadless();
-  return { ok: true, profile: { task: "structure", profileDir, lockFile, headless } };
+    headlessRaw === "1" || headlessRaw === "true"
+      ? true
+      : headlessRaw === "0" || headlessRaw === "false"
+        ? false
+        : explicitDisplay
+          ? false
+          : hermexHeadless();
+  return { ok: true, profile: { task: "structure", profileDir, lockFile, headless, display } };
 }
 
 export function promptSessionScript(): string {
@@ -144,8 +160,10 @@ export function taskChildEnv(profile: HermexTaskProfile): NodeJS.ProcessEnv {
     if (key.startsWith("HERMEX_") || SECRET_KEY.test(key)) continue;
     env[key] = value;
   }
-  const display = hermexDisplay();
-  if (display) env.DISPLAY = display;
+  // This task's display only: an inherited DISPLAY (translation's :99 from .env) is
+  // replaced, or dropped when the task has none.
+  delete env.DISPLAY;
+  if (profile.display) env.DISPLAY = profile.display;
   env.HERMEX_CHROME_PROFILE = profile.profileDir;
   env.HERMEX_CHROME_PROFILE_DIR = profile.profileDir;
   env.HERMEX_CHROME_PROFILE_MARKER = profile.profileDir;
@@ -189,11 +207,12 @@ export function structureHermexAvailability(): StructureHermexAvailability {
       if (!setupComplete) problems.push("The structure profile has no completed Gemini login (.setup_gemini missing) — run npm run hermex:setup-structure.");
     }
     if (!result.profile.headless) {
-      const display = hermexDisplay();
+      const display = result.profile.display;
+      const source = trimmed("HERMEX_STRUCTURE_DISPLAY") ? "HERMEX_STRUCTURE_DISPLAY" : trimmed("HERMEX_DISPLAY") ? "HERMEX_DISPLAY" : "DISPLAY";
       const m = display ? /^:(\d+)/.exec(display) : null;
-      if (!display) problems.push("No DISPLAY for a headful browser — set HERMEX_DISPLAY (Xvfb) or HERMEX_STRUCTURE_HEADLESS=1.");
+      if (!display) problems.push("No X display for the OCR browser — set HERMEX_STRUCTURE_DISPLAY (an Xvfb display such as :98) or HERMEX_STRUCTURE_HEADLESS=1.");
       else if (m && process.platform === "linux" && !fs.existsSync(`/tmp/.X11-unix/X${m[1]}`)) {
-        problems.push(`No X server on ${display} — is Xvfb running?`);
+        problems.push(`No X server on ${display} (from ${source}) — start Xvfb on ${display}.`);
       }
     }
   }

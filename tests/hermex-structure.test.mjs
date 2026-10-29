@@ -158,6 +158,55 @@ console.log("\nthe browser child's environment");
   check("no credential of any kind reaches it", secrets.length === 0, secrets.join());
 }
 
+// ── 2b. display isolation ────────────────────────────────────────────────────
+console.log("\nthe OCR browser's display is its own");
+{
+  const cfg = await import("../server/hermex/config.ts");
+  const withEnv = async (patch, fn) => {
+    const saved = {};
+    for (const k of Object.keys(patch)) saved[k] = process.env[k];
+    for (const [k, v] of Object.entries(patch)) v == null ? delete process.env[k] : (process.env[k] = v);
+    try {
+      return await fn();
+    } finally {
+      for (const [k, v] of Object.entries(saved)) v == null ? delete process.env[k] : (process.env[k] = v);
+    }
+  };
+  // The box: translation on :99 (DISPLAY in .env), OCR on :98.
+  await withEnv({ DISPLAY: ":99", HERMEX_DISPLAY: undefined, HERMEX_STRUCTURE_DISPLAY: ":98", HERMEX_STRUCTURE_HEADLESS: undefined }, async () => {
+    const p = profiles.structureProfile();
+    check("the structure profile resolves HERMEX_STRUCTURE_DISPLAY", p.ok && p.profile.display === ":98", JSON.stringify(p));
+    check("an explicit structure display means a headful browser", p.ok && p.profile.headless === false);
+    check("translation's display is unchanged (:99)", cfg.hermexDisplay() === ":99");
+    const env = profiles.taskChildEnv(p.profile);
+    check("the browser child gets DISPLAY=:98, not translation's :99", env.DISPLAY === ":98", env.DISPLAY);
+    check("HERMEX_STRUCTURE_DISPLAY itself is not passed to the child", !("HERMEX_STRUCTURE_DISPLAY" in env));
+    const s = await session("dumpenv");
+    const live = JSON.parse(await s.ask("env please", { timeoutMs: 10_000 }));
+    await s.close();
+    check("a real session child runs on :98", live.DISPLAY === ":98", live.DISPLAY);
+  });
+  await withEnv({ DISPLAY: ":99", HERMEX_DISPLAY: undefined, HERMEX_STRUCTURE_DISPLAY: undefined }, async () => {
+    const p = profiles.structureProfile();
+    check("unset, it falls back to the shared display (backward compatible)", p.ok && p.profile.display === ":99");
+  });
+  await withEnv({ DISPLAY: ":99", HERMEX_DISPLAY: ":97", HERMEX_STRUCTURE_DISPLAY: undefined }, async () => {
+    const p = profiles.structureProfile();
+    check("unset, HERMEX_DISPLAY still wins over DISPLAY", p.ok && p.profile.display === ":97");
+  });
+  await withEnv({ DISPLAY: ":99", HERMEX_STRUCTURE_DISPLAY: "ninety-eight" }, async () => {
+    const p = profiles.structureProfile();
+    check("a malformed structure display is refused, not replaced by :99", !p.ok && /HERMEX_STRUCTURE_DISPLAY/.test(p.problems.join()));
+    const health = profiles.structureHermexAvailability();
+    check("readiness names the bad setting", !health.ok && health.problems.some((m) => /HERMEX_STRUCTURE_DISPLAY/.test(m)));
+  });
+  await withEnv({ DISPLAY: undefined, HERMEX_DISPLAY: undefined, HERMEX_STRUCTURE_DISPLAY: undefined, HERMEX_STRUCTURE_HEADLESS: "1" }, async () => {
+    const p = profiles.structureProfile();
+    const env = profiles.taskChildEnv(p.profile);
+    check("no display configured → the child inherits none", p.ok && env.DISPLAY == null);
+  });
+}
+
 // ── 3. protocol ──────────────────────────────────────────────────────────────
 console.log("\nsession protocol");
 {

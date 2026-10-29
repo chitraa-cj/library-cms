@@ -130,9 +130,12 @@ job's measured times as soon as one range finishes.
 ```bash
 # 1. a profile directory OUTSIDE the repo (deploys run git clean)
 echo 'HERMEX_STRUCTURE_CHROME_PROFILE=/home/ubuntu/hermex-structure/chrome-profile' >> .env
-# 2. one-time login with the dedicated (non-translation) Google account, on the Xvfb display
+# 2. its own Xvfb display, so the OCR browser never shares translation's :99
+#    (Xvfb :98 must be running whenever OCR runs — make it a service like :99's)
+echo 'HERMEX_STRUCTURE_DISPLAY=:98' >> .env
+# 3. one-time login with the dedicated (non-translation) Google account, on :98 via VNC
 npm run hermex:setup-structure
-# 3. restart the web app so it reads .env, then check
+# 4. restart the web app so it reads .env, then check
 curl -s localhost:<port>/api/admin/ocr/health        # 200 when ready, 503 + the problem otherwise
 ```
 

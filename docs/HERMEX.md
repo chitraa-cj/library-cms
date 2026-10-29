@@ -236,6 +236,7 @@ translation by construction, and translation's own setup is unchanged:
 | --- | --- | --- |
 | Google account | translation's | a **separate** dedicated account |
 | Chrome profile | `HERMEX_CHROME_PROFILE` | `HERMEX_STRUCTURE_CHROME_PROFILE` (refused if it is translation's) |
+| X display | `HERMEX_DISPLAY` / `DISPLAY` (`:99`) | `HERMEX_STRUCTURE_DISPLAY` (e.g. `:98`); unset = translation's |
 | Single-flight lock | `<HERMEX_DIR>/.hermex.lock` | `<structure profile>.lock` |
 | Entry point | `translate_cli.py` (one process per call) | `prompt_session.py` (one browser per job) |
 | Stale-browser cleanup | unchanged (sweeps all chromedrivers) | `HERMEX_CLEANUP_SCOPE=profile` (only its own profile) |

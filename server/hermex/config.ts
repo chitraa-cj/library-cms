@@ -96,6 +96,20 @@ export function hermexDisplay(): string | undefined {
 }
 
 /**
+ * X display for the dedicated OCR / OCR → Grantha browser. HERMEX_STRUCTURE_DISPLAY
+ * (e.g. `:98`) keeps it off translation's screen; unset, it shares hermexDisplay().
+ * Translation never reads this.
+ */
+export function hermexStructureDisplay(): string | undefined {
+  return trimmed("HERMEX_STRUCTURE_DISPLAY") ?? hermexDisplay();
+}
+
+/** `:98`, `:98.0`, `host:98` — the forms X accepts. */
+export function isValidXDisplay(display: string): boolean {
+  return /^[A-Za-z0-9._-]*:\d+(\.\d+)?$/.test(display);
+}
+
+/**
  * Headless or headful?
  *
  * Under Xvfb the browser is *headful* on a virtual display — that is the

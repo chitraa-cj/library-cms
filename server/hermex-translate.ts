@@ -95,6 +95,8 @@ export type HermexFailureReason =
   | "empty" // Gemini answered nothing usable
   | "malformed" // the CLI's stdout was not the JSON contract
   | "process" // non-zero exit / spawn failure
+  | "busy" // another process holds this profile's single-flight lock
+  | "transient" // Gemini answered with one of its canned backend-error replies
   | "unknown";
 
 export class HermexError extends Error {

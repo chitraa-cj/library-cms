@@ -8,7 +8,8 @@
 import { Router, raw } from "express";
 import { createReadStream } from "node:fs";
 import path from "node:path";
-import { OCR_SUPPORTED_MIME, isOcrConfigured, ocrConfig } from "./config";
+import { ocrEngineAvailability } from "./availability";
+import { OCR_SUPPORTED_MIME, ocrConfig } from "./config";
 import { ocrUsageSnapshot } from "./limiter";
 import { estimateJob } from "./estimate";
 import { liveChunks } from "./progress";
@@ -26,11 +27,12 @@ import {
   getJob,
   historicalMsPerPage,
   jobDir,
+  listChunkRawTexts,
   listChunkStatuses,
   listJobs,
   purgeExpiredJobs,
-  updateJob,
 } from "./store";
+import { splitChunkPages } from "./pages";
 
 const router = Router();
 
@@ -48,10 +50,18 @@ function safeName(input: unknown): string {
   return base.slice(0, 200) || "document";
 }
 
-router.get("/config", (_req, res) => {
+router.get("/config", async (_req, res) => {
+  const engine = await ocrEngineAvailability();
   res.json({
-    configured: isOcrConfigured(),
-    models: ocrConfig.models,
+    configured: engine.ok,
+    engine: {
+      name: engine.tesseractVersion ?? "tesseract (not installed)",
+      languages: ocrConfig.languages,
+      installedLanguages: engine.installedLanguages,
+      problems: engine.problems,
+      warnings: engine.warnings,
+      dpi: ocrConfig.dpi,
+    },
     limits: {
       maxUploadMb: Math.round(ocrConfig.maxUploadBytes / 1024 / 1024),
       maxPages: ocrConfig.maxPages,
@@ -61,6 +71,12 @@ router.get("/config", (_req, res) => {
     },
     usage: ocrUsageSnapshot(),
   });
+});
+
+/** Readiness of the local engine only — never a request to any provider. */
+router.get("/health", async (req, res) => {
+  const engine = await ocrEngineAvailability(req.query.force === "1");
+  res.status(engine.ok ? 200 : 503).json(engine);
 });
 
 router.get("/jobs", async (_req, res) => {
@@ -73,14 +89,15 @@ router.post(
   "/jobs",
   raw({ type: () => true, limit: ocrConfig.maxUploadBytes }),
   async (req: any, res) => {
-    if (!isOcrConfigured()) {
-      return fail(res, 503, "Gemini is not configured on this server (GEMINI_API_KEY is missing).");
+    const engine = await ocrEngineAvailability();
+    if (!engine.ok) {
+      return fail(res, 503, `The local OCR engine is not ready on this server: ${engine.problems.join(" ")}`);
     }
     const mimeType = String(req.query.mimeType || req.get("content-type") || "")
       .split(";")[0]
       .trim();
     if (!OCR_SUPPORTED_MIME.has(mimeType)) {
-      return fail(res, 415, `Unsupported file type "${mimeType || "unknown"}". Upload a PDF, PNG, JPEG or WebP.`);
+      return fail(res, 415, `Unsupported file type "${mimeType || "unknown"}". Upload a PDF, PNG, JPEG, WebP or TIFF.`);
     }
     const bytes: Buffer = Buffer.isBuffer(req.body) ? req.body : Buffer.alloc(0);
     if (bytes.byteLength === 0) return fail(res, 400, "Empty upload.");
@@ -90,16 +107,18 @@ router.post(
 
     const chunkSize = Number(req.query.chunkSize);
     try {
-      const job = await createOcrJob({
+      const { job, reused } = await createOcrJob({
         userId: req.user?.id ?? null,
         fileName: safeName(req.query.fileName),
         mimeType,
         bytes,
         chunkSize: Number.isFinite(chunkSize) ? chunkSize : undefined,
         quality: req.query.quality === "accurate" ? "accurate" : "fast",
+        textMode: req.query.textMode === "ocr" ? "ocr" : "auto",
         instructions: typeof req.query.instructions === "string" ? req.query.instructions.slice(0, 2000) : null,
+        force: req.query.force === "1",
       });
-      res.status(201).json({ job });
+      res.status(reused ? 200 : 201).json({ job, reused });
     } catch (err: any) {
       fail(res, err?.status || 500, err?.message || "Could not start the OCR job.");
     }
@@ -119,7 +138,11 @@ router.get("/jobs/:id", async (req, res) => {
     live,
     now,
     concurrency: ocrConfig.concurrency,
-    requestsPerMinute: ocrConfig.requestsPerMinute,
+    requestsPerMinute: 0,
+    // Local engine: ~1.6s/page measured at 300dpi on an M1 (docs/OCR.md); erring slow
+    // for smaller servers until this host has history of its own.
+    guessMsPerPage: { fast: 2_500, accurate: 4_000 },
+    rangeOverheadMs: 500,
     historicalMsPerPage: running ? await historicalMsPerPage(job.model) : null,
     quality: job.quality,
     startedAt: job.startedAt ? new Date(job.startedAt).getTime() : null,
@@ -151,6 +174,22 @@ router.get("/jobs/:id/download", async (req, res) => {
   const { markdown, pages } = await buildOcrDocument(job.id);
   const stem = job.fileName.replace(/\.[^.]+$/, "") || "ocr";
 
+  if (req.query.format === "raw") {
+    // The engine's untouched output beside nothing else — for comparing against the
+    // normalized text. Ranges from before the local engine have no raw copy.
+    const rows = await listChunkRawTexts(job.id);
+    const parts: string[] = [];
+    for (const row of rows) {
+      if (row.status !== "done") continue;
+      const source = row.rawText ?? row.markdown ?? "";
+      for (const page of splitChunkPages(source, row.startPage, row.endPage)) {
+        parts.push(`--- Page ${page.page}${row.rawText == null ? " (no raw copy: transcribed before the local engine)" : ""} ---\n\n${page.markdown}`);
+      }
+    }
+    res.setHeader("content-type", "text/plain; charset=utf-8");
+    res.setHeader("content-disposition", `attachment; filename="${encodeURIComponent(stem)}.raw.txt"`);
+    return res.send(parts.join("\n\n"));
+  }
   if (req.query.format === "txt") {
     const text = pages.map((p) => `--- Page ${p.page} ---\n\n${p.markdown}`).join("\n\n");
     res.setHeader("content-type", "text/plain; charset=utf-8");
@@ -183,23 +222,22 @@ router.post("/jobs/:id/retry", async (req, res) => {
   if (!job) return fail(res, 404, "OCR job not found.");
   if (isJobActive(job.id)) return fail(res, 409, "This job is still running.");
   const requeued = await retryOcrJob(job.id);
+  if (requeued == null) return fail(res, 409, "This job is already queued or running.");
   res.json({ requeued });
 });
 
 router.post("/jobs/:id/cancel", async (req, res) => {
   const job = await getJob(req.params.id);
   if (!job) return fail(res, 404, "OCR job not found.");
-  const wasActive = cancelOcrJob(job.id);
-  if (!wasActive && job.status === "queued") {
-    await updateJob(job.id, { status: "cancelled", finishedAt: new Date() });
-  }
-  res.json({ cancelled: true, wasActive });
+  const wasActive = isJobActive(job.id);
+  const cancelled = await cancelOcrJob(job.id);
+  res.json({ cancelled, wasActive });
 });
 
 router.delete("/jobs/:id", async (req, res) => {
   const job = await getJob(req.params.id);
   if (!job) return fail(res, 404, "OCR job not found.");
-  cancelOcrJob(job.id);
+  await cancelOcrJob(job.id);
   await deleteJob(job.id);
   res.json({ deleted: true });
 });

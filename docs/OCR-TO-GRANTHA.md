@@ -1,8 +1,14 @@
 # OCR → Grantha (admin-only)
 
 Turn a finished OCR transcription into a grantha: configure the hierarchy once, describe
-how the book is laid out, let Claude classify the pages, review the result, then download
-a CSV or hand it straight to a grantha through the import dialog the editors already use.
+how the book is laid out, let the assistant classify the pages, review the result, then
+download a CSV or hand it straight to a grantha through the import dialog the editors
+already use.
+
+The assistant is **Hermex driving Gemini's web UI on a dedicated Google account**: the
+same Hermex the translation workflow uses, but never its account, Chrome profile, lock or
+quota (see *Setup*). No API key and no SDK are involved. Until 2026-10 this step called
+the Claude API.
 
 Entry point: **Administration → OCR Docs** → pick a document → **Create Grantha from OCR**.
 The button appears as soon as one page range has been transcribed, so a long book can be
@@ -11,12 +17,14 @@ structured while its tail is still being read.
 ## The shape of it
 
 ```
-OCR job (Gemini, unchanged)                      server/ocr/*
+OCR job (local engine)                           server/ocr/*
    └─ transcribed pages
         └─ structure job                         cms_structure_jobs
              └─ page-range chunks (in order)     cms_structure_job_chunks
-                  └─ ONE Claude request each     server/structure/claude.ts
-                       └─ validated StructureItem[]        ← the only stored model output
+                  └─ numbered lines → ONE prompt each       server/structure/prompt.ts
+                       └─ Hermex session (dedicated profile) server/structure/hermex-analyzer.ts
+                            └─ line spans → resolveLineAnswer  shared/ocr-structure-lines.ts
+                                 └─ validated StructureItem[]   ← the only stored model output
                             └─ + review edits (overrides)
                                  └─ assembleStructure()    shared/ocr-structure.ts
                                       └─ validate → CSV
@@ -28,17 +36,32 @@ OCR job (Gemini, unchanged)                      server/ocr/*
 
 Two properties are worth stating plainly, because everything else follows from them:
 
-**Claude is asked for classification only.** One request per page range returns an ordered
-list of passages, each labelled (`section` / `verse` / `bhashyam` / `teeka` / `translation` /
-`prose` / `footnote` / `ignored`) and carrying the printed text verbatim. It does not build
-the hierarchy, decide which verse a commentary belongs to, renumber anything, or produce
-CSV. All of that is deterministic code in `shared/ocr-structure.ts`, which runs identically
-on the server, in the review UI and in the tests. A wrong answer can therefore only ever be
-a mis-labelled passage that the review shows — never an invented structure.
+**The model labels line spans; it never writes text.** The pages are shown as numbered
+lines (`L12| …`). One request per page range returns an ordered list of spans, each
+labelled (`section` / `verse` / `bhashyam` / `teeka` / `translation` / `prose` /
+`footnote` / `ignored`), e.g. "lines 4–5 are verse 1". `resolveLineAnswer` then **cuts the
+text from the OCR transcription itself**, so every word in the review and the CSV is
+byte-identical to the OCR output. The model cannot paraphrase, "correct", transliterate or
+drop it, not even through the chat UI's rendering. Coverage is checked in code:
+overlapping, backwards or out-of-range spans reject the answer (it is retried), and lines
+the model skipped come back as **unclassified** prose at confidence 0, so no text is ever
+silently lost.
+
+**Printed, inferred, supplied and uncertain are kept apart** on each item:
+`numberSource` is `printed` only when the number appears in the item's own lines
+(Devanagari digits are matched as digits); otherwise it is `inferred`, with confidence
+capped at 0.5 so it gets flagged. `teekaNameSource` is `printed` (on these pages), `known`
+(used earlier in the document), `instructions` (named by the editor) or `inferred` (capped
+and flagged). Editor changes are marked `edited`. Every item records its `sourceLines` and
+its page.
+
+The model still does not build the hierarchy, decide which verse a commentary belongs to,
+renumber anything or produce CSV. That is deterministic code in `shared/ocr-structure.ts`,
+which runs identically on the server, in the review UI and in the tests.
 
 **Nothing derived is stored.** The chunk rows hold `items`; the job row holds the review's
 `overrides`. Sections, verses, open questions, validation and the CSV are recomputed from
-those two on every read (`buildStructureResult`). So a correction never needs another Claude
+those two on every read (`buildStructureResult`). So a correction never needs another model
 call, and the review, the download and the import can never disagree.
 
 ## Hierarchy
@@ -59,9 +82,9 @@ The instructions step asks **Which pages?** — two boxes, `from` and `to`, 1-ba
 inclusive. Leave them empty for the whole transcription; fill them to analyse a slice.
 
 The window is a *scope* decision, applied before anything else happens: only those pages
-are planned into ranges, only they are sent to Claude, and only they are billed. So a
+are planned into ranges, only they are sent to the model. So a
 900-page scan can be done a hundred pages at a time, each part reviewed and imported on
-its own, and re-running one part costs that part. The estimate beside the boxes re-prices
+its own, and re-running one part costs only that part. The request count beside the boxes updates
 itself as they change (debounced, because the estimate assembles the transcription
 server-side), and it states the resolved window in words before the Analyse button.
 
@@ -94,8 +117,11 @@ reviewed and corrected before it is used; no audio and no new provider credentia
 the machine. Browsers without it simply show an explanatory toast.
 
 The instructions are sent inside `<editor_instructions>`, the pages inside `<document>`,
-and the system prompt says that both are data: text inside them is never an instruction to
-the model, whatever it claims. `tests/ocr-structure-claude.test.mjs` asserts that fencing.
+and the rules say that both are data: text inside them is never an instruction to the
+model, whatever it claims. Data cannot close its own fence (a literal `</document>` in a
+scan is neutralised in the prompt copy). Even a successful injection could only mislabel
+spans: the model has no tools here, cannot write text, and its answer is validated and
+then reviewed. `tests/ocr-structure-lines.test.mjs` asserts the fencing.
 
 ## Questions, and when they are asked
 
@@ -181,85 +207,47 @@ a grantha again asks for confirmation first, naming the grantha and the date.
 | `import_in_progress` / `import_completed` / `import_failed` | the import leg |
 
 Closing the dialog, refreshing or losing the connection costs nothing: the state is the job
-row, and re-opening the wizard resumes on the step it implies. A restart requeues in-flight
-ranges (`reconcileStructureJobsOnBoot`) and never re-asks for a range that already answered.
-Ranges of one job run **in order**, because each one is given the section path still open at
-the end of the previous one plus its last paragraphs as read-only context — that is what
-keeps a chapter heading on page 40 governing page 41.
+row, and re-opening the wizard resumes on the step it implies. Ranges of one job run **in
+order** (each is given the section path still open at the end of the previous one, plus its
+last lines as read-only context) through **one browser session per job**, so Chrome is
+launched once per analysis, not once per range.
 
-## Cost and limits
+Ownership works as it does for OCR (`server/lib/job-lease.ts`): an atomic claim, a fencing
+token on every write, and a heartbeat. A run that stays silent for
+`STRUCTURE_STALE_AFTER_MS` is requeued, and only its unfinished ranges run again. A setup
+failure (profile not logged in, no display, lock held) **stops the job and leaves its
+ranges queued**, so Retry works once it is fixed. A range whose answer stays unusable
+after `STRUCTURE_MAX_ATTEMPTS` fails on its own and stores no partial items. Starting the
+same analysis twice while it is queued or running returns the first one.
 
-### What it costs
+**Concurrent review edits**: the review appends edits and saves the whole list. The server
+accepts a save only if the stored list is a prefix of it (compared key-order-insensitively,
+under a row lock). A save that would erase another reviewer's edits gets a 409 asking the
+editor to reload.
 
-Measured with the estimator at Claude Opus 5 list prices ($5/MTok in, $25/MTok out):
+## Requests and limits
 
-| Document | Requests | Tokens (in / out) | Cost |
-| --- | --- | --- | --- |
-| 100 pages | 10 | 165k / 216k | **~$6** |
-| 300 pages | 30 | 617k / 810k | **~$23** |
-| 800 pages | 80 | 1.6M / 2.2M | **~$62** |
-
-Output dominates, because every item carries the source text back verbatim — that is the
-price of never letting the model paraphrase. The two levers that actually move the figure
-are `STRUCTURE_EFFORT` (try `low`/`medium` on cleanly printed, regularly numbered books)
-and `STRUCTURE_MODEL` (Sonnet 5 is ~2.5x cheaper per token than Opus). **If you change the
-model, change `STRUCTURE_PRICE_*` with it**, or the portal will quote a stale number.
-
-### The gates
+There is no per-token bill: the cost is the dedicated account's web quota and browser time.
+The instructions step shows how many requests the chosen pages need and how many remain
+today. Over a hard limit, the Analyse button is disabled and says why.
 
 | Gate | Default | Env |
 | --- | --- | --- |
-| **Spend per document** | **$30** | `STRUCTURE_MAX_SPEND_PER_JOB_USD` |
-| **Spend per UTC day** | **$60** | `STRUCTURE_MAX_SPEND_PER_DAY_USD` |
-| **Spend per UTC month** | **$400** | `STRUCTURE_MAX_SPEND_PER_MONTH_USD` |
-| Requests per document | 200 | `STRUCTURE_MAX_REQUESTS_PER_JOB` |
-| Requests per rolling minute / UTC day | 20 / 800 | `STRUCTURE_REQUESTS_PER_MINUTE`, `STRUCTURE_REQUESTS_PER_DAY` |
-| Model | `claude-opus-5` | `STRUCTURE_MODEL` |
-| Thinking depth | `high` | `STRUCTURE_EFFORT` |
-| OCR pages per request | 10 (or 60k characters) | `STRUCTURE_PAGES_PER_CHUNK`, `STRUCTURE_MAX_CHARS_PER_CHUNK` |
-| Requests in flight (whole server) | 2 | `STRUCTURE_CONCURRENCY` |
-| Documents analysed at once | 1 | `STRUCTURE_MAX_ACTIVE_JOBS` |
+| OCR pages / characters per request | 3 / 5,000 | `STRUCTURE_PAGES_PER_CHUNK`, `STRUCTURE_MAX_CHARS_PER_CHUNK` |
+| Requests per rolling minute / UTC day (dedicated account) | 4 / 300 | `STRUCTURE_REQUESTS_PER_MINUTE`, `STRUCTURE_REQUESTS_PER_DAY` |
+| Requests per document | 600 | `STRUCTURE_MAX_REQUESTS_PER_JOB` |
 | Attempts per range | 3 | `STRUCTURE_MAX_ATTEMPTS` |
+| Cool-down after Gemini's canned error reply | 60 s | `STRUCTURE_TRANSIENT_COOLDOWN_MS` (do not lower; see docs/HERMEX.md) |
+| One request / browser launch | 15 min / 6 min | `STRUCTURE_REQUEST_TIMEOUT_MS`, `STRUCTURE_LAUNCH_TIMEOUT_MS` |
+| Documents analysed at once | 1 (one browser per profile) | — |
 | Uncertainty threshold | 0.7 | `STRUCTURE_CONFIDENCE_THRESHOLD` |
-| Pages per analysis | 1500 | `STRUCTURE_MAX_PAGES` (narrow the page window instead of raising it) |
+| Pages per analysis | 1500 | `STRUCTURE_MAX_PAGES` |
 
-Any spend gate set to `0` is disabled. The request caps bound the burst rate; **the spend
-caps are what bound the bill**, because one request can carry 60k input and 32k output
-tokens.
-
-### Where each gate bites
-
-1. **Before the button.** The instructions step shows the estimate for the pages that
-   would actually be sent (the page window, if one is set), the budget left today and this
-   month, and the per-document cap. Over any of them, the Analyse button is disabled and
-   says which one and by how much — and a narrower page window is usually the answer.
-2. **At creation.** `POST /jobs` re-checks server-side and refuses with 429 and the gate
-   name, so a stale page or a direct API call cannot slip past the UI.
-3. **Before every range.** The per-document spend and request caps are re-checked against
-   what has *actually* been billed. A document denser than the estimate assumed stops at
-   its cap: the job finishes `partial`, the ranges it did analyse are reviewable, and the
-   error names the env var to raise and tells you to press **Retry failed ranges**.
-4. **Before every request.** The day and month gates sit in `acquireStructureSlot`, so a
-   budget that runs out mid-job stops the next request rather than the next job.
-
-Spend is computed from the token counters the API itself returned, summed over
-`cms_structure_jobs` in Postgres — so it survives a restart, counts every process, and
-cannot be reset by redeploying. Cache reads are billed at 0.1x and cache writes at 1.25x,
-and the two are counted separately (`cached_input_tokens`, `cache_write_tokens`) rather
-than lumped together, which would under-bill the budget.
-
-The estimate itself is deliberately pessimistic — 2.5 chars/token (Devanagari and IAST
-tokenize far worse than English), every range paying the full prompt overhead, output at
-1.35x the page text. It is labelled as an estimate everywhere it appears; the real figure
-lands on the job row as each range finishes and is shown while the analysis runs.
-
-The rules, the hierarchy and the editor's instructions are one cached prefix
-(`cache_control: ephemeral`), so a 300-page book pays for them once instead of thirty
-times; `cachedInputTokens` on the job row is the evidence, and the wizard shows it.
-
-A per-day request counter is also seeded from the database on boot. When it runs out,
-remaining ranges are marked `skipped` and the job finishes `partial` — press **Retry
-failed ranges** after 00:00 UTC.
+Ranges are small on purpose. Gemini's web UI has refused ~6K-character prompts from the EC2
+box while accepting larger ones from a Mac (docs/HERMEX.md). The answer is only a short
+list of spans, so small ranges cost little. When the day cap is reached, the remaining
+ranges are `skipped` and the job finishes `partial`; press Retry failed ranges after
+00:00 UTC.
 
 ## Accuracy
 
@@ -276,40 +264,56 @@ flagged for a human.
 
 ## Setup
 
+1. **A dedicated Google account** for document analysis, not the one translation uses.
+   Translation's Chrome profile holds an exclusive lock for its whole run, and the web
+   quota is per account; sharing either would make translation items fail or run out of
+   quota. Prefer an account with **no Gmail/Drive data, with Gemini extensions and saved
+   info/activity memory turned off**: scanned text is untrusted input, and an empty
+   account gives a prompt injection nothing to reach.
+2. Configure the profile (a new directory) in the CMS `.env`:
+   ```
+   HERMEX_STRUCTURE_CHROME_PROFILE=/home/ubuntu/hermex-structure/chrome-profile
+   ```
+   The server refuses a profile that is translation's, sits inside it, or is hermex's
+   default profile, and it refuses translation's lock file.
+3. Log it in once (this needs a display; on EC2 use the same Xvfb/VNC route as for
+   translation): `npm run hermex:setup-structure` opens Chrome; sign in, then press Enter.
+4. `GET /api/admin/ocr/structure/health` must return 200 (filesystem checks only; it
+   never opens a browser).
+5. `npm run migrate` (or let the server add the two lease columns itself on first use).
+
+The structure browser runs beside translation's, as its own Chrome under its own lock and
+with its own cleanup scope (`HERMEX_CLEANUP_SCOPE=profile`), so it never kills
+translation's driver. Translation's cleanup is unchanged: if *translation* has to reap
+orphans after a launch failure, it may kill the structure browser, which then fails that
+range with a retryable `chrome` error. That asymmetry is deliberate, so translation keeps
+priority.
+
+### Verifying on a server
+
 ```
-ANTHROPIC_API_KEY=sk-ant-...
-ANTHROPIC_WORKSPACE_ID=        # only for an organisation-level (unscoped) key
+npm run hermex:check                     # translation's setup: must stay green
+curl …/api/admin/ocr/structure/health    # the structure profile
 ```
-
-`ANTHROPIC_WORKSPACE_ID` is needed only when the key is not itself scoped to a workspace.
-An unscoped key is refused by the API on every request:
-
-> Claude 400: This API key is not scoped to a workspace, so this request must include the
-> `anthropic-workspace-id` header with the ID of the workspace to use.
-
-Set the workspace to bill (Claude Console → Settings → Workspaces) or issue a
-workspace-scoped key, then restart the portal. The portal rewrites that 400 into the
-sentence naming the fix, and — because the failure is about the credentials and not about
-the pages — **stops the job** instead of marking every page range failed with the same
-message. The ranges stay queued, so **Retry failed ranges** resumes once the env is right.
-The same holds for a rejected key (401), a forbidden one (403) and an empty account
-balance.
-
-Then `npm run migrate` (or `npm run migrate:ocr-structure` plus
-`psql -f script/migrations/20261016_ocr_structure_page_range.sql`). The server also
-installs and upgrades the two tables itself on first use, the same way the OCR tables do,
-so a pull + pm2 restart is enough. Without the key the wizard reports "not configured" and
-refuses to start; the existing Gemini OCR is untouched and keeps working.
+Then run one small analysis (one or two pages) and check that the range shows
+`hermex/gemini-web`, that items carry `sourceLines`, and that translation jobs keep
+completing.
 
 ## Tests
 
 ```
-npm run test:ocr-structure         # contract, assembler, validator, mapping, states
-npm run test:ocr-structure-csv     # the generated CSV through the REAL importer
-npm run test:ocr-structure-claude  # the request shape, retries and redaction (no quota)
+npm run test:ocr-structure          # contract, assembler, validator, mapping, states
+npm run test:ocr-structure-csv      # the generated CSV through the REAL importer
+npm run test:ocr-structure-lines    # line spans → verbatim text, coverage, printed vs
+                                    # inferred, prompt fencing
+npm run test:hermex-structure       # profile isolation, child env (no translation profile,
+                                    # no credentials), session protocol, retries, no fallback
+npm run test:hermex-isolation       # Python: scoped cleanup, prompt_session.py protocol
+npm run test:provider-audit         # nothing reachable from either workflow can call a
+                                    # provider API or write the CMS
+TEST_DATABASE_URL=… npm run test:ocr-structure-db   # real Postgres, scripted analyzer
 ```
 
-The CSV suite is the compatibility guarantee: it pushes generated bytes through
-`parseCsv → planCsvRows → buildImportPayload → placeCsvCreates → prepareHierarchyForSave`
-and asserts the tree the editor ends up holding. If the importer's contract changes, it
-fails there instead of in a half-imported grantha.
+None of these opens a browser or sends a prompt. The real Gemini leg is verified by hand
+(see *Verifying on a server*).
+

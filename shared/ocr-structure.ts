@@ -3,15 +3,16 @@
  *
  * Why it all lives here (and not in the server or the dialog)
  * ----------------------------------------------------------
- * Claude is asked for ONE thing only: cut the transcription into an ordered list of
- * classified items, each carrying the source text verbatim. Every relational decision —
+ * The model is asked for ONE thing only: label consecutive spans of the transcription
+ * (see ocr-structure-lines.ts — it names line ranges and never writes the text; the
+ * text is cut from the OCR output). Every relational decision —
  * which section a verse sits under, which verse a bhashyam belongs to, what the CSV
  * number has to be so the existing importer places it correctly — is made HERE, by
  * deterministic code that runs identically on the server, in the review UI and under
  * `tests/ocr-structure-*.test.mjs`. A model answer can therefore never invent a
  * hierarchy: it can only propose items, and this module decides what they mean.
  *
- *   model answer ──► StructureItem[]            (schema-validated, text preserved)
+ *   model answer ──► StructureItem[]            (validated, text cut from the source lines)
  *        └─ applyStructureOverrides()           user edits + resolved ambiguities
  *             └─ assembleStructure()            sections, verses, attachments, warnings
  *                  └─ validateStructure()       blocking errors vs. acknowledgeable warnings
@@ -107,8 +108,8 @@ export interface ResolvedStructurePageWindow {
  * Cut the transcription down to the pages the editor chose.
  *
  * A window is a scope decision, not a filter applied later: only these pages are planned
- * into ranges, only they are sent to Claude, and only they are billed — which is what
- * makes "analyse pages 40–90 of this 900-page scan" cost what those fifty pages cost.
+ * into ranges and only they are sent to the model — which is what makes "analyse pages
+ * 40–90 of this 900-page scan" take what those fifty pages take.
  * Bounds are inclusive, either may be omitted, they are accepted in either order, and
  * they are clamped to the pages that actually have a transcription (so "1–100" on a
  * document whose OCR stopped at page 60 analyses 60 pages rather than failing).
@@ -196,138 +197,6 @@ export function planStructureChunks(
   return ranges;
 }
 
-// ────────────────────────────────────────────────────────── cost estimation
-
-/**
- * Per-million-token prices and the two conversion factors the estimate needs.
- *
- * Prices live in config (env-overridable) rather than being hard-coded here, because a
- * figure that silently goes stale when the model changes is worse than no figure at all.
- */
-export interface StructureCostRates {
-  inputPer1M: number;
-  outputPer1M: number;
-  /** Cache reads bill at ~0.1x input, cache writes at ~1.25x. */
-  cacheReadPer1M: number;
-  cacheWritePer1M: number;
-  /**
-   * Characters per token. Deliberately pessimistic: Devanagari and IAST tokenize far
-   * worse than English prose (English is ~4 chars/token), and an estimate that
-   * under-states cost is the one that gets someone in trouble.
-   */
-  charsPerToken: number;
-  /** Rules + hierarchy + instructions, the cacheable prefix, per request. */
-  promptOverheadTokens: number;
-  /**
-   * Output tokens as a multiple of the page tokens. The items carry the source text
-   * verbatim, so the answer is roughly the input text again plus JSON scaffolding.
-   */
-  outputRatio: number;
-}
-
-export const STRUCTURE_DEFAULT_RATES: StructureCostRates = {
-  inputPer1M: 5,
-  outputPer1M: 25,
-  cacheReadPer1M: 0.5,
-  cacheWritePer1M: 6.25,
-  charsPerToken: 2.5,
-  promptOverheadTokens: 1_800,
-  outputRatio: 1.35,
-};
-
-export interface StructureCostEstimate {
-  requests: number;
-  inputTokens: number;
-  cachedInputTokens: number;
-  cacheWriteTokens: number;
-  outputTokens: number;
-  costUsd: number;
-  /** What the figure assumed, so the UI can say it rather than present it as a fact. */
-  basis: string;
-}
-
-/** Dollars for a set of token counters, at the given rates. */
-export function structureCostUsd(
-  tokens: {
-    inputTokens?: number | null;
-    outputTokens?: number | null;
-    cachedInputTokens?: number | null;
-    cacheWriteTokens?: number | null;
-  },
-  rates: StructureCostRates,
-): number {
-  const input = Math.max(0, Number(tokens.inputTokens ?? 0));
-  const output = Math.max(0, Number(tokens.outputTokens ?? 0));
-  const cacheRead = Math.max(0, Number(tokens.cachedInputTokens ?? 0));
-  const cacheWrite = Math.max(0, Number(tokens.cacheWriteTokens ?? 0));
-  return (
-    (input * rates.inputPer1M +
-      output * rates.outputPer1M +
-      cacheRead * rates.cacheReadPer1M +
-      cacheWrite * rates.cacheWritePer1M) /
-    1_000_000
-  );
-}
-
-/**
- * What analysing these pages should cost, before a single request is made.
- *
- * This is what the wizard shows the editor and what the server checks the remaining
- * budget against. It is an ESTIMATE — the real figure lands on the job row as the ranges
- * finish — so it is built to err high: pessimistic tokenization, every range paying the
- * full prompt overhead, and no credit for thinking being cheap.
- */
-export function estimateStructureCost(
-  pages: readonly { page: number; markdown: string }[],
-  ranges: readonly StructureChunkRange[],
-  rates: StructureCostRates = STRUCTURE_DEFAULT_RATES,
-  opts: { carryOverChars?: number; promptCaching?: boolean } = {},
-): StructureCostEstimate {
-  const charsByPage = new Map(pages.map((p) => [p.page, p.markdown.length]));
-  const carryOverTokens = Math.ceil((opts.carryOverChars ?? 0) / rates.charsPerToken);
-
-  let pageTokens = 0;
-  for (const range of ranges) {
-    for (let page = range.startPage; page <= range.endPage; page++) {
-      pageTokens += Math.ceil((charsByPage.get(page) ?? 0) / rates.charsPerToken);
-    }
-  }
-
-  const requests = ranges.length;
-  const caching = opts.promptCaching !== false && requests > 1;
-
-  // With caching the prefix is written once and read by the rest; without it, every
-  // request pays for it in full.
-  const cacheWriteTokens = caching ? rates.promptOverheadTokens : 0;
-  const cachedInputTokens = caching ? rates.promptOverheadTokens * Math.max(0, requests - 1) : 0;
-  const uncachedOverhead = caching ? 0 : rates.promptOverheadTokens * requests;
-
-  const inputTokens = pageTokens + uncachedOverhead + carryOverTokens * Math.max(0, requests - 1);
-  const outputTokens = Math.ceil(pageTokens * rates.outputRatio);
-
-  const costUsd = structureCostUsd(
-    { inputTokens, outputTokens, cachedInputTokens, cacheWriteTokens },
-    rates,
-  );
-
-  return {
-    requests,
-    inputTokens,
-    cachedInputTokens,
-    cacheWriteTokens,
-    outputTokens,
-    costUsd,
-    basis: `${requests} request(s), ~${rates.charsPerToken} chars/token, output ~${rates.outputRatio}x the page text${caching ? ", prompt prefix cached" : ""}`,
-  };
-}
-
-/** Two decimals, or more for sums small enough that two would read as zero. */
-export function formatUsd(amount: number): string {
-  if (!Number.isFinite(amount)) return "$0.00";
-  if (amount > 0 && amount < 0.01) return "<$0.01";
-  return `$${amount.toFixed(2)}`;
-}
-
 // ─────────────────────────────────────────────────────────── the model's answer
 
 /**
@@ -380,9 +249,20 @@ export interface StructureItem {
   /** Set when a user edit changed this item; the AI's original text is kept alongside. */
   edited?: boolean;
   originalText?: string;
+  /**
+   * Provenance, set by `resolveLineAnswer` (absent on items from before it existed):
+   * the inclusive span of numbered source lines this item's text was cut from, and
+   * whether its number / commentary name was found printed in the source or only
+   * inferred by the model. `user` is never set here — user edits are `edited`.
+   */
+  sourceLines?: [number, number];
+  numberSource?: "printed" | "inferred";
+  teekaNameSource?: "printed" | "known" | "instructions" | "inferred";
+  /** True for source lines the model left unclassified, kept so no text is ever dropped. */
+  unclassified?: boolean;
 }
 
-/** What one Claude call returns for one page range, before ids are assigned. */
+/** What one model answer for one page range resolves to, before ids are assigned. */
 export interface StructureChunkAnswer {
   items: Array<Omit<StructureItem, "id" | "edited" | "originalText">>;
   /** Free-text observations (suspicious numbering, illegible passages, …). */
@@ -390,69 +270,6 @@ export interface StructureChunkAnswer {
   /** The section path still open at the end of the range, so the next range continues it. */
   openPath?: Array<{ level: number; number: string; title: string }>;
 }
-
-/**
- * JSON Schema handed to the Messages API as `output_config.format`, so the answer is
- * schema-constrained at the source instead of only being checked afterwards. Kept in
- * step with `parseStructureChunkAnswer`, which re-validates regardless: a constrained
- * format is not a reason to trust a payload that reaches the database.
- */
-/**
- * The answer schema sent as `output_config.format.schema`.
- *
- * NOTE: no `minimum` / `maximum` anywhere. Structured outputs reject numeric bounds —
- * `output_config.format.schema: For 'integer' type, properties maximum, minimum are not
- * supported` — and the request fails with a 400 before a model sees it, which looks like
- * a broken feature rather than a schema quibble. The bound belongs in `description`, and
- * it is `parseStructureChunkAnswer` that actually enforces it: `page` is clamped to the
- * requested range, `confidence` to 0–1, and an out-of-range `level` is rejected. The
- * parser was always the authority here; these keywords were only a hint.
- */
-const LEVEL_DESCRIPTION = `section depth, 1 (outermost) to ${STRUCTURE_MAX_SECTION_LEVELS}`;
-
-export const STRUCTURE_CHUNK_JSON_SCHEMA = {
-  type: "object",
-  additionalProperties: false,
-  required: ["items", "warnings"],
-  properties: {
-    items: {
-      type: "array",
-      items: {
-        type: "object",
-        additionalProperties: false,
-        required: ["kind", "page", "confidence"],
-        properties: {
-          kind: { type: "string", enum: [...STRUCTURE_ITEM_KINDS] },
-          level: { type: "integer", description: LEVEL_DESCRIPTION },
-          number: { type: "string" },
-          title: { type: "string" },
-          text: { type: "string" },
-          script: { type: "string", enum: [...STRUCTURE_SCRIPTS] },
-          teekaName: { type: "string" },
-          language: { type: "string" },
-          attachTo: { type: "string", enum: [...STRUCTURE_ATTACHMENTS] },
-          page: { type: "integer", description: "1-based page number, inside the supplied range" },
-          confidence: { type: "number", description: "0 to 1" },
-          note: { type: "string" },
-        },
-      },
-    },
-    warnings: { type: "array", items: { type: "string" } },
-    openPath: {
-      type: "array",
-      items: {
-        type: "object",
-        additionalProperties: false,
-        required: ["level", "number", "title"],
-        properties: {
-          level: { type: "integer", description: LEVEL_DESCRIPTION },
-          number: { type: "string" },
-          title: { type: "string" },
-        },
-      },
-    },
-  },
-} as const;
 
 export class StructureAnswerError extends Error {
   constructor(message: string) {

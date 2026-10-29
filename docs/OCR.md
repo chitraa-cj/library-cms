@@ -1,125 +1,136 @@
 # OCR Docs (admin-only)
 
-Transcribe scanned books, manuscripts and PDFs with Gemini, from inside the CMS
-portal. Admins see **Administration → OCR Docs** (`/admin/ocr`); editors do not
-see the nav entry and every API route returns 403 for them.
+Transcribe PDFs and scans **on this server**, with no external AI service. Admins see
+**Administration → OCR Docs** (`/admin/ocr`); editors do not see the nav entry and every
+API route returns 403 for them.
 
-## How a document is processed
+Until 2026-10 this feature sent page ranges to the Gemini API. It now runs a local
+engine; jobs transcribed the old way keep their text and still display (as Markdown).
+
+## How a page is read
 
 ```
-upload (raw bytes)
-   └─ PDF page count + size-aware chunk plan      server/ocr/pdf.ts
-        └─ N chunk rows, each an inclusive page range        (cms_ocr_job_chunks)
-             └─ worker pool (OCR_CONCURRENCY lanes)          server/ocr/jobs.ts
-                  └─ global gate: in-flight / per-minute / per-day
-                                                             server/ocr/limiter.ts
-                       └─ ONE Gemini request per page range  server/ocr/gemini.ts
-                            └─ Markdown with <<<PAGE:n>>> markers
-                                 └─ merged, page-ordered document
+upload (stored once, never modified)            .ocr-store/<jobId>/source.pdf
+   └─ page count (pdf-lib) + one chunk row per page        cms_ocr_job_chunks
+        └─ pool of OCR lanes (OCR_CONCURRENCY), nice'd     server/ocr/jobs.ts
+             └─ per page                                    server/ocr/engine.ts
+                  ├─ PDF text layer usable?  → pdftotext    (no OCR at all)
+                  └─ otherwise: pdftoppm → Tesseract OSD (script) →
+                       Tesseract with that script's language set; below
+                       OCR_ACCEPT_CONFIDENCE, try the other sets, keep the best
+                  └─ normalize (engine artefacts only) → review flags
+             └─ fenced write: raw text + normalized text + per-page metadata
 ```
 
-The chunk row is the unit of work, of retry and of accounting:
+What is kept, per page, and never mixed up:
 
-- a page range that fails never costs the ranges that succeeded — **Retry failed**
-  re-runs only the failed rows;
-- a server restart requeues in-flight rows and resumes automatically
-  (`reconcileOcrJobsOnBoot`), again without re-running finished pages;
-- the viewer reads the merged document while the job is still running, so pages
-  appear as their range lands instead of after the last request.
-
-Nothing polls a queue and nothing recurses: waiters are woken by an explicit
-FIFO queue, retries are capped at `OCR_MAX_ATTEMPTS`, and every loop walks a
-finite list of chunks.
-
-## Keeping Gemini usage moderate
-
-| Gate | Default | Env |
+| Stage | Where | What |
 | --- | --- | --- |
-| Pages per request | 8 (auto-reduced for heavy scans) | `OCR_CHUNK_SIZE` |
-| Requests in flight (whole server) | 4 | `OCR_CONCURRENCY` |
-| Documents worked on at once | 2 | `OCR_MAX_ACTIVE_JOBS` |
-| Requests per rolling minute | 12 | `OCR_REQUESTS_PER_MINUTE` |
-| Requests per UTC day | 1500 | `OCR_REQUESTS_PER_DAY` |
-| Attempts per page range | 4 | `OCR_MAX_ATTEMPTS` |
-| Upload size / page count | 120MB / 1500 pages | `OCR_MAX_UPLOAD_MB`, `OCR_MAX_PAGES` |
+| Original | `.ocr-store/<job>/source.*` | the upload, byte for byte |
+| Raw | `cms_ocr_job_chunks.raw_text` | exactly what pdftotext / Tesseract produced (`Raw` download) |
+| Normalized | `cms_ocr_job_chunks.markdown` | raw minus meaningless artefacts — what the viewer shows and OCR → Grantha reads |
+| Metadata | `cms_ocr_job_chunks.pages_meta` | source (text layer / OCR), engine + language set, OSD script, confidence, low-confidence words, review flags |
+| Approved | the grantha | whatever an editor commits through the grantha editor |
 
-A 400-page book at 8 pages per request is **50 Gemini requests**, not 400. The
-day counter is seeded from the database on boot, so a restart does not hand out
-a fresh daily budget. When the day budget runs out, remaining ranges are marked
-`skipped` and the job finishes as `partial` — press Retry failed after reset
-(00:00 UTC).
+**Nothing rewrites source text.** There is no AI "correction" stage: uncertain pages are
+*flagged*, never fixed. Normalization (`shared/ocr-quality.ts`) only removes CR/LF
+differences, trailing spaces, form feeds, blank-line runs and Tesseract's ZERO WIDTH
+NON-JOINER after a word-final virama (`त्‌` → `त्`; a ZWNJ between consonants, which
+changes the conjunct, is kept). No Unicode normalization form is applied.
 
-Retries count too: an attempt made while a slot is already held is booked
-against the minute window and the day counter (`recordExtraOcrRequest`), so a
-burst of 503s cannot quietly push past the cap.
+### Review flags
 
-### The API key's own quota comes first
+`empty`, `short`, `low_confidence` (page mean below `OCR_LOW_PAGE_CONFIDENCE`),
+`low_confidence_words` (words below `OCR_LOW_WORD_CONFIDENCE`, listed on the page),
+`invalid_unicode`, `repeated_lines` (a recognition loop), and
+`embedded_text_rejected` (the PDF had a text layer that looked unusable, so the page was
+OCR'd). The viewer shows them on each page and counts flagged pages in the header.
 
-Our caps only matter while they are *stricter* than the key's. A **free-tier**
-Gemini key is metered per project **per model per day** — currently 20
-requests/day/model — which is a few dozen pages, not a book. Two consequences:
+### When to choose "Always OCR"
 
-- for documents of hundreds of pages, enable billing on the Google AI Studio
-  project; nothing in this feature can create quota that the key does not have;
-- when a model's daily quota is spent, the runner does not retry it (a per-day
-  quota will not refill in 30s). It moves the page range to the next model in
-  `OCR_FALLBACK_MODELS` — a separate quota bucket — at the cost of one
-  immediately-failing request per exhausted model. The viewer names any model
-  that served ranges this way, because transcription quality can differ.
+The text-layer check rejects layers that are nearly empty or full of unmapped/replacement
+characters. It **cannot** detect a layer that is plausible-looking but wrong — notably PDFs
+typeset with legacy 8-bit Devanagari fonts (Kruti Dev and similar), whose "text" is Latin
+gibberish, and PDFs whose font map silently drops a sign. Observed on the test fixture: the
+Chrome-produced PDF's text layer drops the Vedic **ꣳ** (U+A8F3), splits "कुर्वन्नेवेह" into
+"कु र्वन्नेवेह" and loses one danda — with no flag, because a text layer carries no
+confidence. When the editor knows the source, **Always OCR** is the safe choice.
 
-Transcription is deterministic (temperature 0) and, on the **Fast** profile,
-runs with thinking disabled — thinking tokens are billed and add nothing to a
-straight transcription. The **High accuracy** profile leaves the model's own
-thinking on.
+## Accuracy (measured, not assumed)
 
-### Progress, ETA and busy models
+On the 3-page Īśāvāsya fixture in `tests/fixtures/ocr/` (rendered from Unicode text, then
+rasterised at 200 dpi and OCR'd at 300 dpi), character error rate against the exact source
+text:
 
-The page polls `GET /jobs/:id` every 1.5s. Between chunk-row changes the worker
-keeps an in-memory record per running range (`server/ocr/progress.ts`), so the
-poll can say "attempt 2 of 4", "Gemini busy (503), retrying in 12s" or "waiting
-for a request slot" instead of a bare spinner. `server/ocr/estimate.ts` turns the
-chunk rows plus that live state into a page-based ETA; it is a pure function
-with unit tests, and its `basis` is shown so a first-minute guess is never
-dressed up as a measurement.
+| Page | Script | Language set chosen | CER |
+| --- | --- | --- | --- |
+| 1 | Devanagari | `san` | 3.1% |
+| 2 | Devanagari | `san` | 4.3% |
+| 3 | IAST | `script/Latin` | 10.1% |
 
-A `503 high demand` answer means the model itself is short of capacity, not the
-key. With fallback models configured, a range spends at most two attempts on the
-busy model and then hands over to the next model (a separate capacity pool),
-exactly as it does for a spent daily quota. Without fallbacks it keeps the full
-`OCR_MAX_ATTEMPTS` budget on the one model.
+What the language comparison on the same pages showed (and why the defaults are what they
+are): `san+hin+eng` contaminates Devanagari with Latin look-alikes (6.2% CER); `hin` is
+worse than `san` on Sanskrit (3.6–5.4%); `eng` strips every IAST diacritic **while
+reporting ~87 confidence**; `script/Latin` keeps most of them. Known misreads on the
+fixture: the verse number **१ read as ९** (not flagged — confidence does not catch every
+error), **ꣳ** read as "ाबि" (flagged at confidence 12), and IAST `ṃ ṛ ḥ ś` dropped.
 
-Keep the fallback list to models the key can really call. Gemini retires models
-(`404 … no longer available to new users`), and a dead entry costs one wasted
-request per page range:
+These are synthetic, clean pages. Real scans (skew, noise, old type) will do worse;
+re-measure on a labelled sample of the actual corpus before trusting any threshold.
+Confidence thresholds are review hints, calibrated only on this fixture.
+
+## Speed
+
+Measured on an Apple M1, one lane: text-layer PDF, 3 pages: ~60 ms (no OCR). Scanned PDF,
+3 pages at 300 dpi: ~4.8 s (OSD + one or two recognitions per page). Throughput scales
+with `OCR_CONCURRENCY` up to the core count; the EC2 box has not been measured — its
+first jobs set the ETA's "historical" basis.
+
+Each Tesseract process runs single-threaded (`OMP_THREAD_LIMIT=1`) at `nice 10`;
+parallelism comes from page lanes, so one book cannot starve the web app or the
+translation worker of CPU.
+
+## Reliability
+
+- **Unit of work = one page** (`OCR_CHUNK_SIZE=1`): a failure costs only that page;
+  **Retry** re-runs only failed/unfinished pages (verified: finished pages' rows are not
+  rewritten).
+- **Transient** failures (a process killed by the OS, a timeout) retry with exponential
+  backoff + jitter, `OCR_MAX_ATTEMPTS` per page. **Bad input** (corrupt page) fails the page
+  without retrying. A **missing engine** (binary or language data) stops the job and leaves
+  its pages queued — Retry after installing.
+- **Ownership** (`server/lib/job-lease.ts`): jobs are claimed with
+  `FOR UPDATE SKIP LOCKED`; every write of a run is fenced on its run token; a heartbeat
+  proves liveness. A run whose heartbeat is older than `OCR_STALE_AFTER_MS` is requeued by a
+  periodic sweep (so after a crash, recovery starts within ~2 minutes). A run that lost its
+  job — cancelled, requeued — writes nothing. Cancel works across processes.
+- **Idempotent upload**: the same bytes with the same settings return the existing job
+  (`reused: true`) as long as its stored upload still exists. `force=1` makes a new one.
+- A job whose stored upload has gone (purged) fails once with that reason instead of every
+  page failing on a poppler exit code.
+
+## Install (Ubuntu / EC2)
 
 ```bash
-node --import tsx --env-file=.env script/ocr-probe-models.mts
+sudo apt install poppler-utils tesseract-ocr tesseract-ocr-osd \
+                 tesseract-ocr-san tesseract-ocr-script-latn
+curl -s localhost:<port>/api/admin/ocr/health        # 200 + versions when ready
 ```
 
-It spends one tiny request per configured model and exits non-zero only for a
-model that can never work; `503` (busy) and `429` (quota spent) are reported as
-transient, because those are what the fallback chain is for.
+`GET /api/admin/ocr/health` (admin) reports the Tesseract version, installed languages and
+anything missing with the package to install. Until it is green, uploads are refused with
+that message and queued jobs wait.
+
+On macOS (dev): `brew install tesseract tesseract-lang poppler`. Homebrew splits language
+files across two directories, so point `OCR_TESSDATA_DIR` at one holding `san`,
+`script/Latin` and `osd` (symlinks are fine) and `OCR_TESSERACT_BIN` at
+`/opt/homebrew/bin/tesseract` if another tesseract comes first on `PATH`.
 
 ## Configuration
 
-```
-GEMINI_API_KEY=...            # required; without it the page says "not configured"
-OCR_MODEL_FAST=gemini-3.8-flash
-OCR_MODEL_ACCURATE=gemini-3.8-flash   # point at a Pro model if the key has Pro quota
-OCR_FALLBACK_MODELS=gemini-3.5-flash,gemini-3.1-flash-lite,gemini-2.5-flash-lite
-                              # tried, in order, when the chosen model's DAILY quota is spent
-OCR_STORAGE_DIR=              # defaults to <repo>/.ocr-store
-OCR_RETENTION_DAYS=30
-```
-
-Uploaded files live in `.ocr-store/<jobId>/` (git-ignored) and are deleted with
-the job, or swept after `OCR_RETENTION_DAYS` via
-`POST /api/admin/ocr/maintenance/purge`.
-
-The two tables (`cms_ocr_jobs`, `cms_ocr_job_chunks`) are created on first use by
-`ensureOcrSchema()`, so a deploy needs no manual migration step;
-`script/migrations/20260921_ocr_jobs.sql` (`npm run migrate:ocr`) is the same DDL
-if you prefer to create them ahead of time.
+See `.env.example` (OCR section) for every variable and default. No API key is needed or
+read. The variables `GEMINI_API_KEY`, `OCR_MODEL_*`, `OCR_FALLBACK_MODELS`,
+`OCR_REQUESTS_PER_*` are no longer used by OCR (translation never used them).
 
 ## API
 
@@ -127,55 +138,28 @@ All routes are `requireAuth + requireAdmin`, mounted at `/api/admin/ocr`.
 
 | Route | Purpose |
 | --- | --- |
-| `GET /config` | limits, models, live usage snapshot |
+| `GET /config` | engine, languages, limits, lane usage |
+| `GET /health` | local engine readiness (200/503) — never contacts any service |
 | `GET /jobs` | recent jobs |
-| `POST /jobs` | upload (raw body; `fileName`, `mimeType`, `quality`, `chunkSize`, `instructions` as query params) |
-| `GET /jobs/:id` | job + per-chunk status (cheap, for polling), each running chunk's `live` state (attempt, phase `slot`/`request`/`backoff`, next-attempt time, last transient error), a `progress` estimate (pages done/running/failed/queued, `elapsedMs`, `etaMs`, and its `basis`: `measured` from this job's finished ranges, `historical` from earlier jobs on the same model, or `guess`), and `serverNow` so the client can turn absolute stamps into countdowns |
-| `GET /jobs/:id/document` | merged pages + markdown + missing ranges |
-| `GET /jobs/:id/download?format=md\|txt` | file download |
+| `POST /jobs` | upload (raw body; `fileName`, `mimeType`, `quality` = `fast`/`accurate` (200/300 dpi), `textMode` = `auto`/`ocr`, `force=1`) → 201 new / 200 `reused` |
+| `GET /jobs/:id` | job + per-page status, live state, progress/ETA |
+| `GET /jobs/:id/document` | merged pages, each with `meta` (source, engine, confidence, flags) |
+| `GET /jobs/:id/download?format=md\|txt\|raw` | normalized Markdown/text, or the raw engine output |
 | `GET /jobs/:id/source` | the original upload |
-| `POST /jobs/:id/retry` | resume: requeue failed/skipped/unfinished ranges, never the done ones |
-| `POST /jobs/:id/cancel` | abort; finished pages are kept |
-| `DELETE /jobs/:id` | delete rows + uploaded file |
+| `POST /jobs/:id/retry` | requeue failed/unfinished pages (409 while queued/running) |
+| `POST /jobs/:id/cancel` | cancel (any process); finished pages are kept |
+| `DELETE /jobs/:id` | cancel, delete rows + stored upload |
 
 ## Testing
 
 ```bash
-node --import tsx tests/ocr-pipeline.test.mjs           # units: chunking, slicing, marker
-                                                        # parsing, rendering, limiter,
-                                                        # progress estimate, 503 hand-over
-node --import tsx tests/ocr-pipeline.test.mjs --live    # + one real Gemini request
-
-# Full path (upload → chunk → Gemini → poll → merge → download) against the
-# local database, with the router mounted on a throwaway Express app:
-OCR_E2E_NO_SSL=1 node --import tsx script/ocr-e2e-local.mts path/to/file.pdf [pagesPerRequest]
+npm run test:ocr-local-engine     # quality rules, TSV/OSD parsing, page decision and
+                                  # range retries with fake engines, rendering, ETA, and
+                                  # the REAL engine on tests/fixtures/ocr (skips loudly
+                                  # when Tesseract is missing)
+node --import tsx tests/ocr-pipeline.test.mjs   # planning, page markers, rendering, ETA
+npm run test:provider-audit       # no provider SDK/endpoint/key/HTTP call reachable
+TEST_DATABASE_URL=postgresql://test@127.0.0.1:55433/cmstest npm run test:ocr-structure-db
+                                  # real Postgres + real engine through the router:
+                                  # leases, resume, cancel, idempotency (throwaway DB only)
 ```
-
-`OCR_E2E_NO_SSL=1` is no longer needed: `server/db.ts` switches TLS off for a
-`localhost` DATABASE_URL on its own (and `DATABASE_SSL=false` forces it off
-anywhere). The flag is still honoured for older checkouts.
-
-## Output format
-
-Gemini is asked for Markdown with one `<<<PAGE:n>>>` marker per page: headings by
-visual hierarchy, verse line breaks preserved, footnotes under a rule, tables as
-Markdown tables, `[illegible]` for unreadable words and `*[figure: …]*` for
-images — never a translation, a correction or a summary. If the model skips the
-markers, the range is kept as one block rather than losing text.
-
-The viewer renders that Markdown with a small escape-first renderer
-(`client/src/lib/ocr-markdown.ts`): transcribed text is HTML-escaped before any
-markup is produced, so a scan can never inject markup into the portal.
-
-## Turning a transcription into a grantha
-
-A finished transcription can be organised into a grantha hierarchy and published
-through the existing CSV import, without copying text anywhere: **Create Grantha
-from OCR** on the document, then hierarchy → instructions → Claude analysis →
-review → CSV or direct upload. The Gemini OCR described above is unchanged and is
-still the only thing that reads the pages.
-
-See **[docs/OCR-TO-GRANTHA.md](OCR-TO-GRANTHA.md)** for that workflow: what Claude
-is and is not asked to do, the hierarchy and number contract the CSV importer
-already expects, which ambiguities become questions, the review overlay, the
-validation gates, and the limits and env vars (`ANTHROPIC_API_KEY`, `STRUCTURE_*`).

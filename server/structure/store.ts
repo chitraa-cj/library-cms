@@ -6,6 +6,7 @@
  */
 import { and, desc, eq, inArray, lt, sql } from "drizzle-orm";
 import { db } from "../db";
+import { ensureLeaseColumns, fencedChunkUpdate, STRUCTURE_TABLES } from "../lib/job-lease";
 import {
   structureJobChunks,
   structureJobs,
@@ -96,6 +97,8 @@ export function ensureStructureSchema(): Promise<void> {
         sql`create index if not exists cms_structure_jobs_created_idx
             on cms_structure_jobs (created_at desc)`,
       );
+      // Run token + heartbeat (script/migrations/20261029_local_ocr_and_job_leases.sql).
+      await ensureLeaseColumns(STRUCTURE_TABLES);
     })().catch((err) => {
       ddlPromise = null; // let the next request retry instead of caching the failure
       throw err;
@@ -180,53 +183,6 @@ export async function updateStructureJob(
     .where(eq(structureJobs.id, jobId));
 }
 
-/** Atomically fold one finished chunk's accounting into its job row. */
-export async function addStructureChunkResultToJob(
-  jobId: string,
-  delta: {
-    done: number;
-    failed: number;
-    requests: number;
-    inputTokens: number;
-    outputTokens: number;
-    cachedInputTokens: number;
-    cacheWriteTokens?: number;
-  },
-): Promise<void> {
-  // Every counter is coerced before it reaches the statement. An `undefined` here does
-  // not come back as a type error from a JS caller — it renders as an EMPTY placeholder
-  // and Postgres answers `syntax error at or near ","`, which is a confusing way to lose
-  // a finished range's accounting.
-  const n = (value: number | undefined | null) => {
-    const parsed = Number(value ?? 0);
-    return Number.isFinite(parsed) ? Math.trunc(parsed) : 0;
-  };
-  await db
-    .update(structureJobs)
-    .set({
-      chunksDone: sql`${structureJobs.chunksDone} + ${n(delta.done)}`,
-      chunksFailed: sql`${structureJobs.chunksFailed} + ${n(delta.failed)}`,
-      requestCount: sql`${structureJobs.requestCount} + ${n(delta.requests)}`,
-      inputTokens: sql`${structureJobs.inputTokens} + ${n(delta.inputTokens)}`,
-      outputTokens: sql`${structureJobs.outputTokens} + ${n(delta.outputTokens)}`,
-      cachedInputTokens: sql`${structureJobs.cachedInputTokens} + ${n(delta.cachedInputTokens)}`,
-      cacheWriteTokens: sql`${structureJobs.cacheWriteTokens} + ${n(delta.cacheWriteTokens)}`,
-      updatedAt: new Date(),
-    })
-    .where(eq(structureJobs.id, jobId));
-}
-
-export async function updateStructureChunk(
-  jobId: string,
-  chunkIndex: number,
-  patch: Partial<typeof structureJobChunks.$inferInsert>,
-): Promise<void> {
-  await db
-    .update(structureJobChunks)
-    .set({ ...patch, updatedAt: new Date() })
-    .where(and(eq(structureJobChunks.jobId, jobId), eq(structureJobChunks.chunkIndex, chunkIndex)));
-}
-
 /**
  * Commentary names already used anywhere in this job, so the next range can be told to
  * spell the same sub-commentary the same way.
@@ -276,47 +232,119 @@ export async function previousDoneChunk(
 }
 
 /**
- * Tokens spent since `since`, across every analysis. The spend caps are enforced from
- * this, not from an in-memory tally: a restart, a second web process or a job someone
- * else started must all count against the same budget.
+ * Requeue a finished job's failed/skipped/unfinished ranges in one transaction, only
+ * while no run owns it — a double-clicked Retry cannot requeue a running job. Ranges
+ * already analysed are left alone. Returns null when the job is queued or running.
  */
-export async function tokensSpentSince(since: Date): Promise<{
-  inputTokens: number;
-  outputTokens: number;
-  cachedInputTokens: number;
-  cacheWriteTokens: number;
-  requests: number;
-}> {
-  const rows = await db.execute(sql`
-    select
-      coalesce(sum(input_tokens), 0)::bigint        as input_tokens,
-      coalesce(sum(output_tokens), 0)::bigint       as output_tokens,
-      coalesce(sum(cached_input_tokens), 0)::bigint as cached_input_tokens,
-      coalesce(sum(cache_write_tokens), 0)::bigint  as cache_write_tokens,
-      coalesce(sum(request_count), 0)::bigint       as requests
-    from cms_structure_jobs
-    where updated_at >= ${since}`);
-  const row = (rows as any)?.rows?.[0] ?? {};
-  const toNum = (value: unknown) => {
-    const parsed = Number(value ?? 0);
-    return Number.isFinite(parsed) ? parsed : 0;
-  };
-  return {
-    inputTokens: toNum(row.input_tokens),
-    outputTokens: toNum(row.output_tokens),
-    cachedInputTokens: toNum(row.cached_input_tokens),
-    cacheWriteTokens: toNum(row.cache_write_tokens),
-    requests: toNum(row.requests),
-  };
+export async function requeueStructureJobForRetry(jobId: string): Promise<{ pending: number; done: number } | null> {
+  return db.transaction(async (tx) => {
+    const [job] = await tx
+      .select({ status: structureJobs.status })
+      .from(structureJobs)
+      .where(eq(structureJobs.id, jobId))
+      .for("update");
+    if (!job || job.status === "running" || job.status === "queued") return null;
+    await tx
+      .update(structureJobChunks)
+      .set({ status: "queued", attempts: 0, error: null, updatedAt: new Date() })
+      .where(
+        and(eq(structureJobChunks.jobId, jobId), inArray(structureJobChunks.status, ["failed", "skipped", "running"])),
+      );
+    const rows = await tx
+      .select({ status: structureJobChunks.status })
+      .from(structureJobChunks)
+      .where(eq(structureJobChunks.jobId, jobId));
+    const done = rows.filter((r) => r.status === "done").length;
+    const pending = rows.length - done;
+    await tx
+      .update(structureJobs)
+      .set({
+        status: pending > 0 ? "queued" : "done",
+        chunksDone: done,
+        chunksFailed: 0,
+        error: null,
+        runToken: null,
+        finishedAt: pending > 0 ? null : new Date(),
+        updatedAt: new Date(),
+      })
+      .where(eq(structureJobs.id, jobId));
+    return { pending, done };
+  });
 }
 
-export async function requeueFailedStructureChunks(jobId: string): Promise<number> {
-  const rows = await db
-    .update(structureJobChunks)
-    .set({ status: "queued", attempts: 0, error: null, updatedAt: new Date() })
-    .where(and(eq(structureJobChunks.jobId, jobId), inArray(structureJobChunks.status, ["failed", "skipped"])))
-    .returning({ id: structureJobChunks.id });
-  return rows.length;
+/** A range's outcome, written only if `token` still owns the job. */
+export function writeStructureChunkResult(
+  jobId: string,
+  chunkIndex: number,
+  token: string,
+  result:
+    | {
+        status: "done";
+        items: unknown[];
+        warnings: string[];
+        openPath: unknown[] | null;
+        rejected: number;
+        model: string;
+        attempts: number;
+        durationMs: number;
+      }
+    | { status: "failed" | "skipped" | "queued" | "running"; attempts?: number; durationMs?: number; error: string | null },
+): Promise<boolean> {
+  const assignments =
+    result.status === "done"
+      ? sql`status = 'done', items = ${JSON.stringify(result.items)}::jsonb,
+            warnings = ${JSON.stringify(result.warnings)}::jsonb,
+            open_path = ${result.openPath == null ? null : JSON.stringify(result.openPath)}::jsonb,
+            rejected_items = ${result.rejected}, model = ${result.model},
+            attempts = attempts + ${result.attempts}, duration_ms = ${result.durationMs}, error = null`
+      : sql`status = ${result.status}, attempts = attempts + ${result.attempts ?? 0},
+            duration_ms = ${result.durationMs ?? 0}, error = ${result.error}`;
+  return fencedChunkUpdate(STRUCTURE_TABLES, jobId, chunkIndex, token, assignments);
+}
+
+/** Requests spent on this job (fenced like every other run write). */
+export async function addStructureRequests(jobId: string, token: string, requests: number): Promise<void> {
+  if (!(requests > 0)) return;
+  await db.execute(sql`
+    update cms_structure_jobs set request_count = request_count + ${Math.trunc(requests)}, updated_at = now()
+     where id = ${jobId} and run_token = ${token}`);
+}
+
+/** JSON with object keys sorted at every depth — equality that survives a jsonb round trip. */
+function canonicalJson(value: unknown): string {
+  if (Array.isArray(value)) return `[${value.map(canonicalJson).join(",")}]`;
+  if (value && typeof value === "object") {
+    return `{${Object.keys(value as object)
+      .sort()
+      .map((k) => `${JSON.stringify(k)}:${canonicalJson((value as Record<string, unknown>)[k])}`)
+      .join(",")}}`;
+  }
+  return JSON.stringify(value) ?? "null";
+}
+
+/**
+ * Replace the review's edit list only if the stored list is a prefix of `next` (the
+ * client appends). Any edit re-opens the review. Row-locked, so the check and the write
+ * are one decision.
+ */
+export async function saveOverridesIfCurrent(jobId: string, next: unknown[]): Promise<"saved" | "conflict"> {
+  return db.transaction(async (tx) => {
+    const [row] = await tx
+      .select({ overrides: structureJobs.overrides })
+      .from(structureJobs)
+      .where(eq(structureJobs.id, jobId))
+      .for("update");
+    const stored = (row?.overrides ?? []) as unknown[];
+    // jsonb does not keep object key order, so compare key-order-insensitively.
+    const isPrefix =
+      stored.length <= next.length && stored.every((entry, i) => canonicalJson(entry) === canonicalJson(next[i]));
+    if (!isPrefix) return "conflict";
+    await tx
+      .update(structureJobs)
+      .set({ overrides: next, reviewedAt: null, updatedAt: new Date() })
+      .where(eq(structureJobs.id, jobId));
+    return "saved";
+  });
 }
 
 export async function deleteStructureJob(jobId: string): Promise<void> {

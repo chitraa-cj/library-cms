@@ -1,45 +1,38 @@
 /**
  * Structure-analysis job runner.
  *
- * Shape of the work — deliberately the same as the OCR runner, because the failure modes
- * are the same: a job owns an ordered list of page-range chunks, each chunk row is the
- * unit of work, of retry and of accounting, and all state lives in Postgres so a crash,
- * a cancel or a failed range never costs the ranges that already answered.
+ * Shape of the work — the same as the OCR runner, because the failure modes are the
+ * same: a job owns an ordered list of page-range chunks, each chunk row is the unit of
+ * work, of retry and of accounting, and all state lives in Postgres so a crash, a cancel
+ * or a failed range never costs the ranges that already answered.
  *
- *   jobs queue ──(maxActiveJobs)──► runJob ──► chunk ──(acquireStructureSlot)──►
- *        Claude ──► validated items ──► chunk row ──► job counters
+ *   queue ──claim (SKIP LOCKED)──► runJob ──► chunk ──(request gate)──►
+ *        Hermex (dedicated Gemini profile) ──► line spans ──► validated items ──►
+ *        fenced chunk write ──► finalize (fenced release)
  *
- * One difference from OCR, and the reason it matters: the chunks of ONE job run in
- * sequence, not in parallel. Each range is told the section path still open at the end of
- * the previous range and is given its last paragraphs as read-only context, which is what
- * lets a chapter heading on page 40 keep governing page 41 and a verse split across the
- * page break stay one verse. Parallelism across jobs (and the process-wide request gate)
- * still bounds the load; `STRUCTURE_MAX_ACTIVE_JOBS` and `STRUCTURE_CONCURRENCY` are the
- * knobs.
+ * Ranges of ONE job run in sequence: each is told the section path still open at the
+ * end of the previous range and given its last lines as read-only context, which keeps
+ * a chapter heading on page 40 governing page 41. One browser session serves the whole
+ * job, so Chrome is launched once per job rather than once per range.
+ *
+ * Ownership (server/lib/job-lease.ts): atomic claim, fencing token on every write,
+ * heartbeat-based recovery — a job that lost its run (cancelled, requeued as stale)
+ * cannot have a late answer written over the new run's.
  *
  * Nothing derived is stored: `items` per chunk is the only persisted model output, and
  * sections/verses/CSV are recomputed from it plus the job's `overrides` on every read
- * (`buildStructureResult`). A review edit therefore never needs another Claude call.
+ * (`buildStructureResult`). A review edit therefore never needs another model call.
  */
 import { randomUUID } from "node:crypto";
-import { and, eq, inArray } from "drizzle-orm";
+import { sql } from "drizzle-orm";
 import { db } from "../db";
-import {
-  structureJobChunks,
-  structureJobs,
-  type OcrJob,
-  type OcrPage,
-  type StructureJob,
-} from "@shared/schema";
+import type { OcrJob, OcrPage, StructureJob } from "@shared/schema";
 import {
   applyStructureOverrides,
   assembleStructure,
   buildStructureCsv,
-  estimateStructureCost,
-  formatUsd,
   planStructureChunks,
   selectPageWindow,
-  structureCostUsd,
   normalizeHierarchyConfig,
   structureWorkflowState,
   validateStructure,
@@ -49,23 +42,18 @@ import {
   type StructureItem,
   type StructureOverride,
   type StructureValidation,
-  type StructureCostEstimate,
   type StructureWorkflowState,
 } from "@shared/ocr-structure";
 export type { StructureChunkRange } from "@shared/ocr-structure";
 export { planStructureChunks, selectPageWindow } from "@shared/ocr-structure";
 import { buildOcrDocument } from "../ocr/jobs";
-import { analyseChunkWithClaude, StructureClaudeError } from "./claude";
-import { isStructureConfigured, sanitizeStructureError, structureConfig, structureRates } from "./config";
+import { claimNextJob, heartbeat, releaseJob, requeueStaleJobs, STRUCTURE_TABLES } from "../lib/job-lease";
+import { StructureAnalysisError, type StructureAnalyzer } from "./analyzer";
+import { isStructureConfigured, sanitizeStructureError, structureConfig } from "./config";
+import { createHermexStructureAnalyzer } from "./hermex-analyzer";
+import { awaitStructureRequestSlot, StructureBudgetError } from "./limiter";
 import {
-  acquireStructureSlot,
-  assertSpendBudget,
-  invalidateStructureSpend,
-  recordExtraStructureRequest,
-  StructureBudgetError,
-} from "./limiter";
-import {
-  addStructureChunkResultToJob,
+  addStructureRequests,
   claimableStructureChunks,
   distinctTeekaNames,
   ensureStructureSchema,
@@ -75,22 +63,37 @@ import {
   listStructureChunkStatuses,
   listStructureChunks,
   previousDoneChunk,
-  requeueFailedStructureChunks,
-  updateStructureChunk,
-  updateStructureJob,
+  requeueStructureJobForRetry,
+  writeStructureChunkResult,
 } from "./store";
 
-const activeJobs = new Map<string, AbortController>();
+const activeJobs = new Map<string, { controller: AbortController; token: string }>();
 
 function log(msg: string) {
   console.log(`[structure] ${msg}`);
 }
 
+/**
+ * How a job gets its analyzer. Production: Hermex on the dedicated profile, gated by
+ * the request limiter. Tests replace it (`setStructureAnalyzerFactory`) — the runner
+ * itself never knows which runtime answers.
+ */
+type AnalyzerFactory = (jobId: string) => StructureAnalyzer;
+let analyzerFactory: AnalyzerFactory = (jobId) =>
+  createHermexStructureAnalyzer({ label: jobId.slice(0, 8), beforeRequest: awaitStructureRequestSlot });
+let readinessCheck: () => boolean = isStructureConfigured;
+
+export function setStructureAnalyzerFactory(factory: AnalyzerFactory | null, ready?: () => boolean): void {
+  analyzerFactory =
+    factory ?? ((jobId) => createHermexStructureAnalyzer({ label: jobId.slice(0, 8), beforeRequest: awaitStructureRequestSlot }));
+  readinessCheck = ready ?? isStructureConfigured;
+}
+
 // ───────────────────────────────────────────────────── live, in-memory progress
 /**
  * What the running range is doing between chunk-row changes ("attempt 2 of 3",
- * "rate limited, retrying in 12s"). Purely advisory: losing it on a restart loses
- * nothing but the countdown.
+ * "cooling down for 60s"). Purely advisory: losing it on a restart loses nothing but
+ * the countdown.
  */
 export interface StructureChunkLive {
   chunkIndex: number;
@@ -128,54 +131,26 @@ export function liveStructureChunk(jobId: string): StructureChunkLive | null {
   return live.get(jobId) ?? null;
 }
 
-// ──────────────────────────────────────────────────────────── cost and budget
+// ──────────────────────────────────────────────────────────────── estimates
 
-/** The configured estimate for a planned set of ranges. */
-export function estimateStructureCostFor(
-  pages: readonly OcrPage[],
-  ranges: readonly { startPage: number; endPage: number }[],
-): StructureCostEstimate {
-  return estimateStructureCost(pages, ranges, structureRates(), {
-    carryOverChars: structureConfig.carryOverChars,
-    promptCaching: structureConfig.promptCaching,
+export interface StructureRequestEstimate {
+  pages: number;
+  requests: number;
+  /** One line the UI can show as is. */
+  basis: string;
+}
+
+/** How many requests analysing these pages takes — the only figure that matters now. */
+export function estimateStructureRequests(pages: readonly OcrPage[]): StructureRequestEstimate {
+  const ranges = planStructureChunks(pages, {
+    pagesPerChunk: structureConfig.pagesPerChunk,
+    maxChars: structureConfig.maxCharsPerChunk,
   });
-}
-
-/** What analysing a whole OCR document would cost, before any job exists. */
-export function estimateStructureCostForPages(pages: readonly OcrPage[]): StructureCostEstimate {
-  return estimateStructureCostFor(
-    pages,
-    planStructureChunks(pages, {
-      pagesPerChunk: structureConfig.pagesPerChunk,
-      maxChars: structureConfig.maxCharsPerChunk,
-    }),
-  );
-}
-
-/** What this job has actually cost so far, from the counters the API returned. */
-export function structureJobSpendUsd(job: StructureJob): number {
-  return structureCostUsd(job, structureRates());
-}
-
-/**
- * The per-document ceiling, checked before each range rather than only at creation.
- *
- * The creation estimate is pessimistic, so this should almost never fire — but "almost
- * never" is not "never", and a document whose pages are far denser than the estimate
- * assumed must stop at its cap rather than quietly spend the day's budget.
- */
-function jobBudgetStop(job: StructureJob): string | null {
-  if (
-    structureConfig.maxRequestsPerJob > 0 &&
-    job.requestCount >= structureConfig.maxRequestsPerJob
-  ) {
-    return `Stopped at the per-document request cap (${structureConfig.maxRequestsPerJob}). Raise STRUCTURE_MAX_REQUESTS_PER_JOB and press Retry failed ranges to continue.`;
-  }
-  const spent = structureJobSpendUsd(job);
-  if (structureConfig.maxSpendPerJobUsd > 0 && spent >= structureConfig.maxSpendPerJobUsd) {
-    return `Stopped at the per-document budget: ${formatUsd(spent)} of ${formatUsd(structureConfig.maxSpendPerJobUsd)}. Raise STRUCTURE_MAX_SPEND_PER_JOB_USD and press Retry failed ranges to continue.`;
-  }
-  return null;
+  return {
+    pages: pages.length,
+    requests: ranges.length,
+    basis: `${ranges.length} request(s) of up to ${structureConfig.pagesPerChunk} page(s) / ${structureConfig.maxCharsPerChunk.toLocaleString("en")} characters, plus retries`,
+  };
 }
 
 // ────────────────────────────────────────────────────────────────── creation
@@ -203,8 +178,7 @@ export async function createStructureJob(input: CreateStructureJobInput): Promis
     throw err;
   }
 
-  // The page window is applied HERE, before anything is planned, estimated or billed:
-  // the ranges, the cost and the result are all about the chosen pages only.
+  // The page window is applied HERE, before anything is planned or sent.
   const selection = selectPageWindow(transcribed, { from: input.pageFrom, to: input.pageTo });
   const pages = selection.pages;
   if (pages.length === 0) {
@@ -227,27 +201,13 @@ export async function createStructureJob(input: CreateStructureJobInput): Promis
     pagesPerChunk: structureConfig.pagesPerChunk,
     maxChars: structureConfig.maxCharsPerChunk,
   });
-
-  // Nothing is sent to Claude until the bill has been looked at. The estimate is
-  // deliberately pessimistic (see estimateStructureCost), so a job that passes here is
-  // very unlikely to be stopped mid-run by the per-job cap.
-  const estimate = estimateStructureCostFor(pages, ranges);
   if (ranges.length > structureConfig.maxRequestsPerJob) {
     const err: any = new Error(
-      `This document needs ${ranges.length} Claude requests; the per-document cap is ${structureConfig.maxRequestsPerJob}. Analyse it in parts, raise STRUCTURE_PAGES_PER_CHUNK, or raise STRUCTURE_MAX_REQUESTS_PER_JOB.`,
+      `This document needs ${ranges.length} requests; the per-document cap is ${structureConfig.maxRequestsPerJob}. Analyse it in parts or raise STRUCTURE_MAX_REQUESTS_PER_JOB.`,
     );
     err.status = 400;
     throw err;
   }
-  if (structureConfig.maxSpendPerJobUsd > 0 && estimate.costUsd > structureConfig.maxSpendPerJobUsd) {
-    const err: any = new Error(
-      `Analysing this document would cost about ${formatUsd(estimate.costUsd)}; the per-document cap is ${formatUsd(structureConfig.maxSpendPerJobUsd)}. Analyse it in parts, or raise STRUCTURE_MAX_SPEND_PER_JOB_USD.`,
-    );
-    err.status = 400;
-    throw err;
-  }
-  // Day and month budgets, counting what this job is expected to add.
-  await assertSpendBudget(estimate.costUsd);
 
   const id = randomUUID();
   const job = await insertStructureJob({
@@ -278,50 +238,63 @@ export async function createStructureJob(input: CreateStructureJobInput): Promis
   log(
     `job ${id} created for ocr ${input.ocrJob.id} — ${pages.length}p` +
       (selection.window ? ` (p${selection.window.from}-${selection.window.to} of ${selection.availableCount})` : "") +
-      `, ${ranges.length} range(s), depth ${cfg.depth} (${cfg.levelNames.join(" › ")}), ${structureConfig.model}, estimated ${formatUsd(estimate.costUsd)}`,
+      `, ${ranges.length} range(s), depth ${cfg.depth} (${cfg.levelNames.join(" › ")}), ${structureConfig.model}`,
   );
   pump();
   return job;
 }
 
 // ────────────────────────────────────────────────────────────────── scheduling
+let pumping = false;
+let pumpAgain = false;
 
-/** Start queued jobs until `maxActiveJobs` are running. Safe to call at any time. */
+/** Start queued jobs until `maxActiveJobs` run in this process. Safe to call at any time. */
 export function pump(): void {
+  if (pumping) {
+    pumpAgain = true;
+    return;
+  }
+  pumping = true;
   void (async () => {
     try {
-      if (!isStructureConfigured()) return;
-      while (activeJobs.size < structureConfig.maxActiveJobs) {
-        const [next] = await db
-          .select()
-          .from(structureJobs)
-          .where(eq(structureJobs.status, "queued"))
-          .orderBy(structureJobs.createdAt)
-          .limit(1);
-        if (!next || activeJobs.has(next.id)) return;
-
-        const controller = new AbortController();
-        activeJobs.set(next.id, controller);
-        await updateStructureJob(next.id, { status: "running", startedAt: new Date(), error: null });
-
-        void runJob(next.id, controller.signal)
-          .catch((err) => log(`job ${next.id} crashed: ${sanitizeStructureError(err)}`))
-          .finally(() => {
-            activeJobs.delete(next.id);
-            live.delete(next.id);
-            pump();
-          });
-      }
+      do {
+        pumpAgain = false;
+        if (!readinessCheck()) return; // jobs stay queued; the wizard shows why
+        while (activeJobs.size < structureConfig.maxActiveJobs) {
+          const claim = await claimNextJob(STRUCTURE_TABLES);
+          if (!claim) break;
+          const controller = new AbortController();
+          activeJobs.set(claim.id, { controller, token: claim.token });
+          void runJob(claim.id, claim.token, controller.signal)
+            .catch((err) => log(`job ${claim.id} crashed: ${sanitizeStructureError(err)}`))
+            .finally(() => {
+              activeJobs.delete(claim.id);
+              live.delete(claim.id);
+              pump();
+            });
+        }
+      } while (pumpAgain);
     } catch (err: any) {
       log(`scheduler error: ${sanitizeStructureError(err)}`);
+    } finally {
+      pumping = false;
     }
   })();
 }
 
-export function cancelStructureJob(jobId: string): boolean {
-  const controller = activeJobs.get(jobId);
-  controller?.abort();
-  return Boolean(controller);
+/** Cancel wherever it runs: abort locally, and fence off any other process's run. */
+export async function cancelStructureJob(jobId: string): Promise<boolean> {
+  activeJobs.get(jobId)?.controller.abort();
+  return db.transaction(async (tx) => {
+    const updated = await tx.execute(sql`
+      update cms_structure_jobs set status = 'cancelled', run_token = null, finished_at = now(), updated_at = now()
+       where id = ${jobId} and status in ('queued', 'running')
+      returning id`);
+    await tx.execute(sql`
+      update cms_structure_job_chunks set status = 'queued', updated_at = now()
+       where job_id = ${jobId} and status = 'running'`);
+    return ((updated as any).rows ?? []).length > 0;
+  });
 }
 
 export function isStructureJobActive(jobId: string): boolean {
@@ -329,108 +302,86 @@ export function isStructureJobActive(jobId: string): boolean {
 }
 
 /**
- * Resume a job: failed ranges go back in the queue, and any range that never finished
- * (e.g. after a cancel) is picked up again. Ranges already analysed are never re-sent,
- * so resuming a half-finished 300-page book costs only the ranges that are missing.
+ * Resume a job: failed/skipped ranges go back in the queue, and any range that never
+ * finished is picked up again. Ranges already analysed are never re-sent. Returns null
+ * while the job is queued or running.
  */
-export async function retryStructureJob(jobId: string): Promise<number> {
-  await requeueFailedStructureChunks(jobId);
-  const chunks = await listStructureChunkStatuses(jobId);
-  const done = chunks.filter((c) => c.status === "done").length;
-  const pending = chunks.length - done;
-
-  await updateStructureJob(jobId, {
-    status: pending > 0 ? "queued" : "done",
-    chunksDone: done,
-    chunksFailed: 0,
-    error: null,
-    finishedAt: pending > 0 ? null : new Date(),
-  });
+export async function retryStructureJob(jobId: string): Promise<number | null> {
+  const outcome = await requeueStructureJobForRetry(jobId);
+  if (!outcome) return null;
   pump();
-  return pending;
+  return outcome.pending;
 }
 
 // ─────────────────────────────────────────────────────────────────── running
 
-async function runJob(jobId: string, signal: AbortSignal): Promise<void> {
+async function runJob(jobId: string, token: string, signal: AbortSignal): Promise<void> {
   const job = await getStructureJob(jobId);
   if (!job) return;
+  const local = activeJobs.get(jobId);
 
-  const pending = await claimableStructureChunks(jobId);
-  if (pending.length === 0) {
-    await finalizeJob(jobId);
-    return;
-  }
+  const beat = setInterval(() => {
+    heartbeat(STRUCTURE_TABLES, jobId, token)
+      .then((owned) => {
+        if (!owned && !signal.aborted) {
+          log(`job ${jobId} no longer owned by this run — stopping`);
+          local?.controller.abort();
+        }
+      })
+      .catch((err) => log(`job ${jobId} heartbeat failed: ${sanitizeStructureError(err)}`));
+  }, Math.max(5_000, Math.floor(structureConfig.staleAfterMs / 4)));
+  beat.unref?.();
 
-  const { pages } = await buildOcrDocument(job.ocrJobId);
-  if (pages.length === 0) {
-    await updateStructureJob(jobId, {
-      status: "failed",
-      error: "The OCR transcription is no longer available. Re-run the OCR job.",
-      finishedAt: new Date(),
-    });
-    return;
-  }
-  const pageByNumber = new Map(pages.map((p) => [p.page, p]));
-
-  const cfg: StructureHierarchyConfig = normalizeHierarchyConfig({
-    depth: job.depth,
-    levelNames: job.levelNames,
-  });
-
-  const analysisWindow =
-    job.pageFrom != null && job.pageTo != null ? { from: job.pageFrom, to: job.pageTo } : null;
-
+  const analyzer = analyzerFactory(jobId);
   const started = Date.now();
-  // Ranges run in order so each one inherits the hierarchy the previous one left open.
   let stopReason: string | null = null;
-  for (const chunk of pending) {
-    if (signal.aborted) break;
 
-    // Re-read the counters rather than trusting the row we booted with: they grow as
-    // ranges finish, and the cap has to be checked against what has actually been spent.
-    const current = await getStructureJob(jobId);
-    if (!current) break;
-    stopReason = jobBudgetStop(current);
-    if (stopReason) {
-      log(`job ${jobId} ${stopReason}`);
-      break;
-    }
+  try {
+    const pending = await claimableStructureChunks(jobId);
+    const { pages } = await buildOcrDocument(job.ocrJobId);
+    if (pages.length === 0) {
+      stopReason = "The OCR transcription is no longer available. Re-run the OCR job.";
+    } else {
+      const pageByNumber = new Map(pages.map((p) => [p.page, p]));
+      const cfg = normalizeHierarchyConfig({ depth: job.depth, levelNames: job.levelNames });
+      const analysisWindow =
+        job.pageFrom != null && job.pageTo != null ? { from: job.pageFrom, to: job.pageTo } : null;
 
-    const carry = await carryOverFor(jobId, chunk.chunkIndex, pageByNumber);
-    // A failure about the server's credentials, not about these pages: it would repeat
-    // identically on every remaining range, so the job stops with the fix named instead
-    // of marking thirty ranges failed with the same message.
-    const fatal = await runChunk(job, cfg, chunk, pageByNumber, carry, analysisWindow, signal);
-    if (fatal) {
-      stopReason = fatal;
-      log(`job ${jobId} stopped: ${fatal}`);
-      break;
+      // Ranges run in order so each one inherits the hierarchy the previous one left open.
+      for (const chunk of pending) {
+        if (signal.aborted) break;
+        const current = await getStructureJob(jobId);
+        if (!current) break;
+        if (structureConfig.maxRequestsPerJob > 0 && current.requestCount >= structureConfig.maxRequestsPerJob) {
+          stopReason = `Stopped at the per-document request cap (${structureConfig.maxRequestsPerJob}). Raise STRUCTURE_MAX_REQUESTS_PER_JOB and press Retry failed ranges to continue.`;
+          break;
+        }
+        const carry = await carryOverFor(jobId, chunk.chunkIndex, pageByNumber);
+        const fatal = await runChunk(job, token, analyzer, cfg, chunk, pageByNumber, carry, analysisWindow, signal);
+        if (fatal) {
+          stopReason = fatal;
+          log(`job ${jobId} stopped: ${fatal}`);
+          break;
+        }
+      }
     }
+  } finally {
+    clearInterval(beat);
+    await analyzer.close();
   }
 
   if (signal.aborted) {
-    await db
-      .update(structureJobChunks)
-      .set({ status: "queued", updatedAt: new Date() })
-      .where(and(eq(structureJobChunks.jobId, jobId), eq(structureJobChunks.status, "running")));
-    await updateStructureJob(jobId, { status: "cancelled", finishedAt: new Date() });
-    log(`job ${jobId} cancelled`);
+    log(`job ${jobId} stopped after ${((Date.now() - started) / 1000).toFixed(1)}s`);
     return;
   }
 
-  await finalizeJob(jobId, stopReason);
-  const finished = await getStructureJob(jobId);
-  log(
-    `job ${jobId} finished in ${((Date.now() - started) / 1000).toFixed(1)}s` +
-      (finished ? ` — spent ${formatUsd(structureJobSpendUsd(finished))} over ${finished.requestCount} request(s)` : ""),
-  );
+  await finalizeJob(jobId, token, stopReason);
+  log(`job ${jobId} finished in ${((Date.now() - started) / 1000).toFixed(1)}s`);
 }
 
 /**
  * Context for range N: the section path the previous range left open, the tail of its
- * text, and the commentary names already used in this document (so the same sub-commentary
- * is not called two different things on two pages).
+ * text, and the commentary names already used in this document.
  */
 async function carryOverFor(
   jobId: string,
@@ -444,52 +395,40 @@ async function carryOverFor(
   if (chunkIndex === 0) {
     return { carryOverText: null, openPath: null, knownTeekaNames: [] };
   }
-  // Both reads are narrow on purpose: one row's metadata and one aggregate, never the
-  // whole answer set (see distinctTeekaNames).
   const [previous, knownTeekaNames] = await Promise.all([
     previousDoneChunk(jobId, chunkIndex),
     distinctTeekaNames(jobId),
   ]);
-
   if (!previous) return { carryOverText: null, openPath: null, knownTeekaNames };
 
-  // The tail comes from the OCR text, not from the model's items: it is context for
-  // continuity, and the transcription is the thing that was actually printed.
+  const openPath = (previous.openPath as Array<{ level: number; number: string; title: string }> | null) ?? null;
+  if (structureConfig.carryOverChars === 0) return { carryOverText: null, openPath, knownTeekaNames };
+
+  // The tail comes from the OCR text, not from the model: it is what was printed.
   let tail = "";
-  if (structureConfig.carryOverChars === 0) {
-    return {
-      carryOverText: null,
-      openPath: (previous.openPath as Array<{ level: number; number: string; title: string }> | null) ?? null,
-      knownTeekaNames,
-    };
-  }
   for (let page = previous.endPage; page >= previous.startPage && tail.length < structureConfig.carryOverChars; page--) {
     const text = pageByNumber.get(page)?.markdown ?? "";
     tail = text ? `${text}\n${tail}` : tail;
   }
-  return {
-    carryOverText: tail.slice(-structureConfig.carryOverChars) || null,
-    openPath:
-      (previous.openPath as Array<{ level: number; number: string; title: string }> | null) ?? null,
-    knownTeekaNames,
-  };
+  return { carryOverText: tail.slice(-structureConfig.carryOverChars) || null, openPath, knownTeekaNames };
 }
 
-/**
- * One page range, end to end. Returns null normally, or the message a configuration
- * failure should stop the whole job with.
- */
+/** One page range end to end. Returns null, or the message a setup failure should stop the job with. */
 async function runChunk(
   job: StructureJob,
+  token: string,
+  analyzer: StructureAnalyzer,
   cfg: StructureHierarchyConfig,
-  chunk: { chunkIndex: number; startPage: number; endPage: number; attempts: number },
+  chunk: { chunkIndex: number; startPage: number; endPage: number },
   pageByNumber: Map<number, OcrPage>,
   carry: Awaited<ReturnType<typeof carryOverFor>>,
   analysisWindow: { from: number; to: number } | null,
   signal: AbortSignal,
 ): Promise<string | null> {
   const startedAt = Date.now();
-  await updateStructureChunk(job.id, chunk.chunkIndex, { status: "running", error: null });
+  if (!(await writeStructureChunkResult(job.id, chunk.chunkIndex, token, { status: "running", error: null }))) {
+    return null; // this run no longer owns the job
+  }
   setLive(job.id, { chunkIndex: chunk.chunkIndex, phase: "slot", attempt: 0, nextAttemptAt: null });
 
   const pages: OcrPage[] = [];
@@ -498,21 +437,13 @@ async function runChunk(
     if (found) pages.push(found);
   }
 
-  let requestsSpent = 0;
-  let release: (() => void) | null = null;
-
   try {
     if (pages.length === 0) {
-      // The OCR range never produced text (a failed/skipped OCR chunk). Nothing to ask
-      // Claude about, and asking would spend a request on an empty page range.
-      throw new StructureClaudeError(
+      throw new StructureAnalysisError(
         `Pages ${chunk.startPage}–${chunk.endPage} have no transcription — retry those pages in OCR Docs first.`,
-        { retryable: false },
       );
     }
-
-    release = await acquireStructureSlot(signal);
-    const result = await analyseChunkWithClaude({
+    const result = await analyzer.analyse({
       pages,
       startPage: chunk.startPage,
       endPage: chunk.endPage,
@@ -524,15 +455,10 @@ async function runChunk(
       carryOverText: carry.carryOverText,
       openPath: carry.openPath,
       knownTeekaNames: carry.knownTeekaNames,
-      onRetryAttempt: recordExtraStructureRequest,
+      signal,
       onProgress: (event) => {
         if (event.kind === "attempt") {
-          setLive(job.id, {
-            chunkIndex: chunk.chunkIndex,
-            attempt: event.attempt,
-            phase: "request",
-            nextAttemptAt: null,
-          });
+          setLive(job.id, { chunkIndex: chunk.chunkIndex, attempt: event.attempt, phase: "request", nextAttemptAt: null });
         } else {
           setLive(job.id, {
             chunkIndex: chunk.chunkIndex,
@@ -542,107 +468,71 @@ async function runChunk(
           });
         }
       },
-      signal,
     });
-    requestsSpent += result.attempts;
 
-    await updateStructureChunk(job.id, chunk.chunkIndex, {
+    await writeStructureChunkResult(job.id, chunk.chunkIndex, token, {
       status: "done",
       items: result.items,
       warnings: result.warnings,
       openPath: result.openPath ?? null,
-      rejectedItems: result.rejected,
+      rejected: result.rejected,
       model: result.model,
-      attempts: chunk.attempts + requestsSpent,
-      inputTokens: result.inputTokens,
-      outputTokens: result.outputTokens,
-      cachedInputTokens: result.cachedInputTokens,
-      cacheWriteTokens: result.cacheWriteTokens,
+      attempts: result.attempts,
       durationMs: Date.now() - startedAt,
-      error: null,
     });
-    await addStructureChunkResultToJob(job.id, {
-      done: 1,
-      failed: 0,
-      requests: requestsSpent,
-      inputTokens: result.inputTokens,
-      outputTokens: result.outputTokens,
-      cachedInputTokens: result.cachedInputTokens,
-      cacheWriteTokens: result.cacheWriteTokens,
-    });
-    // The day/month figures just changed; the next gate check must see the new ones.
-    invalidateStructureSpend();
-    if (result.rejected > 0) {
+    await addStructureRequests(job.id, token, result.attempts);
+    if (result.rejected > 0 || result.unclassifiedLines > 0) {
       log(
-        `job ${job.id} range ${chunk.chunkIndex} (p${chunk.startPage}-${chunk.endPage}): ${result.rejected} item(s) failed the schema check and were dropped`,
+        `job ${job.id} range ${chunk.chunkIndex} (p${chunk.startPage}-${chunk.endPage}): ${result.rejected} item(s) rejected, ${result.unclassifiedLines} line(s) left unclassified for review`,
       );
     }
     return null;
   } catch (err: any) {
-    const cancelled = signal.aborted || err?.message === "cancelled" || err?.message === "Cancelled.";
+    // A budget stop happens before the request is sent: it costs nothing.
+    const attempts = err instanceof StructureAnalysisError ? err.attempts : err instanceof StructureBudgetError ? 0 : 1;
+    const cancelled = signal.aborted || err?.message === "Cancelled." || err?.message === "cancelled";
     if (cancelled) {
-      await updateStructureChunk(job.id, chunk.chunkIndex, {
+      await writeStructureChunkResult(job.id, chunk.chunkIndex, token, {
         status: "queued",
         durationMs: Date.now() - startedAt,
-      });
-      if (requestsSpent > 0) {
-        await addStructureChunkResultToJob(job.id, {
-          done: 0,
-          failed: 0,
-          requests: requestsSpent,
-          inputTokens: 0,
-          outputTokens: 0,
-          cachedInputTokens: 0,
-          cacheWriteTokens: 0,
-        });
-      }
+        error: null,
+      }).catch(() => undefined);
       return null;
     }
     const budget = err instanceof StructureBudgetError;
-    const attempts = err instanceof StructureClaudeError ? err.attempts : 1;
-    await updateStructureChunk(job.id, chunk.chunkIndex, {
-      status: budget ? "skipped" : "failed",
-      attempts: chunk.attempts + Math.max(attempts, 1),
+    const fatal = err instanceof StructureAnalysisError && err.fatal;
+    // A setup failure leaves the range queued (Retry resumes it once fixed); a budget
+    // stop skips it; anything about these pages fails it.
+    await writeStructureChunkResult(job.id, chunk.chunkIndex, token, {
+      status: fatal ? "queued" : budget ? "skipped" : "failed",
+      attempts,
       durationMs: Date.now() - startedAt,
       error: sanitizeStructureError(err),
     });
-    await addStructureChunkResultToJob(job.id, {
-      done: 0,
-      failed: 1,
-      requests: attempts,
-      inputTokens: 0,
-      outputTokens: 0,
-      cachedInputTokens: 0,
-      cacheWriteTokens: 0,
-    });
-    log(
-      `job ${job.id} range ${chunk.chunkIndex} (p${chunk.startPage}-${chunk.endPage}) failed: ${sanitizeStructureError(err)}`,
-    );
-    return err instanceof StructureClaudeError && err.fatal ? err.message : null;
+    await addStructureRequests(job.id, token, attempts);
+    log(`job ${job.id} range ${chunk.chunkIndex} (p${chunk.startPage}-${chunk.endPage}) failed: ${sanitizeStructureError(err)}`);
+    return fatal ? sanitizeStructureError(err) : budget ? sanitizeStructureError(err) : null;
   } finally {
-    release?.();
     live.delete(job.id);
   }
 }
 
-async function finalizeJob(jobId: string, stopReason: string | null = null): Promise<void> {
+async function finalizeJob(jobId: string, token: string, stopReason: string | null): Promise<void> {
   const chunks = await listStructureChunkStatuses(jobId);
   const done = chunks.filter((c) => c.status === "done").length;
   const failed = chunks.filter((c) => c.status === "failed" || c.status === "skipped").length;
   const unanalysed = chunks.length - done - failed;
 
-  // A stop (budget or configuration) leaves the remaining ranges untouched rather than
-  // failed: the job is `partial`, the pages it did analyse are reviewable, and the
-  // message names what to change before pressing Retry failed ranges.
-  const status = stopReason
-    ? done === 0
-      ? "failed"
-      : "partial"
-    : failed === 0
-      ? "done"
-      : done === 0
+  const status =
+    stopReason || unanalysed > 0
+      ? done === 0
         ? "failed"
-        : "partial";
+        : "partial"
+      : failed === 0
+        ? "done"
+        : done === 0
+          ? "failed"
+          : "partial";
   const firstError = chunks.find((c) => c.error)?.error ?? null;
   const error = stopReason
     ? `${stopReason}${unanalysed > 0 ? ` ${unanalysed} page range(s) were not analysed.` : ""}`
@@ -650,34 +540,38 @@ async function finalizeJob(jobId: string, stopReason: string | null = null): Pro
       ? null
       : firstError;
 
-  await updateStructureJob(jobId, {
-    status,
-    chunksDone: done,
-    chunksFailed: failed,
-    finishedAt: new Date(),
-    error,
-  });
+  await releaseJob(
+    STRUCTURE_TABLES,
+    jobId,
+    token,
+    sql`status = ${status}, chunks_done = ${done}, chunks_failed = ${failed}, error = ${error}, finished_at = now()`,
+  );
+}
+
+let sweepTimer: NodeJS.Timeout | null = null;
+
+async function sweep(): Promise<void> {
+  try {
+    const stale = await requeueStaleJobs(STRUCTURE_TABLES, structureConfig.staleAfterMs);
+    if (stale.length > 0) log(`requeued ${stale.length} job(s) whose run stopped responding`);
+  } catch (err: any) {
+    log(`stale sweep failed: ${sanitizeStructureError(err)}`);
+  }
+  pump();
 }
 
 /**
- * After a restart, jobs left `running` own no worker. Put their in-flight ranges back in
- * the queue and let the scheduler resume them — only ranges that never finished are
- * re-sent, so resuming costs nothing for ranges already analysed.
+ * Boot: install the schema, requeue runs whose heartbeat went stale, keep sweeping.
+ * Only ranges that never finished are re-sent.
  */
 export async function reconcileStructureJobsOnBoot(): Promise<void> {
   try {
     await ensureStructureSchema();
-    await db
-      .update(structureJobChunks)
-      .set({ status: "queued", updatedAt: new Date() })
-      .where(inArray(structureJobChunks.status, ["running"]));
-    const stale = await db
-      .update(structureJobs)
-      .set({ status: "queued", updatedAt: new Date() })
-      .where(eq(structureJobs.status, "running"))
-      .returning({ id: structureJobs.id });
-    if (stale.length > 0) log(`requeued ${stale.length} job(s) interrupted by a restart`);
-    pump();
+    await sweep();
+    if (!sweepTimer) {
+      sweepTimer = setInterval(() => void sweep(), Math.max(15_000, Math.floor(structureConfig.staleAfterMs / 2)));
+      sweepTimer.unref?.();
+    }
   } catch (err: any) {
     log(`boot reconcile skipped: ${sanitizeStructureError(err)}`);
   }

@@ -39,6 +39,10 @@ export interface EstimateInput {
   endedAt?: number | null;
   /** Whether the job is still running (no ETA otherwise). */
   running: boolean;
+  /** Per-page guess before anything is measured; defaults suit a remote model. */
+  guessMsPerPage?: Record<"fast" | "accurate", number>;
+  /** Fixed cost per range (process start, render). */
+  rangeOverheadMs?: number;
 }
 
 export type EstimateBasis = "measured" | "historical" | "guess";
@@ -69,6 +73,7 @@ const pagesOf = (c: { startPage: number; endPage: number }) => c.endPage - c.sta
 
 export function estimateJob(input: EstimateInput): JobEstimate {
   const { chunks, live, now } = input;
+  const overheadMs = input.rangeOverheadMs ?? REQUEST_OVERHEAD_MS;
   const done = chunks.filter((c) => c.status === "done");
   const running = chunks.filter((c) => c.status === "running");
   const queued = chunks.filter((c) => c.status === "queued");
@@ -108,7 +113,7 @@ export function estimateJob(input: EstimateInput): JobEstimate {
     // Take the fixed per-request cost off each measured range before dividing,
     // so a short range does not inflate the per-page figure for long ones.
     const netMs = measured.reduce(
-      (s, c) => s + Math.max(c.durationMs - REQUEST_OVERHEAD_MS, c.durationMs * 0.5),
+      (s, c) => s + Math.max(c.durationMs - overheadMs, c.durationMs * 0.5),
       0,
     );
     msPerPage = netMs / Math.max(1, sum(measured));
@@ -117,10 +122,10 @@ export function estimateJob(input: EstimateInput): JobEstimate {
     msPerPage = input.historicalMsPerPage;
     basis = "historical";
   } else {
-    msPerPage = GUESS_MS_PER_PAGE[input.quality];
+    msPerPage = (input.guessMsPerPage ?? GUESS_MS_PER_PAGE)[input.quality];
     basis = "guess";
   }
-  const expected = (c: EstimateChunk) => pagesOf(c) * msPerPage + REQUEST_OVERHEAD_MS;
+  const expected = (c: EstimateChunk) => pagesOf(c) * msPerPage + overheadMs;
 
   // 2. Remaining time of each in-flight range, from its live phase.
   let slowestRunning = 0;

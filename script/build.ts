@@ -8,7 +8,6 @@ import path from "path";
 const allowlist = [
   // Bundled so an OCR → Grantha deploy works even if the box has not re-run
   // npm install (same reason as pdf-lib below).
-  "@anthropic-ai/sdk",
   "@google/generative-ai",
   "axios",
   "connect-pg-simple",

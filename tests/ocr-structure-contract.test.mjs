@@ -19,12 +19,8 @@
  */
 
 import {
-  STRUCTURE_DEFAULT_RATES,
   applyStructureOverrides,
   assembleStructure,
-  estimateStructureCost,
-  formatUsd,
-  structureCostUsd,
   duplicateLevelNames,
   normalizeHierarchyConfig,
   parseStructureChunkAnswer,
@@ -655,96 +651,6 @@ console.log("\nworkflow state");
   eq(state({ hasVerses: false }), "validation_failed", "no entries is a validation failure");
 }
 
-
-// ── 10. cost estimation ─────────────────────────────────────────────────────
-console.log("\ncost estimation");
-{
-  const rates = STRUCTURE_DEFAULT_RATES;
-
-  // Billed counters → dollars, with cache reads cheap and cache writes dearer.
-  eq(
-    structureCostUsd({ inputTokens: 1_000_000, outputTokens: 0 }, rates),
-    5,
-    "1M input tokens costs the input rate",
-  );
-  eq(
-    structureCostUsd({ inputTokens: 0, outputTokens: 1_000_000 }, rates),
-    25,
-    "1M output tokens costs the output rate",
-  );
-  eq(
-    structureCostUsd({ cachedInputTokens: 1_000_000 }, rates),
-    0.5,
-    "a cache read is a tenth of an input token",
-  );
-  eq(
-    structureCostUsd({ cacheWriteTokens: 1_000_000 }, rates),
-    6.25,
-    "a cache write costs more than a plain input token",
-  );
-  check("missing counters are treated as zero, never NaN", structureCostUsd({}, rates) === 0);
-  check(
-    "negative counters cannot credit the budget",
-    structureCostUsd({ inputTokens: -1_000_000 }, rates) === 0,
-  );
-
-  const pages = Array.from({ length: 20 }, (_, i) => ({
-    page: i + 1,
-    markdown: "क".repeat(5_000),
-  }));
-  const ranges = planStructureChunks(pages, { pagesPerChunk: 10, maxChars: 1_000_000 });
-  const estimate = estimateStructureCost(pages, ranges, rates, {
-    carryOverChars: 1_500,
-    promptCaching: true,
-  });
-
-  eq(estimate.requests, 2, "one request per planned range");
-  check(
-    "page text dominates the input estimate",
-    estimate.inputTokens >= (20 * 5_000) / rates.charsPerToken,
-  );
-  check(
-    "output is estimated from the text the items echo back",
-    estimate.outputTokens > estimate.inputTokens * 0.5,
-  );
-  check("the cost is positive and finite", estimate.costUsd > 0 && Number.isFinite(estimate.costUsd));
-  check("it says what it assumed", /chars\/token/.test(estimate.basis));
-
-  // Caching moves the prefix off the input bill and onto the (cheaper) read bill.
-  const uncached = estimateStructureCost(pages, ranges, rates, { promptCaching: false });
-  check(
-    "turning the prompt cache off costs more",
-    uncached.costUsd > estimate.costUsd,
-    `${uncached.costUsd} vs ${estimate.costUsd}`,
-  );
-  eq(estimate.cacheWriteTokens, rates.promptOverheadTokens, "the prefix is written once");
-  eq(
-    estimate.cachedInputTokens,
-    rates.promptOverheadTokens,
-    "and read by each later request (2 requests → 1 read)",
-  );
-
-  // The estimate must scale with the document, or it is not a guard at all.
-  const twice = estimateStructureCost(
-    [...pages, ...pages.map((p) => ({ ...p, page: p.page + 20 }))],
-    planStructureChunks(
-      [...pages, ...pages.map((p) => ({ ...p, page: p.page + 20 }))],
-      { pagesPerChunk: 10, maxChars: 1_000_000 },
-    ),
-    rates,
-  );
-  check("twice the pages costs about twice as much", twice.costUsd > estimate.costUsd * 1.8);
-
-  eq(estimateStructureCost([], [], rates).costUsd, 0, "no pages, no cost");
-
-  // Pessimism check: a denser tokenizer assumption must never lower the estimate.
-  const pessimistic = estimateStructureCost(pages, ranges, { ...rates, charsPerToken: 1.5 });
-  check("fewer chars per token means a higher estimate", pessimistic.costUsd > estimate.costUsd);
-
-  eq(formatUsd(12.3456), "$12.35", "dollars are shown to the cent");
-  eq(formatUsd(0.004), "<$0.01", "a figure too small to show is not shown as zero");
-  eq(formatUsd(Number.NaN), "$0.00", "a broken figure degrades to zero");
-}
 
 console.log(`\n${PASS} passed, ${FAILURES.length} failed`);
 if (FAILURES.length > 0) {

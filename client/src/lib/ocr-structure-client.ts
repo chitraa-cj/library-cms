@@ -11,7 +11,6 @@
 import { apiRequest, CMS_FETCH_INIT } from "./queryClient";
 import type {
   AssembledSection,
-  StructureCostEstimate,
   AssembledVerse,
   HierarchyMappingProposal,
   StructureCsvColumn,
@@ -25,18 +24,10 @@ import type { StructureJob } from "@shared/schema";
 
 export const STRUCTURE_BASE = "/api/admin/ocr/structure";
 
-export interface StructureBudget {
-  spentTodayUsd: number;
-  spentThisMonthUsd: number;
-  remainingTodayUsd: number;
-  remainingThisMonthUsd: number;
-  maxSpendPerJobUsd?: number;
-}
-
 export interface StructureConfigInfo {
   configured: boolean;
   model: string;
-  effort: string;
+  runtime: { name: string; problems: string[]; warnings: string[]; setupComplete: boolean };
   limits: {
     maxDepth: number;
     maxPages: number;
@@ -44,30 +35,28 @@ export interface StructureConfigInfo {
     maxInstructionChars: number;
     confidenceThreshold: number;
     maxRequestsPerJob: number;
-    maxSpendPerJobUsd: number;
-    maxSpendPerDayUsd: number;
-    maxSpendPerMonthUsd: number;
+    requestsPerDay: number;
   };
-  budget: StructureBudget;
   usage: StructureUsage;
 }
 
-/** What one document (or the chosen page window of it) would cost. */
+/** How much work one document (or the chosen page window of it) is. */
 export interface StructureEstimateInfo {
   /** Transcribed pages that would actually be sent. */
   pages: number;
   /** The window applied, clamped to the pages that exist; null = the whole document. */
   window: { from: number; to: number } | null;
-  /** First/last transcribed page of the document, and how many it has. */
   availableFrom: number;
   availableTo: number;
   availablePages: number;
-  estimate: StructureCostEstimate;
+  estimate: { pages: number; requests: number; basis: string };
   model: string;
-  budget: StructureBudget;
-  withinBudget: boolean;
+  remainingRequestsToday: number;
+  withinLimits: boolean;
   /** Why it cannot be started, in words the editor can act on. */
   blockers: string[];
+  /** Worth knowing; it can still start. */
+  warnings: string[];
 }
 
 /** A page window the editor chose; either bound may be left open. */
@@ -77,13 +66,10 @@ export interface StructurePageRange {
 }
 
 export interface StructureUsage {
-  inFlight: number;
-  queued: number;
   lastMinute: number;
   perMinuteLimit: number;
   today: number;
   perDayLimit: number;
-  concurrency: number;
 }
 
 export interface StructureChunkStatus {
@@ -102,9 +88,6 @@ export interface StructureJobDetail {
   job: StructureJob;
   chunks: StructureChunkStatus[];
   active: boolean;
-  /** What this analysis has cost so far, and the ceiling it stops at. */
-  spentUsd: number;
-  maxSpendPerJobUsd: number;
   live: {
     chunkIndex: number;
     attempt: number;

@@ -1,10 +1,10 @@
 /**
  * OCR Docs (admin only).
  *
- * Upload a PDF or scan; the server splits it into page ranges, transcribes each
- * range with Gemini in parallel under a global rate cap, and streams the merged
- * result back here page by page as chunks land — so a 300-page book is readable
- * from the first minute instead of after the last request.
+ * Upload a PDF or scan; the server transcribes it page by page with the LOCAL
+ * engine (the PDF's own text layer where usable, Tesseract otherwise) and streams
+ * the merged result back here as pages land — so a 300-page book is readable from
+ * the first minute. Uncertain pages carry review flags; nothing is AI-corrected.
  */
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
@@ -43,7 +43,8 @@ import {
   Upload,
   X,
 } from "lucide-react";
-import { highlightHtml, renderOcrMarkdown } from "@/lib/ocr-markdown";
+import { highlightHtml, renderOcrMarkdown, renderOcrPlainText } from "@/lib/ocr-markdown";
+import { OCR_PAGE_FLAG_LABELS } from "@shared/ocr-quality";
 import OcrStructureWizard from "@/components/ocr-structure-wizard";
 import { fetchStructureJobsForOcr } from "@/lib/ocr-structure-client";
 import type { Draft, OcrJob, OcrJobStatus, OcrPage, StrapiGrantha, StrapiResponse, StructureJob } from "@shared/schema";
@@ -98,16 +99,18 @@ type JobDetail = {
 };
 type UsageSnapshot = {
   inFlight: number;
-  queued: number;
-  lastMinute: number;
-  perMinuteLimit: number;
-  today: number;
-  perDayLimit: number;
+  waiting: number;
   concurrency: number;
 };
 type OcrConfig = {
   configured: boolean;
-  models: { fast: string; accurate: string };
+  engine: {
+    name: string;
+    languages: { devanagari: string; latin: string; fallback: string };
+    problems: string[];
+    warnings: string[];
+    dpi: { fast: number; accurate: number };
+  };
   limits: {
     maxUploadMb: number;
     maxPages: number;
@@ -124,7 +127,7 @@ type DocumentResult = {
   missingRanges: Array<{ startPage: number; endPage: number; error: string | null }>;
 };
 
-const ACCEPT = ".pdf,.png,.jpg,.jpeg,.webp";
+const ACCEPT = ".pdf,.png,.jpg,.jpeg,.webp,.tif,.tiff";
 
 function mimeFor(file: File): string {
   if (file.type) return file.type;
@@ -133,6 +136,7 @@ function mimeFor(file: File): string {
   if (ext === "png") return "image/png";
   if (ext === "jpg" || ext === "jpeg") return "image/jpeg";
   if (ext === "webp") return "image/webp";
+  if (ext === "tif" || ext === "tiff") return "image/tiff";
   return "application/octet-stream";
 }
 
@@ -152,17 +156,11 @@ function formatDuration(ms: number): string {
   return `${hours}h ${String(minutes % 60).padStart(2, "0")}m`;
 }
 
-/** Gemini's error paragraphs, cut to the words an editor can act on. */
+/** An engine error, cut to the words an editor can act on. */
 function shortError(error: string | null | undefined): string {
   if (!error) return "";
-  if (/\b503\b/.test(error) || /high demand|overloaded/i.test(error)) return "Gemini busy (503)";
-  if (/\b429\b/.test(error)) {
-    const wait = /retry in (\d+)s/i.exec(error);
-    return `rate limited (429${wait ? `, retry in ${wait[1]}s` : ""})`;
-  }
-  if (/did not answer/i.test(error)) return "timed out";
-  if (/network error/i.test(error)) return "network error";
-  if (/returned no text/i.test(error)) return "empty answer";
+  if (/did not finish within/i.test(error)) return "timed out";
+  if (/killed by/i.test(error)) return "engine process was killed";
   const firstLine = error.split("\n")[0];
   return firstLine.length > 70 ? `${firstLine.slice(0, 67)}…` : firstLine;
 }
@@ -178,11 +176,9 @@ function describeLive(c: ChunkStatus, serverNow: number): string {
   }
   if (live.phase === "request") {
     const inFlight = Math.max(0, serverNow - live.phaseStartedAt);
-    return `${live.model} · ${attempt} · waiting on Gemini for ${formatDuration(inFlight)}`;
+    return `${live.model} · ${attempt} · reading for ${formatDuration(inFlight)}`;
   }
-  // slot
-  const handedOver = live.lastError ? `${shortError(live.lastError)} on the previous model · ` : "";
-  return `${handedOver}waiting for a request slot (${live.model})`;
+  return "waiting for a free OCR lane";
 }
 
 function statusBadge(status: OcrJobStatus) {
@@ -201,17 +197,16 @@ function statusBadge(status: OcrJobStatus) {
 /** Upload with XHR so the editor sees byte progress on a 100MB scan. */
 function uploadDocument(
   file: File,
-  opts: { quality: string; chunkSize: number; instructions: string },
+  opts: { quality: string; textMode: string },
   onProgress: (pct: number) => void,
-): Promise<{ job: OcrJob }> {
+): Promise<{ job: OcrJob; reused?: boolean }> {
   return new Promise((resolve, reject) => {
     const params = new URLSearchParams({
       fileName: file.name,
       mimeType: mimeFor(file),
       quality: opts.quality,
-      chunkSize: String(opts.chunkSize),
+      textMode: opts.textMode,
     });
-    if (opts.instructions.trim()) params.set("instructions", opts.instructions.trim().slice(0, 2000));
 
     const xhr = new XMLHttpRequest();
     xhr.open("POST", `${JOBS_KEY}?${params.toString()}`);
@@ -241,8 +236,7 @@ export default function AdminOcrPage() {
 
   const [file, setFile] = useState<File | null>(null);
   const [quality, setQuality] = useState("fast");
-  const [chunkSize, setChunkSize] = useState("8");
-  const [instructions, setInstructions] = useState("");
+  const [textMode, setTextMode] = useState("auto");
   const [uploadPct, setUploadPct] = useState<number | null>(null);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [search, setSearch] = useState("");
@@ -362,7 +356,7 @@ export default function AdminOcrPage() {
       setUploadPct(0);
       return uploadDocument(
         file,
-        { quality, chunkSize: Number(chunkSize), instructions },
+        { quality, textMode },
         setUploadPct,
       );
     },
@@ -373,8 +367,10 @@ export default function AdminOcrPage() {
       setSelectedId(data.job.id);
       void queryClient.invalidateQueries({ queryKey: [JOBS_KEY] });
       toast({
-        title: "OCR started",
-        description: `${data.job.fileName} — ${data.job.pageCount} page(s) in ${data.job.chunksTotal} request(s).`,
+        title: data.reused ? "Already transcribed" : "OCR started",
+        description: data.reused
+          ? `${data.job.fileName} was uploaded before with the same settings — showing that transcription instead of running it again.`
+          : `${data.job.fileName} — ${data.job.pageCount} page(s).`,
       });
     },
     onError: (err: Error) => {
@@ -406,8 +402,11 @@ export default function AdminOcrPage() {
   const renderedPages = useMemo(
     () =>
       pages.map((p) => {
-        const html = renderOcrMarkdown(p.markdown);
-        return { page: p.page, html: search.trim() ? highlightHtml(html, search) : html };
+        // Locally transcribed pages are plain text: Markdown rendering would turn a
+        // danda read as "|" into a table, or a leading "#" into a heading. Pages from
+        // the old Gemini path (no meta) were Markdown and keep rendering as such.
+        const html = p.meta ? renderOcrPlainText(p.markdown) : renderOcrMarkdown(p.markdown);
+        return { page: p.page, meta: p.meta, html: search.trim() ? highlightHtml(html, search) : html };
       }),
     [pages, search],
   );
@@ -418,17 +417,8 @@ export default function AdminOcrPage() {
     return pages.reduce((sum, p) => sum + p.markdown.toLowerCase().split(needle).length - 1, 0);
   }, [pages, search]);
 
-  // Ranges Gemini served from a different model than the job asked for (daily
-  // quota on the first choice); worth showing, since quality can differ.
-  const fallbackModels = useMemo(() => {
-    if (!detail || !job) return [];
-    const used = new Set(
-      detail.chunks
-        .filter((c) => c.status === "done" && c.model && c.model !== job.model)
-        .map((c) => c.model as string),
-    );
-    return [...used];
-  }, [detail, job]);
+  // Pages the engine flagged for a human look (low confidence, empty, repeated lines…).
+  const flaggedPages = useMemo(() => pages.filter((p) => (p.meta?.flags?.length ?? 0) > 0), [pages]);
 
   // A one-second ticker so elapsed time, the ETA and retry countdowns move
   // between polls instead of jumping every 1.5s.
@@ -520,9 +510,10 @@ export default function AdminOcrPage() {
           </h1>
         </div>
         <p className="max-w-3xl text-sm text-muted-foreground">
-          Transcribe scanned books and manuscripts with Gemini. Long documents are split into page
-          ranges and transcribed in parallel under a shared rate cap; pages appear below as soon as
-          their range finishes, and only failed ranges are ever re-run.
+          Transcribe PDFs and scans on this server — no external AI service. Pages with a usable
+          text layer are read directly; scanned pages go through local OCR (Tesseract). Pages appear
+          below as they finish, uncertain ones are flagged for review, and only failed pages are
+          ever re-run.
         </p>
       </div>
 
@@ -531,8 +522,8 @@ export default function AdminOcrPage() {
           <CardContent className="flex items-start gap-3 pt-6 text-sm">
             <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-amber-600" />
             <span>
-              Gemini is not configured on this server. Set <code>GEMINI_API_KEY</code> in the
-              environment and restart before uploading.
+              The local OCR engine is not ready on this server.{" "}
+              {configQuery.data.engine?.problems?.join(" ")}
             </span>
           </CardContent>
         </Card>
@@ -590,44 +581,34 @@ export default function AdminOcrPage() {
 
               <div className="grid grid-cols-2 gap-3">
                 <div className="space-y-1.5">
-                  <Label className="text-xs">Quality</Label>
+                  <Label className="text-xs">Scan resolution</Label>
                   <Select value={quality} onValueChange={setQuality}>
                     <SelectTrigger data-testid="ocr-quality">
                       <SelectValue />
                     </SelectTrigger>
                     <SelectContent>
-                      <SelectItem value="fast">Fast — Flash</SelectItem>
-                      <SelectItem value="accurate">High accuracy — Pro</SelectItem>
+                      <SelectItem value="fast">Standard — {configQuery.data?.engine?.dpi.fast ?? 200} dpi</SelectItem>
+                      <SelectItem value="accurate">Fine print — {configQuery.data?.engine?.dpi.accurate ?? 300} dpi</SelectItem>
                     </SelectContent>
                   </Select>
                 </div>
                 <div className="space-y-1.5">
-                  <Label className="text-xs">Pages per request</Label>
-                  <Select value={chunkSize} onValueChange={setChunkSize}>
-                    <SelectTrigger data-testid="ocr-chunk-size">
+                  <Label className="text-xs">PDF text layer</Label>
+                  <Select value={textMode} onValueChange={setTextMode}>
+                    <SelectTrigger data-testid="ocr-text-mode">
                       <SelectValue />
                     </SelectTrigger>
                     <SelectContent>
-                      {[4, 6, 8, 10, 15, 20].map((n) => (
-                        <SelectItem key={n} value={String(n)}>
-                          {n} pages
-                        </SelectItem>
-                      ))}
+                      <SelectItem value="auto">Use it when readable</SelectItem>
+                      <SelectItem value="ocr">Always OCR</SelectItem>
                     </SelectContent>
                   </Select>
                 </div>
               </div>
-
-              <div className="space-y-1.5">
-                <Label className="text-xs">Notes for the transcriber (optional)</Label>
-                <Textarea
-                  rows={2}
-                  value={instructions}
-                  onChange={(e) => setInstructions(e.target.value)}
-                  placeholder="e.g. Sanskrit in Devanagari with IAST footnotes; keep verse numbers."
-                  data-testid="ocr-instructions"
-                />
-              </div>
+              <p className="text-[11px] leading-relaxed text-muted-foreground">
+                Choose <strong>Always OCR</strong> when the PDF was made with an old Devanagari font
+                (Kruti Dev and similar): its text layer looks like text but is not Unicode Sanskrit.
+              </p>
 
               {uploadPct !== null && (
                 <div className="space-y-1">
@@ -655,9 +636,8 @@ export default function AdminOcrPage() {
 
               {usage && (
                 <p className="text-[11px] leading-relaxed text-muted-foreground">
-                  Gemini budget: {usage.lastMinute}/{usage.perMinuteLimit} requests this minute ·{" "}
-                  {usage.today}/{usage.perDayLimit} today · {usage.inFlight} in flight
-                  {usage.queued > 0 ? `, ${usage.queued} waiting` : ""}.
+                  {configQuery.data?.engine?.name ?? "Local OCR"}: {usage.inFlight}/{usage.concurrency} lanes busy
+                  {usage.waiting > 0 ? `, ${usage.waiting} waiting` : ""}.
                 </p>
               )}
             </CardContent>
@@ -722,8 +702,8 @@ export default function AdminOcrPage() {
                     <span className="font-medium">{job.fileName}</span>
                     {statusBadge(job.status)}
                     <span className="text-xs text-muted-foreground">
-                      {job.pageCount} pages · {job.model} · {job.chunkSize} pages/request ·{" "}
-                      {formatBytes(job.fileSize)}
+                      {job.pageCount} pages · {job.model}
+                      {job.textMode === "ocr" ? " · always OCR" : ""} · {formatBytes(job.fileSize)}
                     </span>
                     <div className="ml-auto flex items-center gap-2">
                       {/* The OCR → Grantha entry point. Available as soon as any page
@@ -809,10 +789,11 @@ export default function AdminOcrPage() {
                           {eta}
                         </span>
                       )}
-                      <span>
-                        {job.requestCount} Gemini requests ·{" "}
-                        {((job.inputTokens + job.outputTokens) / 1000).toFixed(1)}k tokens
-                      </span>
+                      {flaggedPages.length > 0 && (
+                        <span className="text-amber-700 dark:text-amber-300" data-testid="ocr-flagged-count">
+                          {flaggedPages.length} page{flaggedPages.length === 1 ? "" : "s"} flagged for review
+                        </span>
+                      )}
                     </div>
                   </div>
 
@@ -844,8 +825,7 @@ export default function AdminOcrPage() {
                       )}
                       {progress && progress.retrying > 0 && (
                         <li className="pl-5 pt-1 text-muted-foreground">
-                          Gemini is under high demand. Busy ranges retry on their own and move to a fallback
-                          model after two busy answers; nothing is lost.
+                          A page hit a transient engine error and is retrying on its own; nothing is lost.
                         </li>
                       )}
                     </ul>
@@ -870,13 +850,6 @@ export default function AdminOcrPage() {
                         />
                       ))}
                     </div>
-                  )}
-
-                  {fallbackModels.length > 0 && (
-                    <p className="text-xs text-muted-foreground">
-                      {fallbackModels.join(", ")} transcribed some ranges — {job.model} had spent its
-                      daily quota.
-                    </p>
                   )}
 
                   {job.error && (
@@ -930,6 +903,15 @@ export default function AdminOcrPage() {
                           <Download className="mr-1.5 h-3.5 w-3.5" /> .txt
                         </a>
                       </Button>
+                      <Button variant="outline" size="sm" asChild>
+                        <a
+                          href={`${JOBS_KEY}/${job.id}/download?format=raw`}
+                          download
+                          title="The engine's untouched output, before normalization — for comparison"
+                        >
+                          <Download className="mr-1.5 h-3.5 w-3.5" /> Raw
+                        </a>
+                      </Button>
                       <Button variant="ghost" size="sm" asChild>
                         <a href={`${JOBS_KEY}/${job.id}/source`} target="_blank" rel="noreferrer">
                           Original
@@ -962,12 +944,39 @@ export default function AdminOcrPage() {
                           className="mx-auto w-full max-w-[820px] rounded-md border border-border bg-background px-10 py-8 shadow-sm"
                           data-testid={`ocr-page-${p.page}`}
                         >
+                          {p.meta && p.meta.flags.length > 0 && (
+                            <div
+                              className="mb-4 rounded-md border border-amber-500/40 bg-amber-500/5 p-2 text-xs"
+                              data-testid={`ocr-page-flags-${p.page}`}
+                            >
+                              <p className="flex items-center gap-1.5 font-medium text-amber-700 dark:text-amber-300">
+                                <AlertTriangle className="h-3.5 w-3.5" /> Review this page
+                              </p>
+                              <ul className="mt-1 list-disc pl-5 text-muted-foreground">
+                                {p.meta.flags.map((flag) => (
+                                  <li key={flag}>{OCR_PAGE_FLAG_LABELS[flag] ?? flag}</li>
+                                ))}
+                              </ul>
+                              {p.meta.lowConfidenceSamples && p.meta.lowConfidenceSamples.length > 0 && (
+                                <p className="mt-1 text-muted-foreground">
+                                  Uncertain words: {p.meta.lowConfidenceSamples.slice(0, 8).join(" · ")}
+                                </p>
+                              )}
+                            </div>
+                          )}
                           <div
                             className="ocr-page-body text-[15px] leading-relaxed"
                             dangerouslySetInnerHTML={{ __html: p.html }}
                           />
                           <div className="mt-6 border-t border-border pt-2 text-right text-[11px] text-muted-foreground">
                             Page {p.page}
+                            {p.meta && (
+                              <>
+                                {" · "}
+                                {p.meta.source === "embedded" ? "PDF text layer" : p.meta.engine}
+                                {p.meta.confidence != null ? ` · confidence ${Math.round(p.meta.confidence)}` : ""}
+                              </>
+                            )}
                           </div>
                         </article>
                       ))}

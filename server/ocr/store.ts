@@ -3,6 +3,9 @@
  * Postgres, and the idempotent DDL that creates those two tables on first use
  * (the prod box deploys by pulling + pm2 restart, so the feature has to be able
  * to install its own tables rather than waiting for a manual migration).
+ *
+ * Writes a running job makes to its chunk rows are FENCED on the run's token
+ * (`fencedChunkUpdate`): a worker that no longer owns the job writes nothing.
  */
 import { createHash } from "node:crypto";
 import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
@@ -10,6 +13,7 @@ import path from "node:path";
 import { and, desc, eq, inArray, lt, sql } from "drizzle-orm";
 import { db } from "../db";
 import { ocrJobChunks, ocrJobs, type OcrJob, type OcrJobChunk } from "@shared/schema";
+import { ensureLeaseColumns, fencedChunkUpdate, OCR_TABLES } from "../lib/job-lease";
 import { ocrConfig } from "./config";
 
 // ───────────────────────────────────────────────────────────── schema bootstrap
@@ -66,6 +70,11 @@ export function ensureOcrSchema(): Promise<void> {
       );
       // Added after the first release; keeps existing installs in step.
       await db.execute(sql`alter table cms_ocr_job_chunks add column if not exists model text`);
+      // Local engine (script/migrations/20261029_local_ocr_and_job_leases.sql).
+      await db.execute(sql`alter table cms_ocr_job_chunks add column if not exists raw_text text`);
+      await db.execute(sql`alter table cms_ocr_job_chunks add column if not exists pages_meta jsonb`);
+      await db.execute(sql`alter table cms_ocr_jobs add column if not exists text_mode text not null default 'auto'`);
+      await ensureLeaseColumns(OCR_TABLES);
       await db.execute(
         sql`create index if not exists cms_ocr_jobs_created_idx on cms_ocr_jobs (created_at desc)`,
       );
@@ -180,6 +189,60 @@ export async function listChunks(jobId: string): Promise<OcrJobChunk[]> {
   return db.select().from(ocrJobChunks).where(eq(ocrJobChunks.jobId, jobId)).orderBy(ocrJobChunks.chunkIndex);
 }
 
+/** What the merged document needs — not `raw_text`, which would double the read. */
+export async function listChunkTexts(jobId: string) {
+  return db
+    .select({
+      chunkIndex: ocrJobChunks.chunkIndex,
+      startPage: ocrJobChunks.startPage,
+      endPage: ocrJobChunks.endPage,
+      status: ocrJobChunks.status,
+      markdown: ocrJobChunks.markdown,
+      pagesMeta: ocrJobChunks.pagesMeta,
+      error: ocrJobChunks.error,
+    })
+    .from(ocrJobChunks)
+    .where(eq(ocrJobChunks.jobId, jobId))
+    .orderBy(ocrJobChunks.chunkIndex);
+}
+
+/** Raw engine output per range, for the raw-vs-normalized comparison download. */
+export async function listChunkRawTexts(jobId: string) {
+  return db
+    .select({
+      startPage: ocrJobChunks.startPage,
+      endPage: ocrJobChunks.endPage,
+      status: ocrJobChunks.status,
+      rawText: ocrJobChunks.rawText,
+      markdown: ocrJobChunks.markdown,
+    })
+    .from(ocrJobChunks)
+    .where(eq(ocrJobChunks.jobId, jobId))
+    .orderBy(ocrJobChunks.chunkIndex);
+}
+
+/**
+ * An existing job for the same bytes and the same settings that is not failed or
+ * cancelled — what a repeated upload (double click, browser retry) should get back
+ * instead of a second, identical transcription.
+ */
+export async function findReusableJob(fileHash: string, textMode: string, quality: string): Promise<OcrJob | undefined> {
+  const [job] = await db
+    .select()
+    .from(ocrJobs)
+    .where(
+      and(
+        eq(ocrJobs.fileHash, fileHash),
+        eq(ocrJobs.textMode, textMode as any),
+        eq(ocrJobs.quality, quality as any),
+        inArray(ocrJobs.status, ["queued", "running", "done", "partial"]),
+      ),
+    )
+    .orderBy(desc(ocrJobs.createdAt))
+    .limit(1);
+  return job;
+}
+
 export async function claimableChunks(jobId: string): Promise<OcrJobChunk[]> {
   return db
     .select()
@@ -224,13 +287,67 @@ export async function updateChunk(
     .where(and(eq(ocrJobChunks.jobId, jobId), eq(ocrJobChunks.chunkIndex, chunkIndex)));
 }
 
-export async function requeueFailedChunks(jobId: string): Promise<number> {
-  const rows = await db
-    .update(ocrJobChunks)
-    .set({ status: "queued", attempts: 0, error: null, updatedAt: new Date() })
-    .where(and(eq(ocrJobChunks.jobId, jobId), inArray(ocrJobChunks.status, ["failed", "skipped"])))
-    .returning({ id: ocrJobChunks.id });
-  return rows.length;
+/**
+ * Requeue a finished job's failed/skipped/unfinished ranges, in one transaction and
+ * only while no run owns it — so a double-clicked Retry, or a Retry racing the
+ * scheduler, can never put a running job back in the queue under its own feet.
+ * Ranges already `done` are left alone. Returns null when the job is busy.
+ */
+export async function requeueJobForRetry(jobId: string): Promise<{ pending: number; done: number } | null> {
+  return db.transaction(async (tx) => {
+    const [job] = await tx
+      .select({ status: ocrJobs.status })
+      .from(ocrJobs)
+      .where(eq(ocrJobs.id, jobId))
+      .for("update");
+    if (!job || job.status === "running" || job.status === "queued") return null;
+    await tx
+      .update(ocrJobChunks)
+      .set({ status: "queued", attempts: 0, error: null, updatedAt: new Date() })
+      .where(and(eq(ocrJobChunks.jobId, jobId), inArray(ocrJobChunks.status, ["failed", "skipped", "running"])));
+    const rows = await tx
+      .select({ status: ocrJobChunks.status })
+      .from(ocrJobChunks)
+      .where(eq(ocrJobChunks.jobId, jobId));
+    const done = rows.filter((r) => r.status === "done").length;
+    const pending = rows.length - done;
+    await tx
+      .update(ocrJobs)
+      .set({
+        status: pending > 0 ? "queued" : "done",
+        chunksDone: done,
+        chunksFailed: 0,
+        error: null,
+        runToken: null,
+        finishedAt: pending > 0 ? null : new Date(),
+        updatedAt: new Date(),
+      })
+      .where(eq(ocrJobs.id, jobId));
+    return { pending, done };
+  });
+}
+
+/** A finished range's result, written only if `token` still owns the job. */
+export function writeChunkResult(
+  jobId: string,
+  chunkIndex: number,
+  token: string,
+  result:
+    | { status: "done"; markdown: string; rawText: string; pagesMeta: unknown[]; model: string; attempts: number; durationMs: number }
+    | { status: "failed" | "queued"; attempts?: number; durationMs: number; error: string | null },
+): Promise<boolean> {
+  const assignments =
+    result.status === "done"
+      ? sql`status = 'done', markdown = ${result.markdown}, raw_text = ${result.rawText},
+            pages_meta = ${JSON.stringify(result.pagesMeta)}::jsonb, model = ${result.model},
+            attempts = attempts + ${result.attempts}, duration_ms = ${result.durationMs}, error = null`
+      : sql`status = ${result.status}, attempts = attempts + ${result.attempts ?? 0},
+            duration_ms = ${result.durationMs}, error = ${result.error}`;
+  return fencedChunkUpdate(OCR_TABLES, jobId, chunkIndex, token, assignments);
+}
+
+export function markChunkRunning(jobId: string, chunkIndex: number, token: string): Promise<boolean> {
+  return fencedChunkUpdate(OCR_TABLES, jobId, chunkIndex, token, sql`status = 'running', error = null`);
 }
 
 export async function deleteJob(jobId: string): Promise<void> {

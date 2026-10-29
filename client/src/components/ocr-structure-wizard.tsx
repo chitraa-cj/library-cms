@@ -79,7 +79,6 @@ import {
 import {
   STRUCTURE_MAX_DEPTH,
   STRUCTURE_WORKFLOW_LABELS,
-  formatUsd,
   leafLevelName,
   sectionLevelCount,
   type StructureOverride,
@@ -329,12 +328,10 @@ export default function OcrStructureWizard({ open, onOpenChange, ocrJob, grantha
 
   function discardAndEdit() {
     const analysed = job?.chunksDone ?? 0;
-    const spent = detailQuery.data?.spentUsd ?? 0;
     if (analysed > 0) {
       const ok = window.confirm(
         `This throws away ${analysed} page range(s) that have already been analysed` +
-          (spent > 0 ? ` (${formatUsd(spent)} spent)` : "") +
-          `. Analysing them again will cost the same again.\n\nDiscard this analysis and edit the settings?`,
+          `. Analysing them again takes the same requests again.\n\nDiscard this analysis and edit the settings?`,
       );
       if (!ok) return;
     }
@@ -508,8 +505,8 @@ export default function OcrStructureWizard({ open, onOpenChange, ocrJob, grantha
             Create Grantha from OCR — {ocrJob.fileName}
           </DialogTitle>
           <DialogDescription>
-            Configure the hierarchy once, describe how the book is laid out, and let Claude classify
-            the transcription. You review the result, then download the CSV or hand it straight to a
+            Configure the hierarchy once, describe how the book is laid out, and let the assistant
+            classify the transcription (Hermex, on the account reserved for document analysis). You review the result, then download the CSV or hand it straight to a
             grantha through the usual import dialog.
           </DialogDescription>
         </DialogHeader>
@@ -549,10 +546,10 @@ export default function OcrStructureWizard({ open, onOpenChange, ocrJob, grantha
         {configQuery.data && !configQuery.data.configured && (
           <Alert variant="destructive">
             <AlertCircle className="h-4 w-4" />
-            <AlertTitle>Claude is not configured on this server</AlertTitle>
+            <AlertTitle>Document analysis is not ready on this server</AlertTitle>
             <AlertDescription>
-              Set <code>ANTHROPIC_API_KEY</code> in the environment and restart before starting an
-              analysis.
+              {configQuery.data.runtime?.problems?.join(" ") ||
+                "The dedicated Hermex profile is not configured."}
             </AlertDescription>
           </Alert>
         )}
@@ -786,63 +783,56 @@ export default function OcrStructureWizard({ open, onOpenChange, ocrJob, grantha
               <AlertTitle>What happens next</AlertTitle>
               <AlertDescription className="text-xs">
                 {estimate ? `${estimate.pages} page(s) of the transcription are` : "The transcription is"}{" "}
-                sent to {configQuery.data?.model ?? "Claude"} in page ranges of{" "}
-                {configQuery.data?.limits.pagesPerChunk ?? 10}, in order, so a heading on one page still
-                governs the next. Nothing is written to the CMS during the analysis.
+                classified in page ranges of {configQuery.data?.limits.pagesPerChunk ?? 3}, in order, so a
+                heading on one page still governs the next. The assistant only marks which lines are
+                headings, verses and commentary — every word you review is cut from the OCR text itself,
+                never retyped by the model. Nothing is written to the CMS during the analysis.
               </AlertDescription>
             </Alert>
 
-            {/* The bill, before the button that spends it. */}
+            {/* The size of the job, before the button that starts it. */}
             {!jobId && (
               <div
                 className={`space-y-2 rounded-md border p-3 ${
-                  estimate && !estimate.withinBudget ? "border-destructive/50 bg-destructive/5" : "border-border bg-muted/30"
+                  estimate && !estimate.withinLimits ? "border-destructive/50 bg-destructive/5" : "border-border bg-muted/30"
                 }`}
                 data-testid="structure-estimate"
               >
                 <p className="flex items-center gap-1.5 text-sm font-medium">
                   <Wallet className="h-4 w-4" />
-                  Estimated cost
+                  Requests needed
                   {estimateQuery.isLoading && <Loader2 className="h-3 w-3 animate-spin" />}
                 </p>
                 {estimate ? (
                   <>
                     <p className="text-sm">
-                      <strong>{formatUsd(estimate.estimate.costUsd)}</strong> for {estimate.pages} page(s) in{" "}
-                      {estimate.estimate.requests} request(s) — about{" "}
-                      {Math.round(estimate.estimate.inputTokens / 1000)}k in /{" "}
-                      {Math.round(estimate.estimate.outputTokens / 1000)}k out on {estimate.model}.
+                      <strong>{estimate.estimate.requests}</strong> request(s) for {estimate.pages} page(s) ·{" "}
+                      {estimate.remainingRequestsToday} left today on the analysis account.
                     </p>
-                    <p className="text-xs text-muted-foreground">
-                      Budget left: {formatUsd(estimate.budget.remainingTodayUsd)} today ·{" "}
-                      {formatUsd(estimate.budget.remainingThisMonthUsd)} this month · per-document cap{" "}
-                      {formatUsd(estimate.budget.maxSpendPerJobUsd ?? 0)}.
-                    </p>
-                    <p className="text-[11px] text-muted-foreground">
-                      An estimate, deliberately on the high side ({estimate.estimate.basis}). The real figure
-                      is counted from the API as each range finishes and is shown while it runs.
-                    </p>
-                    {!estimate.withinBudget && (
+                    <p className="text-[11px] text-muted-foreground">{estimate.estimate.basis}.</p>
+                    {estimate.warnings.map((w, i) => (
+                      <p key={i} className="text-xs text-amber-700 dark:text-amber-300">
+                        {w}
+                      </p>
+                    ))}
+                    {!estimate.withinLimits && (
                       <Alert variant="destructive" className="mt-1">
                         <AlertCircle className="h-4 w-4" />
-                        <AlertTitle>Over budget — not started</AlertTitle>
+                        <AlertTitle>Too large — not started</AlertTitle>
                         <AlertDescription className="text-xs">
                           <ul className="list-disc space-y-0.5 pl-4">
                             {estimate.blockers.map((blocker, i) => (
                               <li key={i}>{blocker}</li>
                             ))}
                           </ul>
-                          Analyse fewer pages at a time, wait for the budget to reset, or raise the
-                          matching STRUCTURE_MAX_SPEND_* limit on the server.
+                          Analyse fewer pages at a time.
                         </AlertDescription>
                       </Alert>
                     )}
                   </>
                 ) : (
                   <p className="text-xs text-muted-foreground">
-                    {estimateQuery.error
-                      ? (estimateQuery.error as Error).message
-                      : "Working out what this document would cost…"}
+                    {estimateQuery.error ? (estimateQuery.error as Error).message : "Sizing this document…"}
                   </p>
                 )}
               </div>
@@ -861,13 +851,9 @@ export default function OcrStructureWizard({ open, onOpenChange, ocrJob, grantha
                     !hierarchyReady ||
                     startMutation.isPending ||
                     configQuery.data?.configured === false ||
-                    estimate?.withinBudget === false
+                    estimate?.withinLimits === false
                   }
-                  title={
-                    estimate?.withinBudget === false
-                      ? "This document is over the configured Claude budget"
-                      : undefined
-                  }
+                  title={estimate?.withinLimits === false ? "This page range is over the configured limits" : undefined}
                   data-testid="structure-start"
                 >
                   {startMutation.isPending ? (
@@ -901,13 +887,7 @@ export default function OcrStructureWizard({ open, onOpenChange, ocrJob, grantha
                 <span className="text-destructive">{job.chunksFailed} failed</span>
               )}
               <span className="text-xs text-muted-foreground">
-                {job.model} · {((job.inputTokens + job.outputTokens) / 1000).toFixed(1)}k tokens
-                {job.cachedInputTokens > 0
-                  ? ` · ${(job.cachedInputTokens / 1000).toFixed(1)}k served from cache`
-                  : ""}
-                {detailQuery.data
-                  ? ` · ${formatUsd(detailQuery.data.spentUsd)} of ${formatUsd(detailQuery.data.maxSpendPerJobUsd)} for this document`
-                  : ""}
+                {job.model} · {job.requestCount} request(s)
               </span>
               <div className="ml-auto flex items-center gap-2">
                 {running && (
@@ -941,8 +921,8 @@ export default function OcrStructureWizard({ open, onOpenChange, ocrJob, grantha
                 {detailQuery.data.live.phase === "backoff"
                   ? `${detailQuery.data.live.lastError ?? "transient error"} — retrying (attempt ${detailQuery.data.live.attempt + 1} of ${detailQuery.data.live.maxAttempts})`
                   : detailQuery.data.live.phase === "request"
-                    ? `waiting on Claude (attempt ${detailQuery.data.live.attempt} of ${detailQuery.data.live.maxAttempts})`
-                    : "waiting for a request slot"}
+                    ? `waiting on the assistant (attempt ${detailQuery.data.live.attempt} of ${detailQuery.data.live.maxAttempts})`
+                    : "opening the browser / waiting for a request slot"}
               </p>
             )}
 

@@ -145,6 +145,20 @@ export function renderOcrMarkdown(markdown: string): string {
 }
 
 /** Highlight every occurrence of `needle` in already-rendered HTML (text nodes only). */
+/**
+ * Plain OCR text as HTML: escaped first, then paragraphs on blank lines and line
+ * breaks kept. No Markdown interpretation at all — engine output is source text,
+ * and a danda read as "|" or a line starting "#" must stay exactly what it is.
+ */
+export function renderOcrPlainText(text: string): string {
+  return (text ?? "")
+    .replace(/\r\n?/g, "\n")
+    .split(/\n{2,}/)
+    .filter((para) => para.trim())
+    .map((para) => `<p class="my-2 leading-relaxed">${escapeHtml(para).replace(/\n/g, "<br />")}</p>`)
+    .join("\n");
+}
+
 export function highlightHtml(html: string, needle: string): string {
   const query = needle.trim();
   if (query.length < 2) return html;

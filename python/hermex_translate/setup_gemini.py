@@ -37,8 +37,21 @@ def _driver_alive(gemini: Gemini) -> bool:
         return False
 
 
-def run_setup() -> int:
-    marker = Path(hermex_data_dir) / ".setup_gemini"
+def _profile_arg(argv: list[str]) -> str | None:
+    """`--profile DIR`: log a DEDICATED Chrome profile in instead of hermex's default.
+
+    Used for the OCR → Grantha workflow, which must never share translation's Gemini
+    account (npm run hermex:setup-structure). Without the flag nothing changes."""
+    for i, arg in enumerate(argv):
+        if arg == "--profile" and i + 1 < len(argv):
+            return argv[i + 1]
+        if arg.startswith("--profile="):
+            return arg.split("=", 1)[1]
+    return None
+
+
+def run_setup(profile: str | None = None) -> int:
+    marker = Path(profile or hermex_data_dir) / ".setup_gemini"
 
     print("=" * 60)
     print("Hermex Gemini setup")
@@ -54,7 +67,8 @@ def run_setup() -> int:
         warnings.simplefilter("ignore", UserWarning)
         # Web security must stay ON — Gemini rejects sends from a browser started
         # with --disable-web-security (see _disable_web_security in translate_cli).
-        gemini = Gemini(headless=False, disable_web_security=False)
+        kwargs = {"data_dir": profile} if profile else {}
+        gemini = Gemini(headless=False, disable_web_security=False, **kwargs)
 
     try:
         if not gemini.driver:
@@ -107,4 +121,4 @@ def run_setup() -> int:
 
 
 if __name__ == "__main__":
-    sys.exit(run_setup())
+    sys.exit(run_setup(_profile_arg(sys.argv[1:])))

@@ -224,3 +224,26 @@ pkill -f translate_cli.py
 rm -f "$HOME/Library/Application Support/hermex/chrome_profile"/Singleton\*
 cd /Users/chitrajain/Documents/Code/XoidLabs/Library/Data-Feeder-CMS
 npm run hermex:grantha -- "Chandogya Upanishad"
+
+## A second workflow: OCR → Grantha (separate account)
+
+Since 2026-10, Hermex also serves the OCR → Grantha analysis. It is kept apart from
+translation by construction, and translation's own setup is unchanged:
+
+| | Translation | OCR → Grantha |
+| --- | --- | --- |
+| Google account | translation's | a **separate** dedicated account |
+| Chrome profile | `HERMEX_CHROME_PROFILE` | `HERMEX_STRUCTURE_CHROME_PROFILE` (refused if it is translation's) |
+| Single-flight lock | `<HERMEX_DIR>/.hermex.lock` | `<structure profile>.lock` |
+| Entry point | `translate_cli.py` (one process per call) | `prompt_session.py` (one browser per job) |
+| Stale-browser cleanup | unchanged (sweeps all chromedrivers) | `HERMEX_CLEANUP_SCOPE=profile` (only its own profile) |
+| Process | `cms-translation-worker` | the web app (`cmslibrary`), one job at a time |
+
+One-time login for the second profile: `npm run hermex:setup-structure`
+(`setup_gemini.py --profile <dir>`; without `--profile` the script behaves exactly as
+before). Details, limits and the security advice for that account are in
+[OCR-TO-GRANTHA.md](OCR-TO-GRANTHA.md#setup).
+
+Two Chrome instances can now run at once (one per profile). On a small box, keep an eye on
+memory: each Chrome is a few hundred MB. OCR itself no longer uses Gemini at all — it runs
+Tesseract locally ([OCR.md](OCR.md)).

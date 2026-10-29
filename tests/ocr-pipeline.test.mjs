@@ -1,24 +1,19 @@
-#!/usr/bin/env node --import tsx
 /**
- * OCR Docs pipeline - unit tests (no DB, no network by default).
+ * OCR Docs pipeline - unit tests (no DB, no network, no engine).
  * ==============================================================
- * Locks in the rules the chunked transcription depends on:
+ * Locks in the rules the page-range model depends on:
  *   1. a document is split into contiguous, gapless, capped page ranges
- *   2. a page range slices out of the source PDF as its own small PDF
- *   3. page markers in the model answer map back to absolute page numbers,
- *      and a missing marker degrades to one block instead of losing text
- *   4. transcribed text is HTML-escaped before it is ever rendered as markup
+ *   2. page markers map back to absolute page numbers, and a missing marker degrades
+ *      to one block instead of losing text (rows written by the old Gemini path too)
+ *   3. transcribed text is HTML-escaped before it is ever rendered as markup
+ *   4. the progress/ETA estimate
+ * The local engine itself is covered by tests/ocr-local-engine.test.mjs.
  *
  * Run:        node --import tsx tests/ocr-pipeline.test.mjs
- * With live Gemini round-trip (spends ~1 request):
- *             node --import tsx tests/ocr-pipeline.test.mjs --live
  */
-
-// dotenv first: server/ocr/config reads GEMINI_API_KEY at module load.
-import "dotenv/config";
 import { PDFDocument, StandardFonts, rgb } from "pdf-lib";
-import { PdfSlicer, planChunks, fitChunkSize, readPdfPageCount } from "../server/ocr/pdf.ts";
-import { splitChunkPages, ocrChunkWithGemini } from "../server/ocr/gemini.ts";
+import { planChunks, readPdfPageCount } from "../server/ocr/pdf.ts";
+import { splitChunkPages } from "../server/ocr/pages.ts";
 import { renderOcrMarkdown, escapeHtml } from "../client/src/lib/ocr-markdown.ts";
 
 let PASS = 0;
@@ -56,35 +51,7 @@ console.log("\nchunk planning");
   check("a single page yields one range", planChunks(1, 8).length === 1);
   check("a chunk size above the page count yields one range", planChunks(5, 50).length === 1);
 
-  // A heavy scan must shrink pages-per-request so one request stays inline-able.
-  const heavy = fitChunkSize(20, 300 * 1024 * 1024, 300); // 1MB/page
-  check("heavy scans shrink the chunk size", heavy < 20 && heavy >= 1, `got ${heavy}`);
-  const light = fitChunkSize(8, 2 * 1024 * 1024, 300); // ~7KB/page
-  check("light documents keep the requested chunk size", light === 8, `got ${light}`);
-}
-
-// ── 2. PDF slicing ───────────────────────────────────────────────────────────
-console.log("\npdf slicing");
-{
-  const bytes = await makeSamplePdf(12);
-  check("page count is read from the file", (await readPdfPageCount(bytes)) === 12);
-
-  const slicer = await PdfSlicer.load(bytes);
-  const slice = await slicer.slice(5, 8);
-  const sliced = await PDFDocument.load(slice);
-  check("slice holds exactly the requested pages", sliced.getPageCount() === 4);
-  check("slice is much smaller than the source", slice.byteLength < bytes.byteLength);
-
-  const tail = await slicer.slice(11, 99); // clamped to the last page
-  check("an over-long range clamps to the document end", (await PDFDocument.load(tail)).getPageCount() === 2);
-
-  let rejected = false;
-  try {
-    await slicer.slice(50, 60);
-  } catch {
-    rejected = true;
-  }
-  check("a range past the end is rejected", rejected);
+  check("the page count is read from a real PDF", (await readPdfPageCount(await makeSamplePdf(12))) === 12);
 }
 
 // ── 3. page marker parsing ───────────────────────────────────────────────────
@@ -122,36 +89,6 @@ console.log("\nmarkdown rendering");
 
   const devanagari = renderOcrMarkdown("ॐ असतो मा सद्गमय");
   check("Devanagari survives rendering unchanged", devanagari.includes("ॐ असतो मा सद्गमय"));
-}
-
-// ── 5. rate limiting ─────────────────────────────────────────────────────────
-console.log("\nrate limiting");
-{
-  const { acquireOcrSlot, ocrUsageSnapshot } = await import("../server/ocr/limiter.ts");
-  const { ocrConfig } = await import("../server/ocr/config.ts");
-  const cap = ocrConfig.concurrency;
-
-  const releases = [];
-  for (let i = 0; i < cap; i++) releases.push(await acquireOcrSlot());
-  check("slots are handed out up to the concurrency cap", ocrUsageSnapshot().inFlight === cap);
-
-  let granted = false;
-  const overflow = acquireOcrSlot().then((release) => {
-    granted = true;
-    return release;
-  });
-  await new Promise((r) => setTimeout(r, 150));
-  check("a request over the cap waits instead of proceeding", granted === false && ocrUsageSnapshot().queued === 1);
-
-  releases[0]();
-  const overflowRelease = await overflow;
-  check("releasing a slot wakes exactly one waiter", granted === true && ocrUsageSnapshot().queued === 0);
-
-  overflowRelease();
-  overflowRelease(); // releasing twice must not corrupt the count
-  for (const release of releases.slice(1)) release();
-  check("every slot is returned", ocrUsageSnapshot().inFlight === 0);
-  check("the day counter tracked every grant", ocrUsageSnapshot().today >= cap + 1);
 }
 
 // ── 6. progress estimate ─────────────────────────────────────────────────────
@@ -211,74 +148,6 @@ console.log("\nprogress estimate");
   const finished = estimateJob({ ...base, running: false, endedAt: now - 30_000, live: {}, chunks: [chunk(0, 1, 8, "done", 40_000)] });
   check("a finished job has no ETA", finished.etaMs === null && finished.basis === null && finished.pagesDone === 8);
   check("a finished job's elapsed stops at its finish time", finished.elapsedMs === 60_000, `got ${finished.elapsedMs}`);
-}
-
-// ── 7. an overloaded model hands over instead of retrying four times ─────────
-console.log("\n503 hand-over");
-{
-  const { ocrConfig } = await import("../server/ocr/config.ts");
-  const { OcrGeminiError } = await import("../server/ocr/gemini.ts");
-  const realFetch = globalThis.fetch;
-  const realKey = ocrConfig.apiKey;
-  const realBase = ocrConfig.retryBaseDelayMs;
-  let calls = 0;
-  globalThis.fetch = async () => {
-    calls++;
-    return new Response(JSON.stringify({ error: { message: "This model is currently experiencing high demand." } }), {
-      status: 503,
-      headers: { "content-type": "application/json", "retry-after": "0" },
-    });
-  };
-  // ocrConfig is frozen by `as const` at the type level only; set what the test needs.
-  Object.assign(ocrConfig, { apiKey: realKey || "test-key", retryBaseDelayMs: 250 });
-  try {
-    const events = [];
-    let thrown = null;
-    try {
-      await ocrChunkWithGemini({
-        bytes: new Uint8Array([1, 2, 3]),
-        mimeType: "application/pdf",
-        model: "busy-model",
-        startPage: 1,
-        endPage: 2,
-        totalPages: 2,
-        overloadAttempts: 2,
-        onProgress: (e) => events.push(e),
-      });
-    } catch (err) {
-      thrown = err;
-    }
-    check("the call fails after the overload cap", thrown instanceof OcrGeminiError, String(thrown));
-    check("only two requests were spent on the busy model", calls === 2 && thrown?.attempts === 2, `calls=${calls} attempts=${thrown?.attempts}`);
-    check("the error is flagged as overloaded so the worker can hand over", thrown?.overloaded === true && thrown?.retryable === true);
-    check("progress reported each attempt and the backoff between them",
-      events.filter((e) => e.kind === "attempt").length === 2 && events.some((e) => e.kind === "backoff" && /503/.test(e.error)));
-  } finally {
-    globalThis.fetch = realFetch;
-    Object.assign(ocrConfig, { apiKey: realKey, retryBaseDelayMs: realBase });
-  }
-}
-
-// ── 8. optional live Gemini round-trip ───────────────────────────────────────
-if (process.argv.includes("--live")) {
-  console.log("\nlive gemini round-trip");
-  const bytes = await makeSamplePdf(3);
-  const slicer = await PdfSlicer.load(bytes);
-  const slice = await slicer.slice(1, 3);
-  const result = await ocrChunkWithGemini({
-    bytes: slice,
-    mimeType: "application/pdf",
-    model: process.env.OCR_MODEL_FAST || "gemini-3.8-flash",
-    startPage: 1,
-    endPage: 3,
-    totalPages: 3,
-  });
-  const pages = splitChunkPages(result.text, 1, 3);
-  check("gemini returned text", result.text.trim().length > 0);
-  check("gemini emitted one marker per page", pages.length === 3, `got ${pages.length}`);
-  check("page 2 transcription mentions page 2", /page 2/i.test(pages[1]?.markdown ?? ""));
-  check("usage is reported", result.inputTokens > 0 && result.outputTokens > 0);
-  console.log(`  (used ${result.attempts} request, ${result.inputTokens} in / ${result.outputTokens} out tokens)`);
 }
 
 console.log(`\n${PASS} passed, ${FAILURES.length} failed`);

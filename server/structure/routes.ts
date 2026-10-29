@@ -19,18 +19,17 @@ import {
   sectionLevelCount,
   selectPageWindow,
   STRUCTURE_MAX_DEPTH,
-  formatUsd,
   type StructureHierarchyConfig,
   type StructureOverride,
 } from "@shared/ocr-structure";
 import { buildOcrDocument } from "../ocr/jobs";
 import { getJob as getOcrJob } from "../ocr/store";
 import { isStructureConfigured, sanitizeStructureError, structureConfig } from "./config";
-import { structureSpend, structureUsageSnapshot } from "./limiter";
+import { structureHermexAvailability } from "../hermex/task-profiles";
+import { structureUsageSnapshot } from "./limiter";
 import {
   buildStructureResult,
-  estimateStructureCostForPages,
-  structureJobSpendUsd,
+  estimateStructureRequests,
   cancelStructureJob,
   createStructureJob,
   isStructureJobActive,
@@ -45,6 +44,7 @@ import {
   listStructureChunkStatuses,
   listStructureJobs,
   listStructureJobsForOcr,
+  saveOverridesIfCurrent,
   updateStructureJob,
 } from "./store";
 
@@ -164,13 +164,16 @@ function parseOverrides(input: unknown): StructureOverride[] | { error: string }
 // ─────────────────────────────────────────────────────────────────────── config
 
 router.get("/config", async (_req, res) => {
-  // Force a fresh read: this is what the wizard shows next to the estimate, and a stale
-  // "remaining budget" is worse than a slightly slower config call.
-  const spend = await structureSpend(true).catch(() => ({ dayUsd: 0, monthUsd: 0 }));
+  const runtime = structureHermexAvailability();
   res.json({
-    configured: isStructureConfigured(),
+    configured: runtime.ok,
     model: structureConfig.model,
-    effort: structureConfig.effort,
+    runtime: {
+      name: "Hermex → Gemini web (dedicated account, separate from translation)",
+      problems: runtime.problems,
+      warnings: runtime.warnings,
+      setupComplete: runtime.setupComplete,
+    },
     limits: {
       maxDepth: STRUCTURE_MAX_DEPTH,
       maxPages: structureConfig.maxPages,
@@ -178,26 +181,21 @@ router.get("/config", async (_req, res) => {
       maxInstructionChars: structureConfig.maxInstructionChars,
       confidenceThreshold: structureConfig.confidenceThreshold,
       maxRequestsPerJob: structureConfig.maxRequestsPerJob,
-      maxSpendPerJobUsd: structureConfig.maxSpendPerJobUsd,
-      maxSpendPerDayUsd: structureConfig.maxSpendPerDayUsd,
-      maxSpendPerMonthUsd: structureConfig.maxSpendPerMonthUsd,
-    },
-    budget: {
-      spentTodayUsd: spend.dayUsd,
-      spentThisMonthUsd: spend.monthUsd,
-      remainingTodayUsd: Math.max(0, structureConfig.maxSpendPerDayUsd - spend.dayUsd),
-      remainingThisMonthUsd: Math.max(0, structureConfig.maxSpendPerMonthUsd - spend.monthUsd),
+      requestsPerDay: structureConfig.requestsPerDay,
     },
     usage: structureUsageSnapshot(),
   });
 });
 
+/** Filesystem-only readiness of the structure runtime — never opens a browser. */
+router.get("/health", (_req, res) => {
+  const runtime = structureHermexAvailability();
+  res.status(runtime.ok ? 200 : 503).json(runtime);
+});
+
 /**
- * What analysing this OCR document would cost, before anything is started.
- *
- * The wizard shows this on the step before the Analyse button, with the remaining budget
- * beside it, so the decision to spend is made with the number in view rather than
- * discovered on an invoice.
+ * How many requests analysing this OCR document takes, before anything is started,
+ * against the dedicated account's remaining daily allowance.
  */
 router.get("/estimate/:ocrJobId", async (req, res) => {
   const ocrJob = await getOcrJob(req.params.ocrJobId);
@@ -211,8 +209,6 @@ router.get("/estimate/:ocrJobId", async (req, res) => {
     return fail(res, 409, "This document has no transcribed pages yet.");
   }
 
-  // The estimate is for the pages that would actually be sent, so a window is priced as
-  // that window rather than as the book it came from.
   const selection = selectPageWindow(transcribed, requested);
   if (selection.pages.length === 0) {
     return fail(
@@ -222,57 +218,36 @@ router.get("/estimate/:ocrJobId", async (req, res) => {
     );
   }
   const pages = selection.pages;
-
-  const estimate = estimateStructureCostForPages(pages);
-  const spend = await structureSpend(true).catch(() => ({ dayUsd: 0, monthUsd: 0 }));
-  const remainingToday = Math.max(0, structureConfig.maxSpendPerDayUsd - spend.dayUsd);
-  const remainingMonth = Math.max(0, structureConfig.maxSpendPerMonthUsd - spend.monthUsd);
+  const estimate = estimateStructureRequests(pages);
+  const usage = structureUsageSnapshot();
+  const remainingToday = Math.max(0, structureConfig.requestsPerDay - usage.today);
 
   const blockers: string[] = [];
   if (pages.length > structureConfig.maxPages) {
-    blockers.push(
-      `${pages.length} pages selected, over the per-analysis limit of ${structureConfig.maxPages}. Choose a narrower page range.`,
-    );
+    blockers.push(`${pages.length} pages selected, over the per-analysis limit of ${structureConfig.maxPages}. Choose a narrower page range.`);
   }
   if (estimate.requests > structureConfig.maxRequestsPerJob) {
-    blockers.push(
-      `${estimate.requests} requests needed, over the per-document cap of ${structureConfig.maxRequestsPerJob}.`,
-    );
+    blockers.push(`${estimate.requests} requests needed, over the per-document cap of ${structureConfig.maxRequestsPerJob}.`);
   }
-  if (structureConfig.maxSpendPerJobUsd > 0 && estimate.costUsd > structureConfig.maxSpendPerJobUsd) {
-    blockers.push(
-      `about ${formatUsd(estimate.costUsd)}, over the per-document cap of ${formatUsd(structureConfig.maxSpendPerJobUsd)}.`,
-    );
-  }
-  if (structureConfig.maxSpendPerDayUsd > 0 && estimate.costUsd > remainingToday) {
-    blockers.push(
-      `about ${formatUsd(estimate.costUsd)}, over the ${formatUsd(remainingToday)} left in today's budget.`,
-    );
-  }
-  if (structureConfig.maxSpendPerMonthUsd > 0 && estimate.costUsd > remainingMonth) {
-    blockers.push(
-      `about ${formatUsd(estimate.costUsd)}, over the ${formatUsd(remainingMonth)} left this month.`,
+  const warnings: string[] = [];
+  if (estimate.requests > remainingToday) {
+    warnings.push(
+      `${estimate.requests} requests needed and ${remainingToday} remain today; the rest will be skipped and can be resumed after 00:00 UTC with Retry failed ranges.`,
     );
   }
 
   res.json({
     pages: pages.length,
-    /** The window applied, clamped to the pages that exist; null = the whole document. */
     window: selection.window,
     availableFrom: selection.availableFrom,
     availableTo: selection.availableTo,
     availablePages: selection.availableCount,
     estimate,
     model: structureConfig.model,
-    budget: {
-      spentTodayUsd: spend.dayUsd,
-      spentThisMonthUsd: spend.monthUsd,
-      remainingTodayUsd: remainingToday,
-      remainingThisMonthUsd: remainingMonth,
-      maxSpendPerJobUsd: structureConfig.maxSpendPerJobUsd,
-    },
-    withinBudget: blockers.length === 0,
+    remainingRequestsToday: remainingToday,
+    withinLimits: blockers.length === 0,
     blockers,
+    warnings,
   });
 });
 
@@ -292,12 +267,9 @@ router.get("/jobs", async (_req, res) => {
 });
 
 router.post("/jobs", async (req: any, res) => {
-  if (!isStructureConfigured()) {
-    return fail(
-      res,
-      503,
-      "Claude is not configured on this server (ANTHROPIC_API_KEY is missing). Set it and restart.",
-    );
+  const runtime = structureHermexAvailability();
+  if (!runtime.ok) {
+    return fail(res, 503, `OCR → Grantha is not ready on this server: ${runtime.problems.join(" ")}`);
   }
   const ocrJobId = String(req.body?.ocrJobId ?? "");
   if (!ocrJobId) return fail(res, 400, "Which OCR document? `ocrJobId` is required.");
@@ -314,20 +286,32 @@ router.post("/jobs", async (req: any, res) => {
   const window = parsePageWindow(req.body?.pageFrom, req.body?.pageTo);
   if ("error" in window) return fail(res, 400, window.error);
 
+  // Idempotency: the same request for the same document while an identical analysis is
+  // still queued or running returns that analysis instead of starting a second one.
+  const instructions = cleanInstructions(req.body?.instructions);
+  const inFlight = (await listStructureJobsForOcr(ocrJob.id)).find(
+    (j) =>
+      (j.status === "queued" || j.status === "running") &&
+      j.depth === parsed.config.depth &&
+      JSON.stringify(j.levelNames) === JSON.stringify(parsed.config.levelNames) &&
+      (j.instructions ?? null) === (instructions ?? null) &&
+      (j.pageFrom ?? null) === (window.from ?? null) &&
+      (j.pageTo ?? null) === (window.to ?? null),
+  );
+  if (inFlight) return res.status(200).json({ job: inFlight, reused: true });
+
   try {
     const job = await createStructureJob({
       ocrJob,
       userId: req.user?.id ?? null,
       config: parsed.config,
-      instructions: cleanInstructions(req.body?.instructions),
+      instructions,
       voiceUsed: Boolean(req.body?.voiceUsed),
       pageFrom: window.from,
       pageTo: window.to,
     });
-    res.status(201).json({ job });
+    res.status(201).json({ job, reused: false });
   } catch (err: any) {
-    // A budget refusal is a 429 with the gate named, so the UI can say whether waiting
-    // until tomorrow helps or an env var has to be raised.
     const status = err?.status || (err?.name === "StructureBudgetError" ? 429 : 500);
     res
       .status(status)
@@ -349,8 +333,6 @@ router.get("/jobs/:id", async (req, res) => {
     chunks,
     active: isStructureJobActive(job.id),
     live: liveStructureChunk(job.id),
-    spentUsd: structureJobSpendUsd(job),
-    maxSpendPerJobUsd: structureConfig.maxSpendPerJobUsd,
     usage: structureUsageSnapshot(),
     serverNow: Date.now(),
   });
@@ -401,8 +383,18 @@ router.put("/jobs/:id/overrides", async (req, res) => {
   const parsed = parseOverrides(req.body?.overrides);
   if ("error" in parsed) return fail(res, 400, parsed.error);
 
-  // Any edit re-opens the review: a structure that changed has not been approved.
-  await updateStructureJob(job.id, { overrides: parsed, reviewedAt: null });
+  // Optimistic concurrency. The review only ever APPENDS edits and sends the whole list,
+  // so the stored list must be a prefix of what arrives. If it is not, someone else saved
+  // edits this page has not seen — replacing the list would silently erase them. The
+  // check and the write share one row lock, so two simultaneous saves cannot both pass.
+  const outcome = await saveOverridesIfCurrent(job.id, parsed);
+  if (outcome === "conflict") {
+    return fail(
+      res,
+      409,
+      "Someone else changed this review since you opened it. Reload to see their edits, then make yours again.",
+    );
+  }
   const updated = await getStructureJob(job.id);
   const result = await buildStructureResult(updated!);
   res.json({
@@ -440,23 +432,22 @@ router.post("/jobs/:id/retry", async (req, res) => {
   if (!job) return fail(res, 404, "Analysis not found.");
   if (isStructureJobActive(job.id)) return fail(res, 409, "This analysis is still running.");
   const requeued = await retryStructureJob(job.id);
+  if (requeued == null) return fail(res, 409, "This analysis is already queued or running.");
   res.json({ requeued });
 });
 
 router.post("/jobs/:id/cancel", async (req, res) => {
   const job = await getStructureJob(req.params.id);
   if (!job) return fail(res, 404, "Analysis not found.");
-  const wasActive = cancelStructureJob(job.id);
-  if (!wasActive && job.status === "queued") {
-    await updateStructureJob(job.id, { status: "cancelled", finishedAt: new Date() });
-  }
-  res.json({ cancelled: true, wasActive });
+  const wasActive = isStructureJobActive(job.id);
+  const cancelled = await cancelStructureJob(job.id);
+  res.json({ cancelled, wasActive });
 });
 
 router.delete("/jobs/:id", async (req, res) => {
   const job = await getStructureJob(req.params.id);
   if (!job) return fail(res, 404, "Analysis not found.");
-  cancelStructureJob(job.id);
+  await cancelStructureJob(job.id);
   await deleteStructureJob(job.id);
   pump();
   res.json({ deleted: true });

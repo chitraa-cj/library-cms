@@ -588,9 +588,10 @@ export type CreateAcharya = z.infer<typeof createAcharyaSchema>;
 
 // ─── OCR documents (admin-only Gemini OCR) ───────────────────────────────────
 // A job owns one uploaded file; the file is split into fixed page-range chunks
-// and each chunk is one Gemini request. Chunk rows are the unit of work, of
-// retry and of accounting, so a failed page range never re-runs the pages that
-// already succeeded.
+// (one page each by default) transcribed by the local engine — the PDF's own
+// text layer where it is usable, Tesseract otherwise. Chunk rows are the unit of
+// work, of retry and of accounting, so a failed page range never re-runs the
+// pages that already succeeded.
 
 export const ocrJobStatuses = ["queued", "running", "done", "partial", "failed", "cancelled"] as const;
 export type OcrJobStatus = (typeof ocrJobStatuses)[number];
@@ -598,9 +599,13 @@ export type OcrJobStatus = (typeof ocrJobStatuses)[number];
 export const ocrChunkStatuses = ["queued", "running", "done", "failed", "skipped"] as const;
 export type OcrChunkStatus = (typeof ocrChunkStatuses)[number];
 
-/** Transcription profiles exposed in the UI — mapped to a Gemini model server-side. */
+/** Transcription profiles exposed in the UI — the render resolution for scanned pages. */
 export const ocrQualities = ["fast", "accurate"] as const;
 export type OcrQuality = (typeof ocrQualities)[number];
+
+/** "auto": use a PDF's own text layer where it is usable; "ocr": always render and recognise. */
+export const ocrTextModes = ["auto", "ocr"] as const;
+export type OcrTextMode = (typeof ocrTextModes)[number];
 
 export const ocrJobs = pgTable("cms_ocr_jobs", {
   id: varchar("id").primaryKey(),
@@ -611,10 +616,12 @@ export const ocrJobs = pgTable("cms_ocr_jobs", {
   /** sha256 of the upload — lets an identical re-upload be recognised. */
   fileHash: text("file_hash"),
   pageCount: integer("page_count").notNull().default(1),
-  /** Pages per Gemini request. */
+  /** Pages per chunk row (the unit of retry). */
   chunkSize: integer("chunk_size").notNull().default(8),
   quality: text("quality").$type<OcrQuality>().notNull().default("fast"),
+  /** Engine that produced the text ("tesseract 5.5.1", or a Gemini model on jobs made before the local engine). */
   model: text("model").notNull(),
+  textMode: text("text_mode").$type<OcrTextMode>().notNull().default("auto"),
   /** Free-text hint sent with every chunk (script, layout, domain vocabulary). */
   instructions: text("instructions"),
   status: text("status").$type<OcrJobStatus>().notNull().default("queued"),
@@ -629,6 +636,10 @@ export const ocrJobs = pgTable("cms_ocr_jobs", {
   updatedAt: timestamp("updated_at").defaultNow().notNull(),
   startedAt: timestamp("started_at"),
   finishedAt: timestamp("finished_at"),
+  /** Fencing token of the run that owns this job (server/lib/job-lease.ts). */
+  runToken: varchar("run_token"),
+  /** Liveness of that run — always written with the database's now(). */
+  heartbeatAt: timestamp("heartbeat_at"),
 });
 
 export const ocrJobChunks = pgTable("cms_ocr_job_chunks", {
@@ -642,9 +653,14 @@ export const ocrJobChunks = pgTable("cms_ocr_job_chunks", {
   endPage: integer("end_page").notNull(),
   status: text("status").$type<OcrChunkStatus>().notNull().default("queued"),
   attempts: integer("attempts").notNull().default(0),
-  /** Model that actually produced this range (may be a fallback, see ocr/jobs.ts). */
+  /** Engine that actually produced this range. */
   model: text("model"),
+  /** Normalized text with <<<PAGE:n>>> markers — what is shown and analysed. */
   markdown: text("markdown"),
+  /** The engine's untouched output, same markers — kept for comparison (null on pre-local rows). */
+  rawText: text("raw_text"),
+  /** Per-page provenance, confidence and review flags (OcrPageMeta[]). */
+  pagesMeta: jsonb("pages_meta").$type<unknown[]>(),
   inputTokens: integer("input_tokens").notNull().default(0),
   outputTokens: integer("output_tokens").notNull().default(0),
   durationMs: integer("duration_ms").notNull().default(0),
@@ -749,15 +765,17 @@ export type InsertOcrJobChunk = typeof ocrJobChunks.$inferInsert;
 export interface OcrPage {
   page: number;
   markdown: string;
+  /** Provenance/confidence/flags; absent on pages transcribed before the local engine. */
+  meta?: import("./ocr-quality").OcrPageMeta;
 }
 
 export const ocrJobStatusTerminal: readonly OcrJobStatus[] = ["done", "partial", "failed", "cancelled"];
 
-// ---------- OCR → Grantha structure analysis (admin-only, Claude) ----------
+// ---------- OCR → Grantha structure analysis (admin-only, Hermex) ----------
 // One structure job per attempt at organising ONE finished OCR job into a grantha
 // hierarchy. It owns an ordered list of page-range chunks exactly like the OCR job it
 // hangs off (server/structure/jobs.ts), so a failed range costs only itself and a
-// restart resumes without re-asking Claude for ranges that already answered.
+// restart resumes without re-asking the model for ranges that already answered.
 //
 // The model's answer is the only thing stored per chunk (`items`). Everything derived
 // from it — sections, verses, the CSV — is recomputed from `items` + `overrides` by
@@ -833,6 +851,8 @@ export const structureJobs = pgTable("cms_structure_jobs", {
   updatedAt: timestamp("updated_at").defaultNow().notNull(),
   startedAt: timestamp("started_at"),
   finishedAt: timestamp("finished_at"),
+  runToken: varchar("run_token"),
+  heartbeatAt: timestamp("heartbeat_at"),
 });
 
 export const structureJobChunks = pgTable("cms_structure_job_chunks", {

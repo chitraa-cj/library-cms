@@ -1,9 +1,13 @@
 /**
- * OCR feature knobs. Every limit here exists to keep Gemini usage moderate and
- * predictable: a single job can only ever issue `ceil(pages / chunkSize)`
- * requests, the whole server can only ever have OCR_CONCURRENCY requests in
- * flight, and the sliding-window/day budgets bound what a bad day can cost.
+ * OCR feature knobs. Transcription is fully local: embedded PDF text via poppler
+ * (`pdftotext`), page images via poppler (`pdftoppm`), and recognition via
+ * Tesseract. No AI provider, API key or network call is involved, so the limits
+ * here are about CPU and memory on the box, not about anyone's quota.
+ *
+ * Every value is an env var with a safe default, so no limit is hard-coded at a
+ * call site and a box can be tuned without a code change.
  */
+import os from "node:os";
 
 function num(name: string, fallback: number, min: number, max: number): number {
   const raw = process.env[name];
@@ -12,66 +16,80 @@ function num(name: string, fallback: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, Math.floor(parsed)));
 }
 
+function str(name: string, fallback: string): string {
+  return process.env[name]?.trim() || fallback;
+}
+
+/** Leave one core for the web app itself; never more than four OCR lanes by default. */
+const defaultLanes = Math.max(1, Math.min(4, os.cpus().length - 1));
+
 export const ocrConfig = {
-  /** Gemini API key. Without it the feature reports itself as unconfigured. */
-  apiKey: (process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY || "").trim(),
-  apiBase: (process.env.GEMINI_API_BASE || "https://generativelanguage.googleapis.com/v1beta").replace(/\/+$/, ""),
+  /** Binaries. Bare names resolve on PATH; set absolute paths when they are elsewhere. */
+  binaries: {
+    tesseract: str("OCR_TESSERACT_BIN", "tesseract"),
+    pdftotext: str("OCR_PDFTOTEXT_BIN", "pdftotext"),
+    pdftoppm: str("OCR_PDFTOPPM_BIN", "pdftoppm"),
+  },
+  /**
+   * Tesseract's traineddata directory. Empty = Tesseract's own default (which is
+   * where the Ubuntu `tesseract-ocr-*` packages install). Set it when the language
+   * files live elsewhere, e.g. a Homebrew install split across two directories.
+   */
+  tessdataDir: process.env.OCR_TESSDATA_DIR?.trim() || "",
 
   /**
-   * Model per UI quality profile. Both default to the current Flash model:
-   * "fast" runs it with thinking switched off, "accurate" leaves the model's
-   * own thinking on. Point OCR_MODEL_ACCURATE at a Pro model if the key has
-   * Pro quota — Pro is not available on every plan.
+   * Tesseract language sets, chosen per page from the script Tesseract's own OSD
+   * detects. Measured on Devanagari and IAST fixtures (docs/OCR.md, "Accuracy"):
+   * `san` alone beats every combination on Devanagari pages, while `script/Latin`
+   * is the only installed model that keeps most IAST diacritics (`eng` drops them
+   * all while reporting high confidence). The fallback set is tried when the
+   * detected script's own set comes back below `acceptConfidence`.
    */
-  models: {
-    fast: process.env.OCR_MODEL_FAST?.trim() || "gemini-3.8-flash",
-    accurate: process.env.OCR_MODEL_ACCURATE?.trim() || "gemini-3.8-flash",
+  languages: {
+    devanagari: str("OCR_LANGS_DEVANAGARI", "san"),
+    latin: str("OCR_LANGS_LATIN", "script/Latin"),
+    fallback: str("OCR_LANGS_FALLBACK", "san+script/Latin"),
+  },
+
+  /** Render resolution for scanned pages, per UI quality profile. */
+  dpi: {
+    fast: num("OCR_DPI_FAST", 200, 100, 600),
+    accurate: num("OCR_DPI_ACCURATE", 300, 100, 600),
   } as const,
 
   /**
-   * Models to fall back to when the chosen model is out of daily quota OR is
-   * answering 503 "high demand". Gemini meters requests per project PER MODEL
-   * and spreads capacity per model, so a second model is a separate bucket for
-   * both. Each fallback costs at most one extra (immediately failing) request
-   * per page range; set OCR_FALLBACK_MODELS="" to disable.
-   *
-   * Keep only models the key can actually call: a retired one (e.g.
-   * gemini-2.5-flash-lite, 404 "no longer available to new users") wastes a
-   * request per range. `script/ocr-probe-models.mts` checks the list.
+   * Confidence thresholds (Tesseract word confidence, 0–100, weighted by word
+   * length). Calibrated on synthetic fixtures only: a clean Devanagari page with
+   * ~2% character error averaged ~68, the same page read with the wrong model ~17.
+   * Re-calibrate on real scans before trusting them as more than review hints.
    */
-  fallbackModels: (process.env.OCR_FALLBACK_MODELS ?? "gemini-3.5-flash,gemini-3.1-flash-lite")
-    .split(",")
-    .map((m) => m.trim())
-    .filter(Boolean),
+  acceptConfidence: num("OCR_ACCEPT_CONFIDENCE", 60, 0, 100),
+  lowPageConfidence: num("OCR_LOW_PAGE_CONFIDENCE", 55, 0, 100),
+  lowWordConfidence: num("OCR_LOW_WORD_CONFIDENCE", 30, 0, 100),
 
-  /** Pages per request. Small chunks = more parallelism; large = fewer requests. */
-  defaultChunkSize: num("OCR_CHUNK_SIZE", 8, 1, 30),
-  maxChunkSize: num("OCR_MAX_CHUNK_SIZE", 30, 1, 50),
+  /** Pages per chunk row. 1 = every page is its own unit of work, retry and resume. */
+  defaultChunkSize: num("OCR_CHUNK_SIZE", 1, 1, 30),
+  maxChunkSize: num("OCR_MAX_CHUNK_SIZE", 10, 1, 50),
 
-  /** Requests in flight across the whole process (all jobs, all users). */
-  concurrency: num("OCR_CONCURRENCY", 4, 1, 12),
+  /** Page ranges processed at once across the whole process (each is one Tesseract run at a time). */
+  concurrency: num("OCR_CONCURRENCY", defaultLanes, 1, 16),
   /** Jobs actually being worked on at once; the rest wait in `queued`. */
   maxActiveJobs: num("OCR_MAX_ACTIVE_JOBS", 2, 1, 6),
-
-  /**
-   * Sliding-window request cap and hard daily cap (moderate by default).
-   * Keep the per-minute value BELOW the API key's own per-minute quota — the
-   * free tier allows 20/min for flash models and answers 429 the moment a
-   * retry pushes past it. 12 leaves room for retries, which count too.
-   */
-  requestsPerMinute: num("OCR_REQUESTS_PER_MINUTE", 12, 1, 120),
-  requestsPerDay: num("OCR_REQUESTS_PER_DAY", 1500, 10, 50_000),
+  /** `nice` level for OCR child processes, so a long book never starves the web app or translation. */
+  niceLevel: num("OCR_NICE", 10, 0, 19),
 
   /** Upload guards. */
   maxUploadBytes: num("OCR_MAX_UPLOAD_MB", 120, 1, 512) * 1024 * 1024,
   maxPages: num("OCR_MAX_PAGES", 1500, 1, 5000),
-  /** A single inline request payload Gemini will accept comfortably. */
-  maxChunkBytes: num("OCR_MAX_CHUNK_MB", 14, 1, 18) * 1024 * 1024,
 
-  /** Per-chunk retry policy — bounded, never a loop. */
-  maxAttempts: num("OCR_MAX_ATTEMPTS", 4, 1, 6),
-  retryBaseDelayMs: num("OCR_RETRY_BASE_MS", 2000, 250, 30_000),
-  requestTimeoutMs: num("OCR_REQUEST_TIMEOUT_MS", 180_000, 10_000, 600_000),
+  /** Per-chunk retry policy for transient failures (a child killed by the OS, a timeout) — bounded. */
+  maxAttempts: num("OCR_MAX_ATTEMPTS", 3, 1, 6),
+  retryBaseDelayMs: num("OCR_RETRY_BASE_MS", 1000, 100, 30_000),
+  /** Ceiling for one external process (one page render, one recognition). */
+  processTimeoutMs: num("OCR_PROCESS_TIMEOUT_MS", 120_000, 5_000, 900_000),
+
+  /** A running job whose heartbeat is older than this is presumed dead and requeued. */
+  staleAfterMs: num("OCR_STALE_AFTER_MS", 120_000, 15_000, 3_600_000),
 
   /** Where uploads live on disk (job id per folder). */
   storageDir: process.env.OCR_STORAGE_DIR?.trim() || "",
@@ -80,15 +98,8 @@ export const ocrConfig = {
   retentionDays: num("OCR_RETENTION_DAYS", 30, 1, 365),
 } as const;
 
-export const OCR_SUPPORTED_MIME = new Set([
-  "application/pdf",
-  "image/png",
-  "image/jpeg",
-  "image/webp",
-  "image/heic",
-  "image/heif",
-]);
-
-export function isOcrConfigured(): boolean {
-  return ocrConfig.apiKey.length > 0;
-}
+/**
+ * Formats the local engine can read. HEIC/HEIF are not accepted: neither poppler
+ * nor Tesseract decodes them, and silently converting would add a dependency.
+ */
+export const OCR_SUPPORTED_MIME = new Set(["application/pdf", "image/png", "image/jpeg", "image/webp", "image/tiff"]);

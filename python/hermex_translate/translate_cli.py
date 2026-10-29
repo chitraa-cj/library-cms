@@ -642,12 +642,21 @@ def _cleanup_stale_chrome() -> None:
     # Chrome on this box was never reaped.
     profile_marker = (os.environ.get("HERMEX_CHROME_PROFILE_MARKER") or profile_dir).strip()
     if sys.platform in ("darwin", "linux"):
-        patterns = [
-            "chromedriver",
-            "undetected_chromedriver",
-            "chrome-headless",
-            "Google Chrome --headless",
-        ]
+        # HERMEX_CLEANUP_SCOPE=profile limits the sweep to processes naming OUR profile.
+        # Set by every workflow that runs its own browser beside translation's (the
+        # OCR → Grantha prompt session): the bare "chromedriver" patterns would kill
+        # translation's live driver. Unset (translation itself), behaviour is unchanged.
+        scoped = (os.environ.get("HERMEX_CLEANUP_SCOPE") or "").strip().lower() == "profile"
+        patterns = (
+            []
+            if scoped
+            else [
+                "chromedriver",
+                "undetected_chromedriver",
+                "chrome-headless",
+                "Google Chrome --headless",
+            ]
+        )
         if profile_marker:
             # Matches `--user-data-dir=<profile>` and `<profile>/chrome_profile`.
             patterns.append(profile_marker)

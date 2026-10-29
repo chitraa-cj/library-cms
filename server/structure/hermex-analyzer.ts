@@ -45,7 +45,7 @@ export interface HermexAnalyzerOptions {
   /** Log prefix — the job id. */
   label: string;
   /** Tests inject a fake session factory; production opens the real browser. */
-  openSession?: () => Promise<Pick<HermexPromptSession, "ask" | "close" | "alive">>;
+  openSession?: (signal?: AbortSignal) => Promise<Pick<HermexPromptSession, "ask" | "close" | "alive">>;
   /** Called before every request (the per-minute/day gate). */
   beforeRequest?: (signal?: AbortSignal) => Promise<void>;
 }
@@ -55,16 +55,21 @@ export function createHermexStructureAnalyzer(opts: HermexAnalyzerOptions): Stru
 
   const open =
     opts.openSession ??
-    (async () => {
+    (async (signal?: AbortSignal) => {
       const profile = structureProfile();
       if (!profile.ok) throw new HermexError("unavailable", profile.problems.join(" "));
-      return HermexPromptSession.open({ profile: profile.profile, launchTimeoutMs: structureConfig.launchTimeoutMs, label: opts.label });
+      return HermexPromptSession.open({
+        profile: profile.profile,
+        launchTimeoutMs: structureConfig.launchTimeoutMs,
+        label: opts.label,
+        signal,
+      });
     });
 
-  async function liveSession() {
+  async function liveSession(signal?: AbortSignal) {
     if (session && session.alive) return session;
     if (session) await session.close().catch(() => undefined);
-    session = await open();
+    session = await open(signal);
     return session;
   }
 
@@ -97,7 +102,7 @@ export function createHermexStructureAnalyzer(opts: HermexAnalyzerOptions): Stru
         let delayMs = 0;
         try {
           await opts.beforeRequest?.(req.signal);
-          const s = await liveSession();
+          const s = await liveSession(req.signal);
           const reply = await s.ask(prompt, { timeoutMs: structureConfig.requestTimeoutMs, signal: req.signal });
           const resolved = resolveLineAnswer(reply, {
             chunkIndex: req.chunkIndex,

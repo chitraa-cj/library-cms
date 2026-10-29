@@ -3,9 +3,10 @@
  *
  * Shape of the work: a job owns an ordered list of page-range chunks (one page
  * each by default). A bounded pool of workers drains that list; each worker takes
- * a process-wide CPU lane, transcribes its pages with the LOCAL engine (PDF text
- * layer or Tesseract — no AI provider, no network) and writes the result straight
- * back to its chunk row:
+ * the process-wide lane, transcribes its pages with Gemini through Hermex (on the
+ * dedicated document profile — one browser session per job, one lane; there is no
+ * other engine and no fallback) and writes the result straight back to its chunk
+ * row only after the answer passed validation:
  *
  *   queue ──claim (SKIP LOCKED)──► runJob ──(pool)──► chunk ──(acquireOcrSlot)──►
  *        transcribeRange ──► fenced chunk write ──► finalize (fenced release)
@@ -32,7 +33,7 @@ import {
 import { ocrEngineAvailability } from "./availability";
 import { ocrConfig } from "./config";
 import { acquireOcrSlot } from "./limiter";
-import { localEngine, localEngineSettings } from "./local-engine";
+import { createHermexOcrEngine, type HermexOcrEngine, type OcrSession } from "./hermex-engine";
 import { splitChunkPages } from "./pages";
 import { readPdfPageCount, planChunks } from "./pdf";
 import { clearChunkLive, setChunkLive } from "./progress";
@@ -52,9 +53,19 @@ import {
   saveSourceFile,
   writeChunkResult,
 } from "./store";
-import { OcrTranscribeError, transcribeRange, workDirFor } from "./transcribe";
+import { OcrTranscribeError, workDirFor, type OcrRangeProgress } from "./transcribe";
 import { existsSync } from "node:fs";
+import { mkdir, rm } from "node:fs/promises";
 import path from "node:path";
+
+/**
+ * Test seam: replaces the browser session the engine opens (the engine, its prompt,
+ * its validation and the persistence around it stay real). Production never sets it.
+ */
+let sessionFactory: ((signal?: AbortSignal) => Promise<OcrSession>) | null = null;
+export function setOcrSessionFactory(factory: typeof sessionFactory): void {
+  sessionFactory = factory;
+}
 
 /** Runs owned by THIS process: cancellation handle + fencing token. */
 const activeJobs = new Map<string, { controller: AbortController; token: string }>();
@@ -70,8 +81,6 @@ export interface CreateOcrJobInput {
   mimeType: string;
   bytes: Buffer;
   chunkSize?: number;
-  quality?: OcrQuality;
-  textMode?: OcrTextMode;
   instructions?: string | null;
   /** Create a new job even when an identical upload already has one. */
   force?: boolean;
@@ -86,8 +95,10 @@ export interface CreateOcrJobResult {
 export async function createOcrJob(input: CreateOcrJobInput): Promise<CreateOcrJobResult> {
   await ensureOcrSchema();
 
-  const quality: OcrQuality = input.quality === "accurate" ? "accurate" : "fast";
-  const textMode: OcrTextMode = input.textMode === "ocr" ? "ocr" : "auto";
+  // Kept for the schema and old rows. Every page is transcribed by Gemini, so a job's
+  // text mode is always "ocr"; resolution is Gemini's business ("fast" = unused label).
+  const quality: OcrQuality = "fast";
+  const textMode: OcrTextMode = "ocr";
   const fileHash = hashBytes(input.bytes);
 
   // Idempotency: the same bytes with the same settings are the same work. A double
@@ -137,7 +148,7 @@ export async function createOcrJob(input: CreateOcrJobInput): Promise<CreateOcrJ
     chunkSize,
     quality,
     textMode,
-    model: availability.tesseractVersion ?? "local",
+    model: availability.engineLabel,
     instructions: input.instructions?.trim() || null,
     status: "queued",
     chunksTotal: ranges.length,
@@ -153,7 +164,7 @@ export async function createOcrJob(input: CreateOcrJobInput): Promise<CreateOcrJ
     })),
   );
 
-  log(`job ${id} created — ${input.fileName}, ${pageCount}p, ${ranges.length} range(s) of ${chunkSize}p, text=${textMode}, ${quality}`);
+  log(`job ${id} created — ${input.fileName}, ${pageCount}p, ${ranges.length} range(s) of ${chunkSize}p`);
   pump();
   return { job, reused: false };
 }
@@ -261,11 +272,10 @@ async function runJob(jobId: string, token: string, signal: AbortSignal): Promis
     const sourcePath = path.join(jobDir(job.id), sourceFileName(job.mimeType));
     if (!existsSync(sourcePath)) {
       // Nothing can be (re)transcribed without the original; say so instead of letting
-      // every page fail with a poppler exit code.
+      // every page fail on a missing file.
       fatal = "The uploaded file is no longer stored on the server (purged or removed). Upload it again.";
     }
-    const dpi = ocrConfig.dpi[job.quality === "accurate" ? "accurate" : "fast"];
-    const settings = localEngineSettings();
+    const engine = createHermexOcrEngine({ label: jobId, openSession: sessionFactory ?? undefined });
     let cursor = 0;
     // No workers at all when the job is already stopped; finalizeJob still records why.
     const workerCount = fatal ? 0 : Math.min(ocrConfig.concurrency, pending.length);
@@ -275,11 +285,16 @@ async function runJob(jobId: string, token: string, signal: AbortSignal): Promis
         const index = cursor++;
         if (index >= pending.length) return;
         const chunk = pending[index];
-        const outcome = await runChunk(job, token, chunk, { sourcePath, dpi, settings }, signal);
+        const outcome = await runChunk(job, token, chunk, { sourcePath, engine }, signal);
         if (outcome) fatal = outcome;
       }
     };
-    await Promise.all(Array.from({ length: workerCount }, () => worker()));
+    try {
+      await Promise.all(Array.from({ length: workerCount }, () => worker()));
+    } finally {
+      // The browser lives for the job, not the process: free the profile for the next job.
+      await engine.close();
+    }
   } finally {
     clearInterval(beat);
   }
@@ -295,6 +310,15 @@ async function runJob(jobId: string, token: string, signal: AbortSignal): Promis
   log(`job ${jobId} finished in ${((Date.now() - started) / 1000).toFixed(1)}s`);
 }
 
+async function withWorkDir<T>(dir: string, fn: () => Promise<T>): Promise<T> {
+  await mkdir(dir, { recursive: true });
+  try {
+    return await fn();
+  } finally {
+    await rm(dir, { recursive: true, force: true }).catch(() => undefined);
+  }
+}
+
 function sourceFileName(mimeType: string): string {
   const ext = mimeType === "application/pdf" ? "pdf" : mimeType.split("/")[1] || "bin";
   return `source.${ext}`;
@@ -305,7 +329,7 @@ async function runChunk(
   job: OcrJob,
   token: string,
   chunk: { chunkIndex: number; startPage: number; endPage: number },
-  ctx: { sourcePath: string; dpi: number; settings: ReturnType<typeof localEngineSettings> },
+  ctx: { sourcePath: string; engine: HermexOcrEngine },
   signal: AbortSignal,
 ): Promise<string | null> {
   const startedAt = Date.now();
@@ -317,31 +341,31 @@ async function runChunk(
     release = await acquireOcrSlot(signal);
     if (!(await markChunkRunning(job.id, chunk.chunkIndex, token))) return null; // lost the job
 
-    const result = await transcribeRange({
-      sourcePath: ctx.sourcePath,
-      mimeType: job.mimeType,
-      startPage: chunk.startPage,
-      endPage: chunk.endPage,
-      textMode: job.textMode === "ocr" ? "ocr" : "auto",
-      dpi: ctx.dpi,
-      workDir: workDirFor(jobDir(job.id), chunk.chunkIndex),
-      deps: localEngine,
-      settings: ctx.settings,
-      maxAttempts: ocrConfig.maxAttempts,
-      retryBaseDelayMs: ocrConfig.retryBaseDelayMs,
-      signal,
-      onProgress: (event) => {
-        if (event.kind === "page") {
-          setChunkLive(job.id, chunk.chunkIndex, { attempt: event.attempt, phase: "request", nextAttemptAt: null });
-        } else {
-          setChunkLive(job.id, chunk.chunkIndex, {
-            phase: "backoff",
-            nextAttemptAt: Date.now() + event.delayMs,
-            lastError: `page ${event.page}: ${event.error}`,
-          });
-        }
-      },
-    });
+    const onProgress = (event: OcrRangeProgress) => {
+      if (event.kind === "page") {
+        setChunkLive(job.id, chunk.chunkIndex, { attempt: event.attempt, phase: "request", nextAttemptAt: null });
+      } else {
+        setChunkLive(job.id, chunk.chunkIndex, {
+          phase: "backoff",
+          nextAttemptAt: Date.now() + event.delayMs,
+          lastError: `page ${event.page}: ${event.error}`,
+        });
+      }
+    };
+    const workDir = workDirFor(jobDir(job.id), chunk.chunkIndex);
+    const result = await withWorkDir(workDir, () =>
+      ctx.engine.transcribeRange({
+        sourcePath: ctx.sourcePath,
+        mimeType: job.mimeType,
+        startPage: chunk.startPage,
+        endPage: chunk.endPage,
+        workDir,
+        instructions: job.instructions,
+        maxAttempts: ocrConfig.maxAttempts,
+        signal,
+        onProgress,
+      }),
+    );
 
     // Validate before persisting: exactly the pages of this range, in order, once each.
     const expected = chunk.endPage - chunk.startPage + 1;
@@ -489,7 +513,7 @@ export async function reconcileOcrJobsOnBoot(): Promise<void> {
       sweepTimer.unref?.();
     }
     const availability = await ocrEngineAvailability();
-    if (!availability.ok) log(`local OCR engine not ready: ${availability.problems.join(" ")}`);
+    if (!availability.ok) log(`OCR (Hermex) not ready: ${availability.problems.join(" ")}`);
   } catch (err: any) {
     log(`boot reconcile skipped: ${err?.message || err}`);
   }

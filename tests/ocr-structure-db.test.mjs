@@ -14,10 +14,12 @@
  *   1. migrations: the new migration applies twice;
  *   2. ownership: concurrent claims, fenced writes from a stale run, stale-heartbeat
  *      recovery, release by a run that lost its job;
- *   3. OCR through the real router + the REAL local engine (skipped when Tesseract is
- *      not installed): text PDF uses no OCR; duplicate upload is reused; scanned PDF;
- *      persistence across reads; resume re-runs only the failed page; cancel; raw vs
- *      normalized downloads; bad uploads refused;
+ *   3. OCR through the real router, job runner, Hermex OCR engine (range files, prompt,
+ *      answer validation) and persistence, with a SCRIPTED browser session in place of
+ *      Chrome/Gemini: every page goes through the session; duplicate upload is reused;
+ *      malformed and truncated answers are never stored; a page that stays unusable fails
+ *      alone and Retry re-requests only it; persistence across reads; cancel; login
+ *      failure stops the job with pages queued; raw vs normalized; bad uploads refused;
  *   4. OCR → Grantha through the real router with a SCRIPTED analyzer in place of Hermex
  *      (no browser, no account): estimate, run, duplicate submission, review edits with
  *      optimistic concurrency, approval gate, CSV fidelity, a malformed range retried
@@ -25,7 +27,7 @@
  *   5. translation's tables are untouched throughout.
  *
  * The real Hermex → Gemini leg is NOT exercised here (that needs a logged-in dedicated
- * profile); see docs/OCR-TO-GRANTHA.md, "Verifying on a server".
+ * profile); see docs/OCR.md and docs/OCR-TO-GRANTHA.md, "Verifying on a server".
  */
 import fs from "node:fs";
 import os from "node:os";
@@ -50,6 +52,8 @@ const FIXTURES = path.join(ROOT, "tests", "fixtures", "ocr");
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "ocr-db-"));
 process.env.OCR_STORAGE_DIR = path.join(tmp, "store");
 process.env.OCR_STALE_AFTER_MS = "15000";
+process.env.OCR_MAX_ATTEMPTS = "2";
+process.env.OCR_HERMEX_RETRY_BASE_MS = "250";
 // One page per structure range, so one range can fail on its own.
 process.env.STRUCTURE_PAGES_PER_CHUNK = "1";
 // A structure profile that passes the filesystem readiness check; the scripted
@@ -69,6 +73,8 @@ const lease = await import("../server/lib/job-lease.ts");
 const ocrStore = await import("../server/ocr/store.ts");
 const ocrJobs = await import("../server/ocr/jobs.ts");
 const { ocrEngineAvailability } = await import("../server/ocr/availability.ts");
+const { HermexError } = await import("../server/hermex-translate.ts");
+const { PDFDocument } = await import("pdf-lib");
 const structureStore = await import("../server/structure/store.ts");
 const structureJobs = await import("../server/structure/jobs.ts");
 const { StructureAnalysisError } = await import("../server/structure/analyzer.ts");
@@ -174,18 +180,57 @@ console.log("\njob ownership");
 }
 
 // ── 3. OCR end to end ────────────────────────────────────────────────────────
-console.log("\nOCR through the router, real engine");
+console.log("\nOCR through the router, Hermex engine, scripted browser session");
+/**
+ * What "Gemini" sees on each page of the fixture (tests/fixtures/ocr/isha.html). The
+ * scripted session answers in the requested marker format, from the page numbers in the
+ * prompt, and records what it was sent; everything around it is production code.
+ */
+const PAGE_TEXT = {
+  1: "ईशावास्योपनिषत्\nॐ पूर्णमदः पूर्णमिदं पूर्णात्पूर्णमुदच्यते ।\nपूर्णस्य पूर्णमादाय पूर्णमेवावशिष्यते ॥\nईशा वास्यमिदꣳ सर्वं यत्किञ्च जगत्यां जगत् ।\nतेन त्यक्तेन भुञ्जीथा मा गृधः कस्यस्विद्धनम् ॥ १ ॥",
+  2: "कुर्वन्नेवेह कर्माणि जिजीविषेच्छतꣳ समाः ।\nएवं त्वयि नान्यथेतोऽस्ति न कर्म लिप्यते नरे ॥ २ ॥\nअसुर्या नाम ते लोका अन्धेन तमसाऽऽवृताः ।\nताꣳस्ते प्रेत्याभिगच्छन्ति ये के चात्महनो जनाः ॥ ३ ॥   ",
+  3: "īśā vāsyam idaṃ sarvaṃ yat kiñca jagatyāṃ jagat |\ntena tyaktena bhuñjīthā mā gṛdhaḥ kasya svid dhanam || 1 ||",
+};
+const ocrCalls = [];
+let ocrMode = "good";
+let sessionsOpened = 0;
+ocrJobs.setOcrSessionFactory(async () => {
+  sessionsOpened++;
+  if (ocrMode === "login") throw new HermexError("login", "The dedicated Gemini profile's login has expired.");
+  return {
+    alive: true,
+    async ask(prompt, opts) {
+      const m = /pages? (\d+)(?:–(\d+))?/.exec(prompt);
+      const start = Number(m[1]);
+      const end = Number(m[2] ?? m[1]);
+      const file = opts.attachments?.[0];
+      const filePages = file ? (await PDFDocument.load(fs.readFileSync(file))).getPageCount() : 0;
+      ocrCalls.push({ start, end, filePages });
+      if (ocrMode === "slow") await sleep(1_500);
+      if (opts.signal?.aborted) throw new Error("cancelled");
+      if (ocrMode === "page2-unusable" && start === 2) return "I'm sorry, I can't help with that.";
+      if (ocrMode === "page2-truncated-once" && start === 2 && !ocrCalls.some((c, i) => c.start === 2 && i < ocrCalls.length - 1)) {
+        return "```text\n=== PAGE 2 ===\nकुर्वन्नेवेह कर्माणि";
+      }
+      const body = [];
+      for (let p = start; p <= end; p++) body.push(`=== PAGE ${p} ===`, PAGE_TEXT[p]);
+      return "Plaintext\n" + body.join("\n") + "\n=== END ===\nUse code with caution.";
+    },
+    async close() {},
+  };
+});
+
 const engine = await ocrEngineAvailability(true);
 let textJobId = null;
-if (!engine.ok) {
-  skip("OCR end to end", engine.problems.join(" "));
-} else {
+check("the readiness check is Hermex's (document profile), and passes here", engine.ok && engine.engineLabel === "hermex/gemini-web", engine.problems.join(" "));
+{
   const health = await api("GET", "/health");
-  check("health reports the local engine ready", health.status === 200 && health.json.ok);
+  check("health reports Hermex ready", health.status === 200 && health.json.ok);
   const cfg = await api("GET", "/config");
-  check("config names the local engine, no provider model", cfg.json.configured && /tesseract/.test(cfg.json.engine.name) && !("models" in cfg.json));
+  check("config names Hermex, no provider model, no local engine", cfg.json.configured && cfg.json.engine.name === "hermex/gemini-web" && !("models" in cfg.json) && !("languages" in cfg.json.engine));
 
-  check("HEIC is refused (no local decoder)", (await api("POST", "/jobs?fileName=a.heic&mimeType=image/heic", Buffer.from("x"))).status === 415);
+  check("HEIC is refused", (await api("POST", "/jobs?fileName=a.heic&mimeType=image/heic", Buffer.from("x"))).status === 415);
+  check("TIFF is refused (Gemini's upload does not take it)", (await api("POST", "/jobs?fileName=a.tif&mimeType=image/tiff", Buffer.from("x"))).status === 415);
   check("an empty upload is refused", (await api("POST", "/jobs?fileName=a.pdf&mimeType=application/pdf", Buffer.alloc(0))).status === 400);
   const corrupt = await api("POST", "/jobs?fileName=bad.pdf&mimeType=application/pdf", Buffer.from("%PDF-1.4 garbage"));
   check("a corrupt PDF is refused with a clear 400", corrupt.status === 400 && /Could not read this PDF/.test(corrupt.json?.message ?? ""));
@@ -195,61 +240,91 @@ if (!engine.ok) {
     return ["done", "partial", "failed", "cancelled"].includes(r.json?.job?.status) ? r.json : null;
   });
 
-  // Text-layer PDF.
+  // A text PDF still goes through Gemini — there is no local text-layer path.
+  ocrCalls.length = 0;
+  sessionsOpened = 0;
   const created = await upload(path.join(FIXTURES, "isha-text.pdf"));
   check("upload creates a job", created.status === 201 && created.json.reused === false);
   textJobId = created.json.job.id;
   const done = await waitDone(textJobId);
-  check("the text PDF finishes", done?.job.status === "done", done?.job.status);
+  check("the PDF finishes", done?.job.status === "done", done?.job?.error ?? done?.job?.status);
+  check("every page went through the Hermex session, one request each", ocrCalls.map((c) => c.start).join() === "1,2,3", JSON.stringify(ocrCalls));
+  check("each request carried a file holding exactly its page", ocrCalls.every((c) => c.filePages === 1));
+  check("one browser session served the whole job", sessionsOpened === 1, String(sessionsOpened));
   const doc = (await api("GET", `/jobs/${textJobId}/document`)).json;
   check("three pages, in order", doc.pages.map((p) => p.page).join() === "1,2,3");
-  check("all of them from the PDF's own text layer (no OCR)", doc.pages.every((p) => p.meta?.source === "embedded"));
+  check("all transcribed by Hermex", doc.pages.every((p) => p.meta?.source === "ocr" && p.meta.engine === "hermex/gemini-web" && p.meta.confidence === null));
+  check("page text is the answer between the markers — no UI chrome", doc.pages[0].markdown === PAGE_TEXT[1] && !/Plaintext|caution/.test(doc.markdown));
   check("the original upload is stored unchanged", fs.readFileSync(path.join(process.env.OCR_STORAGE_DIR, textJobId, "source.pdf")).equals(fs.readFileSync(path.join(FIXTURES, "isha-text.pdf"))));
+  const raw = (await api("GET", `/jobs/${textJobId}/download?format=raw`)).text;
+  const txt = (await api("GET", `/jobs/${textJobId}/download?format=txt`)).text;
+  check("the raw download keeps the answer as received (trailing spaces included)", raw.includes("जनाः ॥ ३ ॥   "));
+  check("the normalized text differs only in whitespace (ꣳ, avagraha, IAST intact)", !txt.includes("॥ ३ ॥   ") && txt.includes("जिजीविषेच्छतꣳ") && txt.includes("तमसाऽऽवृताः") && txt.includes("gṛdhaḥ"));
+  const reread = (await api("GET", `/jobs/${textJobId}/document`)).json;
+  check("the transcription reads back identically (persisted, not in memory)", JSON.stringify(reread.pages) === JSON.stringify(doc.pages));
 
   const again = await upload(path.join(FIXTURES, "isha-text.pdf"));
   check("the same upload again returns the existing job (no duplicate work)", again.status === 200 && again.json.reused === true && again.json.job.id === textJobId);
   const count = rows(await pool.query("select count(*)::int as n from cms_ocr_jobs where file_name = 'isha-text.pdf'"))[0].n;
   check("…and no second job row exists", count === 1, String(count));
 
-  // Scanned PDF.
-  const scan = await upload(path.join(FIXTURES, "isha-scan.pdf"), { quality: "accurate" });
-  const scanId = scan.json.job.id;
-  const scanDone = await waitDone(scanId);
-  check("the scanned PDF finishes", scanDone?.job.status === "done", scanDone?.job?.error ?? scanDone?.job?.status);
-  const scanDoc = (await api("GET", `/jobs/${scanId}/document`)).json;
-  check("every scanned page went through OCR, in order", scanDoc.pages.map((p) => `${p.page}:${p.meta?.source}`).join() === "1:ocr,2:ocr,3:ocr");
-  check("pages carry confidence and review flags", scanDoc.pages.every((p) => typeof p.meta.confidence === "number" && Array.isArray(p.meta.flags)));
-  const raw = (await api("GET", `/jobs/${scanId}/download?format=raw`)).text;
-  const txt = (await api("GET", `/jobs/${scanId}/download?format=txt`)).text;
-  check("the raw download keeps Tesseract's own output (ZWNJ included)", /‌/.test(raw));
-  check("the normalized download drops only the word-final ZWNJ", !/्‌(\s|$)/.test(txt) && /॥/.test(txt));
-  const reread = (await api("GET", `/jobs/${scanId}/document`)).json;
-  check("the transcription reads back identically (persisted, not in memory)", JSON.stringify(reread.pages) === JSON.stringify(scanDoc.pages));
+  // A truncated answer is retried, never stored short.
+  ocrCalls.length = 0;
+  ocrMode = "page2-truncated-once";
+  const trunc = await upload(path.join(FIXTURES, "isha-scan.pdf"));
+  const scanId = trunc.json.job.id;
+  const truncDone = await waitDone(scanId);
+  ocrMode = "good";
+  check("a cut-off answer (no end marker) was asked again", ocrCalls.filter((c) => c.start === 2).length === 2, JSON.stringify(ocrCalls));
+  const truncDoc = (await api("GET", `/jobs/${scanId}/document`)).json;
+  check("…and only the complete answer was stored", truncDone?.job.status === "done" && truncDoc.pages[1].markdown === PAGE_TEXT[2].trimEnd());
+  const truncChunk = rows(await pool.query(`select attempts from cms_ocr_job_chunks where job_id = $1 and chunk_index = 1`, [scanId]))[0];
+  check("…with both requests counted on that page", truncChunk.attempts === 2, String(truncChunk.attempts));
 
-  // Resume: fail page 2 only, then Retry.
-  const before = rows(await pool.query(`select chunk_index, updated_at, attempts from cms_ocr_job_chunks where job_id = $1 order by chunk_index`, [scanId]));
-  await pool.query(`update cms_ocr_job_chunks set status = 'failed', markdown = null, error = 'simulated' where job_id = $1 and chunk_index = 1`, [scanId]);
-  await pool.query(`update cms_ocr_jobs set status = 'partial' where id = $1`, [scanId]);
-  const retry = await api("POST", `/jobs/${scanId}/retry`);
+  // A page that stays unusable fails alone; Retry re-requests only it.
+  ocrCalls.length = 0;
+  ocrMode = "page2-unusable";
+  const bad = await upload(path.join(FIXTURES, "isha-scan.pdf"), { force: "1" });
+  const badId = bad.json.job.id;
+  const badDone = await waitDone(badId);
+  check("a page whose answers stay unusable fails; the job is partial, not done", badDone?.job.status === "partial" && badDone.chunks[1].status === "failed", badDone?.job?.status);
+  check("…the refusal was never stored as page text", rows(await pool.query(`select markdown from cms_ocr_job_chunks where job_id = $1 and chunk_index = 1`, [badId]))[0].markdown == null);
+  check("…and the other pages were stored", badDone.chunks[0].status === "done" && badDone.chunks[2].status === "done");
+  const before = rows(await pool.query(`select chunk_index, updated_at from cms_ocr_job_chunks where job_id = $1 order by chunk_index`, [badId]));
+  ocrMode = "good";
+  ocrCalls.length = 0;
+  const retry = await api("POST", `/jobs/${badId}/retry`);
   check("Retry requeues only the failed page", retry.json?.requeued === 1, JSON.stringify(retry.json));
-  const resumed = await waitDone(scanId);
-  check("the job completes again", resumed?.job.status === "done");
-  const afterRows = rows(await pool.query(`select chunk_index, updated_at, attempts, status from cms_ocr_job_chunks where job_id = $1 order by chunk_index`, [scanId]));
-  check("pages that had succeeded were NOT redone",
+  const resumed = await waitDone(badId);
+  check("the job completes", resumed?.job.status === "done");
+  check("only page 2 was requested again", ocrCalls.map((c) => c.start).join() === "2", JSON.stringify(ocrCalls));
+  const afterRows = rows(await pool.query(`select chunk_index, updated_at from cms_ocr_job_chunks where job_id = $1 order by chunk_index`, [badId]));
+  check("pages that had succeeded were NOT rewritten",
     afterRows[0].updated_at.getTime() === before[0].updated_at.getTime() && afterRows[2].updated_at.getTime() === before[2].updated_at.getTime());
-  check("the failed page was", afterRows[1].status === "done");
-  const second = await api("POST", `/jobs/${scanId}/retry`);
-  check("Retry on a finished job queues nothing", second.json?.requeued === 0);
+  check("Retry on a finished job queues nothing", (await api("POST", `/jobs/${badId}/retry`)).json?.requeued === 0);
 
   // A retry must not race a queued/running job.
-  await pool.query(`update cms_ocr_jobs set status = 'queued' where id = $1`, [scanId]);
-  check("Retry refuses a job that is already queued", (await ocrStore.requeueJobForRetry(scanId)) === null);
-  await pool.query(`update cms_ocr_jobs set status = 'done' where id = $1`, [scanId]);
+  await pool.query(`update cms_ocr_jobs set status = 'queued' where id = $1`, [badId]);
+  check("Retry refuses a job that is already queued", (await ocrStore.requeueJobForRetry(badId)) === null);
+  await pool.query(`update cms_ocr_jobs set status = 'done' where id = $1`, [badId]);
 
-  // Cancel mid-run; finished pages are kept.
-  const big = await upload(path.join(FIXTURES, "isha-scan.pdf"), { force: "1", textMode: "ocr" });
+  // Login failure: the job stops with the reason, pages stay queued; Retry after login.
+  ocrMode = "login";
+  const locked = await upload(path.join(FIXTURES, "isha-scan.pdf"), { force: "1" });
+  const lockedDone = await waitDone(locked.json.job.id);
+  check("a login failure stops the job with an actionable reason", lockedDone?.job.status === "failed" && /login/.test(lockedDone.job.error ?? ""), lockedDone?.job?.error);
+  check("…leaving its pages queued, not failed", lockedDone.chunks.every((c) => c.status === "queued"), lockedDone.chunks.map((c) => c.status).join());
+  ocrMode = "good";
+  await api("POST", `/jobs/${locked.json.job.id}/retry`);
+  check("once logged in, Retry finishes it", (await waitDone(locked.json.job.id))?.job.status === "done");
+  await api("DELETE", `/jobs/${locked.json.job.id}`);
+
+  // Cancel mid-run; finished pages are kept, the stale run writes nothing.
+  ocrMode = "slow";
+  const big = await upload(path.join(FIXTURES, "isha-scan.pdf"), { force: "1" });
   const bigId = big.json.job.id;
   await until(async () => (await api("GET", `/jobs/${bigId}`)).json?.job.status === "running", { timeoutMs: 10_000, every: 20 });
+  await sleep(300);
   const cancel = await api("POST", `/jobs/${bigId}/cancel`);
   check("cancel answers", cancel.status === 200 && cancel.json.cancelled === true);
   await sleep(2_500);
@@ -257,6 +332,7 @@ if (!engine.ok) {
   const chunkStates = rows(await pool.query(`select status from cms_ocr_job_chunks where job_id = $1`, [bigId])).map((r) => r.status);
   check("the job is cancelled with its token void", cancelled.status === "cancelled" && cancelled.run_token === null);
   check("no page is left 'running'", !chunkStates.includes("running"), chunkStates.join());
+  ocrMode = "good";
   const resumeCancelled = await api("POST", `/jobs/${bigId}/retry`);
   check("a cancelled job resumes with only its unfinished pages", resumeCancelled.json.requeued === chunkStates.filter((s) => s !== "done").length);
   check("…and finishes", (await waitDone(bigId))?.job.status === "done");
@@ -264,9 +340,9 @@ if (!engine.ok) {
   check("delete removes rows and the stored upload", !fs.existsSync(path.join(process.env.OCR_STORAGE_DIR, bigId)));
 
   // A job whose stored upload has gone (purged) is never reused, and fails clearly.
-  fs.rmSync(path.join(process.env.OCR_STORAGE_DIR, scanId), { recursive: true, force: true });
-  const fresh = await upload(path.join(FIXTURES, "isha-scan.pdf"), { quality: "accurate" });
-  check("an upload whose earlier job lost its file starts a new job", fresh.status === 201 && fresh.json.job.id !== scanId);
+  for (const id of [scanId, badId]) fs.rmSync(path.join(process.env.OCR_STORAGE_DIR, id), { recursive: true, force: true });
+  const fresh = await upload(path.join(FIXTURES, "isha-scan.pdf"));
+  check("an upload whose earlier jobs lost their file starts a new job", fresh.status === 201 && ![scanId, badId].includes(fresh.json.job.id), `${fresh.status}`);
   await waitDone(fresh.json.job.id);
   await pool.query(`update cms_ocr_job_chunks set status = 'failed' where job_id = $1 and chunk_index = 0`, [scanId]);
   await pool.query(`update cms_ocr_jobs set status = 'partial' where id = $1`, [scanId]);
@@ -324,7 +400,7 @@ structureJobs.setStructureAnalyzerFactory(
 );
 
 if (!textJobId) {
-  skip("OCR → Grantha end to end", "needs the OCR leg above (local engine not installed)");
+  skip("OCR → Grantha end to end", "needs the OCR leg above");
 } else {
   const waitStructure = (id) => until(async () => {
     const r = await api("GET", `/structure/jobs/${id}`);
@@ -411,6 +487,7 @@ console.log("\ntranslation");
 }
 
 structureJobs.setStructureAnalyzerFactory(null);
+ocrJobs.setOcrSessionFactory(null);
 server.close();
 await pool.end();
 fs.rmSync(tmp, { recursive: true, force: true });

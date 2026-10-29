@@ -55,12 +55,9 @@ router.get("/config", async (_req, res) => {
   res.json({
     configured: engine.ok,
     engine: {
-      name: engine.tesseractVersion ?? "tesseract (not installed)",
-      languages: ocrConfig.languages,
-      installedLanguages: engine.installedLanguages,
+      name: engine.engineLabel,
       problems: engine.problems,
       warnings: engine.warnings,
-      dpi: ocrConfig.dpi,
     },
     limits: {
       maxUploadMb: Math.round(ocrConfig.maxUploadBytes / 1024 / 1024),
@@ -73,7 +70,7 @@ router.get("/config", async (_req, res) => {
   });
 });
 
-/** Readiness of the local engine only — never a request to any provider. */
+/** Readiness of Hermex on the document profile — filesystem checks only, never a prompt. */
 router.get("/health", async (req, res) => {
   const engine = await ocrEngineAvailability(req.query.force === "1");
   res.status(engine.ok ? 200 : 503).json(engine);
@@ -91,13 +88,17 @@ router.post(
   async (req: any, res) => {
     const engine = await ocrEngineAvailability();
     if (!engine.ok) {
-      return fail(res, 503, `The local OCR engine is not ready on this server: ${engine.problems.join(" ")}`);
+      return fail(res, 503, `OCR through Hermex is not ready on this server: ${engine.problems.join(" ")}`);
     }
     const mimeType = String(req.query.mimeType || req.get("content-type") || "")
       .split(";")[0]
       .trim();
     if (!OCR_SUPPORTED_MIME.has(mimeType)) {
-      return fail(res, 415, `Unsupported file type "${mimeType || "unknown"}". Upload a PDF, PNG, JPEG, WebP or TIFF.`);
+      return fail(
+        res,
+        415,
+        `Unsupported file type "${mimeType || "unknown"}". Upload a PDF, PNG, JPEG or WebP (convert TIFF/HEIC first — Gemini's upload does not take them).`,
+      );
     }
     const bytes: Buffer = Buffer.isBuffer(req.body) ? req.body : Buffer.alloc(0);
     if (bytes.byteLength === 0) return fail(res, 400, "Empty upload.");
@@ -113,8 +114,6 @@ router.post(
         mimeType,
         bytes,
         chunkSize: Number.isFinite(chunkSize) ? chunkSize : undefined,
-        quality: req.query.quality === "accurate" ? "accurate" : "fast",
-        textMode: req.query.textMode === "ocr" ? "ocr" : "auto",
         instructions: typeof req.query.instructions === "string" ? req.query.instructions.slice(0, 2000) : null,
         force: req.query.force === "1",
       });
@@ -139,10 +138,10 @@ router.get("/jobs/:id", async (req, res) => {
     now,
     concurrency: ocrConfig.concurrency,
     requestsPerMinute: 0,
-    // Local engine: ~1.6s/page measured at 300dpi on an M1 (docs/OCR.md); erring slow
-    // for smaller servers until this host has history of its own.
-    guessMsPerPage: { fast: 2_500, accurate: 4_000 },
-    rangeOverheadMs: 500,
+    // NOT measured: no real Gemini OCR request has run yet. A placeholder until this
+    // host's own finished ranges replace it (basis "measured"/"historical").
+    guessMsPerPage: { fast: 45_000, accurate: 45_000 },
+    rangeOverheadMs: 15_000,
     historicalMsPerPage: running ? await historicalMsPerPage(job.model) : null,
     quality: job.quality,
     startedAt: job.startedAt ? new Date(job.startedAt).getTime() : null,
@@ -176,14 +175,14 @@ router.get("/jobs/:id/download", async (req, res) => {
 
   if (req.query.format === "raw") {
     // The engine's untouched output beside nothing else — for comparing against the
-    // normalized text. Ranges from before the local engine have no raw copy.
+    // normalized text. Ranges from before the raw column existed have no raw copy.
     const rows = await listChunkRawTexts(job.id);
     const parts: string[] = [];
     for (const row of rows) {
       if (row.status !== "done") continue;
       const source = row.rawText ?? row.markdown ?? "";
-      for (const page of splitChunkPages(source, row.startPage, row.endPage)) {
-        parts.push(`--- Page ${page.page}${row.rawText == null ? " (no raw copy: transcribed before the local engine)" : ""} ---\n\n${page.markdown}`);
+      for (const page of splitChunkPages(source, row.startPage, row.endPage, { exact: row.rawText != null })) {
+        parts.push(`--- Page ${page.page}${row.rawText == null ? " (no raw copy: transcribed before raw copies were kept)" : ""} ---\n\n${page.markdown}`);
       }
     }
     res.setHeader("content-type", "text/plain; charset=utf-8");

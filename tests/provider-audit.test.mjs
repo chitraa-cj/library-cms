@@ -7,8 +7,12 @@
  *   - imports a provider SDK (@anthropic-ai/*, @google/genai, @google/generative-ai, openai),
  *   - names a provider API endpoint or a provider API-key variable,
  *   - makes a raw HTTP call (fetch / http.request / axios) — a hidden fallback would need one.
- * It also checks the Claude SDK is gone from package.json, and that translation's own
- * Gemini wiring (the thing that must keep working) is still where it was.
+ *   - names a local OCR engine or local model runtime in CODE (comments excluded):
+ *     Tesseract, poppler's pdftotext/pdftoppm, EasyOCR, PaddleOCR, Ollama, llama.cpp,
+ *   - spawns a process anywhere except the Hermex prompt session.
+ * It also checks the Claude SDK is gone from package.json, that OCR's engine IS the Hermex
+ * session (no engine switch, no fallback), and that translation's own Gemini wiring (the
+ * thing that must keep working) is still where it was.
  *
  * Run: npm run test:provider-audit
  */
@@ -39,6 +43,9 @@ const FORBIDDEN_TEXT = [
   /\bfetch\s*\(/,
   /\bhttps?\.request\s*\(/,
 ];
+
+const LOCAL_ENGINE = /tesseract|pdftotext|pdftoppm|easyocr|paddleocr|ollama|llama\.cpp|onnxruntime|@xenova|transformers\.js/i;
+const stripComments = (src) => src.replace(/\/\*[\s\S]*?\*\//g, "").replace(/(^|[^:"'`])\/\/.*$/gm, "$1");
 
 function resolveImport(fromFile, spec) {
   let base;
@@ -89,10 +96,37 @@ for (const [label, entry] of [
     for (const re of FORBIDDEN_TEXT) if (re.test(src)) hits.push(`${rel(file)} ~ ${re}`);
   }
   check("no provider endpoint, provider key or raw HTTP call in any reachable file", hits.length === 0, hits.join("; "));
+  const engines = files.filter((f) => LOCAL_ENGINE.test(stripComments(fs.readFileSync(f, "utf8")))).map(rel);
+  check("no local OCR engine or local model is named in any reachable code", engines.length === 0, engines.join(", "));
+  const localEngineImports = [...bare.keys()].filter((s) => LOCAL_ENGINE.test(s) || /^(tesseract|node-tesseract|pdf-poppler|pdfjs-dist|canvas|sharp)/.test(s));
+  check("no OCR/image-processing package is imported", localEngineImports.length === 0, localEngineImports.join(", "));
+  // hermex-translate.ts is reachable only for HermexError/scrubHermexText; it spawns
+  // translate_cli for translation, which these workflows must never call.
+  const spawners = files.filter((f) => /child_process/.test(fs.readFileSync(f, "utf8"))).map(rel);
+  check("the only processes reachable are Hermex's (prompt session, translation's adapter)",
+    spawners.every((f) => f === "server/hermex/prompt-session.ts" || f === "server/hermex-translate.ts"), spawners.join(", "));
+  const own = files.filter((f) => /server\/(ocr|structure)\//.test(rel(f)));
+  const callsTranslation = own.filter((f) => /runHermexTranslate|translate_cli\.py/.test(stripComments(fs.readFileSync(f, "utf8")))).map(rel);
+  check("it never runs translation's Hermex call (its own session only)", callsTranslation.length === 0, callsTranslation.join(", "));
   // Generated content reaches the CMS only through the grantha editor's own Save /
   // Publish (with its locks, backups and approval). The workflow itself cannot write it.
   const cmsWriters = files.map(rel).filter((f) => /^server\/(strapi|publish\/|grantha-)/.test(f));
   check("no CMS write path (Strapi client, publish queue) is reachable", cmsWriters.length === 0, cmsWriters.join(", "));
+}
+
+console.log("\nOCR's engine is Hermex, with no switch and no fallback");
+{
+  const jobs = fs.readFileSync(path.join(ROOT, "server/ocr/jobs.ts"), "utf8");
+  const engine = fs.readFileSync(path.join(ROOT, "server/ocr/hermex-engine.ts"), "utf8");
+  const cfg = fs.readFileSync(path.join(ROOT, "server/ocr/config.ts"), "utf8");
+  check("the job runner transcribes only through createHermexOcrEngine", /createHermexOcrEngine\(/.test(jobs) && !/import\s*\{[^}]*\btranscribeRange\b/.test(jobs));
+  check("the engine opens only a HermexPromptSession", /HermexPromptSession\.open\(/.test(engine));
+  check("there is no engine selector to switch away from Hermex", !/OCR_ENGINE/.test(cfg + jobs + engine));
+  for (const gone of ["server/ocr/local-engine.ts", "server/ocr/engine.ts", "server/lib/run-process.ts"]) {
+    check(`${gone} (local OCR) is gone`, !fs.existsSync(path.join(ROOT, gone)));
+  }
+  const docs = fs.readFileSync(path.join(ROOT, "docs/OCR.md"), "utf8");
+  check("the OCR docs do not ask for Tesseract or poppler packages", !/apt install[^\n]*(tesseract|poppler)/i.test(docs));
 }
 
 console.log("\nthe Python side of the structure session");

@@ -1,7 +1,8 @@
 /**
- * PDF page accounting (pdf-lib, pure JS) and range planning. Page text and page
- * images come from poppler (`local-engine.ts`), which reads pages straight from
- * the stored original — the upload is never sliced, copied or rewritten.
+ * PDF page accounting (pdf-lib, pure JS) and range planning. No text is read from
+ * the PDF here: every page is transcribed by Gemini through Hermex
+ * (`hermex-engine.ts`), which copies the range's pages out of the stored original —
+ * the upload itself is never modified.
  */
 import { PDFDocument } from "pdf-lib";
 

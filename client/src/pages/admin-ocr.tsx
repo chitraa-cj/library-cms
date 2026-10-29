@@ -1,8 +1,8 @@
 /**
  * OCR Docs (admin only).
  *
- * Upload a PDF or scan; the server transcribes it page by page with the LOCAL
- * engine (the PDF's own text layer where usable, Tesseract otherwise) and streams
+ * Upload a PDF or scan; the server transcribes it page by page with Gemini through
+ * Hermex (browser automation on a dedicated profile — no API, no local OCR) and streams
  * the merged result back here as pages land — so a 300-page book is readable from
  * the first minute. Uncertain pages carry review flags; nothing is AI-corrected.
  */
@@ -106,10 +106,8 @@ type OcrConfig = {
   configured: boolean;
   engine: {
     name: string;
-    languages: { devanagari: string; latin: string; fallback: string };
     problems: string[];
     warnings: string[];
-    dpi: { fast: number; accurate: number };
   };
   limits: {
     maxUploadMb: number;
@@ -127,7 +125,7 @@ type DocumentResult = {
   missingRanges: Array<{ startPage: number; endPage: number; error: string | null }>;
 };
 
-const ACCEPT = ".pdf,.png,.jpg,.jpeg,.webp,.tif,.tiff";
+const ACCEPT = ".pdf,.png,.jpg,.jpeg,.webp";
 
 function mimeFor(file: File): string {
   if (file.type) return file.type;
@@ -136,7 +134,6 @@ function mimeFor(file: File): string {
   if (ext === "png") return "image/png";
   if (ext === "jpg" || ext === "jpeg") return "image/jpeg";
   if (ext === "webp") return "image/webp";
-  if (ext === "tif" || ext === "tiff") return "image/tiff";
   return "application/octet-stream";
 }
 
@@ -197,15 +194,12 @@ function statusBadge(status: OcrJobStatus) {
 /** Upload with XHR so the editor sees byte progress on a 100MB scan. */
 function uploadDocument(
   file: File,
-  opts: { quality: string; textMode: string },
   onProgress: (pct: number) => void,
 ): Promise<{ job: OcrJob; reused?: boolean }> {
   return new Promise((resolve, reject) => {
     const params = new URLSearchParams({
       fileName: file.name,
       mimeType: mimeFor(file),
-      quality: opts.quality,
-      textMode: opts.textMode,
     });
 
     const xhr = new XMLHttpRequest();
@@ -235,8 +229,6 @@ export default function AdminOcrPage() {
   const { toast } = useToast();
 
   const [file, setFile] = useState<File | null>(null);
-  const [quality, setQuality] = useState("fast");
-  const [textMode, setTextMode] = useState("auto");
   const [uploadPct, setUploadPct] = useState<number | null>(null);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [search, setSearch] = useState("");
@@ -354,11 +346,7 @@ export default function AdminOcrPage() {
     mutationFn: async () => {
       if (!file) throw new Error("Choose a file first.");
       setUploadPct(0);
-      return uploadDocument(
-        file,
-        { quality, textMode },
-        setUploadPct,
-      );
+      return uploadDocument(file, setUploadPct);
     },
     onSuccess: (data) => {
       setUploadPct(null);
@@ -417,7 +405,7 @@ export default function AdminOcrPage() {
     return pages.reduce((sum, p) => sum + p.markdown.toLowerCase().split(needle).length - 1, 0);
   }, [pages, search]);
 
-  // Pages the engine flagged for a human look (low confidence, empty, repeated lines…).
+  // Pages flagged for a human look (empty, unreadable [?], repeated lines…).
   const flaggedPages = useMemo(() => pages.filter((p) => (p.meta?.flags?.length ?? 0) > 0), [pages]);
 
   // A one-second ticker so elapsed time, the ETA and retry countdowns move
@@ -510,10 +498,9 @@ export default function AdminOcrPage() {
           </h1>
         </div>
         <p className="max-w-3xl text-sm text-muted-foreground">
-          Transcribe PDFs and scans on this server — no external AI service. Pages with a usable
-          text layer are read directly; scanned pages go through local OCR (Tesseract). Pages appear
-          below as they finish, uncertain ones are flagged for review, and only failed pages are
-          ever re-run.
+          Transcribe PDFs and scans with Gemini through Hermex, on the CMS's own Gemini account
+          (not translation's), one page at a time. Pages appear below as they finish, short or
+          unreadable ones are flagged for review, and only failed pages are ever re-run.
         </p>
       </div>
 
@@ -522,7 +509,7 @@ export default function AdminOcrPage() {
           <CardContent className="flex items-start gap-3 pt-6 text-sm">
             <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-amber-600" />
             <span>
-              The local OCR engine is not ready on this server.{" "}
+              The OCR engine is not ready on this server.{" "}
               {configQuery.data.engine?.problems?.join(" ")}
             </span>
           </CardContent>
@@ -579,36 +566,6 @@ export default function AdminOcrPage() {
                 />
               </div>
 
-              <div className="grid grid-cols-2 gap-3">
-                <div className="space-y-1.5">
-                  <Label className="text-xs">Scan resolution</Label>
-                  <Select value={quality} onValueChange={setQuality}>
-                    <SelectTrigger data-testid="ocr-quality">
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="fast">Standard — {configQuery.data?.engine?.dpi.fast ?? 200} dpi</SelectItem>
-                      <SelectItem value="accurate">Fine print — {configQuery.data?.engine?.dpi.accurate ?? 300} dpi</SelectItem>
-                    </SelectContent>
-                  </Select>
-                </div>
-                <div className="space-y-1.5">
-                  <Label className="text-xs">PDF text layer</Label>
-                  <Select value={textMode} onValueChange={setTextMode}>
-                    <SelectTrigger data-testid="ocr-text-mode">
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="auto">Use it when readable</SelectItem>
-                      <SelectItem value="ocr">Always OCR</SelectItem>
-                    </SelectContent>
-                  </Select>
-                </div>
-              </div>
-              <p className="text-[11px] leading-relaxed text-muted-foreground">
-                Choose <strong>Always OCR</strong> when the PDF was made with an old Devanagari font
-                (Kruti Dev and similar): its text layer looks like text but is not Unicode Sanskrit.
-              </p>
 
               {uploadPct !== null && (
                 <div className="space-y-1">
@@ -636,7 +593,7 @@ export default function AdminOcrPage() {
 
               {usage && (
                 <p className="text-[11px] leading-relaxed text-muted-foreground">
-                  {configQuery.data?.engine?.name ?? "Local OCR"}: {usage.inFlight}/{usage.concurrency} lanes busy
+                  {configQuery.data?.engine?.name ?? "Hermex"}: {usage.inFlight}/{usage.concurrency} lanes busy
                   {usage.waiting > 0 ? `, ${usage.waiting} waiting` : ""}.
                 </p>
               )}
@@ -703,7 +660,7 @@ export default function AdminOcrPage() {
                     {statusBadge(job.status)}
                     <span className="text-xs text-muted-foreground">
                       {job.pageCount} pages · {job.model}
-                      {job.textMode === "ocr" ? " · always OCR" : ""} · {formatBytes(job.fileSize)}
+                      {" · "}{formatBytes(job.fileSize)}
                     </span>
                     <div className="ml-auto flex items-center gap-2">
                       {/* The OCR → Grantha entry point. Available as soon as any page

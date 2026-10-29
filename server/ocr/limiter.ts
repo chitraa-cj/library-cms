@@ -1,8 +1,6 @@
 /**
- * Process-wide gate on concurrent OCR work. The engine is local, so the only
- * budget is CPU: at most `OCR_CONCURRENCY` page ranges are being rendered or
- * recognised at once, across every job and user. (The old per-minute and per-day
- * request windows existed to protect a Gemini API quota and are gone with it.)
+ * Process-wide gate on concurrent OCR work: one range at a time (`ocrConfig.concurrency`
+ * is 1 — one browser session on one profile can only answer one request).
  */
 import { Semaphore } from "../lib/semaphore";
 import { ocrConfig } from "./config";

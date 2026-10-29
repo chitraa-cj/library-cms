@@ -586,10 +586,10 @@ export const createAcharyaSchema = z.object({
 });
 export type CreateAcharya = z.infer<typeof createAcharyaSchema>;
 
-// ─── OCR documents (admin-only Gemini OCR) ───────────────────────────────────
+// ─── OCR documents (admin-only; Gemini through Hermex) ───────────────────────
 // A job owns one uploaded file; the file is split into fixed page-range chunks
-// (one page each by default) transcribed by the local engine — the PDF's own
-// text layer where it is usable, Tesseract otherwise. Chunk rows are the unit of
+// (one page each by default), each transcribed by Gemini's web UI through Hermex
+// (browser automation — no API, no local OCR engine). Chunk rows are the unit of
 // work, of retry and of accounting, so a failed page range never re-runs the
 // pages that already succeeded.
 
@@ -619,7 +619,7 @@ export const ocrJobs = pgTable("cms_ocr_jobs", {
   /** Pages per chunk row (the unit of retry). */
   chunkSize: integer("chunk_size").notNull().default(8),
   quality: text("quality").$type<OcrQuality>().notNull().default("fast"),
-  /** Engine that produced the text ("tesseract 5.5.1", or a Gemini model on jobs made before the local engine). */
+  /** Engine that produced the text ("hermex/gemini-web"; older rows may name a Gemini API model or tesseract). */
   model: text("model").notNull(),
   textMode: text("text_mode").$type<OcrTextMode>().notNull().default("auto"),
   /** Free-text hint sent with every chunk (script, layout, domain vocabulary). */
@@ -765,7 +765,7 @@ export type InsertOcrJobChunk = typeof ocrJobChunks.$inferInsert;
 export interface OcrPage {
   page: number;
   markdown: string;
-  /** Provenance/confidence/flags; absent on pages transcribed before the local engine. */
+  /** Provenance/confidence/flags; absent on pages transcribed before per-page metadata was kept. */
   meta?: import("./ocr-quality").OcrPageMeta;
 }
 

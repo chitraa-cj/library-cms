@@ -96,16 +96,22 @@ class _ProfileLock:
     def acquire(self): _w("lock " + self.path)
     def release(self): _w("unlock")
 def _lock_path(): return os.environ.get("HERMEX_LOCK_FILE", "")
+SIGNED_OUT = LOG + ".signed-out"
+class _Driver:
+    # Gemini's "Sign in" link exists once the test drops the marker file (login expired).
+    def find_elements(self, by, sel): return [1] if os.path.exists(SIGNED_OUT) and "Sign in" in sel else []
 class _G:
     is_logged_in = os.environ.get("STUB_LOGGED_IN", "1") == "1"
+    driver = _Driver()
 def _open_gemini_browser(headless):
     print("selenium noise on stdout")  # must never reach the protocol channel
     _w("open headless=%s profile=%s" % (headless, os.environ.get("HERMEX_CHROME_PROFILE")))
     return _G()
 def _start_fresh_gemini_chat(g): _w("fresh-chat")
-def _gemini_query_with_recovery(g, prompt, source_text, timeout):
+def _gemini_query_with_recovery(g, prompt, source_text, timeout, attachments=None):
     print("more noise")
     if prompt == "hang": time.sleep(30)
+    if attachments: _w("attach " + ",".join(attachments))
     class A: text = "reply:" + prompt
     return A()
 def _close_gemini_browser(g): _w("close")
@@ -173,6 +179,29 @@ p.send_signal(signal.SIGTERM)
 p.wait(timeout=10)
 log = log_path.read_text().splitlines()
 check("SIGTERM mid-request still closes the browser and releases the lock", log[-2:] == ["close", "unlock"], str(log))
+
+# Attachments (OCR) and login expiry mid-session.
+log_path.write_text("")
+page = tmp / "page.pdf"
+page.write_bytes(b"%PDF-1.4")
+p = start()
+readline(p)
+def ask(req: dict) -> dict:
+    p.stdin.write(json.dumps({"op": "ask", "timeoutSec": 5, **req}) + "\n")  # type: ignore[union-attr]
+    p.stdin.flush()  # type: ignore[union-attr]
+    return readline(p)
+ok = ask({"id": "a1", "prompt": "ocr", "attachments": [str(page)]})
+check("an attached file reaches the Gemini helper", ok.get("ok") is True and f"attach {page}" in log_path.read_text().splitlines(), str(ok))
+bad = ask({"id": "a2", "prompt": "ocr", "attachments": ["relative.pdf"]})
+check("a relative or missing attachment path is refused, nothing sent", bad.get("reason") == "malformed" and bad.get("id") == "a2")
+plain = ask({"id": "a3", "prompt": "no file"})
+check("a request without attachments calls the helper exactly as translation does", plain.get("ok") is True and log_path.read_text().count("attach ") == 1)
+Path(str(log_path) + ".signed-out").write_text("")
+expired = ask({"id": "a4", "prompt": "ocr"})
+p.wait(timeout=10)
+check("an expired login is reported as 'login' with the fix, never as an answer", expired.get("reason") == "login" and "expired" in expired.get("error", "") and expired.get("ok") is False)
+check("…and the session ends so Node stops the job", p.returncode == 4)
+check("…closing the browser and releasing the lock", log_path.read_text().splitlines()[-2:] == ["close", "unlock"])
 
 shutil.rmtree(tmp, ignore_errors=True)
 print(f"\n{PASS} passed, {len(FAILURES)} failed")

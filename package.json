@@ -58,7 +58,7 @@
     "test:ocr-structure": "node --import tsx tests/ocr-structure-contract.test.mjs",
     "test:ocr-structure-csv": "node --import tsx tests/ocr-structure-csv.test.mjs",
     "test:ocr-structure-lines": "node --import tsx tests/ocr-structure-lines.test.mjs",
-    "test:ocr-local-engine": "node --import tsx tests/ocr-local-engine.test.mjs",
+    "test:ocr-hermex": "node --import tsx tests/ocr-hermex-engine.test.mjs",
     "test:hermex-structure": "node --import tsx tests/hermex-structure.test.mjs",
     "test:hermex-isolation": "python3 python/hermex_translate/test_task_isolation.py",
     "test:provider-audit": "node --import tsx tests/provider-audit.test.mjs",

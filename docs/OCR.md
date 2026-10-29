@@ -1,136 +1,148 @@
 # OCR Docs (admin-only)
 
-Transcribe PDFs and scans **on this server**, with no external AI service. Admins see
-**Administration → OCR Docs** (`/admin/ocr`); editors do not see the nav entry and every
-API route returns 403 for them.
+Transcribe PDFs and scans with **Gemini's web UI through Hermex** — the same browser
+automation translation uses, on a **separate, dedicated** Gemini account and Chrome
+profile. There is no API key, no direct Gemini/Claude/OpenAI API call, no local OCR
+engine (no Tesseract, no poppler OCR) and no fallback: if Hermex cannot work, the job
+stops and says why.
 
-Until 2026-10 this feature sent page ranges to the Gemini API. It now runs a local
-engine; jobs transcribed the old way keep their text and still display (as Markdown).
+Admins see **Administration → OCR Docs** (`/admin/ocr`); editors do not see the nav entry
+and every API route returns 403 for them.
 
 ## How a page is read
 
 ```
 upload (stored once, never modified)            .ocr-store/<jobId>/source.pdf
-   └─ page count (pdf-lib) + one chunk row per page        cms_ocr_job_chunks
-        └─ pool of OCR lanes (OCR_CONCURRENCY), nice'd     server/ocr/jobs.ts
-             └─ per page                                    server/ocr/engine.ts
-                  ├─ PDF text layer usable?  → pdftotext    (no OCR at all)
-                  └─ otherwise: pdftoppm → Tesseract OSD (script) →
-                       Tesseract with that script's language set; below
-                       OCR_ACCEPT_CONFIDENCE, try the other sets, keep the best
-                  └─ normalize (engine artefacts only) → review flags
-             └─ fenced write: raw text + normalized text + per-page metadata
+   └─ page count (pdf-lib) + one chunk row per range      cms_ocr_job_chunks
+        └─ job claimed (lease, run token, heartbeat)       server/ocr/jobs.ts
+             └─ ONE browser session for the job            server/hermex/prompt-session.ts
+                  └─ per range (1 page by default)         server/ocr/hermex-engine.ts
+                       ├─ copy the range's pages into a small PDF (pdf-lib; the
+                       │  upload itself is untouched) — or the image as it is
+                       ├─ fresh Gemini chat: OCR prompt + that file attached
+                       ├─ answer validated (markers, every page once, end marker)
+                       └─ normalize whitespace only → review flags
+                  └─ fenced write: raw page text + normalized text + per-page metadata
 ```
+
+**The prompt** asks for a verbatim transcription: every character in its original script,
+original line breaks, verse numbers, dandas and punctuation; no transliteration,
+translation, correction, completion or summary; `[?]` where something cannot be read;
+no commentary. The answer must be one code block (Gemini's rendered Markdown would
+otherwise collapse line breaks), with `=== PAGE n ===` before each page and `=== END ===`
+after the last.
+
+**Validation before anything is stored** (`parseOcrReply`):
+
+| Answer | Outcome |
+| --- | --- |
+| every page of the range, once, in order, then the end marker | stored |
+| no end marker (cut off / truncated) | rejected, retried in a fresh chat |
+| a page missing, repeated, out of order or with the wrong number | rejected, retried |
+| no markers at all (a refusal, an explanation, a login page's text) | rejected, retried — never stored as page text |
+| still unusable after `OCR_MAX_ATTEMPTS` | that range **fails**; the others are unaffected |
+
+Only the text between the markers is kept, so anything Gemini's UI adds around the code
+block ("Use code with caution", a language label) is never taken as page text.
 
 What is kept, per page, and never mixed up:
 
 | Stage | Where | What |
 | --- | --- | --- |
 | Original | `.ocr-store/<job>/source.*` | the upload, byte for byte |
-| Raw | `cms_ocr_job_chunks.raw_text` | exactly what pdftotext / Tesseract produced (`Raw` download) |
-| Normalized | `cms_ocr_job_chunks.markdown` | raw minus meaningless artefacts — what the viewer shows and OCR → Grantha reads |
-| Metadata | `cms_ocr_job_chunks.pages_meta` | source (text layer / OCR), engine + language set, OSD script, confidence, low-confidence words, review flags |
+| Raw | `cms_ocr_job_chunks.raw_text` | each page's text exactly as Gemini returned it (`Raw` download) |
+| Normalized | `cms_ocr_job_chunks.markdown` | raw minus whitespace artefacts — what the viewer shows and OCR → Grantha reads |
+| Metadata | `cms_ocr_job_chunks.pages_meta` | engine (`hermex/gemini-web`), word count, `[?]` count, review flags |
 | Approved | the grantha | whatever an editor commits through the grantha editor |
 
-**Nothing rewrites source text.** There is no AI "correction" stage: uncertain pages are
-*flagged*, never fixed. Normalization (`shared/ocr-quality.ts`) only removes CR/LF
-differences, trailing spaces, form feeds, blank-line runs and Tesseract's ZERO WIDTH
-NON-JOINER after a word-final virama (`त्‌` → `त्`; a ZWNJ between consonants, which
-changes the conjunct, is kept). No Unicode normalization form is applied.
+**Nothing rewrites source text after transcription.** Normalization
+(`shared/ocr-quality.ts`) only unifies line endings, drops form feeds, trailing spaces and
+runs of 3+ blank lines. No character inside a line is changed, and no Unicode
+normalization form is applied.
 
 ### Review flags
 
-`empty`, `short`, `low_confidence` (page mean below `OCR_LOW_PAGE_CONFIDENCE`),
-`low_confidence_words` (words below `OCR_LOW_WORD_CONFIDENCE`, listed on the page),
-`invalid_unicode`, `repeated_lines` (a recognition loop), and
-`embedded_text_rejected` (the PDF had a text layer that looked unusable, so the page was
-OCR'd). The viewer shows them on each page and counts flagged pages in the header.
+`empty`, `short`, `illegible` (Gemini marked something `[?]`), `invalid_unicode`,
+`repeated_lines` (a transcription loop). Gemini reports no confidence score, so there is
+no confidence flag on Hermex pages. A flag is a content warning for a reviewer; it is not a
+processing failure and never fails a page. Pages stored by earlier engines keep their
+old flags (`low_confidence`, `embedded_text_rejected`) and still display.
 
-### When to choose "Always OCR"
+**Accuracy is not measured yet.** No real Gemini OCR request has run against a labelled
+page from this deployment (the dedicated account was not logged in when this was built).
+Measure on a labelled sample of the real corpus before trusting the output unreviewed;
+Gemini can misread, and a fluent misreading is not flagged.
 
-The text-layer check rejects layers that are nearly empty or full of unmapped/replacement
-characters. It **cannot** detect a layer that is plausible-looking but wrong — notably PDFs
-typeset with legacy 8-bit Devanagari fonts (Kruti Dev and similar), whose "text" is Latin
-gibberish, and PDFs whose font map silently drops a sign. Observed on the test fixture: the
-Chrome-produced PDF's text layer drops the Vedic **ꣳ** (U+A8F3), splits "कुर्वन्नेवेह" into
-"कु र्वन्नेवेह" and loses one danda — with no flag, because a text layer carries no
-confidence. When the editor knows the source, **Always OCR** is the safe choice.
+## Browser session, account and turn-taking
 
-## Accuracy (measured, not assumed)
-
-On the 3-page Īśāvāsya fixture in `tests/fixtures/ocr/` (rendered from Unicode text, then
-rasterised at 200 dpi and OCR'd at 300 dpi), character error rate against the exact source
-text:
-
-| Page | Script | Language set chosen | CER |
-| --- | --- | --- | --- |
-| 1 | Devanagari | `san` | 3.1% |
-| 2 | Devanagari | `san` | 4.3% |
-| 3 | IAST | `script/Latin` | 10.1% |
-
-What the language comparison on the same pages showed (and why the defaults are what they
-are): `san+hin+eng` contaminates Devanagari with Latin look-alikes (6.2% CER); `hin` is
-worse than `san` on Sanskrit (3.6–5.4%); `eng` strips every IAST diacritic **while
-reporting ~87 confidence**; `script/Latin` keeps most of them. Known misreads on the
-fixture: the verse number **१ read as ९** (not flagged — confidence does not catch every
-error), **ꣳ** read as "ाबि" (flagged at confidence 12), and IAST `ṃ ṛ ḥ ś` dropped.
-
-These are synthetic, clean pages. Real scans (skew, noise, old type) will do worse;
-re-measure on a labelled sample of the actual corpus before trusting any threshold.
-Confidence thresholds are review hints, calibrated only on this fixture.
-
-## Speed
-
-Measured on an Apple M1, one lane: text-layer PDF, 3 pages: ~60 ms (no OCR). Scanned PDF,
-3 pages at 300 dpi: ~4.8 s (OSD + one or two recognitions per page). Throughput scales
-with `OCR_CONCURRENCY` up to the core count; the EC2 box has not been measured — its
-first jobs set the ETA's "historical" basis.
-
-Each Tesseract process runs single-threaded (`OMP_THREAD_LIMIT=1`) at `nice 10`;
-parallelism comes from page lanes, so one book cannot starve the web app or the
-translation worker of CPU.
+- Profile: `HERMEX_STRUCTURE_CHROME_PROFILE` — shared with OCR → Grantha, refused if it is
+  translation's profile, inside it, hermex's default profile, or uses translation's lock
+  (`server/hermex/task-profiles.ts`). One-time login: `npm run hermex:setup-structure`.
+- One browser per job, reused for all its ranges (Chrome + Gemini warm-up is paid once),
+  closed when the job ends.
+- OCR and OCR → Grantha **take turns**: `HermexPromptSession.open` holds a per-profile gate,
+  so a job waits for the other workflow's session to close instead of failing on the
+  profile lock. One OCR job and one range run at a time — a single Gemini session never
+  has two requests in flight, and every answer carries its request's correlation id.
+- Login expiry: the Python session checks for Gemini's "Sign in" link before and after each
+  request. A signed-out session ends the job with "login has expired — log in again, then
+  Retry"; a login page is never accepted as an answer.
+- Cleanup is scoped to this profile (`HERMEX_CLEANUP_SCOPE=profile`): it cannot kill
+  translation's browser. Translation's own cleanup is unchanged.
+- Memory: translation's live Chrome measured ≈ 2.7 GB PSS on the EC2 box with ≈ 3.2 GB
+  available. Run large OCR jobs while no translation job is processing.
 
 ## Reliability
 
-- **Unit of work = one page** (`OCR_CHUNK_SIZE=1`): a failure costs only that page;
-  **Retry** re-runs only failed/unfinished pages (verified: finished pages' rows are not
+- **Unit of work = one range** (`OCR_CHUNK_SIZE`, default 1 page): a failure costs only
+  that range; **Retry** re-runs only failed/unfinished ranges (finished rows are not
   rewritten).
-- **Transient** failures (a process killed by the OS, a timeout) retry with exponential
-  backoff + jitter, `OCR_MAX_ATTEMPTS` per page. **Bad input** (corrupt page) fails the page
-  without retrying. A **missing engine** (binary or language data) stops the job and leaves
-  its pages queued — Retry after installing.
+- **Recoverable** browser errors (timeout, Gemini's canned "Something went wrong", a crashed
+  browser) retry with backoff in a fresh chat, up to `OCR_MAX_ATTEMPTS` requests per range.
+- **Setup** failures — not logged in / login expired, no display, profile locked by
+  another process, Hermex not installed — stop the job and leave its pages **queued**, not
+  failed. Fix the cause, press Retry.
+- **Completion**: a job is `done` only when every range was stored after passing
+  validation; otherwise `partial` / `failed` with the reason. A browser reply alone never
+  completes anything.
 - **Ownership** (`server/lib/job-lease.ts`): jobs are claimed with
   `FOR UPDATE SKIP LOCKED`; every write of a run is fenced on its run token; a heartbeat
   proves liveness. A run whose heartbeat is older than `OCR_STALE_AFTER_MS` is requeued by a
-  periodic sweep (so after a crash, recovery starts within ~2 minutes). A run that lost its
-  job — cancelled, requeued — writes nothing. Cancel works across processes.
-- **Idempotent upload**: the same bytes with the same settings return the existing job
-  (`reused: true`) as long as its stored upload still exists. `force=1` makes a new one.
-- A job whose stored upload has gone (purged) fails once with that reason instead of every
-  page failing on a poppler exit code.
+  periodic sweep. A cancelled or requeued run writes nothing. Cancel works across processes.
+- **Idempotent upload**: the same bytes return the existing job (`reused: true`) as long as
+  its stored upload still exists. `force=1` makes a new one.
+- A job whose stored upload has gone fails once with that reason.
 
-## Install (Ubuntu / EC2)
+## Formats
+
+PDF, PNG, JPEG, WebP. **TIFF and HEIC are refused** (415): Hermex's Gemini upload does not
+accept them and this server has no image converter. Convert them to PDF or PNG first.
+
+## Speed
+
+Not measured against real Gemini yet. Each range costs one Gemini request in a fresh chat
+plus the upload; the first range of a job also pays the browser launch. The progress
+estimate starts from a 45 s/page placeholder (shown as a guess) and switches to this
+job's measured times as soon as one range finishes.
+
+## Setup (server)
 
 ```bash
-sudo apt install poppler-utils tesseract-ocr tesseract-ocr-osd \
-                 tesseract-ocr-san tesseract-ocr-script-latn
-curl -s localhost:<port>/api/admin/ocr/health        # 200 + versions when ready
+# 1. a profile directory OUTSIDE the repo (deploys run git clean)
+echo 'HERMEX_STRUCTURE_CHROME_PROFILE=/home/ubuntu/hermex-structure/chrome-profile' >> .env
+# 2. one-time login with the dedicated (non-translation) Google account, on the Xvfb display
+npm run hermex:setup-structure
+# 3. restart the web app so it reads .env, then check
+curl -s localhost:<port>/api/admin/ocr/health        # 200 when ready, 503 + the problem otherwise
 ```
 
-`GET /api/admin/ocr/health` (admin) reports the Tesseract version, installed languages and
-anything missing with the package to install. Until it is green, uploads are refused with
-that message and queued jobs wait.
-
-On macOS (dev): `brew install tesseract tesseract-lang poppler`. Homebrew splits language
-files across two directories, so point `OCR_TESSDATA_DIR` at one holding `san`,
-`script/Latin` and `osd` (symlinks are fine) and `OCR_TESSERACT_BIN` at
-`/opt/homebrew/bin/tesseract` if another tesseract comes first on `PATH`.
+No apt packages are needed for OCR.
 
 ## Configuration
 
-See `.env.example` (OCR section) for every variable and default. No API key is needed or
-read. The variables `GEMINI_API_KEY`, `OCR_MODEL_*`, `OCR_FALLBACK_MODELS`,
-`OCR_REQUESTS_PER_*` are no longer used by OCR (translation never used them).
+See `.env.example` (OCR section). The variables `GEMINI_API_KEY`, `OCR_MODEL_*`,
+`OCR_ENGINE`, `OCR_TESSDATA_DIR`, `OCR_LANGS_*`, `OCR_DPI_*`, `OCR_CONCURRENCY` and
+`OCR_NICE` are not read by OCR.
 
 ## API
 
@@ -138,28 +150,31 @@ All routes are `requireAuth + requireAdmin`, mounted at `/api/admin/ocr`.
 
 | Route | Purpose |
 | --- | --- |
-| `GET /config` | engine, languages, limits, lane usage |
-| `GET /health` | local engine readiness (200/503) — never contacts any service |
+| `GET /config` | engine, limits, lane usage |
+| `GET /health` | Hermex readiness on the document profile (200/503) — filesystem checks only, never a prompt |
 | `GET /jobs` | recent jobs |
-| `POST /jobs` | upload (raw body; `fileName`, `mimeType`, `quality` = `fast`/`accurate` (200/300 dpi), `textMode` = `auto`/`ocr`, `force=1`) → 201 new / 200 `reused` |
-| `GET /jobs/:id` | job + per-page status, live state, progress/ETA |
-| `GET /jobs/:id/document` | merged pages, each with `meta` (source, engine, confidence, flags) |
-| `GET /jobs/:id/download?format=md\|txt\|raw` | normalized Markdown/text, or the raw engine output |
+| `POST /jobs` | upload (raw body; `fileName`, `mimeType`, `chunkSize`, `force=1`) → 201 new / 200 `reused` |
+| `GET /jobs/:id` | job + per-range status, live state, progress/ETA |
+| `GET /jobs/:id/document` | merged pages, each with `meta` |
+| `GET /jobs/:id/download?format=md\|txt\|raw` | normalized Markdown/text, or the raw page texts |
 | `GET /jobs/:id/source` | the original upload |
-| `POST /jobs/:id/retry` | requeue failed/unfinished pages (409 while queued/running) |
+| `POST /jobs/:id/retry` | requeue failed/unfinished ranges (409 while queued/running) |
 | `POST /jobs/:id/cancel` | cancel (any process); finished pages are kept |
 | `DELETE /jobs/:id` | cancel, delete rows + stored upload |
 
 ## Testing
 
 ```bash
-npm run test:ocr-local-engine     # quality rules, TSV/OSD parsing, page decision and
-                                  # range retries with fake engines, rendering, ETA, and
-                                  # the REAL engine on tests/fixtures/ocr (skips loudly
-                                  # when Tesseract is missing)
-node --import tsx tests/ocr-pipeline.test.mjs   # planning, page markers, rendering, ETA
-npm run test:provider-audit       # no provider SDK/endpoint/key/HTTP call reachable
+npm run test:ocr-hermex           # prompt, answer validation (truncated/malformed/refusal),
+                                  # range files, retries, login/busy stop the job, cancel,
+                                  # shared-profile turn-taking (mock sessions + a fake
+                                  # Python peer — no Chrome, no Gemini)
+npm run test:provider-audit       # no provider SDK/endpoint/key/HTTP call, no local OCR
+                                  # engine, no process other than the Hermex session
 TEST_DATABASE_URL=postgresql://test@127.0.0.1:55433/cmstest npm run test:ocr-structure-db
-                                  # real Postgres + real engine through the router:
-                                  # leases, resume, cancel, idempotency (throwaway DB only)
+                                  # real Postgres + the real router, engine, validation and
+                                  # persistence, with the browser session scripted
 ```
+
+None of these talk to real Gemini. To verify the real leg, upload a 1–2 page PDF after the
+setup above and compare the result with the page.

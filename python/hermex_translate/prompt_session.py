@@ -2,7 +2,8 @@
 """
 A long-lived Hermex prompt session: one Chrome on one DEDICATED profile, many prompts.
 
-Used by the OCR → Grantha analysis (server/hermex/session.ts). Translation does not
+Used by OCR (page files attached to the prompt) and the OCR → Grantha analysis
+(server/hermex/prompt-session.ts). Translation does not
 use it and is not affected by it: this process runs on its own Chrome profile, under
 its own lock file, with the browser cleanup scoped to that profile.
 
@@ -11,7 +12,8 @@ selenium, our own logs) goes to stderr.
 
   ← {"type": "ready", "loggedIn": true}                 once the browser is usable
   ← {"type": "fatal", "reason": "...", "error": "..."}   startup failed; process exits
-  → {"id": "<corr id>", "op": "ask", "prompt": "...", "timeoutSec": 300}
+  → {"id": "<corr id>", "op": "ask", "prompt": "...", "timeoutSec": 300,
+     "attachments": ["/abs/page.pdf"]}                  attachments optional (OCR)
   ← {"id": "<corr id>", "ok": true, "text": "..."}
   ← {"id": "<corr id>", "ok": false, "reason": "...", "error": "..."}
   → {"op": "close"}                                      (or EOF) — browser closed, exit 0
@@ -71,6 +73,20 @@ def _reason(err: BaseException) -> str:
     return "unknown"
 
 
+def _signed_out(gemini: Any) -> bool:
+    """Gemini shows a "Sign in" link when the session's Google login has expired. Checked
+    before and after every request, so a login page is never mistaken for an answer.
+    Reads only whether the link exists — no cookie, token or page content."""
+    try:
+        # "css selector" is Selenium's By.CSS_SELECTOR value.
+        return bool(gemini.driver.find_elements("css selector", 'a[aria-label="Sign in"]'))
+    except Exception:
+        return False
+
+
+_LOGIN_EXPIRED = "The dedicated Gemini profile's login has expired. Log in again (npm run hermex:setup-structure), then press Retry."
+
+
 def _exit_on_sigterm(_signum: int, _frame: Any) -> None:
     # Node kills a session it can no longer trust (timeout, cancel). Raising SystemExit
     # runs main()'s `finally`, which closes Chrome — otherwise the browser is orphaned
@@ -127,18 +143,31 @@ def main() -> int:
             req_id = req.get("id")
             prompt = req.get("prompt") or ""
             timeout = int(req.get("timeoutSec") or 300)
+            attachments = req.get("attachments") or []
             if not isinstance(prompt, str) or not prompt.strip():
                 _emit({"id": req_id, "ok": False, "reason": "malformed", "error": "empty prompt"})
                 continue
+            if not isinstance(attachments, list) or not all(
+                isinstance(a, str) and os.path.isabs(a) and os.path.isfile(a) for a in attachments
+            ):
+                _emit({"id": req_id, "ok": False, "reason": "malformed", "error": "attachments must be existing absolute file paths"})
+                continue
             try:
                 cli._start_fresh_gemini_chat(gemini)
-                answer = cli._gemini_query_with_recovery(gemini, prompt, source_text=prompt, timeout=timeout)
+                if _signed_out(gemini):
+                    _emit({"id": req_id, "ok": False, "reason": "login", "error": _LOGIN_EXPIRED})
+                    return 4
+                extra = {"attachments": attachments} if attachments else {}
+                answer = cli._gemini_query_with_recovery(gemini, prompt, source_text=prompt, timeout=timeout, **extra)
                 text = (getattr(answer, "text", None) or "").strip()
+                if _signed_out(gemini):
+                    _emit({"id": req_id, "ok": False, "reason": "login", "error": _LOGIN_EXPIRED})
+                    return 4
                 if not text:
                     raise RuntimeError("Response contained neither text nor image.")
                 _emit({"id": req_id, "ok": True, "text": text})
             except Exception as e:
-                reason = _reason(e)
+                reason = "login" if _signed_out(gemini) else _reason(e)
                 _log(f"request {req_id} failed ({reason}): {e}")
                 _emit({"id": req_id, "ok": False, "reason": reason, "error": str(e)[:500]})
                 if reason in ("chrome", "login", "display"):

@@ -2,8 +2,10 @@
  * Which Gemini account each Hermex workflow drives — kept apart on purpose.
  *
  *   translation       HERMEX_CHROME_PROFILE (server/hermex/config.ts), unchanged.
- *   grantha structure HERMEX_STRUCTURE_CHROME_PROFILE — a SEPARATE Chrome profile,
- *                     logged in to a separate Google account, with its own lock file.
+ *   OCR + grantha     HERMEX_STRUCTURE_CHROME_PROFILE — a SEPARATE Chrome profile,
+ *   structure         logged in to a separate Google account, with its own lock file.
+ *                     OCR and OCR → Grantha share it; HermexPromptSession lets only
+ *                     one of their sessions hold it at a time.
  *
  * Why separate, verified against the code rather than assumed:
  *   - one Chrome profile cannot be driven by two processes (Chrome's Singleton lock),
@@ -90,7 +92,7 @@ export function structureProfile(): TaskProfileResult {
     return {
       ok: false,
       problems: [
-        "HERMEX_STRUCTURE_CHROME_PROFILE is not set. OCR → Grantha needs its own Gemini login, separate from translation's: " +
+        "HERMEX_STRUCTURE_CHROME_PROFILE is not set. OCR and OCR → Grantha need their own Gemini login, separate from translation's: " +
           "set it to a new directory and run `npm run hermex:setup-structure` once (it opens Chrome for the login).",
       ],
     };

@@ -7,7 +7,7 @@
  *      to one block instead of losing text (rows written by the old Gemini path too)
  *   3. transcribed text is HTML-escaped before it is ever rendered as markup
  *   4. the progress/ETA estimate
- * The local engine itself is covered by tests/ocr-local-engine.test.mjs.
+ * The Hermex OCR engine is covered by tests/ocr-hermex-engine.test.mjs.
  *
  * Run:        node --import tsx tests/ocr-pipeline.test.mjs
  */

@@ -225,12 +225,14 @@ rm -f "$HOME/Library/Application Support/hermex/chrome_profile"/Singleton\*
 cd /Users/chitrajain/Documents/Code/XoidLabs/Library/Data-Feeder-CMS
 npm run hermex:grantha -- "Chandogya Upanishad"
 
-## A second workflow: OCR → Grantha (separate account)
+## Second and third workflows: OCR and OCR → Grantha (separate account)
 
-Since 2026-10, Hermex also serves the OCR → Grantha analysis. It is kept apart from
+Since 2026-10, Hermex also serves OCR (page files uploaded to Gemini) and the OCR → Grantha
+analysis. Both run on ONE dedicated profile and take turns on it (an in-process gate in
+`server/hermex/prompt-session.ts`). It is kept apart from
 translation by construction, and translation's own setup is unchanged:
 
-| | Translation | OCR → Grantha |
+| | Translation | OCR and OCR → Grantha |
 | --- | --- | --- |
 | Google account | translation's | a **separate** dedicated account |
 | Chrome profile | `HERMEX_CHROME_PROFILE` | `HERMEX_STRUCTURE_CHROME_PROFILE` (refused if it is translation's) |
@@ -244,6 +246,8 @@ One-time login for the second profile: `npm run hermex:setup-structure`
 before). Details, limits and the security advice for that account are in
 [OCR-TO-GRANTHA.md](OCR-TO-GRANTHA.md#setup).
 
-Two Chrome instances can now run at once (one per profile). On a small box, keep an eye on
-memory: each Chrome is a few hundred MB. OCR itself no longer uses Gemini at all — it runs
-Tesseract locally ([OCR.md](OCR.md)).
+Two Chrome instances can run at once (one per profile). Measured on the EC2 box
+(2026-10-29, `/proc/*/smaps_rollup` PSS): translation's live Chrome tree ≈ 2.7 GB with
+≈ 3.2 GB of memory still available — a second Chrome of that size leaves almost nothing.
+Prefer running OCR / OCR → Grantha jobs when no translation job is processing
+([OCR.md](OCR.md), [OCR-TO-GRANTHA.md](OCR-TO-GRANTHA.md)).

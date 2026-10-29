@@ -17,7 +17,7 @@ structured while its tail is still being read.
 ## The shape of it
 
 ```
-OCR job (local engine)                           server/ocr/*
+OCR job (Gemini via Hermex, same profile)        server/ocr/*
    └─ transcribed pages
         └─ structure job                         cms_structure_jobs
              └─ page-range chunks (in order)     cms_structure_job_chunks

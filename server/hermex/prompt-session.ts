@@ -2,10 +2,14 @@
  * Node side of `python/hermex_translate/prompt_session.py`: one Chrome on one
  * task-specific Gemini profile, kept open across many prompts.
  *
- * Opening Chrome and warming Gemini up costs ~30–60s, so a structure job opens ONE
- * session and sends every page range through it, instead of paying that per range.
+ * Opening Chrome and warming Gemini up costs ~30–60s, so an OCR or structure job
+ * opens ONE session and sends every page range through it, instead of paying that
+ * per range.
  *
  * Guarantees:
+ *   - at most one session per profile in this process: OCR and OCR → Grantha share
+ *     the dedicated document profile, and a second `open` waits for the first
+ *     session to end instead of failing on the profile's lock;
  *   - one request in flight per session; each carries a correlation id and only the
  *     answer bearing that id can resolve it — an answer can never be attributed to
  *     another request;
@@ -18,6 +22,7 @@ import { spawn, type ChildProcess } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import readline from "node:readline";
 import { HermexError, scrubHermexText, type HermexFailureReason } from "../hermex-translate";
+import { Semaphore } from "../lib/semaphore";
 import { hermexPython, repoRoot } from "./config";
 import { promptSessionScript, taskChildEnv, type HermexTaskProfile } from "./task-profiles";
 
@@ -30,6 +35,26 @@ export interface PromptSessionOptions {
   script?: string;
   /** Prefix for log lines, e.g. the job id — never document text. */
   label: string;
+  /** Abandons waiting for the profile (another job's session holds it). */
+  signal?: AbortSignal;
+}
+
+/** One gate per Chrome profile; a profile can only ever host one browser. */
+const profileGates = new Map<string, Semaphore>();
+function profileGate(profileDir: string): Semaphore {
+  let gate = profileGates.get(profileDir);
+  if (!gate) {
+    gate = new Semaphore(() => 1);
+    profileGates.set(profileDir, gate);
+  }
+  return gate;
+}
+
+export interface AskOptions {
+  timeoutMs: number;
+  signal?: AbortSignal;
+  /** Absolute paths of files uploaded with the prompt (OCR page files). */
+  attachments?: string[];
 }
 
 type Pending = {
@@ -60,14 +85,32 @@ export class HermexPromptSession {
   private closed = false;
   private stderrTail = "";
   private exitError: HermexError | null = null;
+  private releaseProfile: (() => void) | null = null;
 
   private constructor(private readonly opts: PromptSessionOptions) {}
 
-  /** Launch the browser and wait until it is logged in and ready (or fail precisely). */
+  /**
+   * Wait for the profile to be free, launch the browser and wait until it is logged
+   * in and ready (or fail precisely). The profile is held until the browser exits.
+   */
   static async open(opts: PromptSessionOptions): Promise<HermexPromptSession> {
     const session = new HermexPromptSession(opts);
-    await session.start();
+    const gate = profileGate(opts.profile.profileDir);
+    if (gate.active > 0) log(opts.label, "waiting for the Gemini profile (another job's session is using it)");
+    session.releaseProfile = await gate.acquire(opts.signal);
+    try {
+      await session.start();
+    } catch (err) {
+      session.freeProfile();
+      throw err;
+    }
     return session;
+  }
+
+  private freeProfile(): void {
+    const release = this.releaseProfile;
+    this.releaseProfile = null;
+    release?.();
   }
 
   get alive(): boolean {
@@ -98,6 +141,7 @@ export class HermexPromptSession {
       child.on("error", (err) => {
         clearTimeout(launchTimer);
         this.closed = true;
+        this.freeProfile();
         reject(new HermexError(err && (err as any).code === "ENOENT" ? "unavailable" : "process", `Could not start Hermex: ${scrubHermexText(err)}`));
       });
 
@@ -134,6 +178,7 @@ export class HermexPromptSession {
       child.on("close", (code) => {
         clearTimeout(launchTimer);
         this.closed = true;
+        this.freeProfile();
         const err =
           this.exitError ??
           new HermexError("chrome", `The Gemini browser session ended (exit ${code ?? "?"}).${this.stderrTail ? ` ${scrubHermexText(this.stderrTail.split("\n").filter(Boolean).slice(-2).join(" "), 300)}` : ""}`);
@@ -178,14 +223,14 @@ export class HermexPromptSession {
    * Send one prompt; resolves with Gemini's reply text. Calls queue behind each
    * other — a session never has two requests in flight.
    */
-  ask(prompt: string, opts: { timeoutMs: number; signal?: AbortSignal }): Promise<string> {
+  ask(prompt: string, opts: AskOptions): Promise<string> {
     const run = () => this.askNow(prompt, opts);
     const result = this.chain.then(run, run);
     this.chain = result.catch(() => undefined);
     return result;
   }
 
-  private askNow(prompt: string, opts: { timeoutMs: number; signal?: AbortSignal }): Promise<string> {
+  private askNow(prompt: string, opts: AskOptions): Promise<string> {
     if (!this.alive) {
       return Promise.reject(this.exitError ?? new HermexError("chrome", "The Gemini browser session is not running."));
     }
@@ -211,7 +256,8 @@ export class HermexPromptSession {
       this.pending = pending;
       // Python's own per-query wait is shorter than ours, so it reports its timeout first.
       const timeoutSec = Math.max(60, Math.floor((opts.timeoutMs * 0.8) / 3 / 1000));
-      this.child!.stdin!.write(JSON.stringify({ id, op: "ask", prompt, timeoutSec }) + "\n");
+      const attachments = opts.attachments?.length ? { attachments: opts.attachments } : {};
+      this.child!.stdin!.write(JSON.stringify({ id, op: "ask", prompt, timeoutSec, ...attachments }) + "\n");
     });
   }
 

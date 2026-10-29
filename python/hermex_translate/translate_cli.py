@@ -496,8 +496,14 @@ def _dismiss_gemini_overlays(gemini: Any) -> None:
     time.sleep(0.8)
 
 
-def _gemini_send_message(gemini: Any, message: str, *, paste: bool) -> None:
-    """Send without Hermex click() — avoids Canvas discovery overlay intercepting input."""
+def _gemini_send_message(
+    gemini: Any, message: str, *, paste: bool, attachments: list[str] | None = None
+) -> None:
+    """Send without Hermex click() — avoids Canvas discovery overlay intercepting input.
+
+    `attachments` (OCR only; translation never passes any) are uploaded through
+    Hermex's own file input before the text is typed, and the send waits until the
+    upload has finished."""
     from selenium.webdriver.common.by import By
     from selenium.webdriver.common.keys import Keys
     from selenium.webdriver.support import expected_conditions as EC
@@ -511,6 +517,8 @@ def _gemini_send_message(gemini: Any, message: str, *, paste: bool) -> None:
     )
     time.sleep(0.5)
     _dismiss_gemini_overlays(gemini)
+    if attachments:
+        gemini._upload_files(attachments)
     input_p = input_box.find_element(By.TAG_NAME, "p")
     try:
         gemini.driver.execute_script("arguments[0].focus();", input_p)
@@ -532,6 +540,12 @@ def _gemini_send_message(gemini: Any, message: str, *, paste: bool) -> None:
     else:
         gemini._type_into(message, input_p)
     gemini.sleep(1)
+    if attachments:
+        # The send button stays disabled while a file is still uploading (state
+        # UPLOADING); ENTER before then is silently ignored.
+        from hermex.models import State
+
+        gemini._wait_until_state(State.TYPING, timeout=120)
     input_p.send_keys(Keys.ENTER)
     # In Gemini's current input UI the box empties the instant ENTER is pressed and the
     # send button is removed, so get_state() reports IDLE until the "Stop response" button
@@ -1090,8 +1104,12 @@ def _gemini_query_with_recovery(
     *,
     source_text: str,
     timeout: int,
+    attachments: list[str] | None = None,
 ) -> Any:
-    """Send prompt, wait for IDLE, then poll for response text (avoids premature empty reads)."""
+    """Send prompt, wait for IDLE, then poll for response text (avoids premature empty reads).
+
+    `attachments` are re-uploaded on every attempt: a recovery starts a fresh chat or
+    reloads the page, and either one drops a pending upload."""
     use_paste = len(prompt) > 1200 or len(source_text) > 500
     effective_timeout = _query_timeout_for_source(source_text, timeout)
     if use_paste:
@@ -1103,7 +1121,10 @@ def _gemini_query_with_recovery(
     for attempt in range(1, 4):
         try:
             _dismiss_gemini_overlays(gemini)
-            _gemini_send_message(gemini, prompt, paste=use_paste)
+            if attachments:
+                _gemini_send_message(gemini, prompt, paste=use_paste, attachments=attachments)
+            else:
+                _gemini_send_message(gemini, prompt, paste=use_paste)
             _wait_idle_or_stall(gemini, effective_timeout)
             msg = _gemini_fetch_response(gemini)
             reply = getattr(msg, "text", "") or ""

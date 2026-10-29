@@ -25,6 +25,14 @@ Environment (set by the Node side, never by hand):
   HERMEX_CHROME_PROFILE / _DIR / _MARKER   the dedicated profile
   HERMEX_LOCK_FILE                         its own single-flight lock
   HERMEX_CLEANUP_SCOPE=profile             never touch another workflow's browser
+  HERMEX_SESSION_PROFILE_DIRECTORY         optional: the Chrome profile inside the
+                                           user-data dir (e.g. "Profile 1"); required
+                                           when that dir holds more than one profile,
+                                           or Chrome opens its profile picker
+
+Readiness: "ready" is sent only once the browser is on gemini.google.com and logged in.
+The profile picker, a Google login page or any other page is a startup failure with
+the reason, and browsers a failed launch left on this profile are stopped.
 """
 
 from __future__ import annotations
@@ -109,13 +117,59 @@ def main() -> int:
         _emit({"type": "fatal", "reason": "unavailable", "error": f"Hermex is not importable: {e}"})
         return 2
 
+    import chrome_profile_select as profiles
+
+    data_dir = (os.environ.get("HERMEX_CHROME_PROFILE") or "").strip()
+    udd = profiles.user_data_dir(data_dir)
+    try:
+        directory = profiles.directory_from_env()
+    except ValueError as e:
+        _emit({"type": "fatal", "reason": "unavailable", "error": str(e)})
+        return 2
+    _log(
+        f"user-data-dir={udd} profile-directory={directory or '(not set: Chrome picks)'}; "
+        f"profiles: {profiles.describe(profiles.read_profiles(udd))}"
+    )
+    if directory:
+        try:
+            profiles.install(directory)
+        except Exception as e:  # pragma: no cover - environment problem
+            _emit({"type": "fatal", "reason": "unavailable", "error": f"Could not select Chrome profile {directory!r}: {e}"})
+            return 2
+    page_timeout = float(os.environ.get("HERMEX_SESSION_PAGE_TIMEOUT_SEC") or 30)
+
     headless = (os.environ.get("HERMEX_SESSION_HEADLESS") or "").strip().lower() in ("1", "true", "yes")
     lock = cli._ProfileLock(cli._lock_path())
     gemini = None
+    locked = False
     try:
         lock.acquire()
-        gemini = cli._open_gemini_browser(headless)
-        if not getattr(gemini, "is_logged_in", True):
+        locked = True
+        try:
+            gemini = cli._open_gemini_browser(headless)
+        except Exception as e:
+            text = str(e).lower()
+            if "unable to discover open pages" in text or "profile-picker" in text:
+                # Chrome is sitting on its profile picker: no page for ChromeDriver to attach to.
+                _emit({
+                    "type": "fatal",
+                    "reason": "chrome" if directory else "unavailable",
+                    "error": f"{profiles.picker_hint(udd, directory)} (ChromeDriver: {str(e).splitlines()[0][:200]})",
+                })
+                return 1
+            raise
+        page = profiles.wait_for_gemini(lambda: gemini.driver.current_url, timeout=page_timeout)
+        _log(f"browser landed on: {page}")
+        if page == "picker":
+            _emit({"type": "fatal", "reason": "chrome" if directory else "unavailable", "error": profiles.picker_hint(udd, directory)})
+            return 1
+        if page == "login":
+            _emit({"type": "fatal", "reason": "login", "error": "The dedicated profile opened Google's sign-in page instead of Gemini. Log in again (npm run hermex:setup-structure)."})
+            return 3
+        if page != "gemini":
+            _emit({"type": "fatal", "reason": "chrome", "error": f"The browser did not reach gemini.google.com within {page_timeout:.0f}s."})
+            return 1
+        if not getattr(gemini, "is_logged_in", True) or _signed_out(gemini):
             _emit({
                 "type": "fatal",
                 "reason": "login",
@@ -180,6 +234,11 @@ def main() -> int:
     finally:
         if gemini is not None:
             cli._close_gemini_browser(gemini)
+        elif locked:
+            # A launch that failed can leave Chrome (often on the profile picker) holding
+            # this profile; stop exactly those processes, nothing else. We hold the
+            # profile's lock, so no live session of ours can be among them.
+            profiles.stop_own_browsers(udd)
         lock.release()
 
 

@@ -28,6 +28,8 @@ const env: NodeJS.ProcessEnv = { ...process.env };
 const display = result.profile.display;
 delete env.DISPLAY;
 if (display) env.DISPLAY = display;
+// Log in to the same Chrome profile the sessions will open (HERMEX_STRUCTURE_PROFILE_DIRECTORY).
+if (result.profile.profileDirectory) env.HERMEX_SESSION_PROFILE_DIRECTORY = result.profile.profileDirectory;
 console.log(`Opening Chrome on the dedicated structure profile: ${result.profile.profileDir} (display ${display ?? "none"})`);
 const run = spawnSync(
   hermexPython(),

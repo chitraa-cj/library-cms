@@ -31,7 +31,49 @@ export interface HermexTaskProfile {
   headless: boolean;
   /** X display for its headful browser (HERMEX_STRUCTURE_DISPLAY, else the shared one). */
   display: string | undefined;
+  /**
+   * The Chrome profile inside the user-data dir (`Profile 1`, `Default`, …) —
+   * HERMEX_STRUCTURE_PROFILE_DIRECTORY. Needed when that dir holds more than one
+   * profile; otherwise Chrome opens its profile picker and never reaches Gemini.
+   */
+  profileDirectory: string | undefined;
 }
+
+export interface ChromeProfileEntry {
+  directory: string;
+  name: string;
+  /** Signed in to Chrome (a Google account attached to the profile). */
+  signedIn: boolean;
+}
+
+/** hermex always launches Chrome with `--user-data-dir=<data dir>/chrome_profile`. */
+export function chromeUserDataDir(profileDir: string): string {
+  return path.join(profileDir.replace(/\/+$/, ""), "chrome_profile");
+}
+
+/**
+ * The profiles Chrome lists in `<user-data dir>/Local State`: directory, display name
+ * and whether it is signed in. Never the account's email, a cookie or a token.
+ * Empty when the file is missing or unreadable (Chrome has not run there yet).
+ */
+export function listChromeProfiles(userDataDir: string): ChromeProfileEntry[] {
+  try {
+    const state = JSON.parse(fs.readFileSync(path.join(userDataDir, "Local State"), "utf8"));
+    const cache = state?.profile?.info_cache;
+    if (!cache || typeof cache !== "object") return [];
+    return Object.entries(cache as Record<string, any>)
+      .map(([directory, info]) => ({ directory, name: String(info?.name ?? ""), signedIn: Boolean(info?.gaia_id) }))
+      .sort((a, b) => a.directory.localeCompare(b.directory));
+  } catch {
+    return [];
+  }
+}
+
+function describeProfiles(profiles: ChromeProfileEntry[]): string {
+  return profiles.map((p) => `${p.directory} "${p.name}" (${p.signedIn ? "signed in" : "not signed in"})`).join(", ");
+}
+
+const VALID_PROFILE_DIRECTORY = /^[A-Za-z0-9][A-Za-z0-9 _.-]{0,63}$/;
 
 export type TaskProfileResult = { ok: true; profile: HermexTaskProfile } | { ok: false; problems: string[] };
 
@@ -125,6 +167,10 @@ export function structureProfile(): TaskProfileResult {
   if (explicitDisplay && !isValidXDisplay(explicitDisplay)) {
     problems.push(`HERMEX_STRUCTURE_DISPLAY "${explicitDisplay}" is not an X display (expected something like :98).`);
   }
+  const profileDirectory = trimmed("HERMEX_STRUCTURE_PROFILE_DIRECTORY");
+  if (profileDirectory && (!VALID_PROFILE_DIRECTORY.test(profileDirectory) || profileDirectory === "..")) {
+    problems.push(`HERMEX_STRUCTURE_PROFILE_DIRECTORY "${profileDirectory}" is not a Chrome profile directory name (e.g. "Profile 1").`);
+  }
 
   if (problems.length > 0) return { ok: false, problems };
 
@@ -138,7 +184,7 @@ export function structureProfile(): TaskProfileResult {
         : explicitDisplay
           ? false
           : hermexHeadless();
-  return { ok: true, profile: { task: "structure", profileDir, lockFile, headless, display } };
+  return { ok: true, profile: { task: "structure", profileDir, lockFile, headless, display, profileDirectory } };
 }
 
 export function promptSessionScript(): string {
@@ -170,6 +216,7 @@ export function taskChildEnv(profile: HermexTaskProfile): NodeJS.ProcessEnv {
   env.HERMEX_LOCK_FILE = profile.lockFile;
   env.HERMEX_CLEANUP_SCOPE = "profile";
   env.HERMEX_SESSION_HEADLESS = profile.headless ? "1" : "0";
+  if (profile.profileDirectory) env.HERMEX_SESSION_PROFILE_DIRECTORY = profile.profileDirectory;
   // Behaviour switches translate_cli reads; carried over explicitly, never a path or secret.
   for (const key of ["HERMEX_WARMUP", "HERMEX_LAUNCH_ATTEMPTS", "HERMEX_HEADLESS_FALLBACK", "HERMEX_DISABLE_WEB_SECURITY"]) {
     const value = process.env[key];
@@ -205,6 +252,22 @@ export function structureHermexAvailability(): StructureHermexAvailability {
     } else {
       setupComplete = fs.existsSync(path.join(result.profile.profileDir, ".setup_gemini"));
       if (!setupComplete) problems.push("The structure profile has no completed Gemini login (.setup_gemini missing) — run npm run hermex:setup-structure.");
+      // Which Chrome profile inside the user-data dir: verified against Chrome's own list,
+      // never assumed from a display name.
+      const udd = chromeUserDataDir(result.profile.profileDir);
+      const chromeProfiles = listChromeProfiles(udd);
+      const chosen = result.profile.profileDirectory;
+      const signedIn = chromeProfiles.filter((p) => p.signedIn).map((p) => p.directory);
+      if (chosen && chromeProfiles.length > 0 && !chromeProfiles.some((p) => p.directory === chosen)) {
+        problems.push(`HERMEX_STRUCTURE_PROFILE_DIRECTORY "${chosen}" is not a profile in ${udd} (it has: ${describeProfiles(chromeProfiles)}).`);
+      } else if (!chosen && chromeProfiles.length > 1) {
+        problems.push(
+          `${udd} holds ${chromeProfiles.length} Chrome profiles (${describeProfiles(chromeProfiles)}) and none is selected, so Chrome opens its profile picker instead of Gemini. ` +
+            `Set HERMEX_STRUCTURE_PROFILE_DIRECTORY to the one logged in to Gemini${signedIn.length ? ` (signed in: ${signedIn.join(", ")})` : ""}.`,
+        );
+      } else if (chosen && chromeProfiles.some((p) => p.directory === chosen && !p.signedIn)) {
+        warnings.push(`Chrome profile "${chosen}" is not signed in to Chrome; the Gemini login itself is checked when a session starts.`);
+      }
     }
     if (!result.profile.headless) {
       const display = result.profile.display;

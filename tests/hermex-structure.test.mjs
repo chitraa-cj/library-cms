@@ -158,6 +158,73 @@ console.log("\nthe browser child's environment");
   check("no credential of any kind reaches it", secrets.length === 0, secrets.join());
 }
 
+// ── 2a. which Chrome profile inside the user-data dir ────────────────────────
+console.log("\nChrome profile selection (profile picker)");
+{
+  const cfg = await import("../server/hermex/config.ts");
+  const withEnv = (patch, fn) => {
+    const saved = {};
+    for (const k of Object.keys(patch)) saved[k] = process.env[k];
+    for (const [k, v] of Object.entries(patch)) v == null ? delete process.env[k] : (process.env[k] = v);
+    try {
+      return fn();
+    } finally {
+      for (const [k, v] of Object.entries(saved)) v == null ? delete process.env[k] : (process.env[k] = v);
+    }
+  };
+  // The box's layout: hermex's user-data dir holds an empty Default and the signed-in
+  // profile Chrome created during the login.
+  const box = path.join(tmp, "box-structure-profile");
+  const udd = path.join(box, "chrome_profile");
+  fs.mkdirSync(udd, { recursive: true });
+  fs.writeFileSync(path.join(box, ".setup_gemini"), "");
+  const writeState = (cache) => fs.writeFileSync(path.join(udd, "Local State"), JSON.stringify({ profile: { info_cache: cache } }));
+  writeState({
+    Default: { name: "Your Chrome" },
+    "Profile 1": { name: "xoidlabs.com", gaia_id: "1", user_name: "someone@example.com" },
+  });
+  check("hermex's user-data dir is <profile>/chrome_profile", profiles.chromeUserDataDir(box + "/") === udd);
+  const listed = profiles.listChromeProfiles(udd);
+  check("Chrome's profile list is read from Local State (directory, name, signed in)",
+    JSON.stringify(listed) === JSON.stringify([{ directory: "Default", name: "Your Chrome", signedIn: false }, { directory: "Profile 1", name: "xoidlabs.com", signedIn: true }]));
+  check("…never the account's email", !JSON.stringify(listed).includes("example.com"));
+
+  const env = { HERMEX_STRUCTURE_CHROME_PROFILE: box, HERMEX_STRUCTURE_HEADLESS: "1" };
+  const picker = withEnv({ ...env, HERMEX_STRUCTURE_PROFILE_DIRECTORY: undefined }, () => profiles.structureHermexAvailability());
+  check("two profiles and none selected → not ready: Chrome would open its profile picker",
+    !picker.ok && picker.problems.some((m) => /profile picker/.test(m) && /HERMEX_STRUCTURE_PROFILE_DIRECTORY/.test(m) && /signed in: Profile 1/.test(m)), picker.problems.join(" | "));
+  check("…and the message carries no email", !picker.problems.join().includes("example.com"));
+
+  const chosen = withEnv({ ...env, HERMEX_STRUCTURE_PROFILE_DIRECTORY: "Profile 1" }, () => ({
+    health: profiles.structureHermexAvailability(),
+    child: profiles.taskChildEnv(profiles.structureProfile().profile),
+  }));
+  check("the signed-in profile selected → ready", chosen.health.ok, chosen.health.problems.join(" | "));
+  check("…and the session child is told to open it", chosen.child.HERMEX_SESSION_PROFILE_DIRECTORY === "Profile 1");
+  check("…the raw setting itself is not passed on", !("HERMEX_STRUCTURE_PROFILE_DIRECTORY" in chosen.child));
+
+  const missing = withEnv({ ...env, HERMEX_STRUCTURE_PROFILE_DIRECTORY: "Profile 7" }, () => profiles.structureHermexAvailability());
+  check("a directory Chrome does not list is refused with the real list", !missing.ok && missing.problems.some((m) => /"Profile 7" is not a profile/.test(m) && /Profile 1 "xoidlabs.com"/.test(m)));
+  const notSigned = withEnv({ ...env, HERMEX_STRUCTURE_PROFILE_DIRECTORY: "Default" }, () => profiles.structureHermexAvailability());
+  check("an existing but not-signed-in profile is allowed with a warning (Gemini login is checked at start)", notSigned.ok && notSigned.warnings.some((w) => /not signed in/.test(w)));
+  const pathLike = withEnv({ ...env, HERMEX_STRUCTURE_PROFILE_DIRECTORY: "../Default" }, () => profiles.structureProfile());
+  check("a path is refused as a profile directory", !pathLike.ok && /not a Chrome profile directory name/.test(pathLike.problems.join()));
+
+  writeState({ Default: { name: "Your Chrome", gaia_id: "1" } });
+  const single = withEnv({ ...env, HERMEX_STRUCTURE_PROFILE_DIRECTORY: undefined }, () => ({
+    health: profiles.structureHermexAvailability(),
+    child: profiles.taskChildEnv(profiles.structureProfile().profile),
+  }));
+  check("a single profile needs no selection (Chrome opens it directly)", single.health.ok, single.health.problems.join(" | "));
+  check("…and no profile flag is passed", !("HERMEX_SESSION_PROFILE_DIRECTORY" in single.child));
+
+  // Translation is untouched: its env builder and its Python never select a profile.
+  const tEnv = withEnv({ ...env, HERMEX_STRUCTURE_PROFILE_DIRECTORY: "Profile 1" }, () => cfg.hermexChildEnv());
+  check("translation's child env carries no session profile selection", !("HERMEX_SESSION_PROFILE_DIRECTORY" in tEnv) && tEnv.HERMEX_CHROME_PROFILE === TRANSLATION_PROFILE);
+  const translateCli = fs.readFileSync(path.join(path.dirname(new URL(import.meta.url).pathname), "..", "python", "hermex_translate", "translate_cli.py"), "utf8");
+  check("translate_cli.py never selects a profile directory", !/chrome_profile_select|profile-directory|HERMEX_SESSION_PROFILE_DIRECTORY/.test(translateCli));
+}
+
 // ── 2b. display isolation ────────────────────────────────────────────────────
 console.log("\nthe OCR browser's display is its own");
 {

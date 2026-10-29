@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import os
 import sys
 import time
 import warnings
@@ -62,6 +63,17 @@ def run_setup(profile: str | None = None) -> int:
     print("4. Return here and press ENTER to save the session")
     print("   (Setup will close Chrome for you — no need to hunt for the window.)")
     print("=" * 60)
+
+    # The OCR profile's user-data dir can hold several Chrome profiles; open the one the
+    # sessions will use (HERMEX_SESSION_PROFILE_DIRECTORY, set by hermex:setup-structure),
+    # or Chrome shows its profile picker. Unset (translation's setup): unchanged.
+    if profile and (os.environ.get("HERMEX_SESSION_PROFILE_DIRECTORY") or "").strip():
+        sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+        import chrome_profile_select
+
+        directory = chrome_profile_select.directory_from_env()
+        print(f"Chrome profile directory: {directory}")
+        chrome_profile_select.install(directory)
 
     with warnings.catch_warnings():
         warnings.simplefilter("ignore", UserWarning)

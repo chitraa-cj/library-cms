@@ -158,6 +158,11 @@ echo 'HERMEX_STRUCTURE_CHROME_PROFILE=/home/ubuntu/hermex-structure/chrome-profi
 # 2. its own Xvfb display, so the OCR browser never shares translation's :99
 #    (Xvfb :98 must be running whenever OCR runs — make it a service like :99's)
 echo 'HERMEX_STRUCTURE_DISPLAY=:98' >> .env
+#    hermex's user-data dir is <profile>/chrome_profile. If it holds more than one Chrome
+#    profile (signing in to Chrome during the login creates "Profile 1"), name the one
+#    logged in to Gemini, or Chrome opens its profile picker and ChromeDriver fails with
+#    "session not created … unable to discover open pages". /health lists the profiles.
+echo 'HERMEX_STRUCTURE_PROFILE_DIRECTORY="Profile 1"' >> .env
 # 3. one-time login with the dedicated (non-translation) Google account, on :98 via VNC
 npm run hermex:setup-structure
 # 4. apply the live-progress column, start the worker and restart the web app

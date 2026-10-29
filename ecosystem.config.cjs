@@ -8,6 +8,7 @@
  *
  *   pm2 start ecosystem.config.cjs --only cms-translation-worker
  *   pm2 start ecosystem.config.cjs --only cms-publish-worker
+ *   pm2 start ecosystem.config.cjs --only cms-ocr-worker
  *   pm2 save
  *
  * Hermex configuration (HERMEX_DIR / HERMEX_PYTHON / HERMEX_CHROME_PROFILE /
@@ -74,6 +75,36 @@ module.exports = {
       kill_timeout: 20_000,
       out_file: "logs/publish-worker.out.log",
       error_file: "logs/publish-worker.err.log",
+      time: true,
+    },
+    {
+      name: "cms-ocr-worker",
+      script: "dist/ocr-worker.cjs",
+      cwd: process.env.CMS_DIR || "/home/ubuntu/library/library-cms",
+      // Holds one job's chunk plan and one range's page file at a time; the 500-page
+      // preparation benchmark peaked ~235MB RSS. The browser is a separate process.
+      node_args: "--max-old-space-size=1024",
+      // ONE instance: one dedicated Chrome profile, one Gemini session, one range at a
+      // time. The claim (FOR UPDATE SKIP LOCKED + run token) would keep a second safe.
+      instances: 1,
+      exec_mode: "fork",
+      env: {
+        NODE_ENV: "production",
+        // The profile and display come from .env (HERMEX_STRUCTURE_CHROME_PROFILE,
+        // HERMEX_STRUCTURE_DISPLAY), loaded by server/env.ts — one source of truth. The
+        // Chrome child's DISPLAY is set from HERMEX_STRUCTURE_DISPLAY by taskChildEnv,
+        // never inherited, so translation's :99 cannot leak in.
+      },
+      autorestart: true,
+      // A crash loop here usually means Chrome or the Gemini session is broken;
+      // back off rather than hammering it.
+      restart_delay: 30_000,
+      max_restarts: 50,
+      // SIGTERM aborts the range in flight and hands the job back within ~20s
+      // (worker-main GRACE_MS), with a 30s backstop; this leaves headroom over both.
+      kill_timeout: 45_000,
+      out_file: "logs/ocr-worker.out.log",
+      error_file: "logs/ocr-worker.err.log",
       time: true,
     },
   ],

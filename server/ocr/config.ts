@@ -50,6 +50,12 @@ export const ocrConfig = {
   /** Requests per range for an unusable answer or a recoverable browser error — bounded. */
   maxAttempts: num("OCR_MAX_ATTEMPTS", 3, 1, 6),
 
+  /**
+   * cms-ocr-worker: how often it looks for queued jobs when no NOTIFY arrived. The
+   * web app notifies on upload and Retry, so this is only the fallback.
+   */
+  pollMs: num("OCR_WORKER_POLL_MS", 5_000, 500, 300_000),
+
   /** A running job whose heartbeat is older than this is presumed dead and requeued. */
   staleAfterMs: num("OCR_STALE_AFTER_MS", 120_000, 15_000, 3_600_000),
 

@@ -203,6 +203,12 @@ def emit(o):
     sys.stdout.write(json.dumps(o) + "\n"); sys.stdout.flush()
 if mode == "login":
     emit({"type": "fatal", "reason": "login", "error": "not logged in"}); sys.exit(3)
+if mode == "busy":
+    # Another PROCESS holds the profile lock until a marker file disappears.
+    held = os.environ["FAKE_HELD"]
+    with open(held + ".tries", "a") as f: f.write("x")
+    if os.path.exists(held):
+        emit({"type": "fatal", "reason": "busy", "error": "profile lock held"}); sys.exit(4)
 emit({"type": "ready", "loggedIn": True})
 for line in sys.stdin:
     req = json.loads(line)
@@ -239,6 +245,34 @@ for line in sys.stdin:
   const after = await open("ok");
   check("…and frees the profile for the next session", after.alive);
   await after.close();
+
+  // OCR (cms-ocr-worker) and OCR → Grantha (web app) are different processes: the
+  // in-process gate cannot see the other one, the profile lock file can.
+  const held = path.join(tmp, "held");
+  process.env.FAKE_HELD = held;
+  fs.writeFileSync(held, "");
+  let crossReady = false;
+  const cross = open("busy", { busyRetryMs: 300, busyWaitMs: 30_000 }).then((s) => ((crossReady = true), s));
+  await new Promise((r) => setTimeout(r, 1_200));
+  const tries = fs.readFileSync(held + ".tries", "utf8").length;
+  check("a profile held by another process is waited for, not failed", !crossReady && tries >= 2, `tries=${tries}`);
+  fs.rmSync(held);
+  const crossSession = await cross;
+  check("…and the session starts once that process lets go", crossReady && crossSession.alive);
+  await crossSession.close();
+
+  fs.writeFileSync(held, "");
+  const t0 = Date.now();
+  const gaveUp = await rejects(open("busy", { busyRetryMs: 200, busyWaitMs: 700 }));
+  check("…for at most busyWaitMs, then it reports busy (the job stops, pages stay queued)", gaveUp?.reason === "busy" && Date.now() - t0 < 5_000);
+  const acBusy = new AbortController();
+  const waiting = open("busy", { busyRetryMs: 300, busyWaitMs: 30_000, signal: acBusy.signal });
+  setTimeout(() => acBusy.abort(), 400);
+  check("…and a cancel ends the wait", (await rejects(waiting)) != null);
+  fs.rmSync(held);
+  const free = await open("ok");
+  check("…leaving the profile usable in this process", free.alive);
+  await free.close();
 }
 
 fs.rmSync(tmp, { recursive: true, force: true });

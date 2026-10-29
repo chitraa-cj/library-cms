@@ -5,7 +5,7 @@ import { createStrapiRouter, strapiRequest, strapiRequestLarge, withSectionLock 
 import { invalidateGranthaBulkCache, invalidateAllBulkCache } from "./grantha-bulk-cache";
 import { createAcharyaRouter, listAcharyas, seedAcharyasIfEmpty } from "./acharyas";
 import ocrRouter from "./ocr/routes";
-import { reconcileOcrJobsOnBoot } from "./ocr/jobs";
+import { prepareOcrApi } from "./ocr/jobs";
 import structureRouter from "./structure/routes";
 import { reconcileStructureJobsOnBoot } from "./structure/jobs";
 import translationJobsRouter from "./translation/routes";
@@ -4580,7 +4580,8 @@ export async function registerRoutes(
   // BEFORE the OCR router so `/structure/...` is not swallowed by `/jobs/:id`.
   app.use("/api/admin/ocr/structure", requireAuth, requireAdmin, structureRouter);
   app.use("/api/admin/ocr", requireAuth, requireAdmin, ocrRouter);
-  void reconcileOcrJobsOnBoot();
+  // OCR jobs run in the cms-ocr-worker process; the web app only installs the schema.
+  void prepareOcrApi();
   void reconcileStructureJobsOnBoot();
 
   // Translation queue (admin-only). The API only ever writes queue rows; the

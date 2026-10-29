@@ -240,7 +240,7 @@ translation by construction, and translation's own setup is unchanged:
 | Single-flight lock | `<HERMEX_DIR>/.hermex.lock` | `<structure profile>.lock` |
 | Entry point | `translate_cli.py` (one process per call) | `prompt_session.py` (one browser per job) |
 | Stale-browser cleanup | unchanged (sweeps all chromedrivers) | `HERMEX_CLEANUP_SCOPE=profile` (only its own profile) |
-| Process | `cms-translation-worker` | the web app (`cmslibrary`), one job at a time |
+| Process | `cms-translation-worker` | OCR: `cms-ocr-worker`; OCR → Grantha: the web app (`cmslibrary`). One session at a time on the profile: in-process gate + the profile lock across the two processes (a "busy" start is retried, `HERMEX_PROFILE_BUSY_WAIT_MS`) |
 
 One-time login for the second profile: `npm run hermex:setup-structure`
 (`setup_gemini.py --profile <dir>`; without `--profile` the script behaves exactly as

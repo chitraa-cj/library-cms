@@ -4,32 +4,30 @@
  *
  * Uploads come in as a raw body rather than multipart/base64 JSON: a 300-page
  * scan is ~80MB and base64 would inflate it by a third for no benefit.
+ *
+ * These routes only read and write job rows. Transcription happens in the
+ * cms-ocr-worker process (server/ocr/worker-main.ts): uploads and Retry queue work
+ * and notify it, cancel and delete mark the row, and live progress is read back
+ * from what the worker wrote.
  */
 import { Router, raw } from "express";
 import { createReadStream } from "node:fs";
 import path from "node:path";
 import { ocrEngineAvailability } from "./availability";
 import { OCR_SUPPORTED_MIME, ocrConfig } from "./config";
-import { ocrUsageSnapshot } from "./limiter";
 import { estimateJob } from "./estimate";
-import { liveChunks } from "./progress";
-import {
-  buildOcrDocument,
-  cancelOcrJob,
-  createOcrJob,
-  isJobActive,
-  pump,
-  retryOcrJob,
-} from "./jobs";
+import { buildOcrDocument, cancelOcrJob, createOcrJob, retryOcrJob } from "./jobs";
 import {
   deleteJob,
   ensureOcrSchema,
   getJob,
   historicalMsPerPage,
   jobDir,
+  listChunkLive,
   listChunkRawTexts,
   listChunkStatuses,
   listJobs,
+  ocrQueueUsage,
   purgeExpiredJobs,
 } from "./store";
 import { splitChunkPages } from "./pages";
@@ -66,7 +64,7 @@ router.get("/config", async (_req, res) => {
       maxChunkSize: ocrConfig.maxChunkSize,
       retentionDays: ocrConfig.retentionDays,
     },
-    usage: ocrUsageSnapshot(),
+    usage: await ocrQueueUsage(ocrConfig.concurrency),
   });
 });
 
@@ -79,7 +77,7 @@ router.get("/health", async (req, res) => {
 router.get("/jobs", async (_req, res) => {
   await ensureOcrSchema();
   const jobs = await listJobs(40);
-  res.json({ jobs, usage: ocrUsageSnapshot() });
+  res.json({ jobs, usage: await ocrQueueUsage(ocrConfig.concurrency) });
 });
 
 router.post(
@@ -129,7 +127,8 @@ router.get("/jobs/:id", async (req, res) => {
   const job = await getJob(req.params.id);
   if (!job) return fail(res, 404, "OCR job not found.");
   const chunks = await listChunkStatuses(job.id);
-  const live = liveChunks(job.id);
+  // Written by the worker while it runs the job; stale rows from a stopped run are ignored.
+  const live = job.status === "running" ? await listChunkLive(job.id) : {};
   const running = job.status === "running" || job.status === "queued";
   const now = Date.now();
   const progress = estimateJob({
@@ -151,8 +150,8 @@ router.get("/jobs/:id", async (req, res) => {
   res.json({
     job,
     chunks: chunks.map((c) => ({ ...c, live: live[c.chunkIndex] ?? null })),
-    active: isJobActive(job.id),
-    usage: ocrUsageSnapshot(),
+    active: job.status === "running",
+    usage: await ocrQueueUsage(ocrConfig.concurrency),
     progress,
     // Lets the client turn absolute `nextAttemptAt` stamps into countdowns
     // without trusting its own clock to match the server's.
@@ -219,7 +218,7 @@ router.get("/jobs/:id/source", async (req, res) => {
 router.post("/jobs/:id/retry", async (req, res) => {
   const job = await getJob(req.params.id);
   if (!job) return fail(res, 404, "OCR job not found.");
-  if (isJobActive(job.id)) return fail(res, 409, "This job is still running.");
+  // requeueJobForRetry refuses a queued/running job under a row lock (409 below).
   const requeued = await retryOcrJob(job.id);
   if (requeued == null) return fail(res, 409, "This job is already queued or running.");
   res.json({ requeued });
@@ -228,7 +227,7 @@ router.post("/jobs/:id/retry", async (req, res) => {
 router.post("/jobs/:id/cancel", async (req, res) => {
   const job = await getJob(req.params.id);
   if (!job) return fail(res, 404, "OCR job not found.");
-  const wasActive = isJobActive(job.id);
+  const wasActive = job.status === "running";
   const cancelled = await cancelOcrJob(job.id);
   res.json({ cancelled, wasActive });
 });
@@ -243,7 +242,6 @@ router.delete("/jobs/:id", async (req, res) => {
 
 router.post("/maintenance/purge", async (_req, res) => {
   const purged = await purgeExpiredJobs();
-  pump();
   res.json({ purged });
 });
 

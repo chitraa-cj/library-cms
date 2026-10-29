@@ -10,6 +10,9 @@
  *   - at most one session per profile in this process: OCR and OCR → Grantha share
  *     the dedicated document profile, and a second `open` waits for the first
  *     session to end instead of failing on the profile's lock;
+ *   - across processes (OCR runs in cms-ocr-worker, OCR → Grantha in the web app) the
+ *     profile's lock file decides: a session refused with "busy" is retried after a
+ *     pause until the other process lets go, `busyWaitMs` passes, or the caller aborts;
  *   - one request in flight per session; each carries a correlation id and only the
  *     answer bearing that id can resolve it — an answer can never be attributed to
  *     another request;
@@ -37,6 +40,30 @@ export interface PromptSessionOptions {
   label: string;
   /** Abandons waiting for the profile (another job's session holds it). */
   signal?: AbortSignal;
+  /** How long to keep retrying while another PROCESS holds the profile. */
+  busyWaitMs?: number;
+  /** Pause between those retries. */
+  busyRetryMs?: number;
+}
+
+function envMs(name: string, fallback: number): number {
+  const n = Number(process.env[name]);
+  return Number.isFinite(n) && n >= 0 ? n : fallback;
+}
+
+function pause(ms: number, signal?: AbortSignal): Promise<void> {
+  return new Promise((resolve, reject) => {
+    if (signal?.aborted) return reject(new Error("cancelled"));
+    const onAbort = () => {
+      clearTimeout(timer);
+      reject(new Error("cancelled"));
+    };
+    const timer = setTimeout(() => {
+      signal?.removeEventListener("abort", onAbort);
+      resolve();
+    }, ms);
+    signal?.addEventListener("abort", onAbort, { once: true });
+  });
 }
 
 /** One gate per Chrome profile; a profile can only ever host one browser. */
@@ -94,17 +121,35 @@ export class HermexPromptSession {
    * in and ready (or fail precisely). The profile is held until the browser exits.
    */
   static async open(opts: PromptSessionOptions): Promise<HermexPromptSession> {
-    const session = new HermexPromptSession(opts);
     const gate = profileGate(opts.profile.profileDir);
     if (gate.active > 0) log(opts.label, "waiting for the Gemini profile (another job's session is using it)");
-    session.releaseProfile = await gate.acquire(opts.signal);
+    const release = await gate.acquire(opts.signal);
+    // The lock file is checked before Chrome launches, so a "busy" refusal is cheap
+    // and retrying it costs one short Python start.
+    const busyWaitMs = opts.busyWaitMs ?? envMs("HERMEX_PROFILE_BUSY_WAIT_MS", 2 * 60 * 60 * 1000);
+    const busyRetryMs = opts.busyRetryMs ?? envMs("HERMEX_PROFILE_BUSY_RETRY_MS", 15_000);
+    const deadline = Date.now() + busyWaitMs;
+    let waited = false;
     try {
-      await session.start();
+      for (;;) {
+        const session = new HermexPromptSession(opts);
+        try {
+          await session.start();
+          session.releaseProfile = release;
+          if (waited) log(opts.label, "the Gemini profile is free again");
+          return session;
+        } catch (err) {
+          const busy = err instanceof HermexError && err.reason === "busy";
+          if (!busy || Date.now() + busyRetryMs > deadline) throw err;
+          if (!waited) log(opts.label, "waiting for the Gemini profile (another process's session is using it)");
+          waited = true;
+          await pause(busyRetryMs, opts.signal);
+        }
+      }
     } catch (err) {
-      session.freeProfile();
+      release();
       throw err;
     }
-    return session;
   }
 
   private freeProfile(): void {

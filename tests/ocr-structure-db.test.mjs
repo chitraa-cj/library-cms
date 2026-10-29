@@ -14,7 +14,8 @@
  *   1. migrations: the new migration applies twice;
  *   2. ownership: concurrent claims, fenced writes from a stale run, stale-heartbeat
  *      recovery, release by a run that lost its job;
- *   3. OCR through the real router, job runner, Hermex OCR engine (range files, prompt,
+ *   3. OCR through the real router, then the real job runner started as cms-ocr-worker
+ *      starts it (the router alone transcribes nothing), Hermex OCR engine (range files, prompt,
  *      answer validation) and persistence, with a SCRIPTED browser session in place of
  *      Chrome/Gemini: every page goes through the session; duplicate upload is reused;
  *      malformed and truncated answers are never stored; a page that stays unusable fails
@@ -246,6 +247,20 @@ check("the readiness check is Hermex's (document profile), and passes here", eng
   const created = await upload(path.join(FIXTURES, "isha-text.pdf"));
   check("upload creates a job", created.status === 201 && created.json.reused === false);
   textJobId = created.json.job.id;
+
+  // The web app only queues: with no worker scheduler, nothing is claimed or sent.
+  check("the web app has no OCR scheduler running", ocrJobs.isOcrSchedulerRunning() === false);
+  await sleep(1_500);
+  const purge = await api("POST", "/maintenance/purge");
+  check("the maintenance purge answers", purge.status === 200 && typeof purge.json?.purged === "number");
+  await sleep(500);
+  const idle = (await api("GET", `/jobs/${textJobId}`)).json;
+  check("an uploaded job stays queued in the web app (no in-process OCR)", idle.job.status === "queued" && idle.active === false, idle.job.status);
+  check("…no browser session was opened and no page was sent, purge included", sessionsOpened === 0 && ocrCalls.length === 0);
+
+  // Now the worker side: exactly what server/ocr/worker-main.ts starts.
+  await ocrJobs.startOcrScheduler({ pollMs: 300 });
+  check("the worker scheduler starts", ocrJobs.isOcrSchedulerRunning() === true);
   const done = await waitDone(textJobId);
   check("the PDF finishes", done?.job.status === "done", done?.job?.error ?? done?.job?.status);
   check("every page went through the Hermex session, one request each", ocrCalls.map((c) => c.start).join() === "1,2,3", JSON.stringify(ocrCalls));
@@ -324,7 +339,12 @@ check("the readiness check is Hermex's (document profile), and passes here", eng
   const big = await upload(path.join(FIXTURES, "isha-scan.pdf"), { force: "1" });
   const bigId = big.json.job.id;
   await until(async () => (await api("GET", `/jobs/${bigId}`)).json?.job.status === "running", { timeoutMs: 10_000, every: 20 });
-  await sleep(300);
+  const liveView = await until(async () => {
+    const r = (await api("GET", `/jobs/${bigId}`)).json;
+    return r?.chunks?.some((c) => c.live?.phase === "request") ? r : null;
+  }, { timeoutMs: 5_000, every: 50 });
+  check("the web app shows the worker's live progress (read from the chunk row)", !!liveView, "no live state seen");
+  check("…and the lane usage the worker is using", liveView?.usage?.inFlight === 1, JSON.stringify(liveView?.usage));
   const cancel = await api("POST", `/jobs/${bigId}/cancel`);
   check("cancel answers", cancel.status === 200 && cancel.json.cancelled === true);
   await sleep(2_500);
@@ -487,6 +507,7 @@ console.log("\ntranslation");
 }
 
 structureJobs.setStructureAnalyzerFactory(null);
+await ocrJobs.stopOcrScheduler({ graceMs: 2_000 });
 ocrJobs.setOcrSessionFactory(null);
 server.close();
 await pool.end();

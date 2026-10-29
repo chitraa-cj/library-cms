@@ -114,6 +114,25 @@ async function buildAll() {
     logLevel: "info",
   });
 
+  // The OCR worker is its own process (pm2 app `cms-ocr-worker`): it claims OCR jobs and
+  // drives the dedicated Hermex profile, so the web app never runs a transcription.
+  console.log("building OCR worker...");
+  await esbuild({
+    entryPoints: ["server/ocr/worker-main.ts"],
+    platform: "node",
+    bundle: true,
+    format: "cjs",
+    outfile: "dist/ocr-worker.cjs",
+    define: {
+      "process.env.NODE_ENV": '"production"',
+    },
+    minifyWhitespace: true,
+    minifySyntax: true,
+    minifyIdentifiers: false,
+    external: externals,
+    logLevel: "info",
+  });
+
   // connect-pg-simple reads its session-table DDL from a non-JS asset at runtime:
   //   fs.readFile(path.resolve(__dirname, './table.sql'))
   // esbuild bundles the JS but not the .sql file, and at runtime __dirname is dist/.

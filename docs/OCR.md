@@ -9,6 +9,31 @@ stops and says why.
 Admins see **Administration → OCR Docs** (`/admin/ocr`); editors do not see the nav entry
 and every API route returns 403 for them.
 
+## Where it runs
+
+OCR jobs run in their own pm2 process, **`cms-ocr-worker`** (`server/ocr/worker-main.ts`,
+built to `dist/ocr-worker.cjs`). The web app (`cmslibrary`) only manages jobs: upload,
+status, Retry, cancel, delete, purge, documents and downloads. It never claims a job or
+opens a browser — `pump()` is inert there because only the worker calls
+`startOcrScheduler()`, and importing the OCR modules starts no timer.
+
+- **Discovery:** an upload or Retry commits the job rows, then sends
+  `NOTIFY cms_ocr_queue`; the worker `LISTEN`s and claims at once. It also polls every
+  `OCR_WORKER_POLL_MS` (5 s), so a lost notification, or a LISTEN connection that
+  dropped, only delays a job by one poll.
+- **Cancel:** the web app marks the job cancelled and clears its run token, then sends
+  `NOTIFY cms_ocr_cancel`; the worker aborts the range in flight. Even without the
+  notification, the run's next heartbeat fails and every write it attempts is fenced off.
+- **Live progress** ("attempt 2 of 3", "retrying in 40 s") is written by the worker to
+  `cms_ocr_job_chunks.live_state` and read by the web app; lane usage comes from the rows.
+- **Shutdown** (SIGTERM from pm2): no new claims, the range in flight is aborted, and the
+  job is handed back to the queue (fenced on its token) within ~20 s; finished pages are
+  kept and the next boot resumes it. A run that dies without that is requeued by the stale
+  sweep after `OCR_STALE_AFTER_MS`.
+- **Shared profile:** OCR → Grantha still runs in the web app on the same Chrome profile.
+  The two processes take turns through the profile's lock file: a session refused as
+  "busy" waits and retries (`HERMEX_PROFILE_BUSY_WAIT_MS`, default 2 h) instead of failing.
+
 ## How a page is read
 
 ```
@@ -135,8 +160,11 @@ echo 'HERMEX_STRUCTURE_CHROME_PROFILE=/home/ubuntu/hermex-structure/chrome-profi
 echo 'HERMEX_STRUCTURE_DISPLAY=:98' >> .env
 # 3. one-time login with the dedicated (non-translation) Google account, on :98 via VNC
 npm run hermex:setup-structure
-# 4. restart the web app so it reads .env, then check
-curl -s localhost:<port>/api/admin/ocr/health        # 200 when ready, 503 + the problem otherwise
+# 4. apply the live-progress column, start the worker and restart the web app
+npm run migrate        # or psql -f script/migrations/20261030_ocr_worker_live_state.sql
+pm2 start ecosystem.config.cjs --only cms-ocr-worker && pm2 save
+pm2 restart cmslibrary
+pm2 logs cms-ocr-worker --lines 20 --nostream   # "Hermex ready" + "WORKER READY"
 ```
 
 No apt packages are needed for OCR.
@@ -174,6 +202,10 @@ npm run test:ocr-hermex           # prompt, answer validation (truncated/malform
                                   # Python peer — no Chrome, no Gemini)
 npm run test:provider-audit       # no provider SDK/endpoint/key/HTTP call, no local OCR
                                   # engine, no process other than the Hermex session
+TEST_DATABASE_URL=postgresql://test@127.0.0.1:55433/cmstest npm run test:ocr-worker
+                                  # the web app only queues; NOTIFY + poll discovery; two
+                                  # worker processes never claim one job; stale recovery;
+                                  # cancel via NOTIFY; SIGTERM hands the job back
 TEST_DATABASE_URL=postgresql://test@127.0.0.1:55433/cmstest npm run test:ocr-structure-db
                                   # real Postgres + the real router, engine, validation and
                                   # persistence, with the browser session scripted

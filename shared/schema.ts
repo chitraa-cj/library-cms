@@ -661,6 +661,8 @@ export const ocrJobChunks = pgTable("cms_ocr_job_chunks", {
   rawText: text("raw_text"),
   /** Per-page provenance, confidence and review flags (OcrPageMeta[]). */
   pagesMeta: jsonb("pages_meta").$type<unknown[]>(),
+  /** What the worker is doing on this range right now (server/ocr/progress.ts); null when idle. */
+  liveState: jsonb("live_state"),
   inputTokens: integer("input_tokens").notNull().default(0),
   outputTokens: integer("output_tokens").notNull().default(0),
   durationMs: integer("duration_ms").notNull().default(0),

@@ -74,6 +74,8 @@ export function ensureOcrSchema(): Promise<void> {
       await db.execute(sql`alter table cms_ocr_job_chunks add column if not exists raw_text text`);
       await db.execute(sql`alter table cms_ocr_job_chunks add column if not exists pages_meta jsonb`);
       await db.execute(sql`alter table cms_ocr_jobs add column if not exists text_mode text not null default 'auto'`);
+      // cms-ocr-worker (script/migrations/20261030_ocr_worker_live_state.sql).
+      await db.execute(sql`alter table cms_ocr_job_chunks add column if not exists live_state jsonb`);
       await ensureLeaseColumns(OCR_TABLES);
       await db.execute(
         sql`create index if not exists cms_ocr_jobs_created_idx on cms_ocr_jobs (created_at desc)`,
@@ -123,6 +125,25 @@ export function hashBytes(bytes: Buffer): string {
 export async function insertJob(row: typeof ocrJobs.$inferInsert): Promise<OcrJob> {
   const [job] = await db.insert(ocrJobs).values(row).returning();
   return job;
+}
+
+/**
+ * A new job and all its ranges in ONE transaction. The job is `queued` the moment it
+ * commits and the worker may claim it right then (poll or NOTIFY), so its ranges must
+ * already exist: a job claimed with no ranges would finish as "done" with no pages.
+ */
+export async function insertJobWithChunks(
+  row: typeof ocrJobs.$inferInsert,
+  chunks: Array<typeof ocrJobChunks.$inferInsert>,
+): Promise<OcrJob> {
+  return db.transaction(async (tx) => {
+    const [job] = await tx.insert(ocrJobs).values(row).returning();
+    // One statement per 500 rows keeps the parameter count well inside Postgres' limit.
+    for (let i = 0; i < chunks.length; i += 500) {
+      await tx.insert(ocrJobChunks).values(chunks.slice(i, i + 500));
+    }
+    return job;
+  });
 }
 
 export async function insertChunks(rows: Array<typeof ocrJobChunks.$inferInsert>): Promise<void> {
@@ -340,10 +361,41 @@ export function writeChunkResult(
     result.status === "done"
       ? sql`status = 'done', markdown = ${result.markdown}, raw_text = ${result.rawText},
             pages_meta = ${JSON.stringify(result.pagesMeta)}::jsonb, model = ${result.model},
-            attempts = attempts + ${result.attempts}, duration_ms = ${result.durationMs}, error = null`
+            attempts = attempts + ${result.attempts}, duration_ms = ${result.durationMs}, error = null,
+            live_state = null`
       : sql`status = ${result.status}, attempts = attempts + ${result.attempts ?? 0},
-            duration_ms = ${result.durationMs}, error = ${result.error}`;
+            duration_ms = ${result.durationMs}, error = ${result.error}, live_state = null`;
   return fencedChunkUpdate(OCR_TABLES, jobId, chunkIndex, token, assignments);
+}
+
+/** The worker's live view of a range (progress.ts), for the web app to read. Advisory, unfenced. */
+export async function writeChunkLive(jobId: string, chunkIndex: number, state: unknown | null): Promise<void> {
+  await db.execute(sql`
+    update cms_ocr_job_chunks set live_state = ${state == null ? null : JSON.stringify(state)}::jsonb
+     where job_id = ${jobId} and chunk_index = ${chunkIndex}`);
+}
+
+/** Live state of a job's ranges, as written by the worker. */
+export async function listChunkLive(jobId: string): Promise<Record<number, any>> {
+  const result = await db.execute(sql`
+    select chunk_index, live_state from cms_ocr_job_chunks
+     where job_id = ${jobId} and live_state is not null and status in ('queued', 'running')`);
+  const out: Record<number, any> = {};
+  for (const row of ((result as any).rows ?? []) as any[]) out[Number(row.chunk_index)] = row.live_state;
+  return out;
+}
+
+/**
+ * Lane usage seen from the database, so the web app reports what the worker is
+ * doing: ranges being read now, and jobs waiting their turn.
+ */
+export async function ocrQueueUsage(concurrency: number): Promise<{ inFlight: number; waiting: number; concurrency: number }> {
+  const result = await db.execute(sql`
+    select (select count(*) from cms_ocr_job_chunks c join cms_ocr_jobs j on j.id = c.job_id
+             where c.status = 'running' and j.status = 'running')::int as in_flight,
+           (select count(*) from cms_ocr_jobs where status = 'queued')::int as waiting`);
+  const row = (((result as any).rows ?? []) as any[])[0] ?? {};
+  return { inFlight: Number(row.in_flight ?? 0), waiting: Number(row.waiting ?? 0), concurrency };
 }
 
 export function markChunkRunning(jobId: string, chunkIndex: number, token: string): Promise<boolean> {

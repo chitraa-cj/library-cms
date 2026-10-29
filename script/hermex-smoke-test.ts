@@ -81,7 +81,9 @@ async function main() {
       {
         login: "\n  → The Gemini session expired. Re-run the interactive Hermex setup on the server.",
         display: "\n  → No X display. Check Xvfb on :99 (see docs/HERMEX.md, EC2 section).",
-        chrome: "\n  → Chrome/chromedriver is wedged. Stop the worker, pkill -f chromedriver, remove Singleton* from the profile.",
+        chrome:
+          "\n  → Chrome/chromedriver is wedged on this profile. Stop the worker, then: python python/hermex_translate/chrome_procs.py <profile> --stop --lock <lock file>" +
+          " (never pkill: OCR's browser runs on the same box).",
         timeout: "\n  → Gemini did not answer in time. Try again; if it persists the session may be rate-limited.",
         unavailable: "\n  → Hermex is not reachable from this process. Check HERMEX_PYTHON / HERMEX_ENABLED in .env.",
       }[reason] ?? "",

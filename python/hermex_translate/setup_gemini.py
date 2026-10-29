@@ -7,6 +7,7 @@ import os
 import sys
 import time
 import warnings
+from typing import Any
 
 try:
     from hermex import Gemini
@@ -51,7 +52,36 @@ def _profile_arg(argv: list[str]) -> str | None:
     return None
 
 
+def _setup_lock(profile: str | None) -> Any:
+    """The single-flight lock of the profile being set up — the one its workers hold.
+
+    A login window opened while a worker drives that profile would be a second Chrome
+    on one user-data dir (both break), and a worker's recovery could close the window
+    mid-login. Taken for the whole setup; "busy" means stop the worker first."""
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    import translate_cli
+
+    if profile:
+        path = (os.environ.get("HERMEX_LOCK_FILE") or "").strip() or f"{profile.rstrip(os.sep)}.lock"
+    else:
+        path = translate_cli._lock_path()
+    return translate_cli._ProfileLock(path)
+
+
 def run_setup(profile: str | None = None) -> int:
+    lock = _setup_lock(profile)
+    try:
+        lock.acquire()
+    except Exception as e:
+        print(f"\n{e}\nA worker is using this Chrome profile; stop it (pm2 stop <worker>) and run setup again.")
+        return 3
+    try:
+        return _run_setup_locked(profile)
+    finally:
+        lock.release()
+
+
+def _run_setup_locked(profile: str | None = None) -> int:
     marker = Path(profile or hermex_data_dir) / ".setup_gemini"
 
     print("=" * 60)

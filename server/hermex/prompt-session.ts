@@ -101,6 +101,9 @@ function asReason(value: unknown): HermexFailureReason {
   return KNOWN_REASONS.has(value as HermexFailureReason) ? (value as HermexFailureReason) : "unknown";
 }
 
+/** Python stderr lines worth surfacing in the worker log: browser lifecycle, never content. */
+const LIFECYCLE_LINE = /^\[(hermex-session|hermex-profile|hermex-procs)\]|^\[hermex\] (Launching Chrome|Browser launch failed|All launch modes failed|Cleaning up|Profile cleanup)/;
+
 function log(label: string, message: string): void {
   console.log(`[hermex-session ${label}] ${message}`);
 }
@@ -190,8 +193,18 @@ export class HermexPromptSession {
         reject(new HermexError(err && (err as any).code === "ENOENT" ? "unavailable" : "process", `Could not start Hermex: ${scrubHermexText(err)}`));
       });
 
+      let stderrLine = "";
       child.stderr?.on("data", (chunk: Buffer) => {
-        this.stderrTail = (this.stderrTail + chunk.toString("utf8")).slice(-4_000);
+        const text = chunk.toString("utf8");
+        this.stderrTail = (this.stderrTail + text).slice(-4_000);
+        // Browser lifecycle lines only (profile choice, launch, landing page, cleanup) —
+        // never prompts, answers or document text, which these prefixes do not carry.
+        stderrLine += text;
+        const lines = stderrLine.split("\n");
+        stderrLine = lines.pop() ?? "";
+        for (const line of lines) {
+          if (LIFECYCLE_LINE.test(line)) log(this.opts.label, scrubHermexText(line.trim(), 300));
+        }
       });
 
       const lines = readline.createInterface({ input: child.stdout! });

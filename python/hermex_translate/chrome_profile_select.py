@@ -13,8 +13,8 @@ open pages". This module:
     signed in to Chrome — never an email, cookie or token);
   * classifies the page the browser landed on (Gemini, the profile picker, a Google
     login page, something else);
-  * finds and stops browsers launched on THIS user-data directory only, by exact
-    `--user-data-dir=` match — never any other Chrome.
+  * stops browsers launched on THIS user-data directory only (chrome_procs: exact
+    `--user-data-dir=` argument on a Chrome executable) — never any other Chrome.
 """
 
 from __future__ import annotations
@@ -22,8 +22,6 @@ from __future__ import annotations
 import json
 import os
 import re
-import signal
-import subprocess
 import sys
 import time
 from typing import Any, Callable
@@ -103,16 +101,33 @@ def install(directory: str, chrome_options_module: Any = None) -> None:
     chrome_options_module.ChromeOptions = _ProfileOptions
 
 
+_GEMINI_APP = re.compile(r"^https://gemini\.google\.com/(u/\d+/)?(app|gem|chat)(?:[/?#]|$)")
+
+
 def classify_url(url: str | None) -> str:
-    """'gemini' | 'picker' | 'login' | 'other' for the page the browser is showing."""
+    """'gemini' | 'landing' | 'picker' | 'login' | 'other' for the page the browser shows.
+
+    'landing' is gemini.google.com outside the chat app — the public start page Gemini
+    redirects to when this profile cannot use the app (not signed in to Gemini, or an
+    account without Gemini access). It has no chat box, so waiting for one only times out."""
     u = (url or "").strip().lower()
     if u.startswith("chrome://profile-picker"):
         return "picker"
-    if u.startswith("https://gemini.google.com/"):
+    if _GEMINI_APP.match(u):
         return "gemini"
+    if u.startswith("https://gemini.google.com"):
+        return "landing"
     if u.startswith("https://accounts.google.com/"):
         return "login"
     return "other"
+
+
+LANDING_HINT = (
+    "Gemini did not open its chat app for this Chrome profile: it redirected to the public "
+    "start page (https://gemini.google.com/). The profile is not signed in to Gemini, or its "
+    "Google account cannot use the Gemini app (e.g. a Workspace account without Gemini). "
+    "Log in again with an account that can use gemini.google.com/app (npm run hermex:setup-structure)."
+)
 
 
 def wait_for_gemini(get_url: Callable[[], str], timeout: float = 30.0, every: float = 0.5,
@@ -126,7 +141,7 @@ def wait_for_gemini(get_url: Callable[[], str], timeout: float = 30.0, every: fl
             kind = classify_url(get_url())
         except Exception:
             kind = "other"
-        if kind in ("gemini", "picker", "login") or clock() >= deadline:
+        if kind in ("gemini", "landing", "picker", "login") or clock() >= deadline:
             return kind
         sleep(every)
 
@@ -147,61 +162,11 @@ def picker_hint(udd: str, configured: str | None) -> str:
     )
 
 
-def own_browser_pids(ps_output: str, udd: str) -> list[int]:
-    """PIDs from `ps -axo pid=,command=` whose command line names exactly this user-data dir."""
-    needle = f"--user-data-dir={udd.rstrip(os.sep)}"
-    pids = []
-    for line in ps_output.splitlines():
-        line = line.strip()
-        if not line:
-            continue
-        pid_text, _, command = line.partition(" ")
-        idx = command.find(needle)
-        if idx < 0:
-            continue
-        end = idx + len(needle)
-        # `/x/chrome_profile` must not match `/x/chrome_profile2` or `/x/chrome_profile/sub`.
-        if end < len(command) and not command[end].isspace():
-            continue
-        try:
-            pids.append(int(pid_text))
-        except ValueError:
-            continue
-    return pids
+def stop_own_browsers(data_dir: str, grace: float = 5.0) -> list[int]:
+    """Stop Chrome left on THIS profile by a failed launch — exact `--user-data-dir`
+    match on a Chrome executable only (chrome_procs), never another browser. Stale
+    singleton files are cleared only once their owner is verifiably dead."""
+    import chrome_procs
 
-
-def stop_own_browsers(udd: str, grace: float = 5.0) -> list[int]:
-    """Stop Chrome processes left on this user-data dir by a failed launch (SIGTERM,
-    then SIGKILL after `grace`). Touches no file and no other browser."""
-    try:
-        ps = subprocess.run(["ps", "-axo", "pid=,command="], capture_output=True, text=True, timeout=10).stdout
-    except Exception as e:
-        _log(f"could not list processes: {e}")
-        return []
-    pids = [p for p in own_browser_pids(ps, udd) if p != os.getpid()]
-    for pid in pids:
-        try:
-            os.kill(pid, signal.SIGTERM)
-        except OSError:
-            pass
-    deadline = time.monotonic() + grace
-    alive = list(pids)
-    while alive and time.monotonic() < deadline:
-        time.sleep(0.25)
-        alive = [p for p in alive if _alive(p)]
-    for pid in alive:
-        try:
-            os.kill(pid, signal.SIGKILL)
-        except OSError:
-            pass
-    if pids:
-        _log(f"stopped {len(pids)} leftover browser process(es) on {udd}")
-    return pids
-
-
-def _alive(pid: int) -> bool:
-    try:
-        os.kill(pid, 0)
-        return True
-    except OSError:
-        return False
+    result = chrome_procs.cleanup_profile(data_dir, grace=grace)
+    return result["browsers"]

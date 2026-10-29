@@ -275,10 +275,15 @@ def main() -> int:
 
     log(f"[diag] {len(plan)} trial(s) planned -> {out_path}")
 
-    gemini = tc._open_gemini_browser(headless=False)
+    # Holds the profile's single-flight lock for the whole run: if a worker is using
+    # this profile the diagnostic stops with "busy" instead of launching a competing Chrome.
+    profile_lock = tc._ProfileLock(tc._lock_path())
+    profile_lock.acquire()
+    gemini = None
     records: list[dict[str, Any]] = []
     position = 0
     try:
+        gemini = tc._open_gemini_browser(headless=False)
         warm = tc._warm_up_gemini(gemini)
         log(f"[diag] warm-up ok={warm}")
         for i, (cell, prompt, src, fresh) in enumerate(plan, 1):
@@ -304,6 +309,7 @@ def main() -> int:
             time.sleep(5)
     finally:
         tc._close_gemini_browser(gemini)
+        profile_lock.release()
 
     print("\n=== outcomes by cell ===")
     cells_seen: dict[str, dict[str, int]] = {}

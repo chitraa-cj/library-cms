@@ -50,7 +50,22 @@ export type RunOptions = {
   dryRun: boolean;
   checkpointPath: string;
   resetCheckpoint: boolean;
+  /**
+   * Set by the translation worker: once it aborts (pm2 stop/restart), no NEW Hermex
+   * process is started — not even a retry. pm2 signals the whole process tree, so the
+   * run in flight is already gone; a retry launched after that would hold the profile
+   * lock while the next worker instance starts, failing its first item as "busy".
+   */
+  signal?: { aborted: boolean };
 };
+
+/** Thrown instead of starting a Hermex run after the worker began shutting down. Not retryable. */
+export class HermexShutdownError extends Error {
+  constructor() {
+    super("Hermex run not started: the worker is shutting down.");
+    this.name = "HermexShutdownError";
+  }
+}
 
 export type CheckpointFile = {
   granthaDocumentId: string;
@@ -324,14 +339,21 @@ export async function runHermexWithRetry(
   req: Parameters<typeof runHermexTranslate>[0],
   maxRetries: number,
   chunkDelayMs: number,
+  signal?: { aborted: boolean },
+  run: typeof runHermexTranslate = runHermexTranslate,
 ): Promise<Awaited<ReturnType<typeof runHermexTranslate>>> {
   let lastErr: unknown;
   for (let attempt = 1; attempt <= maxRetries; attempt++) {
+    if (signal?.aborted) throw attempt === 1 ? new HermexShutdownError() : lastErr ?? new HermexShutdownError();
     try {
-      return await runHermexTranslate(req);
+      return await run(req);
     } catch (e) {
       lastErr = e;
       if (attempt >= maxRetries || !isHermexRetryableError(e)) throw e;
+      if (signal?.aborted) {
+        console.log(`[retry] not retrying — worker shutting down (${e instanceof Error ? e.message.slice(0, 120) : e})`);
+        throw e;
+      }
       const baseWait = isChromeSessionError(e) ? Math.max(chunkDelayMs * 2, 8000) : chunkDelayMs;
       const wait = baseWait * attempt;
       console.log(`[retry] attempt ${attempt + 1}/${maxRetries} in ${wait}ms — ${e instanceof Error ? e.message.slice(0, 120) : e}`);
@@ -756,6 +778,7 @@ export async function translateJobIncremental(
       },
       opts.maxRetries,
       opts.chunkDelayMs,
+      opts.signal,
     );
     for (const row of result.translations ?? []) {
       byLang.set(row.language, row);

@@ -172,8 +172,8 @@ export function hermexChildEnv(): NodeJS.ProcessEnv {
   if (profile) {
     env.HERMEX_CHROME_PROFILE = profile;
     env.HERMEX_CHROME_PROFILE_DIR = profile;
-    // pkill -f pattern for orphaned Chrome on THIS profile. The path is specific
-    // enough that a human's own browser is never matched.
+    // Kept for compatibility; cleanup no longer pattern-matches on it. Orphaned Chrome
+    // is found by its exact --user-data-dir (python/hermex_translate/chrome_procs.py).
     env.HERMEX_CHROME_PROFILE_MARKER ??= profile;
   }
 

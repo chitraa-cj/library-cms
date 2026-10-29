@@ -92,9 +92,11 @@ recovered from, the Dismiss button is clicked, "Use precise location" is **not**
 ```bash
 scp deploy/hermex-patches/test_popup_fix.py ubuntu@<box>:/tmp/
 ssh ubuntu@<box>
-pgrep -x chromedriver >/dev/null && pkill -x chromedriver     # never `pkill -f`: it
-                                                              # matches your own ssh line
-rm -f /home/ubuntu/hermex-translation/chrome-profile/Singleton*
+# Stop the translation worker first. Never pkill chromedriver by name: OCR's driver
+# runs on this box too. This stops only Chrome on translation's profile and removes
+# Singleton* only if their owner is verifiably dead (refuses while a worker holds the lock):
+python /home/ubuntu/library/library-cms/python/hermex_translate/chrome_procs.py \
+  /home/ubuntu/hermex-translation/chrome-profile --stop --lock /home/ubuntu/hermex-translation/.hermex.lock
 cd /tmp && DISPLAY=:99 /home/ubuntu/hermex-translation/.venv/bin/python test_popup_fix.py
 # expect: 10 passed, 0 failed
 ```

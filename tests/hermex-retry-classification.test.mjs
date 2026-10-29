@@ -103,6 +103,43 @@ check(
   "the breaker raise does not interpolate the marker",
 );
 
+// ── no new Hermex run once the worker is shutting down ─────────────────────────
+console.log("\nshutdown stops retries");
+{
+  const { runHermexWithRetry, HermexShutdownError } = await import("../script/lib/hermex-grantha-sync.ts");
+  const req = { sourceText: "x", sourceLanguage: "English", targetLanguages: ["Hindi"] };
+  const chromeErr = () => new Error("Hermex (chrome): session not created: cannot connect to chrome");
+
+  let calls = 0;
+  const err1 = await runHermexWithRetry(req, 3, 1, { aborted: true }, async () => (calls++, { translations: [] })).catch((e) => e);
+  check("already shutting down → no Hermex process is started at all", calls === 0 && err1 instanceof HermexShutdownError);
+
+  calls = 0;
+  const signal = { aborted: false };
+  const err2 = await runHermexWithRetry(req, 3, 1, signal, async () => {
+    calls++;
+    signal.aborted = true; // pm2 SIGINT arrives while this run is in flight (and kills it)
+    throw chromeErr();
+  }).catch((e) => e);
+  check("a run killed by the shutdown is NOT retried (no Chrome launched after SIGINT)", calls === 1 && /cannot connect/.test(err2?.message ?? ""), `calls=${calls}`);
+
+  calls = 0;
+  const ok = await runHermexWithRetry(req, 3, 1, { aborted: false }, async () => {
+    calls++;
+    if (calls < 3) throw chromeErr();
+    return { translations: [{ language: "Hindi", text: "ok" }] };
+  });
+  check("without a shutdown, retry behaviour is unchanged (3 attempts)", calls === 3 && ok.translations.length === 1);
+
+  calls = 0;
+  await runHermexWithRetry(req, 3, 1, undefined, async () => {
+    calls++;
+    if (calls < 2) throw chromeErr();
+    return { translations: [] };
+  });
+  check("callers that pass no signal (the hermex:grantha CLI) retry exactly as before", calls === 2);
+}
+
 console.log(`\n${PASS} passed, ${FAILURES.length} failed`);
 if (FAILURES.length) {
   for (const f of FAILURES) console.log(`  - ${f}`);

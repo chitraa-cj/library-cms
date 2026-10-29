@@ -55,8 +55,9 @@ function checkpointPathForJob(jobId: string): string {
   return path.join(dir, `job-${jobId}.json`);
 }
 
-function runOptionsForJob(jobId: string): RunOptions {
+function runOptionsForJob(jobId: string, signal?: AbortSignal): RunOptions {
   return {
+    signal,
     headless: translationConfig.headless,
     chunkSize: translationConfig.chunkSize,
     chunkDelayMs: translationConfig.chunkDelayMs,
@@ -111,7 +112,7 @@ export async function translateMantra(input: TranslateMantraInput): Promise<Tran
     throw new Error(`Mantra ${input.mantraDocId} was not found in the CMS.`);
   }
 
-  const opts = runOptionsForJob(input.jobId);
+  const opts = runOptionsForJob(input.jobId, input.signal);
   const checkpoint = loadJobCheckpoint(input.jobId, mantra.documentId ?? "", input.granthaName);
 
   const result = await translateMantraPasses(

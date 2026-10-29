@@ -145,11 +145,32 @@ def main() -> int:
     try:
         lock.acquire()
         locked = True
+        # With the lock held, a Chrome on exactly this user-data dir cannot belong to a
+        # live session: it is an orphan of one Node had to SIGKILL. Launching beside it
+        # fails ("cannot connect to chrome"), so stop it first — this profile only.
+        import chrome_procs
+
+        orphans = chrome_procs.browser_pids(udd, chrome_procs.list_processes())
+        if orphans:
+            _log(f"found {len(orphans)} leftover browser process(es) on this profile from an earlier session; stopping them")
+            profiles.stop_own_browsers(data_dir)
         try:
             gemini = cli._open_gemini_browser(headless)
         except Exception as e:
             text = str(e).lower()
-            if "unable to discover open pages" in text or "profile-picker" in text:
+            # Where did the browser end up? Read its tab URL (local DevTools GET) before
+            # the failed launch is cleaned up, so the failure says what actually happened.
+            import chrome_procs
+
+            landed = profiles.classify_url(chrome_procs.current_page_url(udd))
+            _log(f"launch failed ({type(e).__name__}); browser was on: {landed}")
+            if landed == "landing":
+                _emit({"type": "fatal", "reason": "login", "error": profiles.LANDING_HINT})
+                return 3
+            if landed == "login":
+                _emit({"type": "fatal", "reason": "login", "error": "The dedicated profile opened Google's sign-in page instead of Gemini. Log in again (npm run hermex:setup-structure)."})
+                return 3
+            if landed == "picker" or "unable to discover open pages" in text or "profile-picker" in text:
                 # Chrome is sitting on its profile picker: no page for ChromeDriver to attach to.
                 _emit({
                     "type": "fatal",
@@ -157,12 +178,17 @@ def main() -> int:
                     "error": f"{profiles.picker_hint(udd, directory)} (ChromeDriver: {str(e).splitlines()[0][:200]})",
                 })
                 return 1
+            if not str(e).strip() or str(e).strip() == "Message:":
+                raise RuntimeError(f"{type(e).__name__} while opening Gemini (browser was on: {landed})") from e
             raise
         page = profiles.wait_for_gemini(lambda: gemini.driver.current_url, timeout=page_timeout)
         _log(f"browser landed on: {page}")
         if page == "picker":
             _emit({"type": "fatal", "reason": "chrome" if directory else "unavailable", "error": profiles.picker_hint(udd, directory)})
             return 1
+        if page == "landing":
+            _emit({"type": "fatal", "reason": "login", "error": profiles.LANDING_HINT})
+            return 3
         if page == "login":
             _emit({"type": "fatal", "reason": "login", "error": "The dedicated profile opened Google's sign-in page instead of Gemini. Log in again (npm run hermex:setup-structure)."})
             return 3
@@ -238,7 +264,7 @@ def main() -> int:
             # A launch that failed can leave Chrome (often on the profile picker) holding
             # this profile; stop exactly those processes, nothing else. We hold the
             # profile's lock, so no live session of ours can be among them.
-            profiles.stop_own_browsers(udd)
+            profiles.stop_own_browsers(data_dir)
         lock.release()
 
 

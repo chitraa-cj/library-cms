@@ -641,55 +641,26 @@ def _profile_lock_dirs() -> list[str]:
 
 
 def _cleanup_stale_chrome() -> None:
-    """Kill orphaned chromedriver / automation Chrome after launch failures.
+    """Stop what a failed launch left on OUR profile, and nothing else.
 
-    Scoped to OUR profile path so a human's own browser is never touched: the
-    pkill pattern is derived from the configured profile rather than a hard-coded
-    marker that did not match the real nested path on this server."""
-    import subprocess
+    Safe by default (chrome_procs): only Chrome processes whose `--user-data-dir` is
+    exactly this profile's directory, plus ChromeDrivers this process started — never
+    another workflow's browser (translation and OCR run side by side on one box), an
+    unrelated Chrome, a shell that merely mentions the path, or this process. Singleton
+    lock files are removed only when their recorded owner is verifiably dead.
 
-    _log("[hermex] Cleaning up stale chromedriver before relaunch")
-    profile_dir = _configured_profile_dir()
-    # An explicit marker still wins, but the default is now the configured path —
-    # the old default ("hermex/chrome_profile") never matched
-    # ".../hermex-translation/chrome-profile/chrome_profile", so orphaned visible
-    # Chrome on this box was never reaped.
-    profile_marker = (os.environ.get("HERMEX_CHROME_PROFILE_MARKER") or profile_dir).strip()
-    if sys.platform in ("darwin", "linux"):
-        # HERMEX_CLEANUP_SCOPE=profile limits the sweep to processes naming OUR profile.
-        # Set by every workflow that runs its own browser beside translation's (the
-        # OCR → Grantha prompt session): the bare "chromedriver" patterns would kill
-        # translation's live driver. Unset (translation itself), behaviour is unchanged.
-        scoped = (os.environ.get("HERMEX_CLEANUP_SCOPE") or "").strip().lower() == "profile"
-        patterns = (
-            []
-            if scoped
-            else [
-                "chromedriver",
-                "undetected_chromedriver",
-                "chrome-headless",
-                "Google Chrome --headless",
-            ]
-        )
-        if profile_marker:
-            # Matches `--user-data-dir=<profile>` and `<profile>/chrome_profile`.
-            patterns.append(profile_marker)
-        for pattern in patterns:
-            subprocess.run(["pkill", "-f", pattern], capture_output=True)
+    The caller holds this profile's single-flight lock, so a Chrome on the directory
+    cannot belong to a live session of this workflow. HERMEX_CLEANUP_SCOPE is no longer
+    needed for that: the old unscoped sweep (`pkill -f chromedriver` and friends) is gone."""
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    import chrome_procs
 
-    # Remove stale Singleton lock files — a hard-killed Chrome leaves these, and a
-    # fresh Chrome on the same profile then exits immediately ('cannot connect to
-    # chrome'). Chrome recreates them on a clean launch, so removal is safe.
-    for directory in _profile_lock_dirs():
-        for lock in _SINGLETON_FILES:
-            lock_path = os.path.join(directory, lock)
-            try:
-                if os.path.lexists(lock_path):
-                    os.remove(lock_path)
-                    _log(f"[hermex] Removed stale {lock} from {directory}")
-            except OSError as lock_err:
-                _log(f"[hermex] Could not remove {lock}: {lock_err}")
-    time.sleep(5)
+    _log("[hermex] Cleaning up this profile's leftover browser before relaunch")
+    try:
+        chrome_procs.cleanup_profile(_configured_profile_dir())
+    except Exception as e:  # never let cleanup mask the launch error being recovered
+        _log(f"[hermex] Profile cleanup skipped: {type(e).__name__}: {e}")
+    time.sleep(2)
 
 
 def _headless_fallback_enabled() -> bool:

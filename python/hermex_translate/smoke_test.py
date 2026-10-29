@@ -75,8 +75,10 @@ def run_smoke(req: dict[str, Any]) -> dict[str, Any]:
     # IDLE before reading, so the smoke test exercises exactly the code path a real
     # translation takes instead of a happier-looking shortcut.
     from translate_cli import (  # type: ignore[import-not-found]
+        _ProfileLock,
         _close_gemini_browser,
         _gemini_query_with_recovery,
+        _lock_path,
         _open_gemini_browser,
     )
 
@@ -94,18 +96,22 @@ def run_smoke(req: dict[str, Any]) -> dict[str, Any]:
     )
 
     started = time.time()
-    gemini = _open_gemini_browser(headless)
-    try:
-        _log("[hermex-smoke] browser connection established")
-        if not getattr(gemini, "is_logged_in", True):
-            raise RuntimeError(
-                "Gemini session is not logged in — re-run the interactive Hermex setup on the server."
+    # The same single-flight lock translation holds: a smoke test (or the deep health
+    # check) while a translation runs must report "busy", never launch a second Chrome
+    # on the live profile.
+    with _ProfileLock(_lock_path()):
+        gemini = _open_gemini_browser(headless)
+        try:
+            _log("[hermex-smoke] browser connection established")
+            if not getattr(gemini, "is_logged_in", True):
+                raise RuntimeError(
+                    "Gemini session is not logged in — re-run the interactive Hermex setup on the server."
+                )
+            answer = _gemini_query_with_recovery(
+                gemini, prompt, source_text=prompt, timeout=timeout
             )
-        answer = _gemini_query_with_recovery(
-            gemini, prompt, source_text=prompt, timeout=timeout
-        )
-    finally:
-        _close_gemini_browser(gemini)
+        finally:
+            _close_gemini_browser(gemini)
 
     text = _response_text(answer).strip()
     if not text:

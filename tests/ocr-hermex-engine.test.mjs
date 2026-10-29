@@ -203,6 +203,12 @@ def emit(o):
     sys.stdout.write(json.dumps(o) + "\n"); sys.stdout.flush()
 if mode == "login":
     emit({"type": "fatal", "reason": "login", "error": "not logged in"}); sys.exit(3)
+if mode == "stderrlog":
+    sys.stderr.write("[hermex-session] user-data-dir=/p/chrome_profile profile-directory=Profile 1\n")
+    sys.stderr.write("[hermex] Launching Chrome (headless=False, attempt 1/4)\n")
+    sys.stderr.write("ईशा वास्यमिदं SECRET-PAGE-TEXT\n")
+    sys.stderr.write("[hermex] OK chunk 1 | Hindi SECRET-ANSWER\n")
+    sys.stderr.flush()
 if mode == "busy":
     # Another PROCESS holds the profile lock until a marker file disappears.
     held = os.environ["FAKE_HELD"]
@@ -245,6 +251,18 @@ for line in sys.stdin:
   const after = await open("ok");
   check("…and frees the profile for the next session", after.alive);
   await after.close();
+
+  // The worker log shows the session's browser lifecycle, never content.
+  const logged = [];
+  const realLog = console.log;
+  console.log = (...a) => (logged.push(a.join(" ")), realLog(...a));
+  const noisy = await open("stderrlog");
+  await new Promise((r) => setTimeout(r, 300));
+  await noisy.close();
+  console.log = realLog;
+  const text = logged.join("\n");
+  check("the session's profile choice and launch lines reach the worker log", /profile-directory=Profile 1/.test(text) && /Launching Chrome/.test(text));
+  check("…but never page text or answers", !/SECRET-PAGE-TEXT|SECRET-ANSWER/.test(text));
 
   // OCR (cms-ocr-worker) and OCR → Grantha (web app) are different processes: the
   // in-process gate cannot see the other one, the profile lock file can.

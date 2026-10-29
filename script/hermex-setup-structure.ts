@@ -30,6 +30,8 @@ delete env.DISPLAY;
 if (display) env.DISPLAY = display;
 // Log in to the same Chrome profile the sessions will open (HERMEX_STRUCTURE_PROFILE_DIRECTORY).
 if (result.profile.profileDirectory) env.HERMEX_SESSION_PROFILE_DIRECTORY = result.profile.profileDirectory;
+// The same lock OCR and OCR → Grantha sessions hold: setup refuses ("busy") while one runs.
+env.HERMEX_LOCK_FILE = result.profile.lockFile;
 console.log(`Opening Chrome on the dedicated structure profile: ${result.profile.profileDir} (display ${display ?? "none"})`);
 const run = spawnSync(
   hermexPython(),

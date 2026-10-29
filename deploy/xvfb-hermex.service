@@ -20,7 +20,10 @@
 #   sudo cp deploy/xvfb-hermex.service /etc/systemd/system/
 #   sudo systemctl daemon-reload
 #   pm2 stop cms-translation-worker          # stop users of the display first
-#   pkill -f chromedriver || true
+#   # never `pkill -f chromedriver`: OCR's browser (display :98) runs on this box too.
+#   # Leftover Chrome on translation's profile only:
+#   #   python python/hermex_translate/chrome_procs.py /home/ubuntu/hermex-translation/chrome-profile \
+#   #     --stop --lock /home/ubuntu/hermex-translation/.hermex.lock
 #   pkill -f "Xvfb :99" || true              # retire the hand-started one
 #   sudo systemctl enable --now xvfb-hermex
 #   systemctl status xvfb-hermex --no-pager

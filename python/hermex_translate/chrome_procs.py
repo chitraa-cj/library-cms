@@ -47,6 +47,21 @@ def canonical(path: str) -> str:
     return os.path.realpath(os.path.expanduser(path)).rstrip(os.sep) or os.sep
 
 
+def proc_from_cmdline(pid: int, ppid: int, data: bytes) -> Proc | None:
+    """A Proc from raw /proc/<pid>/cmdline bytes.
+
+    Normally NUL-separated argv. Chrome on Linux REWRITES its command line into one
+    space-joined string (verified on EC2: argc=1, no NUL), so a single argument that
+    carries flags is parsed like `ps` output instead — otherwise a running Chrome would
+    never be recognised (the executable would be the whole line, with no arguments)."""
+    parts = [a.decode("utf-8", "replace") for a in data.split(b"\0") if a]
+    if not parts:
+        return None
+    if len(parts) == 1 and " --" in parts[0]:
+        return Proc(pid, ppid, (), parts[0])
+    return Proc(pid, ppid, tuple(parts))
+
+
 def list_processes() -> list[Proc]:
     """Every process with its exact argv (Linux /proc), or `ps` output elsewhere."""
     procs: list[Proc] = []
@@ -57,14 +72,15 @@ def list_processes() -> list[Proc]:
             pid = int(entry)
             try:
                 with open(f"/proc/{pid}/cmdline", "rb") as f:
-                    argv = tuple(a.decode("utf-8", "replace") for a in f.read().split(b"\0") if a)
+                    data = f.read()
                 with open(f"/proc/{pid}/stat", "rb") as f:
                     stat = f.read().decode("utf-8", "replace")
                 ppid = int(stat.rsplit(")", 1)[1].split()[1])
             except (OSError, ValueError, IndexError):
                 continue
-            if argv:
-                procs.append(Proc(pid, ppid, argv))
+            proc = proc_from_cmdline(pid, ppid, data)
+            if proc is not None:
+                procs.append(proc)
         return procs
     try:
         out = subprocess.run(["ps", "-axo", "pid=,ppid=,args="], capture_output=True, text=True, timeout=10).stdout

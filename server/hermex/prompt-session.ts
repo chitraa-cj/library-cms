@@ -102,7 +102,7 @@ function asReason(value: unknown): HermexFailureReason {
 }
 
 /** Python stderr lines worth surfacing in the worker log: browser lifecycle, never content. */
-const LIFECYCLE_LINE = /^\[(hermex-session|hermex-profile|hermex-procs)\]|^\[hermex\] (Launching Chrome|Browser launch failed|All launch modes failed|Cleaning up|Profile cleanup)/;
+const LIFECYCLE_LINE = /^\[(hermex-session|hermex-profile|hermex-procs)\]|^\[hermex\] (Launching Chrome|ChromeDriver for this profile|Browser launch failed|All launch modes failed|Cleaning up|Profile cleanup)/;
 
 function log(label: string, message: string): void {
   console.log(`[hermex-session ${label}] ${message}`);

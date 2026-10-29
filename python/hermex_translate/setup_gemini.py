@@ -105,6 +105,13 @@ def _run_setup_locked(profile: str | None = None) -> int:
         print(f"Chrome profile directory: {directory}")
         chrome_profile_select.install(directory)
 
+    # This profile's own ChromeDriver file: re-downloading the shared one would crash a
+    # worker's driver running on the other profile (see translate_cli._isolate_chromedriver).
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    import translate_cli
+
+    translate_cli._isolate_chromedriver(profile or str(Path(hermex_data_dir)))
+
     with warnings.catch_warnings():
         warnings.simplefilter("ignore", UserWarning)
         # Web security must stay ON — Gemini rejects sends from a browser started

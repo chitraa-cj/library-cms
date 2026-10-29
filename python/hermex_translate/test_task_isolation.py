@@ -86,9 +86,15 @@ def alive(pid: int) -> bool:
             return p.poll() is None
     try:
         os.kill(pid, 0)
-        return True
     except OSError:
         return False
+    # A killed process re-parented to a subreaper can linger as a zombie: dead for us.
+    try:
+        with open(f"/proc/{pid}/stat") as f:
+            return f.read().rsplit(")", 1)[1].split()[0] != "Z"
+    except OSError:
+        st = subprocess.run(["ps", "-o", "stat=", "-p", str(pid)], capture_output=True, text=True).stdout.strip()
+        return bool(st) and not st.startswith("Z")
 
 
 real_sleep = time.sleep
@@ -142,6 +148,14 @@ try:
         chrome_procs.Proc(5000, 1, (str(BIN / "chrome"), f"--user-data-dir={TR_UDD}")),
     ]
     check("cleanup can never select its own process or an ancestor", chrome_procs.browser_pids(str(TR_UDD), fake_procs, me=me) == [5000])
+    # Chrome on Linux rewrites /proc/<pid>/cmdline into ONE space-joined string (seen on EC2).
+    rewritten = chrome_procs.proc_from_cmdline(
+        7001, 1, f"/opt/google/chrome/chrome --profile-directory=Profile 1 --start-maximized --user-data-dir={TR_UDD} --no-sandbox".encode())
+    nul_form = chrome_procs.proc_from_cmdline(7002, 1, b"\0".join([b"/opt/google/chrome/chrome", f"--user-data-dir={TR_UDD}".encode()]))
+    shell = chrome_procs.proc_from_cmdline(7003, 1, f"bash -c grep --user-data-dir={TR_UDD}".encode())
+    check("a Chrome whose command line was rewritten into one string is still recognised (the EC2 case)",
+          chrome_procs.browser_pids(str(TR_UDD), [rewritten, nul_form, shell], me=1) == [7001, 7002])  # type: ignore[list-item]
+    check("…while a shell carrying the same text is not", 7003 not in chrome_procs.browser_pids(str(TR_UDD), [shell], me=1))  # type: ignore[list-item]
     ps_text = f"10 1 /Applications/Google Chrome.app/Contents/MacOS/Google Chrome --user-data-dir=/x/Application Support/p --no-first-run\n11 1 /usr/bin/grep --user-data-dir=/x/Application Support/p"
     check("ps fallback: a path with spaces still matches exactly, and grep does not",
           chrome_procs.browser_pids("/x/Application Support/p", chrome_procs.parse_ps(ps_text), me=1) == [10])
@@ -281,6 +295,14 @@ def pid_alive(pid: int) -> bool:
 real_sleep2 = time.sleep
 translate_cli.time.sleep = lambda s: None  # type: ignore[assignment]
 saved_hermex = sys.modules.get("hermex")
+# Stand-in for undetected_chromedriver's patcher: records where each launch keeps its driver.
+_fake_uc = _types.ModuleType("undetected_chromedriver")
+_fake_patcher = _types.ModuleType("undetected_chromedriver.patcher")
+_fake_patcher.Patcher = type("Patcher", (), {"data_path": "~/.local/share/undetected_chromedriver"})  # type: ignore[attr-defined]
+_fake_uc.patcher = _fake_patcher  # type: ignore[attr-defined]
+saved_uc = {k: sys.modules.get(k) for k in ("undetected_chromedriver", "undetected_chromedriver.patcher")}
+sys.modules["undetected_chromedriver"] = _fake_uc
+sys.modules["undetected_chromedriver.patcher"] = _fake_patcher
 sessions: list[subprocess.Popen] = []
 session_children: list[int] = []  # killing a session does not kill its children
 try:
@@ -293,6 +315,8 @@ try:
         failing_launch(TR_DATA, scope)
         real_sleep2(0.4)
         check(f"[HERMEX_CLEANUP_SCOPE {label}] translation's failed launch retried and cleaned up", _LaunchFails.launches == 2)
+        check(f"[HERMEX_CLEANUP_SCOPE {label}] …using translation's OWN ChromeDriver file, not the shared one",
+              _fake_patcher.Patcher.data_path == str(TR_DATA / "uc-driver"), _fake_patcher.Patcher.data_path)
         check(f"[HERMEX_CLEANUP_SCOPE {label}] …OCR's Chrome (main + renderer) is still alive",
               pid_alive(ocr_chrome) and pid_alive(ocr_renderer))
         check(f"[HERMEX_CLEANUP_SCOPE {label}] …OCR's ChromeDriver is still alive", pid_alive(ocr_driver))
@@ -315,6 +339,8 @@ try:
         import chrome_profile_select as _cps  # the OCR session's own failed-launch cleanup
         _cps.stop_own_browsers(str(OCR_DATA), grace=1.0)
         real_sleep2(0.4)
+        check(f"[OCR fails, scope {label}] OCR launches with its OWN ChromeDriver file",
+              _fake_patcher.Patcher.data_path == str(OCR_DATA / "uc-driver"), _fake_patcher.Patcher.data_path)
         check(f"[OCR fails, scope {label}] translation's Chrome and ChromeDriver are still alive",
               pid_alive(tr_chrome) and pid_alive(tr_renderer) and pid_alive(tr_driver))
         check(f"[OCR fails, scope {label}] …OCR's own leftover Chrome is stopped", not pid_alive(ocr_orphan.pid))
@@ -338,6 +364,11 @@ try:
     live_tr.kill()
 finally:
     translate_cli.time.sleep = real_sleep2  # type: ignore[assignment]
+    for k, v in saved_uc.items():
+        if v is None:
+            sys.modules.pop(k, None)
+        else:
+            sys.modules[k] = v
     if saved_hermex is None:
         sys.modules.pop("hermex", None)
     else:
@@ -558,12 +589,23 @@ def _start_fresh_gemini_chat(g): _w("fresh-chat")
 def _gemini_query_with_recovery(g, prompt, source_text, timeout, attachments=None):
     print("more noise")
     if prompt == "hang": time.sleep(30)
+    if prompt == "driver-dead":
+        raise ConnectionError("HTTPConnectionPool(host='localhost', port=41893): Max retries exceeded with url: /session/d0c9/url "
+                              "(Caused by NewConnectionError('Failed to establish a new connection: [Errno 111] Connection refused'))")
     if attachments: _w("attach " + ",".join(attachments))
     class A: text = "reply:" + prompt
     return A()
 def _close_gemini_browser(g): _w("close")
 '''
 )
+
+
+def _reason_of(message: str) -> str:
+    out = sys.stdout
+    sys.path.insert(0, str(HERE))
+    import prompt_session as _psr  # rebinds sys.stdout for its protocol channel
+    sys.stdout = out
+    return _psr._reason(RuntimeError(message))
 
 
 def start(**env_over: str) -> subprocess.Popen:
@@ -649,6 +691,19 @@ p.wait(timeout=10)
 check("an expired login is reported as 'login' with the fix, never as an answer", expired.get("reason") == "login" and "expired" in expired.get("error", "") and expired.get("ok") is False)
 check("…and the session ends so Node stops the job", p.returncode == 4)
 check("…closing the browser and releasing the lock", log_path.read_text().splitlines()[-2:] == ["close", "unlock"])
+
+# A crashed ChromeDriver mid-job (seen on EC2: page 5 onwards all failed through a dead driver).
+Path(str(log_path) + ".signed-out").unlink(missing_ok=True)  # left by the login-expiry test
+log_path.write_text("")
+p = start()
+readline(p)
+dead = ask({"id": "d1", "prompt": "driver-dead"})
+p.wait(timeout=10)
+check("a lost ChromeDriver connection is reported as 'chrome', not 'unknown'", dead.get("reason") == "chrome" and dead.get("id") == "d1", str(dead))
+check("…and the session exits so Node opens a fresh browser for the next page", p.returncode == 4)
+for msg in ("('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))",
+            "HTTPConnectionPool(host='localhost', port=39675): Max retries exceeded with url: /session/x/elements"):
+    check(f"…'{msg[:40]}…' counts as a broken browser", _reason_of(msg) == "chrome")
 
 # ── 3. Chrome profile selection, profile picker, leftover browsers ───────────
 print("\nChrome profile selection")

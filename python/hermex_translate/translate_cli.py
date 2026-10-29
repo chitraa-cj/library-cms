@@ -1024,8 +1024,36 @@ def _warm_up_gemini(gemini: Any) -> bool:
     return True
 
 
+def _isolate_chromedriver(data_dir: str | None = None) -> str | None:
+    """Give this Chrome profile its OWN undetected_chromedriver binary.
+
+    undetected_chromedriver keeps one patched driver per user at
+    ~/.local/share/undetected_chromedriver/undetected_chromedriver and, on EVERY
+    launch, deletes it, downloads a fresh one and patches it in place. A driver already
+    running from that file — the other workflow's — then segfaults (EC2 kernel log,
+    2026-10-29: translation's driver at 18:49:35, 16s after OCR launched; OCR's at
+    18:52:21, 5s after translation launched; 81 such segfaults since 2026-10-27).
+
+    Pointing the patcher at `<hermex data dir>/uc-driver` keeps each profile's driver
+    file to itself. Launches of ONE profile are serialized by its profile lock, so a
+    launch never rewrites a driver of its own workflow that is still in use."""
+    base = (data_dir or _configured_profile_dir()).rstrip(os.sep)
+    directory = os.path.join(base, "uc-driver")
+    try:
+        from undetected_chromedriver import patcher
+    except Exception:  # hermex not installed here (tests / tooling)
+        return None
+    os.makedirs(directory, exist_ok=True)
+    patcher.Patcher.data_path = directory
+    return directory
+
+
 def _open_gemini_browser(headless: bool, *, after_cleanup: bool = False) -> Any:
     from hermex import Gemini
+
+    driver_dir = _isolate_chromedriver()
+    if driver_dir:
+        _log(f"[hermex] ChromeDriver for this profile: {driver_dir}")
 
     modes: list[bool] = [headless]
     if headless and _headless_fallback_enabled():

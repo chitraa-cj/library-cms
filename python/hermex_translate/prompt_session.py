@@ -81,6 +81,15 @@ def _reason(err: BaseException) -> str:
         return "empty"
     if any(k in text for k in ("chrome", "chromedriver", "webdriver", "selenium", "session not created", "no such window")):
         return "chrome"
+    # The ChromeDriver process is gone (crashed or killed): every later command fails the
+    # same way. "chrome" ends this session so Node opens a fresh browser, instead of
+    # sending every remaining page through a dead driver.
+    if any(k in text for k in (
+        "remotedisconnected", "remote end closed connection", "connection aborted", "connection refused",
+        "max retries exceeded", "failed to establish a new connection", "newconnectionerror",
+        "httpconnectionpool", "invalid session id", "disconnected",
+    )):
+        return "chrome"
     return "unknown"
 
 

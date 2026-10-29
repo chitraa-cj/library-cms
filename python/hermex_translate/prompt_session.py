@@ -66,6 +66,9 @@ def _reason(err: BaseException) -> str:
     text = f"{name} {err}".lower()
     if name == "HermexBusyError":
         return "busy"
+    if name == "UploadConsentRequired" or "upload_consent_required" in text:
+        # An account-level step only its owner can take: stop the job, keep pages queued.
+        return "unavailable"
     if "not logged in" in text or "sign in" in text or "login" in text:
         return "login"
     if "cannot open display" in text or "no display" in text:

@@ -357,6 +357,153 @@ finally:
             p.kill()
 
 
+# ── 1c. OCR file upload against Gemini's current UI (no browser) ───────────────
+print("\nOCR upload: current Gemini upload UI")
+
+
+def _install_selenium_stubs() -> dict:
+    """Minimal selenium stand-ins (the test Python has no selenium installed)."""
+    saved = {k: sys.modules.get(k) for k in list(sys.modules) if k == "selenium" or k.startswith("selenium.")}
+
+    class TimeoutException(Exception):
+        pass
+
+    class By:
+        CSS_SELECTOR = "css selector"
+        TAG_NAME = "tag name"
+
+    class Keys:
+        ESCAPE = "\ue00c"
+        ENTER = "\ue007"
+
+    def element_to_be_clickable(locator):
+        def check(driver):
+            el = driver.find_element(*locator)
+            return el if el is not None and el.is_displayed() and el.is_enabled() else False
+        return check
+
+    class WebDriverWait:
+        def __init__(self, driver, timeout):
+            self.driver = driver
+
+        def until(self, cond):
+            value = cond(self.driver)
+            if not value:
+                raise TimeoutException("")
+            return value
+
+    mods = {
+        "selenium": _types.ModuleType("selenium"),
+        "selenium.common": _types.ModuleType("selenium.common"),
+        "selenium.common.exceptions": _types.SimpleNamespace(TimeoutException=TimeoutException),
+        "selenium.webdriver": _types.ModuleType("selenium.webdriver"),
+        "selenium.webdriver.common": _types.ModuleType("selenium.webdriver.common"),
+        "selenium.webdriver.common.by": _types.SimpleNamespace(By=By),
+        "selenium.webdriver.common.keys": _types.SimpleNamespace(Keys=Keys),
+        "selenium.webdriver.support": _types.ModuleType("selenium.webdriver.support"),
+        "selenium.webdriver.support.expected_conditions": _types.SimpleNamespace(element_to_be_clickable=element_to_be_clickable),
+        "selenium.webdriver.support.ui": _types.SimpleNamespace(WebDriverWait=WebDriverWait),
+    }
+    sys.modules.update(mods)  # type: ignore[arg-type]
+    return saved
+
+
+class _El:
+    def __init__(self, text: str = "", buttons: list | None = None):
+        self.text, self.clicks, self.keys, self.buttons = text, 0, [], buttons or []
+
+    def click(self):
+        self.clicks += 1
+
+    def send_keys(self, value):
+        self.keys.append(value)
+
+    def is_displayed(self):
+        return True
+
+    def is_enabled(self):
+        return True
+
+    def find_elements(self, by, sel):
+        return list(self.buttons)
+
+
+class _GeminiPage:
+    """What the EC2 probe saw: 'Upload & tools' + the uploader entry, then three unnamed inputs."""
+
+    def __init__(self, consent: bool, inputs: list[dict]):
+        self.menu, self.trigger = _El(), _El()
+        self.cancel, self.agree = _El("Cancel"), _El("Agree")
+        self.dialog = _El(buttons=[self.cancel, self.agree]) if consent else None
+        self.inputs = inputs
+        self.input_els = [_El() for _ in inputs]
+        self.active = _El()
+        self.switch_to = _types.SimpleNamespace(active_element=self.active)
+        self.patched = self.restored = False
+
+    def find_elements(self, by, sel):
+        return [self.menu] if 'aria-label="Upload & tools"' in sel else []
+
+    def find_element(self, by, sel):
+        return self.trigger if "uploader-images-files-button-advanced" in sel else None
+
+    def execute_script(self, script, *args):
+        if "window.__restoreFileClick = " in script:
+            self.patched = True
+        elif "__restoreFileClick()" in script:
+            self.restored = True
+        elif "creating content from images and files" in script:
+            return self.dialog if (self.dialog and self.trigger.clicks) else None
+        elif "map(i => ({name" in script:
+            return self.inputs if self.trigger.clicks else []
+        elif "querySelectorAll('input[type=file]')];" in script:
+            return self.input_els
+        elif "return arguments[0].style.display" in script:
+            return "none"
+        return None
+
+
+saved_selenium = _install_selenium_stubs()
+try:
+    seen = [{"name": "", "accept": ".txt,.pdf,.doc,.docx,.png,.jpg,.jpeg,.webp"}, {"name": "", "accept": "image/*,video/*"},
+            {"name": "", "accept": ".txt,.pdf,.doc,.docx,.png,.jpg,.jpeg,.webp"}]
+    check("the document input is chosen by what it accepts (Gemini no longer names it Filedata)",
+          translate_cli._pick_file_input(seen, ["/x/pages-1-1.pdf"]) == 0)
+    check("…an image uses an input that accepts it", translate_cli._pick_file_input([seen[1]], ["/x/page-1.png"]) == 0)
+    check("…the legacy Filedata input still wins when present",
+          translate_cli._pick_file_input([seen[1], {"name": "Filedata", "accept": ""}], ["/x/a.pdf"]) == 1)
+    check("…and no input that cannot take the file is used", translate_cli._pick_file_input([seen[1]], ["/x/a.pdf"]) is None)
+
+    pdf = tmp / "pages-1-1.pdf"
+    pdf.write_bytes(b"%PDF-1.4")
+    page = _GeminiPage(consent=False, inputs=seen)
+    translate_cli._upload_attachments(_types.SimpleNamespace(driver=page), [str(pdf)])
+    check("upload: menu opened, 'Upload files' clicked, the file sent to the document input",
+          page.menu.clicks == 1 and page.trigger.clicks == 1 and page.input_els[0].keys == [os.path.realpath(pdf)])
+    check("…the OS-dialog suppression is installed and always removed", page.patched and page.restored)
+
+    page = _GeminiPage(consent=True, inputs=seen)
+    err = None
+    try:
+        translate_cli._upload_attachments(_types.SimpleNamespace(driver=page), [str(pdf)])
+    except translate_cli.UploadConsentRequired as e:
+        err = e
+    check("Gemini's one-time upload notice ends the request with an explicit error",
+          err is not None and translate_cli.UPLOAD_CONSENT_MARKER in str(err) and "Agree" in str(err))
+    check("…the notice is closed with Cancel — never Agree", page.cancel.clicks == 1 and page.agree.clicks == 0)
+    check("…nothing was uploaded", all(not e.keys for e in page.input_els) and page.restored)
+    check("…it is not treated as retryable (no timeout/transient wording)",
+          not translate_cli._is_idle_timeout(err) and not translate_cli._is_gemini_transient(err))  # type: ignore[arg-type]
+    _stdout = sys.stdout
+    import prompt_session as _ps  # noqa: E402  (it rebinds sys.stdout for its protocol)
+    sys.stdout = _stdout
+    check("…and the session reports it as 'unavailable' (job stops, pages stay queued)", _ps._reason(err) == "unavailable")  # type: ignore[arg-type]
+finally:
+    for k in [k for k in sys.modules if k == "selenium" or k.startswith("selenium.")]:
+        del sys.modules[k]
+    sys.modules.update({k: v for k, v in saved_selenium.items() if v is not None})
+
+
 # ── 2. prompt_session.py against a stub browser layer ─────────────────────────
 print("\nprompt_session.py protocol")
 work = tmp / "session"

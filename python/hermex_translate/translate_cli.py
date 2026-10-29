@@ -518,7 +518,7 @@ def _gemini_send_message(
     time.sleep(0.5)
     _dismiss_gemini_overlays(gemini)
     if attachments:
-        gemini._upload_files(attachments)
+        _upload_attachments(gemini, attachments)
     input_p = input_box.find_element(By.TAG_NAME, "p")
     try:
         gemini.driver.execute_script("arguments[0].focus();", input_p)
@@ -553,6 +553,169 @@ def _gemini_send_message(
     # empty-idle box and return before generation even starts → empty/stale response read.
     # Block until generation visibly starts (Stop response present) before returning.
     _wait_generation_started(gemini, timeout=15)
+
+
+UPLOAD_CONSENT_MARKER = "UPLOAD_CONSENT_REQUIRED"
+
+
+class UploadConsentRequired(RuntimeError):
+    """Gemini wants this account to accept its one-time file-upload notice first.
+
+    Accepting it is the account owner's decision, so the dialog is closed with Cancel
+    (never Agree) and the request fails with this explicit, non-retryable error."""
+
+
+# The upload menu's document/image trigger, newest layout first. hermex's own
+# `_upload_files` still waits for `input[name="Filedata"]`, which Gemini no longer
+# names (verified on EC2 2026-10-29: three file inputs, all with an empty name).
+_UPLOAD_TRIGGERS = (
+    'images-files-uploader[data-test-id="uploader-images-files-button-advanced"] '
+    "button:not(.hidden-local-file-image-selector-button)",
+    'button[data-test-id="local-images-files-uploader-button"]',
+)
+_UPLOAD_MENU_BUTTONS = (
+    '[data-node-type="input-area"] button[aria-label="Upload & tools"]',
+    '[data-node-type="input-area"] button[aria-label*="upload" i]',
+)
+_CONSENT_DIALOG_JS = """
+const dialogs = [...document.querySelectorAll('mat-dialog-container, [role="dialog"], [role="alertdialog"]')];
+const d = dialogs.find(x => /creating content from images and files|necessary rights to any images or files/i.test(x.innerText || ''));
+return d || null;
+"""
+
+
+def _pick_file_input(inputs: list[dict[str, Any]], paths: list[str]) -> int | None:
+    """Index of the file input that accepts every path: a legacy `Filedata` input wins,
+    else the first whose `accept` list covers each file's extension or MIME family."""
+    import mimetypes
+
+    for i, inp in enumerate(inputs):
+        if inp.get("name") == "Filedata":
+            return i
+    for i, inp in enumerate(inputs):
+        tokens = [t.strip().lower() for t in (inp.get("accept") or "").split(",") if t.strip()]
+        if not tokens:
+            continue
+        ok = True
+        for path in paths:
+            ext = os.path.splitext(path)[1].lower()
+            mime = (mimetypes.guess_type(path)[0] or "").lower()
+            family = mime.split("/")[0] + "/*" if mime else ""
+            if not (ext in tokens or (mime and mime in tokens) or (family and family in tokens)):
+                ok = False
+                break
+        if ok:
+            return i
+    return None
+
+
+def _upload_attachments(gemini: Any, attachments: list[str]) -> None:
+    """Attach files through Gemini's upload menu (OCR only; translation never uploads).
+
+    Same mechanics as hermex's `_upload_files` (suppress the OS file dialog, open the
+    menu, send the paths to the hidden input) but robust to the current UI: the input
+    is chosen by what it accepts rather than by its old `Filedata` name, and Gemini's
+    one-time upload notice ends the request with an explicit error instead of an
+    anonymous 10-second timeout."""
+    from selenium.common.exceptions import TimeoutException
+    from selenium.webdriver.common.by import By
+    from selenium.webdriver.common.keys import Keys
+    from selenium.webdriver.support import expected_conditions as EC
+    from selenium.webdriver.support.ui import WebDriverWait
+
+    paths = [str(os.path.realpath(p)) for p in attachments]
+    supported = getattr(type(gemini), "SUPPORTED_ATTACHMENTS", None)
+    for path in paths:
+        if not os.path.isfile(path):
+            raise FileNotFoundError(f"File not found: {path}")
+        if supported and os.path.splitext(path)[1].lower() not in supported:
+            raise ValueError(f"Unsupported attachment type {os.path.splitext(path)[1]!r}")
+
+    driver = gemini.driver
+    # Gemini's JS may call input.click() on the file input, which would open an OS
+    # dialog nothing can drive; suppress exactly that for the duration of the upload.
+    driver.execute_script("""
+        const orig = HTMLInputElement.prototype.click;
+        HTMLInputElement.prototype.click = function() {
+            if (this.type === 'file') return;
+            return orig.apply(this, arguments);
+        };
+        window.__restoreFileClick = () => { HTMLInputElement.prototype.click = orig; };
+    """)
+    target = None
+    original_display = None
+    try:
+        menu = None
+        for selector in _UPLOAD_MENU_BUTTONS:
+            found = driver.find_elements(By.CSS_SELECTOR, selector)
+            if found:
+                menu = found[0]
+                break
+        if menu is None:
+            raise RuntimeError("Gemini's upload menu button (Upload & tools) was not found in the input area.")
+        menu.click()
+
+        trigger = None
+        deadline = time.time() + 10
+        while trigger is None and time.time() < deadline:
+            for selector in _UPLOAD_TRIGGERS:
+                try:
+                    trigger = WebDriverWait(driver, 1).until(EC.element_to_be_clickable((By.CSS_SELECTOR, selector)))
+                    break
+                except TimeoutException:
+                    continue
+        if trigger is None:
+            raise RuntimeError("Gemini's upload menu opened without an 'Upload files' entry.")
+        trigger.click()
+
+        # Gemini's one-time notice appears right after the click, before any upload.
+        notice_deadline = time.time() + 2.5
+        while time.time() < notice_deadline:
+            dialog = driver.execute_script(_CONSENT_DIALOG_JS)
+            if dialog is not None:
+                cancelled = False
+                for button in dialog.find_elements(By.CSS_SELECTOR, "button"):
+                    if (button.text or "").strip().lower() == "cancel":
+                        button.click()
+                        cancelled = True
+                        break
+                if not cancelled:
+                    driver.switch_to.active_element.send_keys(Keys.ESCAPE)
+                raise UploadConsentRequired(
+                    "Gemini is asking this account to accept its one-time file-upload notice "
+                    "(\"Creating content from images and files\"). Uploads stay blocked until the "
+                    "account owner clicks Agree once: open the OCR browser's display (VNC on :98) "
+                    f"during a session, or run npm run hermex:setup-structure, and accept it. Then press Retry. ({UPLOAD_CONSENT_MARKER})"
+                )
+            time.sleep(0.25)
+
+        info_js = "return [...document.querySelectorAll('input[type=file]')].map(i => ({name: i.name, accept: i.accept}));"
+        elements_js = "return [...document.querySelectorAll('input[type=file]')];"
+        deadline = time.time() + 10
+        while target is None and time.time() < deadline:
+            index = _pick_file_input(driver.execute_script(info_js) or [], paths)
+            if index is not None:
+                target = driver.execute_script(elements_js)[index]
+                break
+            time.sleep(0.25)
+        if target is None:
+            raise RuntimeError(
+                "Gemini's upload menu did not provide a file input that accepts "
+                + ", ".join(sorted({os.path.splitext(p)[1] for p in paths}))
+            )
+        original_display = driver.execute_script("return arguments[0].style.display;", target)
+        driver.execute_script("arguments[0].style.display = 'block';", target)
+        target.send_keys("\n".join(paths))
+    finally:
+        if target is not None:
+            try:
+                driver.execute_script("arguments[0].style.display = arguments[1];", target, original_display)
+            except Exception:
+                pass
+        try:
+            driver.execute_script("window.__restoreFileClick && window.__restoreFileClick();")
+        except Exception:
+            pass
 
 
 def _wait_generation_started(gemini: Any, timeout: float = 15) -> bool:

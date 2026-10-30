@@ -989,6 +989,45 @@ def _warmup_enabled() -> bool:
     return v not in ("0", "false", "no")
 
 
+def _describe_page(gemini: Any) -> str:
+    """One log-safe line on what Gemini is showing: URL path, input state, the head of the
+    latest reply and any alert/dialog text. No account names or emails. Never raises."""
+    try:
+        from selenium.webdriver.common.by import By
+    except Exception:
+        return "unavailable"
+
+    parts: list[str] = []
+    try:
+        url = gemini.driver.current_url or ""
+        parts.append(f"url={url.split('?')[0][:80]}")
+    except Exception:
+        pass
+    try:
+        parts.append(f"state={str(gemini.get_state()).split('.')[-1]}")
+    except Exception as e:
+        parts.append(f"state=ERROR {type(e).__name__}")
+    try:
+        resps = gemini.driver.find_elements(By.TAG_NAME, "model-response")
+        reply = " ".join((resps[-1].text if resps else "").split())
+        parts.append(f"replies={len(resps)} last={reply[:120]!r}")
+    except Exception:
+        pass
+    try:
+        notes = []
+        for el in gemini.driver.find_elements(
+            By.CSS_SELECTOR, '[role="alert"], [role="alertdialog"], [role="dialog"], snack-bar-container, mat-dialog-container'
+        ):
+            text = " ".join((el.text or "").split())[:120]
+            if text and el.is_displayed() and text not in notes:
+                notes.append(text)
+        if notes:
+            parts.append(f"notices={notes[:3]!r}")
+    except Exception:
+        pass
+    return " ".join(parts) or "unavailable"
+
+
 def _warm_up_gemini(gemini: Any) -> bool:
     """Send one throwaway prompt so the first REAL prompt is not the first one.
 
@@ -1006,10 +1045,13 @@ def _warm_up_gemini(gemini: Any) -> bool:
         return False
     try:
         _gemini_send_message(gemini, "Reply with the single word READY.", paste=False)
-        _wait_idle_or_stall(gemini, 120, stall_secs=45)
+        # Long enough for the first text to arrive (see _first_text_secs): a warm-up cut
+        # off at 45s never once succeeded and left a generation running for the real
+        # prompt to stop.
+        _wait_idle_or_stall(gemini, _first_text_secs() + 60, stall_secs=45)
         reply = (getattr(_gemini_fetch_response(gemini), "text", "") or "").strip()
     except Exception as e:
-        _log(f"[hermex] Warm-up query failed ({type(e).__name__}) — continuing")
+        _log(f"[hermex] Warm-up query failed ({type(e).__name__}) — continuing; page: {_describe_page(gemini)}")
         return False
     if _looks_like_gemini_error_reply(reply):
         # Same rule as _transient_backoff_sec: an error reply needs cool-down, not just a
@@ -1218,8 +1260,26 @@ def _try_stop_generation(gemini: Any) -> None:
         _log(f"[hermex] Could not stop generation: {e}")
 
 
+def _first_text_secs() -> float:
+    """HERMEX_FIRST_TEXT_SECS: how long Gemini may stay silent before its first text.
+
+    Measured 2026-10-30 on the translation account from EC2: Gemini does NOT stream
+    there. It shows Stop for 80-155s with no text at all, then the whole answer appears
+    within ~2s. Treating that silence as a stall (the old 150s rule, 45s for the warm-up)
+    killed answers that were about to land."""
+    try:
+        return max(30.0, float(os.environ.get("HERMEX_FIRST_TEXT_SECS") or 420))
+    except ValueError:
+        return 420.0
+
+
 def _wait_idle_or_stall(
-    gemini: Any, timeout: float, *, stall_secs: float = 150, poll: float = 2.0
+    gemini: Any,
+    timeout: float,
+    *,
+    stall_secs: float = 150,
+    first_text_secs: float | None = None,
+    poll: float = 2.0,
 ) -> None:
     """Wait until Gemini is IDLE, but abort early if generation STALLS.
 
@@ -1229,12 +1289,20 @@ def _wait_idle_or_stall(
     watch the streamed <model-response> text length: if it stops growing for
     `stall_secs` while not yet idle, we raise a (recoverable) timeout so the caller
     refreshes the chat and retries within minutes instead of an hour. Legitimately slow
-    generations keep growing their text, so they are never aborted."""
+    generations keep growing their text, so they are never aborted.
+
+    Silence BEFORE the first text is not a stall: while Gemini is generating and no
+    text has appeared yet, it gets `first_text_secs` (HERMEX_FIRST_TEXT_SECS) instead —
+    see _first_text_secs. A prompt still sitting unsent in the box (state TYPING, the
+    --disable-web-security failure) keeps the short `stall_secs` rule."""
     from selenium.common.exceptions import TimeoutException
     from selenium.webdriver.common.by import By
     from hermex.models import State
 
+    silent_limit = _first_text_secs() if first_text_secs is None else first_text_secs
     start = time.time()
+    baseline: int | None = None  # text already on the page (an earlier turn) when we began
+    text_started = False
     last_len = -1
     last_growth = time.time()
     while time.time() - start < timeout:
@@ -1249,13 +1317,25 @@ def _wait_idle_or_stall(
             cur_len = len(resps[-1].text) if resps else 0
         except Exception:
             cur_len = last_len
+        if baseline is None:
+            baseline = cur_len
+        elif cur_len != baseline:
+            text_started = True
         if cur_len != last_len:
             last_len = cur_len
             last_growth = time.time()
-        elif time.time() - last_growth > stall_secs:
-            raise TimeoutException(
-                f"Gemini generation stall timeout — no new text for {int(stall_secs)}s"
-            )
+        else:
+            quiet = time.time() - last_growth
+            waiting_for_first_text = not text_started and state == State.GENERATING
+            limit = max(stall_secs, silent_limit) if waiting_for_first_text else stall_secs
+            if quiet > limit:
+                if waiting_for_first_text:
+                    raise TimeoutException(
+                        f"Gemini generation stall timeout — no text at all after {int(limit)}s"
+                    )
+                raise TimeoutException(
+                    f"Gemini generation stall timeout — no new text for {int(stall_secs)}s"
+                )
         time.sleep(poll)
     raise TimeoutException(f"Gemini idle wait timeout after {int(timeout)}s")
 
@@ -1321,8 +1401,10 @@ def _gemini_query_with_recovery(
                 # produced the error — so attempts 2 and 3 re-sent the identical prompt
                 # into a conversation Gemini had already failed in. Start a real new
                 # chat instead; the backoff below is unchanged.
+                # The reply is Gemini's own canned text (≤300 chars, never the translation):
+                # log it, or "backend error" hides a usage-limit or sign-in message.
                 _log(
-                    f"[hermex] {kind} (attempt {attempt}/3) — starting a FRESH chat, waiting {cool:.0f}s"
+                    f"[hermex] {kind} (attempt {attempt}/3): {str(e)[:160]!r} — starting a FRESH chat, waiting {cool:.0f}s"
                 )
                 _start_fresh_gemini_chat(gemini)
             else:
@@ -1813,8 +1895,27 @@ def _run_translate_locked(req: dict[str, Any]) -> dict[str, Any]:
     return {"ok": True, "translations": rows, "chunks": chunk_logs}
 
 
+def _select_chrome_profile_directory() -> None:
+    """Open the Chrome profile HERMEX_SESSION_PROFILE_DIRECTORY names (set by the CMS from
+    HERMEX_TRANSLATION_PROFILE_DIRECTORY), the same way the OCR session does. Always logs
+    which profiles the user-data dir holds, so a run on a not-signed-in profile shows up
+    in the worker log instead of as slow Gemini "backend error" replies."""
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    import chrome_profile_select as profiles
+
+    udd = profiles.user_data_dir(_configured_profile_dir())
+    directory = profiles.directory_from_env()  # ValueError on a malformed name: fail the run
+    _log(
+        f"[hermex] user-data-dir={udd} profile-directory={directory or '(not set: Chrome picks)'}; "
+        f"profiles: {profiles.describe(profiles.read_profiles(udd))}"
+    )
+    if directory:
+        profiles.install(directory)
+
+
 def main() -> None:
     try:
+        _select_chrome_profile_directory()
         req = _read_request()
         result = run_translate(req)
         json.dump(result, sys.stdout, ensure_ascii=False)

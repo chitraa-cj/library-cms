@@ -177,9 +177,21 @@ export function hermexChildEnv(): NodeJS.ProcessEnv {
     env.HERMEX_CHROME_PROFILE_MARKER ??= profile;
   }
 
+  // Which Chrome profile inside the user-data dir translation drives. Without it, a dir
+  // holding several profiles (a not-signed-in `Default` beside the signed-in one) leaves
+  // the choice to Chrome, which can land on the wrong account. Never inherited.
+  delete env.HERMEX_SESSION_PROFILE_DIRECTORY;
+  const profileDirectory = hermexTranslationProfileDirectory();
+  if (profileDirectory) env.HERMEX_SESSION_PROFILE_DIRECTORY = profileDirectory;
+
   const dir = hermexDir();
   if (dir) env.HERMEX_DIR = dir;
   return env;
+}
+
+/** `HERMEX_TRANSLATION_PROFILE_DIRECTORY`, e.g. "Profile 1"; undefined = Chrome picks. */
+export function hermexTranslationProfileDirectory(): string | undefined {
+  return trimmed("HERMEX_TRANSLATION_PROFILE_DIRECTORY");
 }
 
 /** A flat, loggable, secret-free view of the resolved configuration. */
@@ -189,6 +201,7 @@ export function hermexConfigSummary() {
     dir: hermexDir() ?? null,
     python: hermexPython(),
     chromeProfile: hermexChromeProfile() ?? null,
+    profileDirectory: hermexTranslationProfileDirectory() ?? null,
     display: hermexDisplay() ?? null,
     headless: hermexHeadless(),
     translateScript: hermexTranslateScriptPath(),

@@ -127,6 +127,20 @@ type DocumentResult = {
 
 const ACCEPT = ".pdf,.png,.jpg,.jpeg,.webp";
 
+function readUrlParam(name: string): string | null {
+  return new URLSearchParams(window.location.search).get(name) || null;
+}
+
+/** Mirror page state into the query string without adding history entries. */
+function writeUrlParams(params: Record<string, string | null>): void {
+  const url = new URL(window.location.href);
+  for (const [key, value] of Object.entries(params)) {
+    if (value) url.searchParams.set(key, value);
+    else url.searchParams.delete(key);
+  }
+  if (url.href !== window.location.href) window.history.replaceState(window.history.state, "", url);
+}
+
 function mimeFor(file: File): string {
   if (file.type) return file.type;
   const ext = file.name.split(".").pop()?.toLowerCase();
@@ -230,14 +244,18 @@ export default function AdminOcrPage() {
 
   const [file, setFile] = useState<File | null>(null);
   const [uploadPct, setUploadPct] = useState<number | null>(null);
-  const [selectedId, setSelectedId] = useState<string | null>(null);
+  // The selected document and whether the Grantha wizard is open live in the URL
+  // (`?doc=<id>&grantha=1`), so a refresh or a reopened tab lands back on the same run.
+  // The runs themselves are server-side jobs: they never depended on this page being
+  // open, only Cancel stops them.
+  const [selectedId, setSelectedId] = useState<string | null>(() => readUrlParam("doc"));
   const [search, setSearch] = useState("");
   const [dragOver, setDragOver] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const isAdmin = user?.role === "admin";
   // "Create Grantha from OCR" — the structure workflow hangs off the selected document.
-  const [wizardOpen, setWizardOpen] = useState(false);
+  const [wizardOpen, setWizardOpen] = useState(() => readUrlParam("grantha") === "1");
 
   const configQuery = useQuery<OcrConfig>({
     queryKey: ["/api/admin/ocr/config"],
@@ -269,6 +287,28 @@ export default function AdminOcrPage() {
   const detail = detailQuery.data;
   const job = detail?.job;
   const running = job ? !TERMINAL.includes(job.status) : false;
+
+  // A remembered document that no longer exists (deleted, purged) falls back to the
+  // newest. Only a 404: a network blip must not drop the user off their document.
+  useEffect(() => {
+    if (selectedId && (detailQuery.error as any)?.status === 404) setSelectedId(null);
+  }, [selectedId, detailQuery.error]);
+
+  useEffect(() => {
+    writeUrlParams({ doc: activeJobId, grantha: wizardOpen && activeJobId ? "1" : null });
+  }, [activeJobId, wizardOpen]);
+
+  // The upload is the one step that IS this tab: the file is still streaming from the
+  // browser, so leaving now loses it. Everything after it runs on the server.
+  useEffect(() => {
+    if (uploadPct === null) return;
+    const warn = (event: BeforeUnloadEvent) => {
+      event.preventDefault();
+      event.returnValue = "";
+    };
+    window.addEventListener("beforeunload", warn);
+    return () => window.removeEventListener("beforeunload", warn);
+  }, [uploadPct]);
 
   const docQuery = useQuery<DocumentResult>({
     queryKey: [`${JOBS_KEY}/${activeJobId}/document`],

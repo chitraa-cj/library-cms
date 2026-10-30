@@ -7,8 +7,10 @@ profile and no `--profile-directory`, Chrome opens chrome://profile-picker/ inst
 browser window, and ChromeDriver fails with "session not created … unable to discover
 open pages". This module:
 
-  * names the profile explicitly (`--profile-directory=<dir>`) for the OCR / OCR →
-    Grantha session only — translation never imports it;
+  * names the profile explicitly (`--profile-directory=<dir>`) when one is configured:
+    HERMEX_STRUCTURE_PROFILE_DIRECTORY for the OCR / OCR → Grantha session,
+    HERMEX_TRANSLATION_PROFILE_DIRECTORY for translation (both arrive here as
+    HERMEX_SESSION_PROFILE_DIRECTORY, in their own processes);
   * reads the profile list from `Local State` (directory, display name, whether it is
     signed in to Chrome — never an email, cookie or token);
   * classifies the page the browser landed on (Gemini, the profile picker, a Google
@@ -82,8 +84,8 @@ def install(directory: str, chrome_options_module: Any = None) -> None:
     hermex builds its own `undetected_chromedriver.ChromeOptions()` with no hook for
     extra arguments, so the class is replaced, for this process only, by one that adds
     `--profile-directory`. Every relaunch in the session (recovery after a crash) is
-    covered too. The prompt session is a single-purpose process; translation runs in
-    its own processes and never calls this."""
+    covered too. Each caller is a single-purpose process (one prompt session, or one
+    translate_cli run), so the patch never reaches another workflow's browser."""
     directory = validate_directory(directory)
     if chrome_options_module is None:
         import undetected_chromedriver as chrome_options_module  # type: ignore[no-redef]

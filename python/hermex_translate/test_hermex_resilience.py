@@ -333,6 +333,75 @@ check(
     "hermex" not in tc.TRANSIENT_ABORT_MARKER.lower(),
 )
 
+# ── F. silence before the first text is not a stall ─────────────────────────
+print("\n F. silence before the first text is not a stall")
+
+_State = type("State", (), {"IDLE": "IDLE", "TYPING": "TYPING", "GENERATING": "GENERATING"})
+sys.modules.setdefault("hermex", types.ModuleType("hermex"))
+_models = types.ModuleType("hermex.models")
+setattr(_models, "State", _State)
+sys.modules["hermex.models"] = _models
+_exc = types.ModuleType("selenium.common.exceptions")
+setattr(_exc, "TimeoutException", type("TimeoutException", (Exception,), {}))
+sys.modules.setdefault("selenium.common", types.ModuleType("selenium.common"))
+sys.modules["selenium.common.exceptions"] = _exc
+
+
+def run_wait(script: list[tuple[float, str, int]], **kwargs: Any) -> tuple[str, float]:
+    """`script`: (from_second, state, reply_len) steps on a fake clock. Returns
+    ("idle" | the timeout message, seconds elapsed)."""
+    clock = {"now": 0.0}
+
+    def current() -> tuple[str, int]:
+        step = script[0]
+        for s in script:
+            if clock["now"] >= s[0]:
+                step = s
+        return step[1], step[2]
+
+    class Resp:
+        @property
+        def text(self) -> str:
+            return "x" * current()[1]
+
+    fake = types.SimpleNamespace(
+        get_state=lambda: current()[0],
+        driver=types.SimpleNamespace(find_elements=lambda *a: [Resp()] if current()[1] else []),
+    )
+    real_time = tc.time
+    tc.time = types.SimpleNamespace(
+        time=lambda: clock["now"], sleep=lambda s: clock.__setitem__("now", clock["now"] + s)
+    )
+    try:
+        tc._wait_idle_or_stall(fake, kwargs.pop("timeout", 3600), **kwargs)
+        return "idle", clock["now"]
+    except Exception as e:  # the stubbed TimeoutException
+        return str(e), clock["now"]
+    finally:
+        tc.time = real_time
+
+
+# Measured on EC2 2026-10-30: 79s of Stop with no text, then the whole answer at once.
+outcome, at = run_wait([(0, "GENERATING", 0), (79, "GENERATING", 573), (81, "IDLE", 573)], first_text_secs=420)
+check("an answer after 79s of silence is waited for", outcome == "idle", f"{outcome} at {at}s")
+
+outcome, at = run_wait([(0, "GENERATING", 0), (154, "GENERATING", 600), (156, "IDLE", 600)], first_text_secs=420)
+check("an answer after 154s of silence (the old 150s kill) is waited for", outcome == "idle", f"{outcome} at {at}s")
+
+outcome, at = run_wait([(0, "GENERATING", 0)], first_text_secs=420)
+check("a reply that never starts still times out", "no text at all" in outcome, outcome)
+check("…at the first-text limit, not the stall limit", 420 <= at <= 425, f"{at}s")
+
+outcome, at = run_wait([(0, "GENERATING", 0), (10, "GENERATING", 200)], first_text_secs=420)
+check("text that stops growing is still a stall at stall_secs", "no new text for 150s" in outcome and at <= 165, f"{outcome} at {at}s")
+
+outcome, at = run_wait([(0, "TYPING", 0)], first_text_secs=420)
+check("a prompt stuck unsent in the box keeps the short rule", "no new text" in outcome and at <= 155, f"{outcome} at {at}s")
+
+outcome, at = run_wait([(0, "GENERATING", 300)], first_text_secs=420)
+check("an earlier turn's text on the page does not count as this reply's first text",
+      "no text at all" in outcome and at >= 420, f"{outcome} at {at}s")
+
 print(f"\n{PASS} passed, {len(FAILURES)} failed")
 for f in FAILURES:
     print(f"  - {f}")

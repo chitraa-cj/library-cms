@@ -323,9 +323,23 @@ def _query_timeout_for_source(source_text: str, base: int) -> int:
     return min(3600, max(base, scaled))
 
 
+def _is_selenium_timeout(err: BaseException) -> bool:
+    """A bare WebDriverWait timeout. Hermex's waits pass no message, so str() is just
+    "Message: " — matching on the word "timeout" missed it and the chunk failed outright
+    (seen 2026-10-30 on EC2: `FAIL ... attempt 1/3 | Message: ` after a slow reply)."""
+    if type(err).__name__ == "TimeoutException":
+        return True
+    return str(err).strip().lower() in ("message:", "")
+
+
 def _is_idle_timeout(err: BaseException) -> bool:
     msg = str(err).lower()
-    return "did not reach state" in msg or "state.idle" in msg or "timeout" in msg
+    return (
+        "did not reach state" in msg
+        or "state.idle" in msg
+        or "timeout" in msg
+        or _is_selenium_timeout(err)
+    )
 
 
 def _is_empty_response_error(err: BaseException) -> bool:
@@ -1222,7 +1236,15 @@ def _gemini_fetch_response(gemini: Any) -> Any:
             except Exception:
                 pass
             time.sleep(2 if attempt < 4 else 4)
-            msg = gemini.get_last_response(get_markdown=False)
+            try:
+                msg = gemini.get_last_response(get_markdown=False)
+            except Exception as read_err:
+                # get_last_response waits 20s for a <model-response> and raises a bare
+                # TimeoutException when none exists yet — the slow account's answer can
+                # land after IDLE. That is "not ready", not a failure: keep polling.
+                if not _is_selenium_timeout(read_err):
+                    raise
+                raise RuntimeError("Response contained neither text nor image.") from read_err
             text = (msg.text or "").strip()
             if text and not _looks_like_clipboard_or_shell_garbage(text):
                 return msg

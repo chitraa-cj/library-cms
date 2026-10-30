@@ -402,6 +402,52 @@ outcome, at = run_wait([(0, "GENERATING", 300)], first_text_secs=420)
 check("an earlier turn's text on the page does not count as this reply's first text",
       "no text at all" in outcome and at >= 420, f"{outcome} at {at}s")
 
+# ── G. a bare Selenium timeout ("Message: ") is recoverable ─────────────────
+print("\n G. a bare Selenium timeout is recoverable, not a chunk failure")
+
+
+class TimeoutException(Exception):  # selenium's class name; the real one is stubbed out
+    def __str__(self) -> str:
+        return "Message: \n"
+
+
+check("a bare TimeoutException counts as an idle timeout", tc._is_idle_timeout(TimeoutException()))
+check("an unrelated error still does not", not tc._is_idle_timeout(RuntimeError("boom")))
+
+saved_recover = tc._recover_browser_session
+real_sleep = tc.time.sleep
+try:
+    tc._recover_browser_session = lambda g: None
+    tc.time.sleep = lambda s: None
+    tc._gemini_send_message = lambda *a, **k: None
+    tc._wait_idle_or_stall = lambda *a, **k: None
+    tc._dismiss_gemini_overlays = lambda g: None
+
+    class SlowReply(FakeGemini):
+        """get_last_response times out twice (no <model-response> yet), then answers."""
+
+        def __init__(self) -> None:
+            super().__init__()
+            self.reads = 0
+            self.driver.execute_script = lambda *a, **k: None
+
+        def get_state(self) -> str:
+            return "IDLE"
+
+        def get_last_response(self, get_markdown: bool = False) -> Reply:
+            self.reads += 1
+            if self.reads <= 2:
+                raise TimeoutException()
+            return Reply(GOOD)
+
+    g = SlowReply()
+    out = tc._gemini_fetch_response(g)
+    check("the reader keeps polling past a missing reply element", out.text == GOOD and g.reads == 3,
+          f"reads={g.reads}")
+finally:
+    tc._recover_browser_session = saved_recover
+    tc.time.sleep = real_sleep
+
 print(f"\n{PASS} passed, {len(FAILURES)} failed")
 for f in FAILURES:
     print(f"  - {f}")

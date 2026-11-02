@@ -66,6 +66,14 @@ export type HermexTranslateRequest = HermexTranslateJob & {
   continueOnError?: boolean;
   chunkDelaySec?: number;
   maxRetries?: number;
+  /**
+   * Cancels this request: skipped if it is still waiting for the browser lock, and the
+   * Python/Chrome child is killed if it is already running. Never sent to Python. The
+   * translation worker fires it when an item exceeds TRANSLATION_TIMEOUT — without it
+   * the abandoned item's requests kept the lock for hours and every later item timed
+   * out while queued behind them (2026-10-31 → 11-02, "20 ahead").
+   */
+  cancelSignal?: AbortSignal;
 };
 
 export type HermexTranslationRow = {
@@ -310,6 +318,7 @@ interface SpawnJsonOptions {
   script: string;
   payload: unknown;
   timeoutMs: number;
+  cancelSignal?: AbortSignal;
 }
 
 /**
@@ -319,7 +328,7 @@ interface SpawnJsonOptions {
  * become a command. The request itself travels on stdin as JSON, so even a
  * mantra full of quotes and newlines cannot affect the command line.
  */
-async function spawnHermexJson<T>({ label, script, payload, timeoutMs }: SpawnJsonOptions): Promise<T> {
+async function spawnHermexJson<T>({ label, script, payload, timeoutMs, cancelSignal }: SpawnJsonOptions): Promise<T> {
   const python = hermexPython();
   const env = hermexChildEnv();
 
@@ -347,13 +356,22 @@ async function spawnHermexJson<T>({ label, script, payload, timeoutMs }: SpawnJs
     let stdout = "";
     let stderr = "";
     let timedOut = false;
+    let cancelled = false;
 
-    const timer = setTimeout(() => {
-      timedOut = true;
+    const killChild = () => {
       child.kill("SIGTERM");
       // Chrome can keep the process alive; make sure it actually dies.
       setTimeout(() => child.kill("SIGKILL"), 10_000).unref?.();
+    };
+    const timer = setTimeout(() => {
+      timedOut = true;
+      killChild();
     }, timeoutMs);
+    const onCancel = () => {
+      cancelled = true;
+      killChild();
+    };
+    cancelSignal?.addEventListener("abort", onCancel, { once: true });
 
     child.stdout?.on("data", (chunk: Buffer) => {
       stdout += chunk.toString();
@@ -367,11 +385,19 @@ async function spawnHermexJson<T>({ label, script, payload, timeoutMs }: SpawnJs
 
     child.on("error", (err) => {
       clearTimeout(timer);
+      cancelSignal?.removeEventListener("abort", onCancel);
       reject(new HermexError("process", `Hermex process error: ${scrubHermexText(err)}`));
     });
 
     child.on("close", (code) => {
       clearTimeout(timer);
+      cancelSignal?.removeEventListener("abort", onCancel);
+
+      if (cancelled) {
+        log(`Hermex translation cancelled — ${label}`);
+        reject(new HermexError("timeout", "Hermex request cancelled (the item ran out of time).", { retryable: false }));
+        return;
+      }
 
       if (timedOut) {
         log(`Hermex translation failed — ${label}: timed out after ${Math.round(timeoutMs / 1000)}s`);
@@ -441,7 +467,16 @@ export function runHermexTranslate(req: HermexTranslateRequest): Promise<HermexT
       ? `${req.jobs.length} job(s)`
       : req.context || `${req.targetLanguages?.length ?? 0} language(s)`) || "translate";
 
+  const { cancelSignal, ...request } = req;
+  req = request;
+
   return withBrowserLock(label, async () => {
+    if (cancelSignal?.aborted) {
+      log(`Hermex translation skipped — ${label}: cancelled while waiting for the browser lock`);
+      throw new HermexError("timeout", "Hermex request cancelled before it started (the item ran out of time).", {
+        retryable: false,
+      });
+    }
     assertRunnable();
 
     // The caller may force headless; otherwise the host's configuration decides
@@ -472,6 +507,7 @@ export function runHermexTranslate(req: HermexTranslateRequest): Promise<HermexT
       script: hermexTranslateScriptPath(),
       payload,
       timeoutMs: hermexTranslateTimeoutMs(),
+      cancelSignal,
     });
 
     const rows = result.translations ?? result.results?.flatMap((r) => r.translations ?? []) ?? [];

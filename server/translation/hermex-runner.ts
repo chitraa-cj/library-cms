@@ -35,6 +35,8 @@ export interface TranslateMantraInput {
   targetLanguages: string[];
   /** Aborts between field units; a unit already in flight is allowed to finish. */
   signal?: AbortSignal;
+  /** Kills the Hermex request in flight and skips queued ones (item timeout). */
+  cancel?: AbortSignal;
 }
 
 export interface TranslateMantraResult {
@@ -55,9 +57,10 @@ function checkpointPathForJob(jobId: string): string {
   return path.join(dir, `job-${jobId}.json`);
 }
 
-function runOptionsForJob(jobId: string, signal?: AbortSignal): RunOptions {
+function runOptionsForJob(jobId: string, signal?: AbortSignal, cancel?: AbortSignal): RunOptions {
   return {
     signal,
+    cancel,
     headless: translationConfig.headless,
     chunkSize: translationConfig.chunkSize,
     chunkDelayMs: translationConfig.chunkDelayMs,
@@ -112,7 +115,7 @@ export async function translateMantra(input: TranslateMantraInput): Promise<Tran
     throw new Error(`Mantra ${input.mantraDocId} was not found in the CMS.`);
   }
 
-  const opts = runOptionsForJob(input.jobId, input.signal);
+  const opts = runOptionsForJob(input.jobId, input.signal, input.cancel);
   const checkpoint = loadJobCheckpoint(input.jobId, mantra.documentId ?? "", input.granthaName);
 
   const result = await translateMantraPasses(

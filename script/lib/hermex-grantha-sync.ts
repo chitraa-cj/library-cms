@@ -57,6 +57,12 @@ export type RunOptions = {
    * lock while the next worker instance starts, failing its first item as "busy".
    */
   signal?: { aborted: boolean };
+  /**
+   * Set by the translation worker per item: when it fires (TRANSLATION_TIMEOUT), the
+   * Hermex request in flight is killed and any still queued for the browser lock is
+   * skipped. Unlike `signal`, this one does not let the current run finish.
+   */
+  cancel?: AbortSignal;
 };
 
 /** Thrown instead of starting a Hermex run after the worker began shutting down. Not retryable. */
@@ -775,6 +781,7 @@ export async function translateJobIncremental(
         queryTimeoutSec: queryTimeoutForSource(job.sourceText.length),
         chunkDelaySec: opts.chunkDelayMs / 1000,
         maxRetries: 3,
+        cancelSignal: opts.cancel,
       },
       opts.maxRetries,
       opts.chunkDelayMs,

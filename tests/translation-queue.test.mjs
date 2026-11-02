@@ -335,6 +335,36 @@ console.log("\ntranslation queue");
   check("summary counts queued items", summary.queuedItems >= 3);
 }
 
+// 12. An item that exceeds TRANSLATION_TIMEOUT is cancelled, not abandoned. Before the
+// fix the rejected item's translation kept running and held the browser lock, so every
+// later item timed out queued behind it (2026-10-31 → 11-02).
+{
+  console.log("\n item timeout cancels the work");
+  await makeJob(1);
+  const saved = translationConfig.itemTimeoutMs;
+  translationConfig.itemTimeoutMs = 200;
+  let sawCancel = false;
+  let settled = false;
+  const translate = (input) =>
+    new Promise((_, reject) => {
+      input.cancel?.addEventListener("abort", () => {
+        sawCancel = true;
+        // The real run takes a moment to kill Chrome; the worker must wait for it.
+        setTimeout(() => {
+          settled = true;
+          reject(new Error("cancelled"));
+        }, 100);
+      });
+    });
+  try {
+    await processOneItem({ workerId: "w1", translate });
+  } finally {
+    translationConfig.itemTimeoutMs = saved;
+  }
+  check("the timeout fired the item's cancel signal", sawCancel);
+  check("the worker waited for the cancelled run to unwind", settled);
+}
+
 // ─────────────────────────────────────────────────────────────────── cleanup
 await purgeTestJobs();
 await pool.end();

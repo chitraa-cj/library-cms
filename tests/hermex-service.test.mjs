@@ -294,6 +294,23 @@ console.log("\n log and error scrubbing");
   check("the config summary carries no secrets", !/password|cookie|token|secret/i.test(serialised), serialised);
 }
 
+// cancelSignal: a running child is killed and a request still queued for the lock is
+// skipped — a timed-out worker item must not keep the browser busy for hours.
+{
+  console.log("\n cancel");
+  useFakeScript(`import time\ntime.sleep(30)\n`);
+  const ctl = new AbortController();
+  const started = Date.now();
+  const running = adapter.runHermexTranslate({ ...request, cancelSignal: ctl.signal }).catch((e) => e);
+  const queued = adapter.runHermexTranslate({ ...request, cancelSignal: ctl.signal }).catch((e) => e);
+  setTimeout(() => ctl.abort(), 500);
+  const [a, b] = await Promise.all([running, queued]);
+  check("the running request is killed promptly", Date.now() - started < 15_000, `${Date.now() - started}ms`);
+  check("the running request reports cancellation", /cancelled/.test(a?.message ?? ""), a?.message);
+  check("the queued request is skipped", /before it started/.test(b?.message ?? ""), b?.message);
+  check("cancellation is not retryable", a?.retryable === false && b?.retryable === false);
+}
+
 fs.rmSync(tmp, { recursive: true, force: true });
 
 console.log(`\n${PASS} passed, ${FAILURES.length} failed`);

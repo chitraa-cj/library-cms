@@ -55,10 +55,14 @@ function sleep(ms: number, signal?: AbortSignal): Promise<void> {
   });
 }
 
-/** Reject the item if a single mantra somehow runs past TRANSLATION_TIMEOUT. */
-function withTimeout<T>(work: Promise<T>, ms: number, label: string): Promise<T> {
+/**
+ * Reject the item if a single mantra somehow runs past TRANSLATION_TIMEOUT, and call
+ * `onTimeout` so the work is actually stopped — rejecting alone left it running.
+ */
+function withTimeout<T>(work: Promise<T>, ms: number, label: string, onTimeout?: () => void): Promise<T> {
   return new Promise<T>((resolve, reject) => {
     const timer = setTimeout(() => {
+      onTimeout?.();
       reject(new Error(`${label} exceeded TRANSLATION_TIMEOUT (${Math.round(ms / 1000)}s)`));
     }, ms);
     work.then(
@@ -132,18 +136,25 @@ export async function processOneItem(opts: WorkerOptions = {}): Promise<"done" |
   }, translationConfig.leaseHeartbeatMs);
   if (typeof heartbeat.unref === "function") heartbeat.unref();
 
+  // Per-item cancellation. Before this, a timed-out item's translation kept running
+  // in the background — its Hermex requests (and their retries) held the browser lock,
+  // the next item queued behind them and timed out before reaching Gemini, and so on:
+  // every item failed at exactly 3 × TRANSLATION_TIMEOUT (seen 2026-10-31 → 11-02).
+  const cancel = new AbortController();
+  const stop = opts.signal ? AbortSignal.any([opts.signal, cancel.signal]) : cancel.signal;
+  const work = translate({
+    jobId: job.id,
+    mantraDocId: item.mantraDocId ?? "",
+    mantraLabel: item.mantraLabel ?? String(item.sequenceNumber),
+    granthaName: job.granthaName ?? "",
+    targetLanguages: Array.isArray(job.targetLanguages) ? job.targetLanguages : [],
+    signal: stop,
+    cancel: cancel.signal,
+  });
+
   try {
-    const result = await withTimeout(
-      translate({
-        jobId: job.id,
-        mantraDocId: item.mantraDocId ?? "",
-        mantraLabel: item.mantraLabel ?? String(item.sequenceNumber),
-        granthaName: job.granthaName ?? "",
-        targetLanguages: Array.isArray(job.targetLanguages) ? job.targetLanguages : [],
-        signal: opts.signal,
-      }),
-      translationConfig.itemTimeoutMs,
-      `Item #${item.sequenceNumber}`,
+    const result = await withTimeout(work, translationConfig.itemTimeoutMs, `Item #${item.sequenceNumber}`, () =>
+      cancel.abort(),
     );
 
     await completeItem(item.id, result.summary);
@@ -165,6 +176,11 @@ export async function processOneItem(opts: WorkerOptions = {}): Promise<"done" |
     }
   } finally {
     clearInterval(heartbeat);
+    if (cancel.signal.aborted) {
+      // Let the cancelled run unwind (its child is being killed) so the next item
+      // starts on a free browser instead of queueing behind leftovers.
+      await work.catch(() => undefined);
+    }
   }
 
   const progress = await refreshJobProgress(job.id);

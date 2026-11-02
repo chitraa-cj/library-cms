@@ -53,9 +53,12 @@ sudo logrotate --debug /etc/logrotate.d/library-cms >/dev/null 2>&1 || {
 
 echo "[logs] 3/3 daily prune of Hermex dumps (>14 days)"
 CRON_LINE="17 3 * * * find ${CMS_DIR}/logs/hermex-raw ${CMS_DIR}/logs/hermex-diagnostics -type f -mtime +14 -delete 2>/dev/null"
-( crontab -l 2>/dev/null | grep -v 'logs/hermex-raw' ; echo "$CRON_LINE" ) | crontab -
+# `|| true`: with no crontab yet, `crontab -l` fails and grep matches nothing — under
+# pipefail that killed the subshell before the echo and installed an EMPTY crontab.
+existing="$(crontab -l 2>/dev/null | grep -v 'logs/hermex-raw' || true)"
+printf '%s\n%s\n' "$existing" "$CRON_LINE" | sed '/^$/d' | crontab -
 
 echo "[logs] done:"
 pm2 conf pm2-logrotate 2>/dev/null | grep -E 'max_size|retain|compress|rotateInterval' || true
-crontab -l | grep hermex-raw
+crontab -l | grep hermex-raw || { echo "[logs] cron line missing"; exit 1; }
 df -h / | tail -1

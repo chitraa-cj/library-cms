@@ -64,6 +64,8 @@ sys.path.insert(0, str(HERE))
 
 import translate_cli as tc  # noqa: E402
 
+_REAL_SEND = tc._gemini_send_message  # later sections replace it on the module
+
 PASS = 0
 FAILURES: list[str] = []
 
@@ -446,6 +448,99 @@ try:
           f"reads={g.reads}")
 finally:
     tc._recover_browser_session = saved_recover
+    tc.time.sleep = real_sleep
+
+# ── H. a prompt Gemini never accepted fails fast ────────────────────────────
+print("\n H. a prompt Gemini never accepted fails in seconds, not minutes")
+
+
+class _Input:
+    def __init__(self, text: str) -> None:
+        self.text = text
+        self.enters = 0
+
+    def click(self) -> None:
+        pass
+
+    def send_keys(self, *_: Any) -> None:
+        self.enters += 1
+
+
+class _Box:
+    def __init__(self, p: _Input) -> None:
+        self.p = p
+
+    def find_element(self, *_: Any) -> _Input:
+        return self.p
+
+
+def run_send(*, started: list[bool], box_text: str = "the prompt", replies: list[int] | None = None) -> tuple[_Input, BaseException | None]:
+    """`started`: what each _wait_generation_started call returns; `replies`: model-response counts."""
+    p = _Input(box_text)
+    counts = list(replies or [0])
+    g = types.SimpleNamespace(
+        driver=types.SimpleNamespace(
+            execute_script=lambda *a, **k: None,
+            find_elements=lambda *a, **k: [None] * (counts.pop(0) if len(counts) > 1 else counts[0]),
+        ),
+        sleep=lambda s: None,
+        _type_into=lambda m, el: None,
+        _paste_into=lambda m, el, fake_typing=False: None,
+    )
+    ui = sys.modules["selenium.webdriver.support.ui"]
+    saved = (ui.WebDriverWait, tc._wait_generation_started, tc._dismiss_gemini_overlays, tc.time.sleep)
+    answers = list(started)
+    ui.WebDriverWait = type("W", (), {"__init__": lambda self, *a, **k: None, "until": lambda self, *a, **k: _Box(p)})
+    tc._wait_generation_started = lambda gem, timeout=15: answers.pop(0) if answers else False
+    tc._dismiss_gemini_overlays = lambda gem: None
+    tc.time.sleep = lambda s: None
+    err: BaseException | None = None
+    try:
+        _REAL_SEND(g, "the prompt", paste=False)
+    except Exception as e:  # noqa: BLE001
+        err = e
+    finally:
+        ui.WebDriverWait, tc._wait_generation_started, tc._dismiss_gemini_overlays, tc.time.sleep = saved
+    return p, err
+
+
+p, err = run_send(started=[True])
+check("a normal send presses ENTER once and returns", p.enters == 1 and err is None, f"enters={p.enters} err={err}")
+p, err = run_send(started=[False, True])
+check("a prompt left in the box is sent again and then accepted", p.enters == 2 and err is None, f"enters={p.enters} err={err}")
+p, err = run_send(started=[False, False])
+check("a prompt that never takes raises PromptNotSubmittedError",
+      isinstance(err, tc.PromptNotSubmittedError) and p.enters == 2, f"enters={p.enters} err={err!r}")
+p, err = run_send(started=[False, False], box_text="")
+check("an emptied box with nothing generating is not waited on either",
+      isinstance(err, tc.PromptNotSubmittedError) and p.enters == 1, f"enters={p.enters} err={err!r}")
+p, err = run_send(started=[False], replies=[0, 1])
+check("a fast reply that finished between polls is accepted", err is None and p.enters == 1, f"err={err!r}")
+
+saved_recover = tc._recover_browser_session
+saved_send, saved_wait, saved_fetch = tc._gemini_send_message, tc._wait_idle_or_stall, tc._gemini_fetch_response
+real_sleep = tc.time.sleep
+try:
+    recovered: list[int] = []
+    sends: list[int] = []
+    tc._recover_browser_session = lambda g: recovered.append(1)
+    tc.time.sleep = lambda s: None
+    tc._dismiss_gemini_overlays = lambda g: None
+    tc._wait_idle_or_stall = lambda *a, **k: None
+    tc._gemini_fetch_response = lambda g: Reply(GOOD)
+
+    def flaky_send(*a: Any, **k: Any) -> None:
+        sends.append(1)
+        if len(sends) == 1:
+            raise tc.PromptNotSubmittedError("Gemini did not accept the prompt")
+
+    tc._gemini_send_message = flaky_send
+    out = tc._gemini_query_with_recovery(object(), "p", source_text="s", timeout=60)
+    check("the query loop refreshes and re-sends after a non-submitted prompt",
+          out.text == GOOD and len(sends) == 2 and len(recovered) == 1, f"sends={len(sends)} recovered={len(recovered)}")
+finally:
+    tc._recover_browser_session = saved_recover
+    tc._gemini_send_message, tc._wait_idle_or_stall, tc._gemini_fetch_response = saved_send, saved_wait, saved_fetch
     tc.time.sleep = real_sleep
 
 print(f"\n{PASS} passed, {len(FAILURES)} failed")

@@ -560,13 +560,47 @@ def _gemini_send_message(
         from hermex.models import State
 
         gemini._wait_until_state(State.TYPING, timeout=120)
+    replies_before = _count_model_responses(gemini)
     input_p.send_keys(Keys.ENTER)
     # In Gemini's current input UI the box empties the instant ENTER is pressed and the
     # send button is removed, so get_state() reports IDLE until the "Stop response" button
     # appears (~1s later). Without this guard wait_until_idle() can see that momentary
     # empty-idle box and return before generation even starts → empty/stale response read.
     # Block until generation visibly starts (Stop response present) before returning.
-    _wait_generation_started(gemini, timeout=15)
+    if _wait_generation_started(gemini, timeout=15):
+        return
+    if _count_model_responses(gemini) > replies_before:
+        return  # a short reply that finished between polls
+    if _input_text_len(input_p) > 0:
+        # ENTER did not take — the prompt is still sitting in the box. Press it once more.
+        _log("[hermex] Prompt still in the input box after ENTER — sending again")
+        input_p.send_keys(Keys.ENTER)
+    if _wait_generation_started(gemini, timeout=15) or _count_model_responses(gemini) > replies_before:
+        return
+    # Nothing started and no reply exists: the prompt was never submitted (or vanished).
+    # Before this check the caller waited 4-8 min for a reply that could not come
+    # (`Response not ready yet 10/10`, page: state=IDLE replies=0 — seen 2026-11-02).
+    raise PromptNotSubmittedError("Gemini did not accept the prompt (no generation, no reply after 30s)")
+
+
+class PromptNotSubmittedError(RuntimeError):
+    """ENTER was pressed but Gemini never started generating and no reply appeared."""
+
+
+def _count_model_responses(gemini: Any) -> int:
+    from selenium.webdriver.common.by import By
+
+    try:
+        return len(gemini.driver.find_elements(By.TAG_NAME, "model-response"))
+    except Exception:
+        return 0
+
+
+def _input_text_len(input_p: Any) -> int:
+    try:
+        return len((input_p.text or "").strip())
+    except Exception:
+        return 0
 
 
 UPLOAD_CONSENT_MARKER = "UPLOAD_CONSENT_REQUIRED"
@@ -1405,6 +1439,7 @@ def _gemini_query_with_recovery(
                 or _is_empty_response_error(e)
                 or _is_click_intercepted(e)
                 or _is_gemini_transient(e)
+                or isinstance(e, PromptNotSubmittedError)
             )
             if not recoverable or attempt >= 3:
                 raise
@@ -1412,6 +1447,8 @@ def _gemini_query_with_recovery(
             if _is_gemini_transient(e):
                 kind = "Gemini backend error reply"
                 cool = _transient_backoff_sec(attempt)
+            elif isinstance(e, PromptNotSubmittedError):
+                kind = "prompt not submitted"
             elif _is_click_intercepted(e):
                 kind = "UI overlay blocked input"
             elif _is_empty_response_error(e):

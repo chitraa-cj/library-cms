@@ -32,7 +32,22 @@ pm2 set pm2-logrotate:retain 10
 pm2 set pm2-logrotate:compress true
 pm2 set pm2-logrotate:rotateInterval '0 0 * * *'
 pm2 set pm2-logrotate:workerInterval 300
+# pm2-logrotate 3.0.0 bug: pmx autocasts the stored "true" to boolean true, and the
+# module's parseBool() only accepts the STRING 'true' — so compress silently stays off
+# (seen 2026-11-02: 790MB rotated uncompressed). Patch it to accept both; re-applied
+# here because a module reinstall/update restores the original file.
+LR_APP="$HOME/.pm2/modules/pm2-logrotate/node_modules/pm2-logrotate/app.js"
+if [ -f "$LR_APP" ] && grep -q "if (str === 'true') return true;" "$LR_APP"; then
+  sed -i "s/if (str === 'true') return true;/if (str === true || str === 'true') return true;/; s/if (str === 'false') return false;/if (str === false || str === 'false') return false;/" "$LR_APP"
+  pm2 restart pm2-logrotate >/dev/null
+  echo "[logs] patched pm2-logrotate boolean config parsing (compress now honoured)"
+fi
 pm2 save
+
+# Compress anything rotated while compression was broken. nice/ionice: the portal
+# shares this box, and gzip on a 480MB file should not compete with it.
+find "$HOME/.pm2/logs" "${CMS_DIR}/logs" -maxdepth 1 -name '*__*.log' -type f \
+  -exec nice -n 19 ionice -c3 gzip -9 {} \; 2>/dev/null || true
 
 echo "[logs] 2/3 logrotate rule for activity.log"
 sudo tee /etc/logrotate.d/library-cms >/dev/null <<EOF

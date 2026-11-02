@@ -4,6 +4,16 @@ on:
   push:
     branches:
       - main
+    # Every deploy restarts the translation worker, which kills the mantra in flight and
+    # burns one of its 3 attempts (2026-11-02: three deploy-script-only pushes in 20 min
+    # failed items #43-#45). Changes that cannot affect the running app don't deploy;
+    # box ops scripts under deploy/ are run by hand anyway.
+    paths-ignore:
+      - "deploy/**"
+      - "docs/**"
+      - "tests/**"
+      - "**/*.md"
+      - ".github/workflows/**"
 
 jobs:
   deploy:

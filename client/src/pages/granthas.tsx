@@ -38,6 +38,7 @@ import {
 } from "@/components/ui/alert-dialog";
 import {
   granthaTypes,
+  prakaranaCategories,
   sectionTypeLabels,
   translationLanguages,
   type PortalVocabularyKey,
@@ -1173,6 +1174,11 @@ function GranthaCard({
               {item.GranthaType}
             </Badge>
           )}
+          {item.GranthaType === "Prakarana Grantha" && item.PrakaranaCategory && (
+            <Badge variant="outline" className="text-xs">
+              {item.PrakaranaCategory}
+            </Badge>
+          )}
           <Badge
             variant="outline"
             className={`text-xs ${
@@ -1508,6 +1514,7 @@ export default function GranthasPage() {
   const [formData, setFormData] = useState<{
     GranthaName: string;
     GranthaType: string;
+    PrakaranaCategory: string;
     BhashyamName: string;
     BhashyamAuthor: string;
     IntroductionToTextEnglish: StrapiBlock[];
@@ -1522,6 +1529,7 @@ export default function GranthasPage() {
   }>({
     GranthaName: "",
     GranthaType: "",
+    PrakaranaCategory: "",
     BhashyamName: "",
     BhashyamAuthor: "",
     IntroductionToTextEnglish: [],
@@ -2340,6 +2348,7 @@ export default function GranthasPage() {
   const EMPTY_FORM = {
     GranthaName: "",
     GranthaType: "",
+    PrakaranaCategory: "",
     BhashyamName: "",
     BhashyamAuthor: "",
     IntroductionToTextEnglish: [] as StrapiBlock[],
@@ -2575,6 +2584,7 @@ export default function GranthasPage() {
       setFormData({
         GranthaName: d.GranthaName || "",
         GranthaType: d.GranthaType || "",
+        PrakaranaCategory: d.PrakaranaCategory || "",
         BhashyamName: d.BhashyamName || "",
         BhashyamAuthor: d.BhashyamAuthor || "",
         IntroductionToTextEnglish: d.IntroductionToTextEnglish || [],
@@ -2650,6 +2660,7 @@ export default function GranthasPage() {
       setFormData({
         GranthaName: d.GranthaName || "",
         GranthaType: d.GranthaType || "",
+        PrakaranaCategory: d.PrakaranaCategory || "",
         BhashyamName: d.BhashyamName || "",
         BhashyamAuthor: d.BhashyamAuthor || "",
         IntroductionToTextEnglish: d.IntroductionToTextEnglish || [],
@@ -2728,6 +2739,10 @@ export default function GranthasPage() {
       setFormData({
         GranthaName: item.GranthaName || "",
         GranthaType: item.GranthaType || "",
+        PrakaranaCategory:
+          hasDraft && savedData.PrakaranaCategory != null
+            ? savedData.PrakaranaCategory
+            : item.PrakaranaCategory || "",
         // Prefer the saved portal draft value (plain string) and fall back to
         // Strapi when the draft has nothing — otherwise reopening an edited
         // grantha silently discards a changed BhashyamName/BhashyamAuthor and
@@ -5612,6 +5627,7 @@ export default function GranthasPage() {
     setFormData({
       GranthaName: d.GranthaName || "",
       GranthaType: d.GranthaType || "",
+      PrakaranaCategory: d.PrakaranaCategory || "",
       BhashyamName: d.BhashyamName || "",
       BhashyamAuthor: d.BhashyamAuthor || "",
       IntroductionToTextEnglish: d.IntroductionToTextEnglish || [],
@@ -5901,6 +5917,8 @@ export default function GranthasPage() {
     const payload: Record<string, any> = {
       GranthaName: formData.GranthaName,
       GranthaType: formData.GranthaType || undefined,
+      PrakaranaCategory:
+        formData.GranthaType === "Prakarana Grantha" ? formData.PrakaranaCategory || undefined : undefined,
       BhashyamName: formData.BhashyamName || undefined,
       BhashyamAuthor: formData.BhashyamAuthor || undefined,
       teekas,
@@ -7177,6 +7195,24 @@ export default function GranthasPage() {
                 </SelectContent>
               </Select>
             </div>
+            {formData.GranthaType === "Prakarana Grantha" && (
+              <div>
+                <Label>Prakarana Category</Label>
+                <Select
+                  value={formData.PrakaranaCategory}
+                  onValueChange={(val) => setFormData({ ...formData, PrakaranaCategory: val })}
+                >
+                  <SelectTrigger className="mt-1.5" data-testid="select-prakarana-category">
+                    <SelectValue placeholder="Select category" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {prakaranaCategories.map((c) => (
+                      <SelectItem key={c} value={c}>{c}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+            )}
             <div>
               <Label>Bhashyam Name</Label>
               <Input

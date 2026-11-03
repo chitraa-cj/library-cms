@@ -214,18 +214,6 @@ export const granthaTypes = [
   "Bhakthi Grantha",
 ] as const;
 
-/**
- * Sub-category of a "Prakarana Grantha" — Strapi `grantha.PrakaranaCategory` (plain string).
- * The reading app (Sacred-Script-Hub) groups the Prakarana catalog by these five buckets.
- */
-export const prakaranaCategories = [
-  "Gitas",
-  "Shankara Granthas",
-  "Siddhi Granthas",
-  "Mimamsa Granthas",
-  "Other Granthas",
-] as const;
-
 export const bhashyamAuthors = [
   "Sri Shankarayacharya",
   "Upanishad Brahmendra",
@@ -1131,7 +1119,6 @@ export interface StrapiManthra {
  *   coverImage (media — images only)
  *   order (integer)
  *   GranthaType (enum: Upanishad | Bhagavad Gita | Brahma Sutra | Prakarana Grantha | Bhakthi Grantha)
- *   PrakaranaCategory (string — one of `prakaranaCategories`; only meaningful for Prakarana Granthas)
  *   BhashyamName (string)
  *   BhashyamAuthor (string — was an enum; now free-form, guarded by the shared vocabulary allowlist)
  *   IntroductionToTextEnglish (blocks — rich text)
@@ -1147,7 +1134,6 @@ export interface StrapiGrantha {
   documentId: string;
   GranthaName: string;
   GranthaType: (typeof granthaTypes)[number] | string;
-  PrakaranaCategory?: (typeof prakaranaCategories)[number] | string | null;
   BhashyamName?: string | null;
   BhashyamAuthor?: (typeof bhashyamAuthors)[number] | string | null;
   IntroductionToTextEnglish?: StrapiBlock[] | null;

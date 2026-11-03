@@ -214,7 +214,6 @@ export interface GranthaLiteRow {
   documentId: string;
   GranthaName: string | null;
   GranthaType: string | null;
-  PrakaranaCategory: string | null;
   BhashyamName: string | null;
   BhashyamAuthor: string | null;
   slug: string | null;
@@ -248,17 +247,10 @@ export function readAllGranthasLite(): GranthaLiteRow[] | null {
   const conn = getDb();
   if (!conn) return null;
   try {
-    // `prakarana_category` only exists once the Strapi schema carries PrakaranaCategory;
-    // select NULL until then so this fast path keeps working across the rollout.
-    const hasPrakaranaCategory = (conn.prepare(`pragma table_info(granthas)`).all() as any[]).some(
-      (c) => c.name === "prakarana_category",
-    );
     const granthas = conn
       .prepare(
         `select g.document_id as documentId, g.grantha_name as GranthaName,
-                g.grantha_type as GranthaType,
-                ${hasPrakaranaCategory ? "g.prakarana_category" : "null"} as PrakaranaCategory,
-                g.bhashyam_name as BhashyamName,
+                g.grantha_type as GranthaType, g.bhashyam_name as BhashyamName,
                 g.bhashyam_author as BhashyamAuthor, g.slug as slug, g."order" as ord
          from granthas g
          where g.published_at is not null
@@ -320,7 +312,6 @@ export function readAllGranthasLite(): GranthaLiteRow[] | null {
       documentId: g.documentId,
       GranthaName: g.GranthaName ?? null,
       GranthaType: g.GranthaType ?? null,
-      PrakaranaCategory: g.PrakaranaCategory ?? null,
       BhashyamName: g.BhashyamName ?? null,
       BhashyamAuthor: g.BhashyamAuthor ?? null,
       slug: g.slug ?? null,

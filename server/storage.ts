@@ -188,7 +188,6 @@ export class DatabaseStorage implements IStorage {
         when status = 'draft' then jsonb_build_object(
           'GranthaName', data->'GranthaName',
           'GranthaType', data->'GranthaType',
-          'PrakaranaCategory', data->'PrakaranaCategory',
           'BhashyamName', data->'BhashyamName',
           'BhashyamAuthor', data->'BhashyamAuthor',
           'structureConfig', data->'structureConfig',

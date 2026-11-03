@@ -1758,7 +1758,6 @@ export function createStrapiRouter() {
         const GRANTHA_LITE = [
           "fields[0]=documentId", "fields[1]=GranthaName", "fields[2]=GranthaType",
           "fields[3]=BhashyamName", "fields[4]=BhashyamAuthor", "fields[5]=slug", "fields[6]=order",
-          "fields[7]=PrakaranaCategory",
           "populate[teekas][fields][0]=documentId", "populate[teekas][fields][1]=TeekaName",
           "pagination[pageSize]=100", "sort=GranthaName:asc",
         ].join("&");
@@ -1789,7 +1788,6 @@ export function createStrapiRouter() {
           documentId: g.documentId,
           GranthaName: g.GranthaName ?? null,
           GranthaType: g.GranthaType ?? null,
-          PrakaranaCategory: g.PrakaranaCategory ?? null,
           BhashyamName: g.BhashyamName ?? null,
           BhashyamAuthor: g.BhashyamAuthor ?? null,
           slug: g.slug ?? null,

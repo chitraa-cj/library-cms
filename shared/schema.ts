@@ -211,6 +211,13 @@ export const granthaTypes = [
   "Bhagavad Gita",
   "Brahma Sutra",
   "Prakarana Grantha",
+  // Prakarana sub-categories (2026-11-03). The reading app files each under its own
+  // Prakarana Granthas sub-category; plain "Prakarana Grantha" lands in "Other Granthas".
+  "Prakarana - Gitas",
+  "Prakarana - Shankara Granthas",
+  "Prakarana - Siddhi Granthas",
+  "Prakarana - Mimamsa Granthas",
+  "Prakarana - Other Granthas",
   "Bhakthi Grantha",
 ] as const;
 
@@ -1118,7 +1125,9 @@ export interface StrapiManthra {
  *   GranthaNameTranslations (shared.translations[], repeatable)
  *   coverImage (media — images only)
  *   order (integer)
- *   GranthaType (enum: Upanishad | Bhagavad Gita | Brahma Sutra | Prakarana Grantha | Bhakthi Grantha)
+ *   GranthaType (enum: Upanishad | Bhagavad Gita | Brahma Sutra | Prakarana Grantha |
+ *     Prakarana - Gitas | Prakarana - Shankara Granthas | Prakarana - Siddhi Granthas |
+ *     Prakarana - Mimamsa Granthas | Prakarana - Other Granthas | Bhakthi Grantha)
  *   BhashyamName (string)
  *   BhashyamAuthor (string — was an enum; now free-form, guarded by the shared vocabulary allowlist)
  *   IntroductionToTextEnglish (blocks — rich text)

@@ -758,6 +758,9 @@ export const translationItems = pgTable("cms_translation_items", {
   startedAt: timestamp("started_at"),
   completedAt: timestamp("completed_at"),
   lastAttemptAt: timestamp("last_attempt_at"),
+  /** Set when an admin marks a failed item as read — it then drops out of the
+   *  error panels. Cleared whenever the item fails again. */
+  dismissedAt: timestamp("dismissed_at"),
 });
 
 export type TranslationJob = typeof translationJobs.$inferSelect;

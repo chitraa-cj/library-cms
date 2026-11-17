@@ -19,7 +19,7 @@
  * `requeueExpiredLeases` hands the item back after it lapses.
  */
 import { randomUUID } from "node:crypto";
-import { and, asc, desc, eq, inArray, sql } from "drizzle-orm";
+import { and, asc, desc, eq, inArray, isNull, sql } from "drizzle-orm";
 import { db } from "../db";
 import {
   translationItems,
@@ -98,6 +98,7 @@ export function ensureTranslationSchema(): Promise<void> {
           last_attempt_at timestamp
         )`);
       for (const stmt of [
+        sql`alter table cms_translation_items add column if not exists dismissed_at timestamp`,
         sql`create index if not exists cms_translation_items_job_idx on cms_translation_items (job_id)`,
         sql`create index if not exists cms_translation_items_status_idx on cms_translation_items (status)`,
         sql`create index if not exists cms_translation_items_job_status_idx on cms_translation_items (job_id, status)`,
@@ -188,14 +189,59 @@ export async function getTranslationJob(id: string): Promise<TranslationJob | nu
   return job ?? null;
 }
 
-export async function listTranslationJobs(limit = 50, offset = 0): Promise<TranslationJob[]> {
+export const translationJobSorts = [
+  "newest",
+  "oldest",
+  "grantha",
+  "status",
+  "progress",
+  "failed",
+  "activity",
+] as const;
+export type TranslationJobSort = (typeof translationJobSorts)[number];
+
+const jobSortOrder: Record<TranslationJobSort, any[]> = {
+  newest: [desc(translationJobs.createdAt)],
+  oldest: [asc(translationJobs.createdAt)],
+  grantha: [sql`lower(${translationJobs.granthaName}) asc nulls last`, desc(translationJobs.createdAt)],
+  status: [asc(translationJobs.status), desc(translationJobs.createdAt)],
+  progress: [
+    sql`${translationJobs.completedItems}::float / nullif(${translationJobs.totalItems}, 0) desc nulls last`,
+    desc(translationJobs.createdAt),
+  ],
+  failed: [desc(translationJobs.failedItems), desc(translationJobs.createdAt)],
+  activity: [desc(translationJobs.lastActivityAt)],
+};
+
+export async function listTranslationJobs(
+  limit = 50,
+  offset = 0,
+  sort: TranslationJobSort = "newest",
+): Promise<TranslationJob[]> {
   await ensureTranslationSchema();
   return db
     .select()
     .from(translationJobs)
-    .orderBy(desc(translationJobs.createdAt))
+    .orderBy(...jobSortOrder[sort])
     .limit(limit)
     .offset(offset);
+}
+
+/**
+ * The newest job per grantha — what the grantha picker labels each grantha with
+ * ("completed", "partially failed", "queued", …). Keyed by Strapi documentId.
+ */
+export async function latestJobPerGrantha(): Promise<
+  Array<{ granthaDocId: string; granthaName: string | null; status: TranslationJobStatus; jobId: string }>
+> {
+  await ensureTranslationSchema();
+  const result = await db.execute(sql`
+    select distinct on (grantha_doc_id)
+      grantha_doc_id as "granthaDocId", grantha_name as "granthaName", status, id as "jobId"
+    from cms_translation_jobs
+    where grantha_doc_id is not null
+    order by grantha_doc_id, created_at desc`);
+  return (result as any).rows ?? result;
 }
 
 export interface ListItemsOptions {
@@ -286,9 +332,9 @@ export async function listUpcomingItems(limit = 20): Promise<TranslationItem[]> 
 
 export async function listRecentFailedItems(limit = 20, jobId?: string): Promise<TranslationItem[]> {
   await ensureTranslationSchema();
-  const where = jobId
-    ? and(eq(translationItems.status, "failed"), eq(translationItems.jobId, jobId))
-    : eq(translationItems.status, "failed");
+  // Items an admin has marked as read stay in the item table but leave this list.
+  const unread = and(eq(translationItems.status, "failed"), isNull(translationItems.dismissedAt));
+  const where = jobId ? and(unread, eq(translationItems.jobId, jobId)) : unread;
   return db
     .select()
     .from(translationItems)
@@ -402,6 +448,7 @@ export async function failItem(
       leaseExpiresAt: null,
       leaseOwner: null,
       completedAt: next === "failed" ? sql`now()` : null,
+      dismissedAt: null,
     })
     .where(eq(translationItems.id, itemId));
   return next;
@@ -607,6 +654,7 @@ export async function retryFailedItems(
       lastAttemptAt: null,
       leaseExpiresAt: null,
       leaseOwner: null,
+      dismissedAt: null,
     })
     .where(where)
     .returning({ id: translationItems.id });
@@ -625,6 +673,52 @@ export async function retryFailedItems(
     await refreshJobProgress(jobId);
   }
   return { requeued: rows.length };
+}
+
+/**
+ * Mark failed items as read so they leave the error panels. Scoped to one item,
+ * one job, or (neither given) every unread failure in the queue.
+ */
+export async function markFailedItemsRead(opts: { jobId?: string; itemId?: number } = {}): Promise<{
+  marked: number;
+}> {
+  await ensureTranslationSchema();
+  const conds = [eq(translationItems.status, "failed"), isNull(translationItems.dismissedAt)];
+  if (opts.jobId) conds.push(eq(translationItems.jobId, opts.jobId));
+  if (opts.itemId !== undefined) conds.push(eq(translationItems.id, opts.itemId));
+  const rows = await db
+    .update(translationItems)
+    .set({ dismissedAt: sql`now()` })
+    .where(and(...conds))
+    .returning({ id: translationItems.id });
+  return { marked: rows.length };
+}
+
+/**
+ * Remove a job and all of its items. Refused while an item is mid-translation:
+ * the worker would finish it and then write into a row that no longer exists.
+ * Cancel first, wait for the in-flight item, then remove.
+ */
+export async function deleteTranslationJob(
+  jobId: string,
+): Promise<{ deleted: boolean; processingItems: number }> {
+  await ensureTranslationSchema();
+  return db.transaction(async (tx) => {
+    // Lock the job's items: claimNextItem locks items (SKIP LOCKED), so the worker
+    // steps over them instead of claiming one between this check and the delete,
+    // and a claim already in progress is waited for and then seen as `processing`.
+    const locked = await tx.execute(
+      sql`select status from cms_translation_items where job_id = ${jobId} for update`,
+    );
+    const statuses = ((locked as any).rows ?? locked) as Array<{ status: string }>;
+    const count = statuses.filter((r) => r.status === "processing").length;
+    if (count > 0) return { deleted: false, processingItems: count };
+    const rows = await tx
+      .delete(translationJobs)
+      .where(eq(translationJobs.id, jobId))
+      .returning({ id: translationJobs.id }); // items cascade
+    return { deleted: rows.length > 0, processingItems: 0 };
+  });
 }
 
 /**

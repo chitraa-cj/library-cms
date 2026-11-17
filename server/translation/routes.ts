@@ -23,18 +23,23 @@ import {
   cancelTranslationJob,
   countItemsByStatus,
   createTranslationJob,
+  deleteTranslationJob,
   ensureTranslationSchema,
   getTranslationJob,
+  latestJobPerGrantha,
   listProcessingItems,
   listRecentFailedItems,
   listTranslationItems,
   listTranslationJobs,
   listUpcomingItems,
+  markFailedItemsRead,
   refreshJobProgress,
   resetAttemptsForJob,
   retryFailedItems,
+  translationJobSorts,
   translationSummary,
   type NewTranslationItem,
+  type TranslationJobSort,
 } from "./store";
 
 const router = Router();
@@ -199,7 +204,11 @@ router.get("/", async (req, res) => {
   try {
     const limit = Math.min(200, Math.max(1, Number(req.query.limit) || 50));
     const page = Math.max(1, Number(req.query.page) || 1);
-    const jobs = await listTranslationJobs(limit, (page - 1) * limit);
+    const sortRaw = typeof req.query.sort === "string" ? req.query.sort : "newest";
+    if (!translationJobSorts.includes(sortRaw as TranslationJobSort)) {
+      return fail(res, 400, `sort must be one of: ${translationJobSorts.join(", ")}`);
+    }
+    const jobs = await listTranslationJobs(limit, (page - 1) * limit, sortRaw as TranslationJobSort);
     const summary = await translationSummary();
     res.json({
       jobs: jobs.map(jobView),
@@ -238,6 +247,31 @@ router.get("/queue/overview", async (_req, res) => {
   }
 });
 
+/** Newest job status per grantha, for labelling the grantha picker. */
+router.get("/granthas/status", async (_req, res) => {
+  try {
+    res.json({ granthas: await latestJobPerGrantha() });
+  } catch (err: any) {
+    fail(res, 500, err?.message || "Could not read grantha translation status.");
+  }
+});
+
+/**
+ * Mark failed items as read so they leave the error panels. Body: `{ jobId?, itemId? }`
+ * — neither means every unread failure in the queue.
+ */
+router.post("/failed/mark-read", async (req, res) => {
+  const parsed = z
+    .object({ jobId: z.string().trim().min(1).max(64).optional(), itemId: z.number().int().optional() })
+    .safeParse(req.body ?? {});
+  if (!parsed.success) return fail(res, 400, parsed.error.issues[0]?.message || "Invalid request body.");
+  try {
+    res.json(await markFailedItemsRead(parsed.data));
+  } catch (err: any) {
+    fail(res, 500, err?.message || "Could not mark the failed items as read.");
+  }
+});
+
 router.get("/:id", async (req, res) => {
   try {
     // Recount from the rows so a page refresh always shows the truth, even if
@@ -254,6 +288,7 @@ router.get("/:id", async (req, res) => {
       counts,
       current_item: current && current.jobId === job.id ? itemView(current) : null,
       recent_errors: failed.map((f) => ({
+        item_id: f.id,
         item: f.sequenceNumber,
         mantra: f.mantraLabel,
         attempts: f.attempts,
@@ -336,6 +371,25 @@ async function handleRetry(req: any, res: any) {
     fail(res, 500, err?.message || "Could not retry the failed items.");
   }
 }
+
+/** Remove a job and its items. Refused (409) while an item is mid-translation. */
+router.delete("/:id", async (req, res) => {
+  try {
+    const job = await getTranslationJob(req.params.id);
+    if (!job) return fail(res, 404, "Translation job not found.");
+    const { deleted, processingItems } = await deleteTranslationJob(job.id);
+    if (!deleted && processingItems > 0) {
+      return fail(
+        res,
+        409,
+        "An item of this job is being translated right now. Cancel the job, wait for that item to finish, then remove it.",
+      );
+    }
+    res.json({ deleted });
+  } catch (err: any) {
+    fail(res, 500, err?.message || "Could not remove the job.");
+  }
+});
 
 router.post("/:id/retry", handleRetry);
 router.post("/:id/retry-failed", handleRetry);

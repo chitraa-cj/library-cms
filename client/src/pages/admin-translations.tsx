@@ -21,21 +21,48 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Progress } from "@/components/ui/progress";
 import { Separator } from "@/components/ui/separator";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import {
+  Command,
+  CommandEmpty,
+  CommandGroup,
+  CommandInput,
+  CommandItem,
+  CommandList,
+} from "@/components/ui/command";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+  AlertDialogTrigger,
+} from "@/components/ui/alert-dialog";
 import {
   AlertTriangle,
   Ban,
+  Check,
   CheckCircle2,
+  ChevronsUpDown,
   Clock,
+  Eye,
   Languages,
   Loader2,
   Play,
   RefreshCw,
   Server,
+  Trash2,
 } from "lucide-react";
 import { otherTranslationLanguages, type TranslationJobStatus } from "@shared/schema";
 
 const JOBS_KEY = "/api/translation-jobs";
 const QUEUE_KEY = "/api/translation-jobs/queue/overview";
+const GRANTHA_STATUS_KEY = "/api/translation-jobs/granthas/status";
+const MARK_READ_URL = "/api/translation-jobs/failed/mark-read";
 
 const TERMINAL: TranslationJobStatus[] = ["completed", "partially_failed", "failed", "cancelled"];
 
@@ -43,6 +70,7 @@ type JobRow = {
   id: string;
   status: TranslationJobStatus;
   grantha_name: string | null;
+  grantha_doc_id: string | null;
   created_by: string | null;
   target_languages: string[];
   total: number;
@@ -63,6 +91,7 @@ type JobDetail = JobRow & {
   counts: { queued: number; processing: number; completed: number; failed: number };
   current_item: ItemRow | null;
   recent_errors: Array<{
+    item_id: number;
     item: number;
     mantra: string | null;
     attempts: number;
@@ -100,6 +129,27 @@ type Summary = {
   failedItems: number;
 };
 
+const JOB_SORTS = [
+  { value: "newest", label: "Newest first" },
+  { value: "oldest", label: "Oldest first" },
+  { value: "activity", label: "Last activity" },
+  { value: "grantha", label: "Grantha (A–Z)" },
+  { value: "status", label: "Status" },
+  { value: "progress", label: "Progress" },
+  { value: "failed", label: "Most failed" },
+] as const;
+type JobSort = (typeof JOB_SORTS)[number]["value"];
+
+/** How the grantha picker labels a grantha, from its newest job. */
+const GRANTHA_STATUS_LABEL: Record<TranslationJobStatus, string> = {
+  completed: "Completed already",
+  partially_failed: "Partially failed",
+  queued: "Queued",
+  processing: "In progress",
+  failed: "Failed",
+  cancelled: "Cancelled",
+};
+
 const ITEM_FILTERS = ["all", "queued", "processing", "completed", "failed"] as const;
 type ItemFilter = (typeof ITEM_FILTERS)[number];
 
@@ -131,13 +181,17 @@ export default function AdminTranslationsPage() {
   const isAdmin = user?.role === "admin";
 
   const [granthaName, setGranthaName] = useState("");
+  const [granthaDocId, setGranthaDocId] = useState<string | null>(null);
+  const [granthaPickerOpen, setGranthaPickerOpen] = useState(false);
+  const [jobSort, setJobSort] = useState<JobSort>("newest");
   const [languageInput, setLanguageInput] = useState("");
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [itemFilter, setItemFilter] = useState<ItemFilter>("all");
   const [itemPage, setItemPage] = useState(1);
 
   const jobsQuery = useQuery<{ jobs: JobRow[]; summary: Summary; worker_enabled: boolean }>({
-    queryKey: [JOBS_KEY],
+    queryKey: [JOBS_KEY, { sort: jobSort }],
+    queryFn: async () => (await apiRequest("GET", `${JOBS_KEY}?sort=${jobSort}`)).json(),
     enabled: isAdmin,
     // Poll only while something can still change; a finished board is static.
     refetchInterval: (query) => {
@@ -192,6 +246,33 @@ export default function AdminTranslationsPage() {
     },
   });
 
+  // Grantha picker: every grantha, labelled with the status of its newest job.
+  const granthasQuery = useQuery<{ data: Array<{ documentId: string; GranthaName: string | null }> }>({
+    queryKey: ["/api/strapi", "granthas", "lite"],
+    enabled: isAdmin,
+    staleTime: 60_000,
+    refetchOnWindowFocus: false,
+  });
+  const granthaStatusQuery = useQuery<{
+    granthas: Array<{ granthaDocId: string; status: TranslationJobStatus }>;
+  }>({
+    queryKey: [GRANTHA_STATUS_KEY],
+    enabled: isAdmin,
+  });
+  const granthaOptions = useMemo(() => {
+    const statusByDocId = new Map(
+      (granthaStatusQuery.data?.granthas ?? []).map((g) => [g.granthaDocId, g.status]),
+    );
+    const seen = new Set<string>();
+    const out: Array<{ docId: string; name: string; status: TranslationJobStatus | undefined }> = [];
+    for (const g of granthasQuery.data?.data ?? []) {
+      if (!g.documentId || !g.GranthaName || seen.has(g.documentId)) continue;
+      seen.add(g.documentId);
+      out.push({ docId: g.documentId, name: g.GranthaName, status: statusByDocId.get(g.documentId) });
+    }
+    return out.sort((a, b) => a.name.localeCompare(b.name));
+  }, [granthasQuery.data, granthaStatusQuery.data]);
+
   const requestedLanguages = useMemo(
     () =>
       languageInput
@@ -207,6 +288,7 @@ export default function AdminTranslationsPage() {
   function refreshAll() {
     void queryClient.invalidateQueries({ queryKey: [JOBS_KEY] });
     void queryClient.invalidateQueries({ queryKey: [QUEUE_KEY] });
+    void queryClient.invalidateQueries({ queryKey: [GRANTHA_STATUS_KEY] });
     if (activeJobId) {
       void queryClient.invalidateQueries({ queryKey: [`${JOBS_KEY}/${activeJobId}`] });
       void queryClient.invalidateQueries({ queryKey: [`${JOBS_KEY}/${activeJobId}/items`] });
@@ -216,6 +298,7 @@ export default function AdminTranslationsPage() {
   const createJob = useMutation({
     mutationFn: async () => {
       const res = await apiRequest("POST", JOBS_KEY, {
+        ...(granthaDocId ? { granthaDocId } : {}),
         granthaName: granthaName.trim(),
         targetLanguages: requestedLanguages,
       });
@@ -227,6 +310,7 @@ export default function AdminTranslationsPage() {
         description: `${n(data.total_items)} mantra(s) queued. The worker picks them up on its own — you can close this page.`,
       });
       setGranthaName("");
+      setGranthaDocId(null);
       setSelectedId(data.job_id);
       refreshAll();
     },
@@ -255,6 +339,24 @@ export default function AdminTranslationsPage() {
       refreshAll();
     },
     onError: (err: any) => toast({ variant: "destructive", title: "Retry failed", description: err?.message }),
+  });
+
+  const markRead = useMutation({
+    mutationFn: async (scope: { jobId?: string; itemId?: number }) =>
+      (await apiRequest("POST", MARK_READ_URL, scope)).json(),
+    onSuccess: () => refreshAll(),
+    onError: (err: any) => toast({ variant: "destructive", title: "Mark as read failed", description: err?.message }),
+  });
+
+  const deleteJob = useMutation({
+    mutationFn: async (jobId: string) => (await apiRequest("DELETE", `${JOBS_KEY}/${jobId}`)).json(),
+    onSuccess: () => {
+      toast({ title: "Job removed", description: "The job and all of its items were deleted." });
+      setSelectedId(null);
+      setItemPage(1);
+      refreshAll();
+    },
+    onError: (err: any) => toast({ variant: "destructive", title: "Remove failed", description: err?.message }),
   });
 
   if (!isAdmin) {
@@ -323,14 +425,57 @@ export default function AdminTranslationsPage() {
               <Label htmlFor="grantha-name" className="text-xs">
                 Grantha name
               </Label>
-              <Input
-                id="grantha-name"
-                value={granthaName}
-                onChange={(e) => setGranthaName(e.target.value)}
-                placeholder="Chandogya Upanishad"
-                className="mt-1.5"
-                data-testid="input-grantha-name"
-              />
+              <Popover open={granthaPickerOpen} onOpenChange={setGranthaPickerOpen}>
+                <PopoverTrigger asChild>
+                  <Button
+                    id="grantha-name"
+                    variant="outline"
+                    role="combobox"
+                    aria-expanded={granthaPickerOpen}
+                    className="mt-1.5 w-full justify-between font-normal"
+                    data-testid="input-grantha-name"
+                  >
+                    <span className={granthaName ? "truncate" : "truncate text-muted-foreground"}>
+                      {granthaName || "Search granthas…"}
+                    </span>
+                    <ChevronsUpDown className="ml-2 h-4 w-4 shrink-0 opacity-50" />
+                  </Button>
+                </PopoverTrigger>
+                <PopoverContent className="w-[--radix-popover-trigger-width] p-0" align="start">
+                  <Command>
+                    <CommandInput placeholder="Search granthas…" />
+                    <CommandList>
+                      <CommandEmpty>
+                        {granthasQuery.isLoading ? "Loading granthas…" : "No grantha found."}
+                      </CommandEmpty>
+                      <CommandGroup>
+                        {granthaOptions.map((g) => (
+                          <CommandItem
+                            key={g.docId}
+                            value={`${g.name} ${g.docId}`}
+                            onSelect={() => {
+                              setGranthaName(g.name);
+                              setGranthaDocId(g.docId);
+                              setGranthaPickerOpen(false);
+                            }}
+                            data-testid={`option-grantha-${g.docId}`}
+                          >
+                            <Check
+                              className={`mr-2 h-4 w-4 ${granthaDocId === g.docId ? "opacity-100" : "opacity-0"}`}
+                            />
+                            <span className="flex-1 truncate">{g.name}</span>
+                            {g.status ? (
+                              <Badge variant="secondary" className={`ml-2 text-[10px] ${statusBadge(g.status)}`}>
+                                {GRANTHA_STATUS_LABEL[g.status]}
+                              </Badge>
+                            ) : null}
+                          </CommandItem>
+                        ))}
+                      </CommandGroup>
+                    </CommandList>
+                  </Command>
+                </PopoverContent>
+              </Popover>
             </div>
             <div>
               <Label htmlFor="languages" className="text-xs">
@@ -377,8 +522,24 @@ export default function AdminTranslationsPage() {
           {/* ── Job table ─────────────────────────────────────────────── */}
           <Card>
             <CardHeader className="pb-3">
-              <CardTitle className="text-base">Jobs</CardTitle>
-              <CardDescription>Click a row to open it.</CardDescription>
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <div>
+                  <CardTitle className="text-base">Jobs</CardTitle>
+                  <CardDescription>Click a row to open it.</CardDescription>
+                </div>
+                <Select value={jobSort} onValueChange={(v) => setJobSort(v as JobSort)}>
+                  <SelectTrigger className="h-8 w-[160px] text-xs" data-testid="select-job-sort">
+                    <SelectValue placeholder="Sort" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {JOB_SORTS.map((s) => (
+                      <SelectItem key={s.value} value={s.value} className="text-xs">
+                        {s.label}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
             </CardHeader>
             <CardContent className="p-0">
               <div className="overflow-x-auto">
@@ -501,6 +662,38 @@ export default function AdminTranslationsPage() {
                         Retry {n(detail.failed)} failed
                       </Button>
                     ) : null}
+                    <AlertDialog>
+                      <AlertDialogTrigger asChild>
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          className="text-destructive"
+                          disabled={deleteJob.isPending || (detail.counts?.processing ?? 0) > 0}
+                          title={
+                            (detail.counts?.processing ?? 0) > 0
+                              ? "An item is being translated — cancel the job and wait for it to finish first."
+                              : undefined
+                          }
+                          data-testid="button-remove-job"
+                        >
+                          <Trash2 className="mr-2 h-4 w-4" />
+                          Remove
+                        </Button>
+                      </AlertDialogTrigger>
+                      <AlertDialogContent>
+                        <AlertDialogHeader>
+                          <AlertDialogTitle>Remove this job from the queue?</AlertDialogTitle>
+                          <AlertDialogDescription>
+                            {detail.grantha_name || "This job"} and its {n(detail.total)} item(s) are deleted
+                            from the queue. Translations already written to the CMS are kept.
+                          </AlertDialogDescription>
+                        </AlertDialogHeader>
+                        <AlertDialogFooter>
+                          <AlertDialogCancel>Keep</AlertDialogCancel>
+                          <AlertDialogAction onClick={() => deleteJob.mutate(detail.id)}>Remove</AlertDialogAction>
+                        </AlertDialogFooter>
+                      </AlertDialogContent>
+                    </AlertDialog>
                   </div>
                 </div>
               </CardHeader>
@@ -574,12 +767,34 @@ export default function AdminTranslationsPage() {
                   <>
                     <Separator />
                     <div>
-                      <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-                        Recent errors
-                      </p>
+                      <div className="mb-2 flex items-center justify-between">
+                        <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+                          Recent errors
+                        </p>
+                        <Button
+                          size="sm"
+                          variant="ghost"
+                          className="h-6 px-2 text-xs"
+                          onClick={() => markRead.mutate({ jobId: detail.id })}
+                          disabled={markRead.isPending}
+                          data-testid="button-mark-job-errors-read"
+                        >
+                          <Eye className="mr-1 h-3.5 w-3.5" />
+                          Mark all read
+                        </Button>
+                      </div>
                       <ul className="space-y-1.5 text-xs">
                         {detail.recent_errors.map((e) => (
                           <li key={e.item} className="rounded border border-destructive/30 p-2">
+                            <button
+                              type="button"
+                              className="float-right text-muted-foreground hover:text-foreground"
+                              onClick={() => markRead.mutate({ itemId: e.item_id })}
+                              disabled={markRead.isPending}
+                              data-testid={`button-mark-read-${e.item_id}`}
+                            >
+                              Mark read
+                            </button>
                             <span className="font-medium">
                               #{e.item} {e.mantra ?? ""}
                             </span>{" "}
@@ -753,9 +968,24 @@ export default function AdminTranslationsPage() {
             </div>
 
             <div>
-              <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-                Failed items
-              </p>
+              <div className="mb-2 flex items-center justify-between">
+                <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+                  Failed items
+                </p>
+                {(queueQuery.data?.failed?.length ?? 0) > 0 ? (
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    className="h-6 px-2 text-xs"
+                    onClick={() => markRead.mutate({})}
+                    disabled={markRead.isPending}
+                    data-testid="button-mark-all-failed-read"
+                  >
+                    <Eye className="mr-1 h-3.5 w-3.5" />
+                    Mark all read
+                  </Button>
+                ) : null}
+              </div>
               {(queueQuery.data?.failed?.length ?? 0) === 0 ? (
                 <p className="flex items-center gap-1.5 text-xs text-muted-foreground">
                   <CheckCircle2 className="h-3.5 w-3.5 text-emerald-500" />
@@ -765,6 +995,15 @@ export default function AdminTranslationsPage() {
                 <ul className="space-y-2 text-xs">
                   {queueQuery.data!.failed.slice(0, 8).map((item) => (
                     <li key={item.id} className="rounded border border-destructive/30 p-2">
+                      <button
+                        type="button"
+                        className="float-right text-muted-foreground hover:text-foreground"
+                        onClick={() => markRead.mutate({ itemId: item.id })}
+                        disabled={markRead.isPending}
+                        data-testid={`button-queue-mark-read-${item.id}`}
+                      >
+                        Mark read
+                      </button>
                       <div className="font-medium">
                         #{item.sequence_number} {item.mantra_label ?? ""}
                       </div>

@@ -365,6 +365,73 @@ console.log("\ntranslation queue");
   check("the worker waited for the cancelled run to unwind", settled);
 }
 
+// 13. Marking failed items as read hides them from the error panels, not the item table.
+{
+  console.log("\n mark failed items read");
+  const job = await makeJob(2);
+  const [a, b] = await itemsOf(job.id);
+  await store.failItem(a.id, "boom a", 99);
+  await store.failItem(b.id, "boom b", 99);
+  eq_("both failures listed", (await store.listRecentFailedItems(10, job.id)).length, 2);
+
+  eq_("one item marked", (await store.markFailedItemsRead({ itemId: a.id })).marked, 1);
+  const left = await store.listRecentFailedItems(10, job.id);
+  check("read item leaves the error list", left.length === 1 && left[0].id === b.id);
+  eq_("read item still in the item table", (await store.listTranslationItems(job.id, { status: "failed" })).total, 2);
+
+  eq_("job-scoped mark", (await store.markFailedItemsRead({ jobId: job.id })).marked, 1);
+  eq_("nothing unread left", (await store.listRecentFailedItems(10, job.id)).length, 0);
+
+  await store.retryFailedItems(job.id, a.id);
+  const claimed = await store.claimNextItem("read-worker");
+  await store.failItem(claimed.id, "boom again", 99);
+  check("a fresh failure shows again", (await store.listRecentFailedItems(10, job.id)).some((i) => i.id === a.id));
+}
+
+// 14. Removing a job deletes it and its items, but never under an in-flight item.
+{
+  console.log("\n remove job");
+  const job = await makeJob(2);
+  const claimed = await store.claimNextItem("remove-worker");
+  const refused = await store.deleteTranslationJob(job.id);
+  check("refused while an item is processing", !refused.deleted && refused.processingItems === 1);
+  check("job still there", Boolean(await store.getTranslationJob(job.id)));
+
+  await store.releaseItem(claimed.id, null);
+  eq_("removed once idle", (await store.deleteTranslationJob(job.id)).deleted, true);
+  eq_("job gone", await store.getTranslationJob(job.id), null);
+  eq_("items gone", (await itemsOf(job.id)).length, 0);
+}
+
+// 15. Sorting the job list and the per-grantha status the picker shows.
+{
+  console.log("\n job sort and grantha status");
+  await purgeTestJobs();
+  const older = await store.createTranslationJob({
+    createdBy: null, granthaDocId: "sortgrantha", granthaName: "Zeta", targetLanguages: [],
+    items: [{ mantraDocId: "m1", mantraLabel: "1" }],
+  });
+  createdJobs.push(older.id);
+  await db.execute(sql`update cms_translation_jobs set created_at = now() - interval '1 hour' where id = ${older.id}`);
+  const newer = await store.createTranslationJob({
+    createdBy: null, granthaDocId: "sortgrantha", granthaName: "Alpha", targetLanguages: [],
+    items: [{ mantraDocId: "m2", mantraLabel: "1" }],
+  });
+  createdJobs.push(newer.id);
+  await db.update(translationJobs).set({ status: "completed" }).where(eq(translationJobs.id, newer.id));
+
+  const ids = async (sort) => (await store.listTranslationJobs(50, 0, sort)).map((j) => j.id).filter((id) => id === older.id || id === newer.id);
+  eq_("newest first", (await ids("newest"))[0], newer.id);
+  eq_("oldest first", (await ids("oldest"))[0], older.id);
+  eq_("grantha A-Z", (await ids("grantha"))[0], newer.id);
+  for (const sort of store.translationJobSorts) {
+    check(`sort ${sort} runs`, (await ids(sort)).length === 2);
+  }
+
+  const status = (await store.latestJobPerGrantha()).find((g) => g.granthaDocId === "sortgrantha");
+  check("grantha labelled by its newest job", status?.jobId === newer.id && status?.status === "completed");
+}
+
 // ─────────────────────────────────────────────────────────────────── cleanup
 await purgeTestJobs();
 await pool.end();
